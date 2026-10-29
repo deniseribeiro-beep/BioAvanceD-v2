@@ -56,10 +56,11 @@ class SensorController {
           message: error.message
         });
       }
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar sensor',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -180,74 +181,6 @@ class SensorController {
       return res.status(500).json({
         success: false,
         error: 'Erro ao buscar sensor',
-        message: error.message
-      });
-    }
-  }
-
-  async collectReading(req, res) {
-    try {
-      const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({
-          success: false,
-          error: 'Banco de dados não disponível'
-        });
-      }
-
-      // #1029: fetch BEFORE mutating, 404 before the scope check, and 403
-      // before any service call that writes. Copied from this file's own
-      // #634 `get` handler and from createLinkedFileController's shape: the
-      // 404-first ordering is what keeps a MISSING sensor from being
-      // indistinguishable from a foreign-org one, which is exactly the
-      // null-tolerance that would have made this check a silent no-op
-      // against the existing fixtures.
-      const existing = await sensorService.getSensor(db, req.params.id);
-      if (!existing) {
-        return res.status(404).json({
-          success: false,
-          error: 'Sensor não encontrado'
-        });
-      }
-      if (req.organizationScope && !isRecordInOrganizationScope(existing, req.organizationScope, 'organizationId')) {
-        return res.status(403).json({
-          success: false,
-          error: 'Acesso negado',
-          message: 'Este sensor pertence a outra organização'
-        });
-      }
-
-      const reading = await sensorService.collectReading(db, req.params.id);
-
-      // Registra log de coleta de leitura
-      if (req.user) {
-        const auditLogger = require('../utils/auditLogger');
-        auditLogger.init(db);
-        const hasTemperatureValue = typeof reading?.temperatureValue === 'number';
-        await auditLogger.log({
-          action: 'READ',
-          resourceType: 'Sensor',
-          resourceId: req.params.id,
-          status: hasTemperatureValue ? 'success' : 'warning',
-          severity: hasTemperatureValue ? 'info' : 'warning',
-          message: hasTemperatureValue
-            ? `Leitura coletada do sensor: ${req.params.id}`
-            : `Nenhum valor de temperatura foi obtido do sensor: ${req.params.id}`,
-          payload: { temperature: reading?.temperatureValue ?? null },
-          req: req,
-          module: 'Sensores'
-        });
-      }
-
-      return res.status(200).json({
-        success: true,
-        data: reading
-      });
-    } catch (error) {
-      logger.error('Erro ao coletar leitura:', error.message);
-      return res.status(500).json({
-        success: false,
-        error: 'Erro ao coletar leitura',
         message: error.message
       });
     }

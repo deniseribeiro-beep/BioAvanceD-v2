@@ -4,8 +4,15 @@ const { getCollection } = require('../../../utils/collectionResolver');
 // added this probe there; writing a second one here is how the insufficient
 // startSession() guard came to exist in two places already.
 const { isKnownStandaloneDeployment } = require('../../../utils/mongoTransaction');
-const StorageAssignmentModel = require('../../../models/StorageAssignment');
 const positionGrid = require('../../../utils/storagePositionGrid');
+const { escapeRegex } = require('../../../utils/escapeRegex');
+const {
+  currentPlacement,
+  placeSpecimen,
+  moveSpecimen,
+  releaseSpecimen,
+  legacyWriteEventId
+} = require('../../../services/legacyPlacementChain.service');
 
 /**
  * Repositório Mongo para operações de armazenamento físico de amostras.
@@ -68,12 +75,15 @@ class MongoStorageRepository {
   }
 
   /**
-   * dict-02 StorageAssignment (ELM-0167-0178, #507): the return shape hands
-   * callers the canonical custody entity via `storageAssignment` instead of
-   * leaving them to read the raw `storageLocation.boxId/position` snapshot
-   * embedded on the Mongo document — that embedding stays as an internal
-   * persistence-layer detail, not part of the contract this method exposes.
-   * @param {string} specimenId
+   * #507, #1374: the return shape hands callers the sample's current
+   * placement via `storageAssignment` instead of leaving them to read the
+   * raw `storageLocation.boxId/position` snapshot embedded on the Mongo
+   * document. The physical chain is read first and the open legacy
+   * StorageAssignment row (ELM-0167-0178) is the fallback; the value has
+   * `boxId`, `positionCode` (legacy `A1` form), `placedAt`, `source` and the
+   * chain ids (`containerId`, `storagePositionId`, `storageRackId`,
+   * `storageLocationId`), or is null when the sample is not placed.
+   * @param {string} specimenId the sample's Mongo _id
    * @param {import('mongodb').ClientSession} [session]
    */
   async findSampleById(specimenId, session) {
@@ -82,25 +92,24 @@ class MongoStorageRepository {
     const sample = await samplesCollection.findOne({ _id: normalizedId }, { session });
     if (!sample) return null;
 
-    const storageAssignment = await this.findCurrentStorageAssignment(specimenId, session);
+    const storageAssignment = await currentPlacement(this.db, sample, session);
     return { ...sample, storageAssignment };
   }
 
   /**
-   * dict-02 StorageAssignment (ELM-0167-0178, #507): resolve the open
-   * (not yet `removedAt`) placement-history record for a specimen, i.e. its
-   * current physical position, per the `StorageLocation`+`StorageAssignment`
-   * canonical entity pair (`docs/architecture/canonical-data-contract-v1.md`
-   * section 7.4).
-   * @param {string} specimenId
+   * #507, #1374: the sample's current placement, the same value
+   * `findSampleById` attaches as `storageAssignment`: the physical chain
+   * first, the open legacy StorageAssignment row as the fallback, with
+   * `boxId`, `positionCode` (legacy `A1` form), `placedAt`, `source` and the
+   * chain ids. Null when the sample is missing or not placed.
+   * @param {string} specimenId the sample's Mongo _id
    * @param {import('mongodb').ClientSession} [session]
    */
   async findCurrentStorageAssignment(specimenId, session) {
-    const storageAssignmentsCollection = this.db.collection('storageAssignments');
-    return storageAssignmentsCollection.findOne(
-      { specimenId: String(specimenId), removedAt: null },
-      { session }
-    );
+    const samplesCollection = await getCollection(this.db, 'samples');
+    const sample = await samplesCollection.findOne({ _id: this.toObjectId(specimenId) }, { session });
+    if (!sample) return null;
+    return currentPlacement(this.db, sample, session);
   }
 
   /**
@@ -141,10 +150,6 @@ class MongoStorageRepository {
    * equipment chain for a box via its StoragePath when one exists, falling
    * back to a live parent_id walk (#654) when it doesn't — which is every
    * real box today, since nothing writes storagePaths.
-   *
-   * facilityId/roomId (ELM-0168/0169, #418) resolve by walking up from the
-   * freezer's StorageContainer.roomId to Room.facilityId — best-effort,
-   * since a FREEZER isn't required to have a Room assigned.
    * @param {ObjectId} boxObjId
    * @param {import('mongodb').ClientSession} [session]
    */
@@ -166,43 +171,10 @@ class MongoStorageRepository {
       }
     }
 
-    const { roomId, facilityId } = await this.findFacilityAndRoomForFreezer(freezerId, session);
-
     return {
       rackId,
       shelfId,
-      equipmentId: freezerId ? String(freezerId) : null,
-      roomId,
-      facilityId
-    };
-  }
-
-  /**
-   * dict-02 StorageAssignment.facilityId/roomId (ELM-0168/0169, #418):
-   * resolve a FREEZER StorageContainer's Room, then that Room's Facility.
-   * @param {ObjectId} [freezerId]
-   * @param {import('mongodb').ClientSession} [session]
-   */
-  async findFacilityAndRoomForFreezer(freezerId, session) {
-    if (!freezerId) {
-      return { roomId: null, facilityId: null };
-    }
-
-    const storageContainersCollection = this.db.collection('storageContainers');
-    const freezer = await storageContainersCollection.findOne({ _id: freezerId }, { session });
-    if (!freezer || !freezer.roomId) {
-      return { roomId: null, facilityId: null };
-    }
-
-    const roomsCollection = this.db.collection('rooms');
-    const room = await roomsCollection.findOne({ _id: freezer.roomId }, { session });
-    if (!room) {
-      return { roomId: String(freezer.roomId), facilityId: null };
-    }
-
-    return {
-      roomId: String(freezer.roomId),
-      facilityId: room.facilityId ? String(room.facilityId) : null
+      equipmentId: freezerId ? String(freezerId) : null
     };
   }
 
@@ -242,48 +214,6 @@ class MongoStorageRepository {
         boxId: box._id
       }
     };
-  }
-
-  /**
-   * dict-02 StorageAssignment (ELM-0167-0178, P1X-0072/0073): open a new
-   * placement-history record for a specimen's physical stay at a position.
-   * @param {{ specimenId: string, boxId: ObjectId, positionCode: string }} input
-   * @param {import('mongodb').ClientSession} [session]
-   */
-  async openStorageAssignment(input, session) {
-    const storageAssignmentsCollection = this.db.collection('storageAssignments');
-    const hierarchy = await this.findStorageHierarchyForBox(input.boxId, session);
-
-    const record = StorageAssignmentModel.open({
-      specimenId: input.specimenId,
-      boxId: input.boxId,
-      positionCode: input.positionCode,
-      ...hierarchy
-    });
-
-    await storageAssignmentsCollection.insertOne(record, { session });
-    return record;
-  }
-
-  /**
-   * dict-02 StorageAssignment: close the open placement-history record for
-   * a specimen's stay at a position (removedAt/occupancyStatus), rather
-   * than overwriting/discarding it.
-   * @param {{ specimenId: string, boxId: ObjectId, positionCode: string }} input
-   * @param {import('mongodb').ClientSession} [session]
-   */
-  async closeStorageAssignment(input, session) {
-    const storageAssignmentsCollection = this.db.collection('storageAssignments');
-    await storageAssignmentsCollection.updateOne(
-      {
-        specimenId: String(input.specimenId),
-        boxId: String(input.boxId),
-        positionCode: input.positionCode,
-        removedAt: null
-      },
-      { $set: StorageAssignmentModel.closeFields() },
-      { session }
-    );
   }
 
   /**
@@ -382,12 +312,13 @@ class MongoStorageRepository {
       throw new Error('Falha ao atualizar localização da amostra');
     }
 
-    await this.closeStorageAssignment(
-      { specimenId: input.specimenId, boxId: fromBoxObjId, positionCode: input.fromPosition },
-      session
-    );
-    await this.openStorageAssignment(
-      { specimenId: input.specimenId, boxId: toBoxObjId, positionCode: input.toPosition },
+    // #1374: the move goes on the physical chain, in this session; a
+    // specimen placed only through the legacy path is adopted first.
+    const sample = await samplesCollection.findOne({ _id: sampleObjId }, { session });
+    const at = new Date();
+    await moveSpecimen(
+      this.db,
+      { sample, toBox, toPosition: input.toPosition, at, sourceEventId: legacyWriteEventId('move', sample, at) },
       session
     );
   }
@@ -481,8 +412,12 @@ class MongoStorageRepository {
       throw new Error('Falha ao atualizar amostra');
     }
 
-    await this.openStorageAssignment(
-      { specimenId: input.specimenId, boxId: boxObjId, positionCode: normalizedPosition },
+    // #1374: the placement goes on the physical chain, in this session; a
+    // chain refusal (ASSIGNMENT_OVERLAP) aborts the transaction.
+    const at = new Date();
+    await placeSpecimen(
+      this.db,
+      { sample, box, position: normalizedPosition, at, sourceEventId: legacyWriteEventId('allocate', sample, at) },
       session
     );
   }
@@ -567,77 +502,17 @@ class MongoStorageRepository {
       throw new Error('Falha ao atualizar a amostra após alocação automática');
     }
 
-    // #1003: the other three storage-placement writers (allocateSamplePosition,
-    // moveSamplePosition, releaseSamplePosition) each open/close a
-    // StorageAssignment row -- auto-assign never did, so findSampleById never
-    // resolved a storageAssignment for an auto-assigned specimen and
-    // releaseSamplePosition/moveSamplePosition both refused to act on it.
-    await this.openStorageAssignment(
-      { specimenId: input.specimenId, boxId: boxObjId, positionCode: lockedPosition },
+    // #1374: auto-assign places the specimen on the physical chain, in this
+    // session, like the other writers, so the reader resolves its placement;
+    // a chain refusal (ASSIGNMENT_OVERLAP) aborts the transaction.
+    const at = new Date();
+    await placeSpecimen(
+      this.db,
+      { sample: freshSample, box: freshBox, position: lockedPosition, at, sourceEventId: legacyWriteEventId('auto-assign', freshSample, at) },
       session
     );
 
     return lockedPosition;
-  }
-
-  /**
-   * Undoes an autoAssignSamplePosition write (used when a downstream step,
-   * e.g. the Neo4j sync, fails after the Mongo allocation already committed).
-   *
-   * @param {{ specimenId: string|import('mongodb').ObjectId, boxId: string|import('mongodb').ObjectId, position: string }} input
-   * @param {import('mongodb').ClientSession} session
-   */
-  async rollbackAutoAssignedPosition(input, session) {
-    const samplesCollection = await getCollection(this.db, 'samples');
-    const storageBoxesCollection = this.db.collection('storageBoxes');
-    const sampleObjId = this.toObjectId(input.specimenId);
-    const boxObjId = this.toObjectId(input.boxId);
-
-    await storageBoxesCollection.updateOne(
-      {
-        _id: boxObjId,
-        [`occupancyGrid.${input.position}`]: sampleObjId
-      },
-      {
-        $unset: {
-          [`occupancyGrid.${input.position}`]: ''
-        },
-        $inc: {
-          currentOccupancy: -1
-        },
-        $set: {
-          updatedAt: new Date(),
-          lastModified: new Date()
-        }
-      },
-      { session }
-    );
-
-    await samplesCollection.updateOne(
-      {
-        _id: sampleObjId,
-        'storageLocation.boxId': boxObjId,
-        'storageLocation.position': input.position
-      },
-      {
-        $unset: {
-          storageLocation: ''
-        },
-        $set: {
-          updatedAt: new Date()
-        }
-      },
-      { session }
-    );
-
-    // #1003: compensates the openStorageAssignment hunk A added to
-    // autoAssignSamplePosition above -- without this, a rollback (e.g. the
-    // Neo4j-sync-failed path in storageService.js) would leave an OPEN
-    // StorageAssignment for a specimen that is no longer allocated.
-    await this.closeStorageAssignment(
-      { specimenId: input.specimenId, boxId: boxObjId, positionCode: input.position },
-      session
-    );
   }
 
   /**
@@ -700,10 +575,9 @@ class MongoStorageRepository {
       { session }
     );
 
-    await this.closeStorageAssignment(
-      { specimenId: input.specimenId, boxId: sourceBoxObjId, positionCode: String(sourcePosition).toUpperCase() },
-      session
-    );
+    // #1374: the container leaves its position on the physical chain, in
+    // this session; the specimen stays loaded in it.
+    await releaseSpecimen(this.db, { sample, at: new Date() }, session);
 
     return {
       from: {
@@ -931,7 +805,7 @@ class MongoStorageRepository {
     return {
       found: true,
       location: {
-        specimenId: sample._id,
+        specimenId: String(sample.specimenId || sample._id),
         barcode: sample.barcode,
         box: {
           boxId: sample.storageLocation.boxId,
@@ -1000,7 +874,7 @@ class MongoStorageRepository {
       const storagePath = pathByBoxId.get(boxKey) || null;
       const liveResolution = storagePath ? null : liveByBoxId.get(boxKey);
       result.set(key, {
-        specimenId: sample._id,
+        specimenId: String(sample.specimenId || sample._id),
         barcode: sample.barcode,
         box: {
           boxId: sample.storageLocation.boxId,
@@ -1025,7 +899,7 @@ class MongoStorageRepository {
   }
 
   /**
-   * @param {{ query: string }} input
+   * @param {{ query: string, scopeFilter?: object }} input - scopeFilter: #1211's organization terms
    */
   async searchAllocatableSampleCandidates(input) {
     const searchTerm = String(input.query || '').trim();
@@ -1033,7 +907,7 @@ class MongoStorageRepository {
 
     const samplesCollection = await getCollection(this.db, 'samples');
 
-    const searchRegex = new RegExp(searchTerm, 'i');
+    const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
     return samplesCollection.find({
       $and: [
         {
@@ -1044,12 +918,15 @@ class MongoStorageRepository {
           ]
         },
         { specimenStatus: { $in: ['available', 'reserved'] } },
+        // RF006 AC3: a depleted specimen has no material to place.
+        { quantityStatus: { $ne: 'depleted' } },
         {
           $or: [
             { 'storageLocation.boxId': { $exists: false } },
             { 'storageLocation.boxId': null }
           ]
-        }
+        },
+        ...(input.scopeFilter && Object.keys(input.scopeFilter).length > 0 ? [input.scopeFilter] : [])
       ]
     }).limit(20).toArray();
   }

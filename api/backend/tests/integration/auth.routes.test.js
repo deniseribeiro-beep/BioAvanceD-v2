@@ -119,158 +119,65 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
   });
 
-  describe('POST /register', () => {
-    // #1037: this used to assert 201 for an ANONYMOUS request -- it pinned
-    // the escalation as correct behaviour. The route now carries
-    // `authenticate`, so an unauthenticated caller cannot reach the
-    // controller at all.
-    //
-    // RF003 makes the Administrador the primary actor for the whole account
-    // lifecycle and RF001 (authentication) has no account-creation clause;
-    // no requirement anywhere in the canonical corpus asks for unauthenticated
-    // self-registration. RF003 AC#6 additionally requires auditing creation,
-    // and RF012 AC#1 / RNF009 AC#2 (Crítica) both make the actor a mandatory
-    // element of the audit event -- which an anonymous creation cannot supply.
-    it('#1037: refuses an ANONYMOUS register outright, without reaching the controller', async () => {
-      const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
-        res.status(201).json({ success: true, created: req.body.email });
-      });
-      const authRoutes = loadAuthRoutes();
-      const app = buildApp(authRoutes);
+  // #1057 (Denise, 2026-09-25): POST /api/auth/register was deleted. It was a
+  // strictly weaker duplicate of POST /api/users/register, and #1037 showed
+  // the cost of a second door onto registerUser. The 404 for an authenticated
+  // Administrador is the load-bearing case: it shows the route is gone, not
+  // merely gated. The /change-password CONTROL confirms the same token and
+  // app do reach a live route, so the 404 is not an app that answers
+  // nothing.
+  describe('POST /register (deleted, #1057)', () => {
+    beforeEach(() => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
+    });
+
+    function rbacDb(users) {
+      const { buildRbacCollections } = require('../factories/rbac.factory');
+      const collections = buildRbacCollections(users);
+      return { collection: vi.fn((name) => collections[name] || { findOne: vi.fn(async () => null), find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }) };
+    }
+
+    it('is no longer routed: 404 for an anonymous caller', async () => {
+      const app = buildApp(loadAuthRoutes());
 
       const res = await request(app)
         .post('/api/auth/register')
         .send({ email: 'new@example.com', password: 'x' });
 
-      expect(res.status).toBe(401);
-      expect(spy).not.toHaveBeenCalled();
+      expect(res.status).toBe(404);
     });
 
-    // #1037: this route is UNAUTHENTICATED (no `authenticate`, unlike every
-    // neighbour) and auth.controller.js hands `req.body` to registerUser
-    // verbatim, which honours `userData.accessType || 2`. accessType 4 maps to
-    // 'administrator' in ROLE_CODE_BY_ACCESS_TYPE, and resolveScopeForRole
-    // short-circuits hierarchyLevel 4 to a GLOBAL scope without validating an
-    // organizationId -- so the grant cannot fail. The same request also takes
-    // the branch that sets mfaEnabled:false/mfaSecretCiphertext:null by default.
-    //
-    // The sibling POST /api/users/register carries #998's hierarchy floor,
-    // whose own comment describes this exact escalation one level down. Both
-    // routes reach the same service; the floor lived in only one of them.
-    //
-    // Fail CLOSED rather than silently downgrading: a caller who genuinely
-    // needs to choose a privilege level has an authenticated route for it,
-    // and a silent downgrade would leave the caller believing it succeeded.
-    it('#1037: refuses a caller-supplied accessType, without reaching the controller', async () => {
-      const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
-        res.status(201).json({ success: true, created: req.body.email });
-      });
-      const authRoutes = loadAuthRoutes();
-      const app = buildApp(authRoutes);
+    it('is no longer routed: 404 even for an authenticated Administrador', async () => {
+      const userID = makeUserId();
+      const app = buildApp(loadAuthRoutes(), rbacDb([{ userAccountId: userID, accessType: 4 }]));
 
       const res = await request(app)
         .post('/api/auth/register')
-        .send({ email: 'attacker@example.com', password: 'x', accessType: 4 });
+        .set('Authorization', `Bearer ${signAccessToken({ userID, accessType: 4 })}`)
+        .send({ email: 'ok@example.com', password: 'x' });
 
-      // 401, not 403: `authenticate` now runs BEFORE
-      // rejectCallerSuppliedPrivilege, so an anonymous caller is refused for
-      // being anonymous before the privilege guard is reached. The guard is
-      // still load-bearing for an AUTHENTICATED caller -- pinned below.
-      expect(res.status).toBe(401);
-      expect(spy).not.toHaveBeenCalled();
+      expect(res.status).toBe(404);
     });
 
-    it('#1037: refuses a caller-supplied roleName too -- getAccessTypeForRole maps it to the same privilege', async () => {
-      const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
-        res.status(201).json({ success: true, created: req.body.email });
+    it('CONTROL: the same token reaches a live route on this router', async () => {
+      const spy = vi.spyOn(authController, 'changePassword').mockImplementation(async (req, res) => {
+        res.status(200).json({ success: true });
       });
-      const authRoutes = loadAuthRoutes();
-      const app = buildApp(authRoutes);
+      const userID = makeUserId();
+      const app = buildApp(loadAuthRoutes(), rbacDb([{ userAccountId: userID, accessType: 4 }]));
 
       const res = await request(app)
-        .post('/api/auth/register')
-        .send({ email: 'attacker2@example.com', password: 'x', roleName: 'Administrador' });
+        .post('/api/auth/change-password')
+        .set('Authorization', `Bearer ${signAccessToken({ userID, accessType: 4 })}`)
+        .send({});
 
-      // 401 for the same reason as the sibling above.
-      expect(res.status).toBe(401);
-      expect(spy).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
     });
 
-    // #1037 (second half): the escalation reported in that issue was closed
-    // in two steps. rejectCallerSuppliedPrivilege stopped an anonymous caller
-    // CHOOSING a privilege level; these pin the rest -- that an anonymous
-    // caller cannot create an account at any level, and that the route is now
-    // gated on the same permission as its authenticated twin
-    // (POST /api/users/register).
-    describe('#1037: authenticated callers', () => {
-      // `authenticate` verifies the JWT and then calls sessionService --
-      // same two spies the /change-password authenticated test installs.
-      // Without them a validly-signed token still 401s on the session check,
-      // which looks like the route rejecting the caller.
-      beforeEach(() => {
-        vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-        vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
-      });
-
-      function rbacDb(users) {
-        const { buildRbacCollections } = require('../factories/rbac.factory');
-        const collections = buildRbacCollections(users);
-        return { collection: vi.fn((name) => collections[name] || { findOne: vi.fn(async () => null), find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }) };
-      }
-
-      it('refuses an authenticated caller who lacks createUser, without reaching the controller', async () => {
-        const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
-          res.status(201).json({ success: true, created: req.body.email });
-        });
-        const userID = makeUserId();
-        // accessType 2 (Tecnico) does not carry createUser in the RBAC
-        // catalog -- 3 (Coordenador) and 4 (Administrador) do.
-        const app = buildApp(loadAuthRoutes(), rbacDb([{ userAccountId: userID, accessType: 2 }]));
-
-        const res = await request(app)
-          .post('/api/auth/register')
-          .set('Authorization', `Bearer ${signAccessToken({ userID, accessType: 2 })}`)
-          .send({ email: 'nope@example.com', password: 'x' });
-
-        expect(res.status).toBe(403);
-        expect(spy).not.toHaveBeenCalled();
-      });
-
-      it('still refuses a caller-supplied accessType even from a createUser holder -- the twin route is where a level is chosen', async () => {
-        const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
-          res.status(201).json({ success: true, created: req.body.email });
-        });
-        const userID = makeUserId();
-        const app = buildApp(loadAuthRoutes(), rbacDb([{ userAccountId: userID, accessType: 4 }]));
-
-        const res = await request(app)
-          .post('/api/auth/register')
-          .set('Authorization', `Bearer ${signAccessToken({ userID, accessType: 4 })}`)
-          .send({ email: 'esc@example.com', password: 'x', accessType: 4 });
-
-        expect(res.status).toBe(403);
-        expect(spy).not.toHaveBeenCalled();
-      });
-
-      // CONTROL: the route still WORKS for the caller it is meant for. Without
-      // this, every assertion above would be satisfied by a route that refuses
-      // everyone.
-      it('CONTROL: reaches the controller for a createUser holder sending no privilege fields', async () => {
-        const spy = vi.spyOn(authController, 'register').mockImplementation(async (req, res) => {
-          res.status(201).json({ success: true, created: req.body.email });
-        });
-        const userID = makeUserId();
-        const app = buildApp(loadAuthRoutes(), rbacDb([{ userAccountId: userID, accessType: 4 }]));
-
-        const res = await request(app)
-          .post('/api/auth/register')
-          .set('Authorization', `Bearer ${signAccessToken({ userID, accessType: 4 })}`)
-          .send({ email: 'ok@example.com', password: 'x' });
-
-        expect(res.status).toBe(201);
-        expect(spy).toHaveBeenCalledTimes(1);
-        expect(res.body.created).toBe('ok@example.com');
-      });
+    it('the controller no longer carries a register handler', () => {
+      expect(authController.register).toBeUndefined();
     });
   });
 
@@ -289,8 +196,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('delegates to authController.changePassword when authenticated', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const spy = vi.spyOn(authController, 'changePassword').mockImplementation(async (req, res) => {
         res.status(200).json({ success: true });
       });
@@ -369,8 +276,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('responds 501 once authenticate can validate the session', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
       const token = signAccessToken();
@@ -386,8 +293,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('GET /two-factor/status', () => {
     it('returns 503 when there is no db on app.locals', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, undefined);
       const token = signAccessToken();
@@ -400,8 +307,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 404 when the authenticated user is not found in the db', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb(null));
       const token = signAccessToken();
@@ -414,8 +321,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 200 with mfaEnabled/mfaLocked flags on success', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({ mfaEnabled: true, mfaLocked: false }));
       const token = signAccessToken();
@@ -428,9 +335,41 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.body.data).toEqual({ mfaEnabled: true, mfaLocked: false });
     });
 
+    // #1306 (RF001 AC4): authenticate refused an inactive account only at
+    // login, so a session opened before the inactivation kept working.
+    it.each(['inactive', 'blocked', 'suspended'])(
+      'authenticate refuses a live session whose account is %s',
+      async (status) => {
+        vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+        vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
+        const authRoutes = loadAuthRoutes();
+        const app = buildApp(authRoutes, makeDb({ accountStatus: status, mfaEnabled: true, mfaLocked: false }));
+
+        const res = await request(app)
+          .get('/api/auth/two-factor/status')
+          .set('Authorization', `Bearer ${signAccessToken()}`);
+
+        expect(res.status).toBe(401);
+        expect(res.body.accountInactive).toBe(true);
+      }
+    );
+
+    it('CONTROL: authenticate admits an active account, and one stored before status existed', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
+      const authRoutes = loadAuthRoutes();
+      for (const doc of [{ accountStatus: 'active' }, { accountStatus: 'Ativo' }, {}]) {
+        const app = buildApp(authRoutes, makeDb({ ...doc, mfaEnabled: false, mfaLocked: false }));
+        const res = await request(app)
+          .get('/api/auth/two-factor/status')
+          .set('Authorization', `Bearer ${signAccessToken()}`);
+        expect(res.status).toBe(200);
+      }
+    });
+
     it('returns 500 when the db lookup throws', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       // First findOne is authenticate's own roleValidUntil lookup (must succeed so the
       // request reaches the route); the route's own lookup on the 2nd call is what throws.
@@ -483,10 +422,12 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.body.sessionExpired).toBe(true);
     });
 
+    // #1330: the session carries lastActivityAt; the response key stays
+    // lastActivity.
     it('returns 200 with lastActivity/expiresAt on success', async () => {
       const expiresAt = new Date().toISOString();
       const lastActivity = new Date().toISOString();
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ lastActivity, expiresAt });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ lastActivityAt: lastActivity, expiresAt });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
       const token = signAccessToken();
@@ -516,8 +457,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('POST /logout', () => {
     it('invalidates the session, clears the refresh cookie and returns 200', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1', userID: 'u1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1', userAccountId: 'u1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(true);
       const logLogoutSpy = vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
       const authRoutes = loadAuthRoutes();
@@ -533,16 +474,33 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       // #974: an explicit logout is 'user_request' by the session's own owner,
       // so it is distinguishable from the 'expiration'/'system' pair the clock
       // writes and from an admin's 'admin_action'.
-      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1', 'user_request', 'u1');
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1', 'user_request', 'u1', { req: expect.anything() });
       expect(logLogoutSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
     });
 
+    // #1330: the session is ended by its sessionId, attributed to its
+    // userAccountId.
+    it('invalidates the session by its sessionId, attributed to its owner', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's-canon', userAccountId: 'u-canon' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's-canon' });
+      const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(true);
+      vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
+      const app = buildApp(loadAuthRoutes(), makeDb({}));
+
+      const res = await request(app)
+        .post('/api/auth/logout')
+        .set('Authorization', `Bearer ${signAccessToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's-canon', 'user_request', 'u-canon', { req: expect.anything() });
+    });
+
     it('still returns 200 and still logs the logout when sessionService.verifySession throws', async () => {
       vi.spyOn(sessionService, 'verifySession')
-        .mockResolvedValueOnce({ valid: true, session: { sessionID: 's1' } }) // for authenticate()
+        .mockResolvedValueOnce({ valid: true, session: { sessionId: 's1' } }) // for authenticate()
         .mockRejectedValueOnce(new Error('verify-boom')); // for the logout handler itself
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const logLogoutSpy = vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -560,8 +518,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('GET /verify', () => {
     it('returns 503 when there is no db', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, undefined);
       const token = signAccessToken();
@@ -571,8 +529,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 404 and logs TOKEN_VERIFY_FAILED when the user is not found', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb(null));
@@ -587,8 +545,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       [1, 'Usuário Externo'],
       [3, 'Coordenador']
     ])('resolves accessType %s to roleName "%s" via the active RBAC role assignment', async (accessType, expectedRole) => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const userID = makeUserId();
       const app = buildApp(
@@ -605,8 +563,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 500 when the db lookup throws', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       // First findOne is authenticate's own roleValidUntil lookup (must succeed so the
       // request reaches the route); the route's own lookup on the 2nd call is what throws.
@@ -631,8 +589,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('GET /sessions', () => {
     it('returns the sessions list from session.service.listUserSessions', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       vi.spyOn(sessionService, 'listUserSessions').mockResolvedValue([{ sessionID: 'x1' }]);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -644,8 +602,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 500 when session.service.listUserSessions throws', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       vi.spyOn(sessionService, 'listUserSessions').mockRejectedValue(new Error('list-boom'));
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -658,8 +616,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('DELETE /sessions/all-others', () => {
     it('revokes other sessions and returns 200', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const revokeSpy = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(true);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -673,8 +631,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('DELETE /sessions/:sessionId', () => {
     it('returns 404 when revokeSessionById resolves falsy', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue(false);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -685,8 +643,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('revokes the specified session and returns 200', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'other-session' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'other-session' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 'other-session' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 'other-session' });
       vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue(true);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -740,7 +698,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 401 when the session userID does not match the token userID', async () => {
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: 'someone-else', sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: 'someone-else', sessionId: 's9' });
       const app = appWithDb(makeDb({}));
       const userID = makeUserId();
       const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
@@ -753,7 +711,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
     it('returns 401 when the user behind a valid session is no longer in the db', async () => {
       const userID = makeUserId();
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: String(userID), sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: String(userID), sessionId: 's9' });
       const app = appWithDb(makeDb(null));
       const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
@@ -763,9 +721,50 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.status).toBe(401);
     });
 
+    // #1249: session.autoRenewal off -- no renewal; the session ends as an expiry.
+    it('refuses to renew, ends the session and clears the cookie while session.autoRenewal is off', async () => {
+      const userId = new ObjectId();
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: userId.toString(), sessionId: 's9' });
+      const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
+      const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(undefined);
+      const app = appWithDb(makeDb({ _id: 'main', session: { autoRenewal: false } }));
+      const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`);
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('SESSION_RENEWAL_DISABLED');
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's9', 'expiration', 'system');
+      expect(rotateSpy).not.toHaveBeenCalled();
+      expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
+    });
+
+    // #1330: the refresh reads the owner from userAccountId and the id from
+    // sessionId, and hands the stored copy to the rotation.
+    it('rotates the session by its sessionId, passing the stored copy', async () => {
+      const userId = new ObjectId();
+      const stored = { userAccountId: userId.toString(), sessionId: 's-canon' };
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue(stored);
+      const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
+      const db = makeDbWithRbac(
+        { _id: userId, email: 'a@b.com', username: 'u', accessType: 2, name: 'A' },
+        [{ userAccountId: userId.toString(), accessType: 3 }]
+      );
+      const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      const res = await request(appWithDb(db))
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`);
+
+      expect(res.status).toBe(200);
+      expect(rotateSpy).toHaveBeenCalledWith(expect.anything(), 's-canon', expect.any(String), expect.any(String), stored);
+    });
+
     it('rotates tokens and returns a new access token on the happy path', async () => {
       const userId = new ObjectId();
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: userId.toString(), sessionId: 's9' });
       const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
       // #431: the new access token's accessType is resolved from the RBAC
       // assignment, not the User document's (no-longer-populated) field.
@@ -788,6 +787,33 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(rotateSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token='))).toBe(true);
     });
+
+    // #1306 (RNF021 C2): refresh checked only that the user existed.
+    it.each(['inactive', 'blocked', 'suspended', 'Inativo'])(
+      'refuses to renew for an account whose status is %s, ending the session',
+      async (status) => {
+        const userId = new ObjectId();
+        vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: userId.toString(), sessionId: 's9' });
+        const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
+        const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(undefined);
+        const db = makeDbWithRbac(
+          { _id: userId, email: 'a@b.com', username: 'u', displayName: 'A', accountStatus: status },
+          [{ userAccountId: userId.toString(), accessType: 2 }]
+        );
+        const app = appWithDb(db);
+        const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+        const res = await request(app)
+          .post('/api/auth/refresh')
+          .set('Cookie', `refresh_token=${refreshToken}`);
+
+        expect(res.status).toBe(401);
+        expect(res.body.code).toBe('ACCOUNT_INACTIVE');
+        expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's9', 'admin_action', 'system');
+        expect(rotateSpy).not.toHaveBeenCalled();
+        expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
+      }
+    );
   });
 
   describe('POST /password-reset/request and /password-reset/reset', () => {
@@ -868,5 +894,52 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(spy).toHaveBeenCalledTimes(1);
       expect(res.status).toBe(200);
     });
+  });
+});
+
+// #1246: the forms read the strength rules the server will enforce. Public by
+// design (the reset page has no session), and the reuse keys stay out.
+describe('GET /api/auth/password-policy (#1246)', () => {
+  function dbWithConfig(config) {
+    return { collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue(config) })) };
+  }
+
+  it('serves the stored strength rules without a session, and no reuse keys', async () => {
+    const db = dbWithConfig({
+      _id: 'main',
+      passwordRules: { minLength: 12, requireUppercase: true, requireLowercase: true, requireNumbers: false, requireSpecialChars: true, preventReuse: true, maxReuseHistory: 7 },
+    });
+    const res = await request(buildApp(loadAuthRoutes(), db)).get('/api/auth/password-policy');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      minLength: 12, minLengthWithMFA: 12, requireUppercase: true, requireLowercase: true, requireNumbers: false, requireSpecialChars: true,
+      allowPasswordReset: true,
+    });
+  });
+
+  // #1257: a new deployment's defaults, after NIST SP 800-63B-4.
+  it('serves the defaults when no config document exists', async () => {
+    const res = await request(buildApp(loadAuthRoutes(), dbWithConfig(null))).get('/api/auth/password-policy');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      minLength: 15, minLengthWithMFA: 8, requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
+      allowPasswordReset: true,
+    });
+  });
+
+  // #1249: authentication.requireStrongPassword off relaxes the composition
+  // flags, and allowPasswordReset off is reported so the login page hides the link.
+  it('reports requireStrongPassword and allowPasswordReset from the authentication group', async () => {
+    const db = dbWithConfig({ _id: 'main', authentication: { requireStrongPassword: false, allowPasswordReset: false }, passwordRules: { minLength: 10 } });
+    const res = await request(buildApp(loadAuthRoutes(), db)).get('/api/auth/password-policy');
+    expect(res.body.data).toEqual({
+      minLength: 10, minLengthWithMFA: 10, requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
+      allowPasswordReset: false,
+    });
+  });
+
+  it('answers 503 with no database', async () => {
+    const res = await request(buildApp(loadAuthRoutes(), undefined)).get('/api/auth/password-policy');
+    expect(res.status).toBe(503);
   });
 });

@@ -8,8 +8,8 @@ const env = require('../../config/env');
  * - A amostra deve existir e possuir localização de origem.
  * - O destino deve ser válido e estar livre.
  * - Escritas de estado + auditoria devem ocorrer na mesma transação Mongo.
- * - Operações de linhagem (Neo4j) devem ser validadas e persistidas antes do MongoDB
- *   conforme exigência de cadeia de custódia ISO 20387.
+ * - O evento de custódia (ISO 20387) é validado antes do MongoDB e registrado no
+ *   outbox do grafo na mesma transação (#1312); nenhuma escrita direta no Neo4j.
  */
 class MoveSampleUseCase {
   /**
@@ -69,7 +69,7 @@ class MoveSampleUseCase {
       throw new Error('Caixa de destino não encontrada');
     }
 
-    const lineageResult = await this.ensureLineageBeforeMongo({
+    const lineagePayload = {
       specimenId: String(snapshotSample._id),
       barcode: snapshotSample.barcode || null,
       eventType: 'move',
@@ -78,80 +78,83 @@ class MoveSampleUseCase {
       actorId: command?.actor?.userId || null,
       reason: command.reason || null,
       happenedAt: new Date()
-    });
+    };
+    const lineageResult = await this.validateLineageBeforeMongo(lineagePayload);
+    let lineageEventId = null;
 
     let movementID = null;
     let movedAt = new Date();
     let sampleSnapshot = null;
 
-    try {
-      await this.storageRepository.withTransaction(async (session) => {
-        const sample = await this.storageRepository.findSampleById(command.specimenId, session);
-        if (!sample) {
-          throw new Error('Amostra não encontrada');
-        }
+    await this.storageRepository.withTransaction(async (session) => {
+      const sample = await this.storageRepository.findSampleById(command.specimenId, session);
+      if (!sample) {
+        throw new Error('Amostra não encontrada');
+      }
 
-        const sourceBoxId = sample?.storageAssignment?.boxId;
-        const sourcePosition = sample?.storageAssignment?.positionCode;
-        if (!sourceBoxId || !sourcePosition) {
-          throw new Error('Amostra não possui localização de origem para movimentação');
-        }
+      const sourceBoxId = sample?.storageAssignment?.boxId;
+      const sourcePosition = sample?.storageAssignment?.positionCode;
+      if (!sourceBoxId || !sourcePosition) {
+        throw new Error('Amostra não possui localização de origem para movimentação');
+      }
 
-        const targetBox = await this.storageRepository.findBoxById(to.boxId, session);
-        if (!targetBox) {
-          throw new Error('Caixa de destino não encontrada');
-        }
+      const targetBox = await this.storageRepository.findBoxById(to.boxId, session);
+      if (!targetBox) {
+        throw new Error('Caixa de destino não encontrada');
+      }
 
-        await this.storageRepository.moveSamplePosition(
-          {
-            specimenId: command.specimenId,
-            fromBoxId: from.boxId,
-            fromPosition: from.position,
-            toBoxId: to.boxId,
-            toPosition: to.position
+      await this.storageRepository.moveSamplePosition(
+        {
+          specimenId: command.specimenId,
+          fromBoxId: from.boxId,
+          fromPosition: from.position,
+          toBoxId: to.boxId,
+          toPosition: to.position
+        },
+        session
+      );
+
+      movedAt = new Date();
+      sampleSnapshot = {
+        specimenId: String(sample.specimenId || sample._id),
+        barcode: sample.barcode || null
+      };
+
+      const auditResult = await this.auditRepository.appendImmutableAudit(
+        {
+          specimenId: String(sample.specimenId || sample._id),
+          barcode: sample.barcode || null,
+          eventType: 'move',
+          before: {
+            storageLocation: {
+              boxId: from.boxId,
+              position: from.position
+            }
           },
-          session
-        );
-
-        movedAt = new Date();
-        sampleSnapshot = {
-          specimenId: String(sample._id),
-          barcode: sample.barcode || null
-        };
-
-        const auditResult = await this.auditRepository.appendImmutableAudit(
-          {
-            specimenId: String(sample._id),
-            barcode: sample.barcode || null,
-            eventType: 'move',
-            before: {
-              storageLocation: {
-                boxId: from.boxId,
-                position: from.position
-              }
-            },
-            after: {
-              storageLocation: {
-                boxId: to.boxId,
-                position: to.position
-              }
-            },
-            context: {
-              reason: command.reason || null,
-              notes: command.notes || null,
-              actor: command.actor
-            },
-            timestamp: movedAt
+          after: {
+            storageLocation: {
+              boxId: to.boxId,
+              position: to.position
+            }
           },
-          session
-        );
+          context: {
+            reason: command.reason || null,
+            notes: command.notes || null,
+            actor: command.actor
+          },
+          timestamp: movedAt
+        },
+        session
+      );
 
-        movementID = auditResult.movementID;
-      });
-    } catch (mongoError) {
-      await this.compensateLineageIfNeeded(lineageResult, String(snapshotSample._id));
-      throw mongoError;
-    }
+      movementID = auditResult.movementID;
+
+      lineageEventId = await this.recordLineageInTransaction(
+        lineageResult,
+        { ...lineagePayload, happenedAt: movedAt },
+        session
+      );
+    });
 
     return {
       success: true,
@@ -160,10 +163,10 @@ class MoveSampleUseCase {
       from,
       to,
       movedAt,
-      lineageSynced: lineageResult.lineagePersisted,
+      lineageSynced: lineageResult.lineageValidated,
       lineageValidated: lineageResult.lineageValidated,
-      lineagePersisted: lineageResult.lineagePersisted,
-      lineageEventId: lineageResult.eventId || null
+      lineagePersisted: lineageResult.lineageValidated,
+      lineageEventId
     };
   }
 
@@ -193,46 +196,45 @@ class MoveSampleUseCase {
     }
   }
 
-  async ensureLineageBeforeMongo(payload) {
+  // LINEAGE_MODE governs this pre-MongoDB step only: a missing lineage
+  // repository or a custody payload missing its fields refuses the operation
+  // under fail-closed, and under fail-open the operation runs without a
+  // custody event. It reads nothing; custody reads no consent (MongoDB is the
+  // consent authority, and revocation is prospective, RF010 AC6).
+  async validateLineageBeforeMongo(payload) {
     const shouldFailHard = String(env.LINEAGE_MODE || 'fail-open').toLowerCase() === 'fail-closed';
 
     if (!this.lineageRepository) {
-      const error = new Error('[ISO20387][LINEAGE] Repositório Neo4j ausente para operação de custódia');
+      const error = new Error('[ISO20387][LINEAGE] Repositório de linhagem ausente para operação de custódia');
       if (shouldFailHard) {
         throw error;
       }
       logger.warn(error.message);
-      return { lineageValidated: false, lineagePersisted: false };
+      return { lineageValidated: false };
     }
 
     try {
       await this.lineageRepository.validateBeforePersistence(payload);
-      const persisted = await this.lineageRepository.recordCustodyEvent(payload);
-      return { lineageValidated: true, lineagePersisted: true, eventId: persisted?.eventId || null };
+      return { lineageValidated: true };
     } catch (error) {
-      logger.error('[ISO20387][LINEAGE] Falha na validação/persistência pré-Mongo (move):', error.message || error);
+      logger.error('[ISO20387][LINEAGE] Falha na validação pré-Mongo (move):', error.message || error);
       if (shouldFailHard) {
         throw new Error('ISO20387_LINEAGE_VALIDATION_FAILED: operação bloqueada antes do MongoDB');
       }
-      return { lineageValidated: false, lineagePersisted: false, eventId: null };
+      return { lineageValidated: false };
     }
   }
 
-  async compensateLineageIfNeeded(lineageResult, specimenId) {
-    if (!lineageResult?.lineagePersisted || !lineageResult?.eventId || !this.lineageRepository) {
-      return;
+  // #1312 (RF023 AC3/AC8): the custody event is an outbox append inside the
+  // move's own transaction, never a Neo4j write. A failed append aborts the
+  // transaction, so the move is refused in either LINEAGE_MODE and MongoDB
+  // never keeps a step the graph was not told about.
+  async recordLineageInTransaction(lineageResult, payload, session) {
+    if (!lineageResult?.lineageValidated) {
+      return null;
     }
-
-    try {
-      await this.lineageRepository.compensateCustodyEvent({
-        eventId: lineageResult.eventId,
-        specimenId,
-        reason: 'mongo_transaction_failed'
-      });
-      logger.warn('[ISO20387][SAGA] Compensação Neo4j concluída após falha Mongo (move)');
-    } catch (compensationError) {
-      logger.error('[ISO20387][SAGA] Falha ao compensar evento de linhagem (move):', compensationError.message || compensationError);
-    }
+    const persisted = await this.lineageRepository.recordCustodyEvent(payload, { session });
+    return persisted?.eventId || null;
   }
 }
 

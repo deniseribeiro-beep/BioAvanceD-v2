@@ -2,7 +2,11 @@ const bcrypt = require('bcryptjs');
 const speakeasy = require('speakeasy');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { randomUUID, randomInt } = require('crypto');
 const { hashToken } = require('../utils/tokenHash');
+const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
+const SessionModel = require('../models/Session');
+const UserModel = require('../models/User');
 
 /**
  * Service de Segurança do Usuário
@@ -103,13 +107,16 @@ class UserSecurityService {
 
       // Busca recovery codes
       const recoveryCodesCollection = db.collection('recovery_codes');
-      const recoveryCodes = await recoveryCodesCollection.findOne({ userID: new ObjectId(userID) });
-      
+      const recoveryCodes = await recoveryCodesCollection.findOne(
+        RecoveryCodeSetModel.ownerFilter(new ObjectId(userID))
+      );
+
       return {
         primaryEnabled: user.mfaEnabled || false,
-        primarySetupDate: user.mfaSetupDate || null,
+        // dict-02 P1X-0198 mfaSetupAt (#1330).
+        primarySetupDate: UserModel.mfaSetupAtOf(user) || null,
         recoveryCodes: {
-          remaining: recoveryCodes?.remaining || 0,
+          remaining: RecoveryCodeSetModel.remainingOf(recoveryCodes),
           codes: null // Nunca retorna códigos em listagem
         }
       };
@@ -150,13 +157,18 @@ class UserSecurityService {
       }
 
       // Calcula força da senha (baseado em políticas)
-      const strength = this.calculatePasswordStrength(user.password);
+      const strength = this.calculatePasswordStrength(UserModel.passwordHashOf(user));
       const strengthScore = strength === 'strong' ? 5 : strength === 'medium' ? 3 : 1;
       
-      // Calcula expiração (90 dias padrão)
-      const lastChanged = user.passwordChangedAt || user.createdAt || new Date();
-      const lastChangedDate = lastChanged instanceof Date ? lastChanged : new Date(lastChanged);
-      const expiresAt = new Date(lastChangedDate.getTime() + 90 * 24 * 60 * 60 * 1000);
+      // #1251: the policy's expirationDays and the same anchor login uses
+      // (passwordChangedAt, then the pre-rename lastPasswordChange, then
+      // createdAt). 0 days means no expiry, reported as null.
+      const passwordService = require('./password.service');
+      const policy = await passwordService.resolvePasswordPolicy(db);
+      const lastChanged = passwordService.passwordChangedAt(user) || new Date();
+      const expiresAt = policy.expirationDays === 0
+        ? null
+        : new Date(lastChanged.getTime() + policy.expirationDays * 24 * 60 * 60 * 1000);
       
       return {
         lastChanged: lastChanged,
@@ -195,17 +207,17 @@ class UserSecurityService {
       
       // Busca sessões no banco
       const dbSessions = await sessionsCollection.find({
-        userID: userID.toString(),
+        ...SessionModel.ownerFilter(userID.toString()),
         isActive: true
-      }).sort({ lastActivity: -1 }).toArray();
-      
+      }).sort({ lastActivityAt: -1 }).toArray();
+
       // Se não houver sessões no banco, tenta buscar do cache do sessionService
       let sessions = dbSessions;
       if (sessions.length === 0) {
         // Busca do cache do sessionService
         const sessionService = require('./session.service');
         const cacheSessions = Array.from(sessionService.sessions.values())
-          .filter(s => s.userID === userID.toString() && s.isActive);
+          .filter(s => SessionModel.ownerOf(s) === userID.toString() && s.isActive);
         sessions = cacheSessions;
       }
       
@@ -226,12 +238,12 @@ class UserSecurityService {
         const isCurrent = session.token === currentToken;
         
         return {
-          id: session.sessionID || session._id?.toString() || `session_${Date.now()}`,
+          id: SessionModel.sessionIdOf(session) || session._id?.toString() || `session_${Date.now()}`,
           deviceName: this.extractDeviceName(userAgent),
           browser: this.extractBrowser(userAgent),
           os: this.extractOS(userAgent),
           location: this.getLocationFromIP(ip),
-          lastAccess: session.lastActivity || session.createdAt || new Date(),
+          lastAccess: SessionModel.lastActivityOf(session) || SessionModel.startedAtOf(session) || new Date(),
           isCurrent: isCurrent
         };
       });
@@ -453,47 +465,51 @@ class UserSecurityService {
       }
 
       // Valida senha atual
-      const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+      const isCurrentPasswordValid = await bcrypt.compare(currentPassword, UserModel.passwordHashOf(user));
       if (!isCurrentPasswordValid) {
         await authService.recordFailedPasswordAttempt(db, usersCollection, user);
         throw new Error('Senha atual incorreta');
       }
 
-      // Valida complexidade da senha
-      const PasswordValidator = require('../utils/passwordValidator');
-      PasswordValidator.validateOrThrow(newPassword);
-      
-      // Verifica se não está reutilizando senha (últimas 5)
-      const passwordHistory = user.passwordHistory || [];
-      for (const oldHash of passwordHistory) {
-        const isReused = await bcrypt.compare(newPassword, oldHash);
-        if (isReused) {
-          throw new Error('Você não pode reutilizar uma senha recente');
-        }
+      // #1244: reuse follows passwordRules through the one shared check.
+      // This site used to compare every stored hash but never the current
+      // password, and kept 5 where the others kept 3. Its own message is
+      // kept, since UserSecurityPage shows it.
+      const passwordService = require('./password.service');
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      // #1246: the policy's strength rules, as every other password write
+      // checks them; this site had its own 12-character validator.
+      passwordService.validateStrength(newPassword, passwordPolicy, user);
+      try {
+        await passwordService.validateReuse(newPassword, user, passwordPolicy);
+      } catch (reuseError) {
+        throw new Error('Você não pode reutilizar uma senha recente');
       }
-      
+
       // Hash da nova senha
       const saltRounds = 12;
       const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
-      
+
       // Atualiza senha e histórico
-      const newPasswordHistory = [user.password, ...passwordHistory].slice(0, 5);
+      const newPasswordHistory = passwordService.nextPasswordHistory(user, passwordPolicy);
       
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },
-        {
-          $set: {
-            password: newPasswordHash,
-            passwordHistory: newPasswordHistory,
-            passwordChangedAt: new Date(),
-            // #995: a successful change clears the counter AND the lock, the
-            // same pairing processLogin's success path uses. This site cleared
-            // neither, so it could only ever count up.
-            ...authService.clearedLockoutFields(),
-            updatedAt: new Date()
-          }
-        }
+        UserModel.storedUpdateOf({
+          passwordHash: newPasswordHash,
+          passwordHistoryHashes: newPasswordHistory,
+          passwordChangedAt: new Date(),
+          // #1250: the owner replaced it, which is what forceReset asks
+          // for; auth.controller's changePassword clears it the same way.
+          forcePasswordReset: false,
+          // #995: a successful change clears the counter AND the lock, the
+          // same pairing processLogin's success path uses. This site cleared
+          // neither, so it could only ever count up.
+          ...authService.clearedLockoutFields(),
+          updatedAt: new Date()
+        })
       );
+      await authService.moveToCanonicalNames(usersCollection, user, authService.PASSWORD_WRITE_FIELDS);
     } catch (error) {
       logger.error('Erro ao atualizar senha:', error.message);
       throw error;
@@ -519,18 +535,24 @@ class UserSecurityService {
         codes.map(code => bcrypt.hash(code, 10))
       );
       
-      // Remove códigos antigos e salva novos
+      // Remove códigos antigos e salva novos: a new set replaces the user's
+      // previous one in place, under the canonical names, and drops the
+      // pre-dictionary ones a document written before them still carries.
+      const owner = new ObjectId(userID);
+      const filter = RecoveryCodeSetModel.ownerFilter(owner);
+      const previous = await recoveryCodesCollection.findOne(filter);
+      const now = new Date();
+      const set = RecoveryCodeSetModel.fieldsOf({
+        recoveryCodeSetId: randomUUID(),
+        userAccountId: owner,
+        codeHashes: hashedCodes,
+        generatedAt: now,
+        regeneratedAt: previous ? now : null
+      });
+      const unset = Object.fromEntries(RecoveryCodeSetModel.LEGACY_FIELDS.map((field) => [field, '']));
       await recoveryCodesCollection.updateOne(
-        { userID: new ObjectId(userID) },
-        {
-          $set: {
-            codes: hashedCodes,
-            remaining: 10,
-            usedCodes: [],
-            createdAt: new Date(),
-            updatedAt: new Date()
-          }
-        },
+        filter,
+        { $set: set, $unset: unset },
         { upsert: true }
       );
       
@@ -547,9 +569,12 @@ class UserSecurityService {
    */
   generateRecoveryCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Remove I, O, 0, 1 para evitar confusão
+    // #1331: a code now signs in, so it is drawn from the CSPRNG, not
+    // Math.random. Sign-in recognises this alphabet and length
+    // (auth.service.js asRecoveryCode); change them together.
     let code = '';
     for (let i = 0; i < 8; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+      code += chars.charAt(randomInt(chars.length));
     }
     return code;
   }
@@ -562,16 +587,16 @@ class UserSecurityService {
       const sessionsCollection = db.collection('sessions');
       const { ObjectId } = require('mongodb');
 
-      // Suporta documentos que usam sessionID ou apenas _id
-      const query = {
-        userID: userID.toString(),
-        $or: [
-          { sessionID: sessionId }
-        ]
-      };
+      // Suporta documentos que usam sessionId ou apenas _id; o dono casa sob
+      // userAccountId.
+      const idClauses = [SessionModel.idFilter(sessionId)];
       if (ObjectId.isValid(sessionId)) {
-        query.$or.push({ _id: new ObjectId(sessionId) });
+        idClauses.push({ _id: new ObjectId(sessionId) });
       }
+      const query = {
+        ...SessionModel.ownerFilter(userID.toString()),
+        $and: [{ $or: idClauses }]
+      };
 
       const result = await sessionsCollection.updateOne(
         query,
@@ -598,10 +623,10 @@ class UserSecurityService {
       // Limpa cache em memória do sessionService
       const sessionService = require('./session.service');
       if (sessionService.sessions) {
-        // Tenta remover pelo sessionID; se não existir, remove pela correspondência de _id
+        // Tenta remover pelo sessionId; se não existir, remove pela correspondência de _id
         if (!sessionService.sessions.delete(sessionId)) {
           for (const [sid, s] of sessionService.sessions.entries()) {
-            if (sid === sessionId || s.sessionID === sessionId || (s._id && s._id.toString && s._id.toString() === sessionId)) {
+            if (sid === sessionId || SessionModel.sessionIdOf(s) === sessionId || (s._id && s._id.toString && s._id.toString() === sessionId)) {
               sessionService.sessions.delete(sid);
             }
           }
@@ -672,21 +697,28 @@ class UserSecurityService {
       // Salva token no banco
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },
-        {
-          $set: {
-            // #1078: same hash-at-rest rule as auth.service's writer. Note
-            // this path mints a token valid for up to 24h, so the window in
-            // which a raw stored value would have been readable was the
-            // longer of the two.
-            passwordResetTokenHash: hashToken(resetToken),
-            passwordResetExpires: expiresAt,
-            updatedAt: new Date()
-          }
-        }
+        UserModel.storedUpdateOf({
+          // #1078: same hash-at-rest rule as auth.service's writer. Note
+          // this path mints a token valid for up to 24h, so the window in
+          // which a raw stored value would have been readable was the
+          // longer of the two.
+          passwordResetTokenHash: hashToken(resetToken),
+          passwordResetExpiresAt: expiresAt,
+          updatedAt: new Date()
+        })
       );
 
-      // Aqui você pode enviar o email com o link de reset
-      // Por enquanto, apenas retorna o token (em produção, enviar por email)
+      // #1203: the second instance of that issue's bug. The route answers
+      // "Link de reset de senha enviado com sucesso" and nothing was sent;
+      // the controller strips resetToken from the response, so the link
+      // reached nobody. AWAITED here, unlike auth.service's unauthenticated
+      // sibling: the caller is the authenticated account owner, so there is
+      // no existence to hide, and a failed send must surface as the route's
+      // 400 rather than as a success toast.
+      const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+      const notificationService = require('./NotificationService');
+      await notificationService.sendPasswordReset(user.email, resetLink, { expiresInMinutes: Math.round(expirationHours * 60) });
+
       logger.info(`Token de reset de senha gerado para usuário ${userID}, expira em ${expirationHours} horas`);
 
       return {

@@ -1217,3 +1217,129 @@ describe('DELETE /api/equipment/:id', () => {
     expect(res.body.message).toBe('delete failed');
   });
 });
+
+// #1087: all three GETs were `authenticate` + `requireOrganizationScope`
+// and nothing else, so every authenticated principal could list the
+// equipment inventory -- including UsuarioExterno, whose only seeded grant
+// is viewReports. The sibling file already gated its reads: sensor.routes.js
+// puts requirePermission('viewTemperature') on both of its GETs, so this was
+// a divergence between route families written alongside each other, not a
+// considered decision about equipment.
+//
+// The code is a NEW read-only one rather than manageStorageTopology, and
+// that is load-bearing: Tecnico does NOT hold manageStorageTopology, while
+// RF025's primary actor IS Tecnico and its AC#3 is "Registrar equipamentos
+// utilizados". Gating these reads on the write code would have broken the
+// role the requirement is written for -- the trap #1073 and #929 both
+// record, arrived at from the opposite direction.
+//
+// viewEquipment is READ-only on purpose: the #631 derived-action check
+// passes for GET and the code can never be reused to gate a write.
+describe('#1087: the three equipment READS are permission-gated', () => {
+  const EXTERNAL_USER = 'qa-user-external';
+
+  // accessType 1 is not in this file's RBAC_COLLECTIONS, which seeds 2/3/4.
+  function externalRbac() {
+    return buildRbacCollections([{ userAccountId: EXTERNAL_USER, accessType: 1 }]);
+  }
+
+  function externalToken() {
+    return jwt.sign(
+      { userID: EXTERNAL_USER, accessType: 1, roleName: 'Usuário Externo', name: 'QA External', mfaVerified: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+  }
+
+  function equipmentCollection() {
+    return createCollectionMock({
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_EQ]) }),
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+    });
+  }
+
+  function externalDb() {
+    return createDbMock({
+      ...externalRbac(),
+      organizations: scopedOrganizations(),
+      equipment: equipmentCollection(),
+    });
+  }
+
+  it('GET / refuses an UsuarioExterno caller, who holds only viewReports', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app)
+      .get('/api/equipment')
+      .set('Authorization', `Bearer ${externalToken()}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /analytical refuses the same caller', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app)
+      .get('/api/equipment/analytical')
+      .set('Authorization', `Bearer ${externalToken()}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /:id refuses the same caller', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app)
+      .get('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${externalToken()}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  // CONTROL, and the one that matters most: RF025 names Tecnico as its
+  // primary actor and AC#3 is "Registrar equipamentos utilizados", so a
+  // Tecnico losing equipment reads would be a requirement regression, not
+  // a tightening. Green before and after.
+  it('CONTROL: a Tecnico (accessType 2) still lists equipment', async () => {
+    app.locals.db = createDbMock({
+      ...RBAC_COLLECTIONS,
+      organizations: scopedOrganizations(),
+      equipment: equipmentCollection(),
+    });
+
+    const res = await request(app)
+      .get('/api/equipment')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  // CONTROL: the unauthenticated refusal must stay 401, not become 403 --
+  // a 403 here would mean the gate runs before authenticate.
+  it('CONTROL: no token is still 401, not 403', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app).get('/api/equipment');
+
+    expect(res.status).toBe(401);
+  });
+
+  // CONTROL: the org-scope refusal is a DIFFERENT gate on the same route
+  // (#635/#1081). A 403 from the permission check must not be mistaken for
+  // it, so this pins that an in-scope Tecnico is admitted while the
+  // unassigned one is not -- both 403, different causes.
+  it('CONTROL: an unassigned org-scope caller is still refused separately', async () => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: userIdFor(2), accessType: 2, organizationId: '' }]),
+      organizations: scopedOrganizations(),
+      equipment: equipmentCollection(),
+    });
+
+    const res = await request(app)
+      .get('/api/equipment')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
+  });
+});

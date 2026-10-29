@@ -85,6 +85,7 @@
 
 .role-badge-container {
 	display: inline-flex;
+	gap: 0.35rem;
 }
 
 .role-badge {
@@ -106,9 +107,16 @@
 	border-color: rgba(0, 122, 77, 0.22);
 }
 
+/* #1240: the additive auditor role, shown beside the main role. */
+.role-auditor {
+	background: rgba(124, 58, 237, 0.1);
+	color: #6d28d9;
+	border-color: rgba(124, 58, 237, 0.22);
+}
+
 .role-coordenador {
 	background: rgba(37, 99, 235, 0.1);
-	color: var(--info);
+	color: #1c5cea; /* RNF027 C2 (#1324): --info on this tint is 4.3:1 at 12px; this is 4.7:1. */
 	border-color: rgba(37, 99, 235, 0.22);
 }
 

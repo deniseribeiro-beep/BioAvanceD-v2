@@ -75,7 +75,15 @@ const auditRequest = async (req, res, next) => {
           
           // Determina módulo
           const module = determineModule(requestPath);
-          
+
+          // #1120: a controller that knows WHY it refused a request names it
+          // in res.locals.auditReason, and it rides on this row rather than a
+          // second one. Without it, a machine-ingest 400 for an empty
+          // sensorId and one for a non-finite temperature were byte-identical
+          // rows. payload is in buildHashPayload, so the reason is chained.
+          // Added only when set, so every other row's payload keeps its shape.
+          const auditReason = res.locals && res.locals.auditReason;
+
           await auditLogger.log({
             action: action,
             resourceType: entity,
@@ -89,7 +97,8 @@ const auditRequest = async (req, res, next) => {
               path: requestPath,
               statusCode: statusCode,
               duration: duration,
-              query: Object.keys(req.query).length > 0 ? 'present' : null
+              query: Object.keys(req.query).length > 0 ? 'present' : null,
+              ...(auditReason ? { reason: auditReason } : {})
             }
           });
         }
@@ -165,26 +174,36 @@ const ENTITY_MAP = {
   'result': 'Result',
 
   // #1115: the 40 mounted prefixes that previously fell through to Sistema.
+  'access-policies': 'AccessPolicy',
   'access-requests': 'AccessRequest',
   'analysis-files': 'AnalysisFile',
+  'file-access': 'DataFile',
   'analysis-types': 'AnalysisType',
   'assays': 'Assay',
   'audit': 'AuditEvent',
   'backup': 'Backup',
   'backup-policy': 'BackupPolicy',
+  'biobanks': 'Biobank',
+  'biomarker-associations': 'BiomarkerAssociation',
   'cids': 'Cid',
   'collections': 'Collection',
   'compliance': 'Compliance',
   'datasets': 'Dataset',
+  'diagnostic-reports': 'DiagnosticReport',
   'disposition-actions': 'DispositionAction',
   'e-consent': 'Consent',
   'extraction-protocols': 'ExtractionProtocol',
-  'facilities': 'Facility',
+  'fhir-profiles': 'FHIRProfileRegistry',
   'hpo': 'TerminologyConcept',
+  'identifier-namespaces': 'IdentifierNamespaceRegistry',
+  'imaging-derived-data': 'ImagingDerivedData',
+  'imaging-studies': 'ImagingStudy',
   'incidents': 'Incident',
+  'interoperability-mapping-releases': 'InteroperabilityMappingRelease',
   'iot': 'TelemetryReading',
   'legal-holds': 'LegalHold',
   'measurement-units': 'MeasurementUnit',
+  'networks': 'Network',
   'nonconformances': 'Nonconformance',
   'notification-rules': 'NotificationRule',
   'notifications': 'Notification',
@@ -196,13 +215,21 @@ const ENTITY_MAP = {
   'quality': 'RCSAssessment',
   'quality-descriptions': 'QualityDescription',
   'reagent-lots': 'ReagentLot',
+  'reference-releases': 'ReferenceDatasetRelease',
   'report-templates': 'ReportTemplate',
   'retention-policies': 'RetentionPolicy',
-  'rooms': 'Room',
   'sample-origins': 'SampleOrigin',
   'sample-types': 'SampleType',
   'security': 'SecurityConfiguration',
+  'shipments': 'Shipment',
   'storage': 'StorageContainer',
+  // #1314/#1316: the v2 physical chain and custody; each route also writes
+  // its own audit row naming the assignment it created or closed.
+  'physical-chain': 'Container',
+  'devices': 'Device',
+  // #1317: the telemetry binding; each write also audits explicitly.
+  'device-registrations': 'DeviceRegistration',
+  'telemetry-datastreams': 'TelemetryDatastream',
   'studies': 'Study',
   'terminologies': 'TerminologyConcept',
   'workflow-runs': 'WorkflowRun'
@@ -218,12 +245,16 @@ const ENTITY_MAP = {
  *  dictionary     reads the canonical data dictionary itself
  *  phone-codes    static reference lookup
  *  intake-wizard  multi-entity workflow; its handlers audit explicitly
+ *  ingestion      multi-entity ingestion; its handler audits explicitly
+ *  monitoring     read-only list of run records; changes no entity
  */
 const NO_ENTITY_ROUTES = [
   'health',
   'dictionary',
   'phone-codes',
-  'intake-wizard'
+  'intake-wizard',
+  'ingestion',
+  'monitoring'
 ];
 
 /**

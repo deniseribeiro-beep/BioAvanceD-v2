@@ -2,7 +2,6 @@ require('dotenv').config();
 
 module.exports = {
   NODE_ENV: process.env.NODE_ENV || 'development',
-  TEST_ENVIRONMENT: process.env.TEST_ENVIRONMENT === 'true' || process.env.TEST_ENVIRONMENT === '1',
   // #359 / RNF008.6: authLimiter's relaxed budget must be an explicit,
   // isolated opt-in, not inferred from NODE_ENV (a generic environment
   // indicator every non-production run shares, including one where
@@ -16,6 +15,16 @@ module.exports = {
   // consent surface), and a stack that needs headroom on one does not
   // thereby need it on the other.
   CONSENT_RATE_LIMIT_RELAXED: process.env.CONSENT_RATE_LIMIT_RELAXED === 'true' || process.env.CONSENT_RATE_LIMIT_RELAXED === '1',
+  // RF022 AC4/AC9, RNF014 C7: the API and workers refuse to start unless the
+  // newest ReadinessReport for their environment is `ready`. An explicit
+  // opt-in, set by the stacks that run the Foundation job first (test,
+  // production), so a native `npm start` with no Foundation run still works.
+  FOUNDATION_READINESS_REQUIRED: process.env.FOUNDATION_READINESS_REQUIRED === 'true' || process.env.FOUNDATION_READINESS_REQUIRED === '1',
+  // #1378 (ELM-0116, "reject legacy writes after migration window"): closes
+  // the Sample.barcode migration window. An explicit opt-in: unset, create,
+  // both imports and an update still write Sample.barcode, and a scan still
+  // falls back to it.
+  SAMPLE_BARCODE_WINDOW_CLOSED: process.env.SAMPLE_BARCODE_WINDOW_CLOSED === 'true' || process.env.SAMPLE_BARCODE_WINDOW_CLOSED === '1',
   PORT: process.env.PORT || 3000,
 
   // Mongo
@@ -54,6 +63,14 @@ module.exports = {
   TELEMETRY_TRIGGER_COOLDOWN_MINUTES: process.env.TELEMETRY_TRIGGER_COOLDOWN_MINUTES,
   TELEMETRY_MIN_TEMP_ALERT: process.env.TELEMETRY_MIN_TEMP_ALERT,
   TELEMETRY_MAX_TEMP_ALERT: process.env.TELEMETRY_MAX_TEMP_ALERT,
+  // RF009 AC4, RF017 AC5: what the ingestion contract does with a reading
+  // whose sensor has no TelemetryDatastream valid at its observedAt, no
+  // active DeviceRegistration, or whose Device is not registered, homologated
+  // and unretired, RF017 AC8. `enforce` (the default) refuses it with a 422;
+  // `record`, the opt-out, accepts it and records a TelemetryValidationIssue.
+  // `enforce` became the default on 2026-10-21 (#1392) because no deployment
+  // holds unbound sensors.
+  TELEMETRY_BINDING_MODE: process.env.TELEMETRY_BINDING_MODE || 'enforce',
 
   // MQTT telemetry ingestion
   MQTT_ENABLED: process.env.MQTT_ENABLED === 'true' || process.env.MQTT_ENABLED === '1',
@@ -82,6 +99,12 @@ module.exports = {
   AUDIT_MERKLE_SIGN_KEY_ID: process.env.AUDIT_MERKLE_SIGN_KEY_ID,
   AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE: process.env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE,
   AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON: process.env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON,
+  // #1157: the registry holds the SPKI half of a key that does not exist until
+  // the stack's keygen one-shot runs, and compose resolves its environment at
+  // parse time -- so no static env entry can ever carry it. This names a file
+  // written beside the private key instead; the JSON var above stays the
+  // fallback, for the host-side generator that already writes it.
+  AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE: process.env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE,
   AUDIT_RFC3161_MODE: process.env.AUDIT_RFC3161_MODE,
   AUDIT_RFC3161_TSA_URL: process.env.AUDIT_RFC3161_TSA_URL,
   AUDIT_RFC3161_TSA_AUTH_TOKEN: process.env.AUDIT_RFC3161_TSA_AUTH_TOKEN,
@@ -132,8 +155,24 @@ module.exports = {
   // set only so prod can point them at a volume mounted outside /app.
   UPLOAD_DIR: process.env.UPLOAD_DIR,
   STORAGE_DIR: process.env.STORAGE_DIR,
+  // #1321 (RNF029 C4): DataFile malware scanner; unset or "none" records not-available.
+  MALWARE_SCAN_DRIVER: process.env.MALWARE_SCAN_DRIVER,
+  // #1321 (RF007 AC2, RNF016 C4): DataFile object store; unset or "filesystem" keeps STORAGE_BASE.
+  OBJECT_STORE_DRIVER: process.env.OBJECT_STORE_DRIVER,
+  OBJECT_STORE_S3_ENDPOINT: process.env.OBJECT_STORE_S3_ENDPOINT,
+  OBJECT_STORE_S3_BUCKET: process.env.OBJECT_STORE_S3_BUCKET,
+  OBJECT_STORE_S3_REGION: process.env.OBJECT_STORE_S3_REGION,
+  OBJECT_STORE_S3_ACCESS_KEY_ID: process.env.OBJECT_STORE_S3_ACCESS_KEY_ID,
+  OBJECT_STORE_S3_SECRET_ACCESS_KEY: process.env.OBJECT_STORE_S3_SECRET_ACCESS_KEY,
+  OBJECT_STORE_S3_TIMEOUT_MS: process.env.OBJECT_STORE_S3_TIMEOUT_MS,
   BACKUP_CRON: process.env.BACKUP_CRON,
   BACKUP_RETENTION_DAYS: process.env.BACKUP_RETENTION_DAYS,
+  // #1325 (RNF010 C1): off-site copy of each encrypted run; unset keeps it off.
+  BACKUP_OFFSITE_S3_ENDPOINT: process.env.BACKUP_OFFSITE_S3_ENDPOINT,
+  BACKUP_OFFSITE_S3_BUCKET: process.env.BACKUP_OFFSITE_S3_BUCKET,
+  BACKUP_OFFSITE_S3_REGION: process.env.BACKUP_OFFSITE_S3_REGION,
+  BACKUP_OFFSITE_S3_ACCESS_KEY_ID: process.env.BACKUP_OFFSITE_S3_ACCESS_KEY_ID,
+  BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY: process.env.BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY,
   // #749: read by scheduler.service.js#startRetentionSweepSchedule since it
   // was written, but never registered here -- so the override was dead and
   // the sweep was pinned to its 0 4 * * * fallback no matter what was set.
@@ -141,9 +180,13 @@ module.exports = {
   RESTORE_TEST_CRON: process.env.RESTORE_TEST_CRON,
   TEMP_MONITOR_CRON: process.env.TEMP_MONITOR_CRON,
   TEMP_STALE_MINUTES: process.env.TEMP_STALE_MINUTES,
+  // RNF015 C2 (#1323): platformAlert.service.js parses the thresholds.
+  PLATFORM_ALERT_CRON: process.env.PLATFORM_ALERT_CRON,
+  ALERT_HTTP_ERROR_RATE: process.env.ALERT_HTTP_ERROR_RATE,
+  ALERT_HTTP_P95_MS: process.env.ALERT_HTTP_P95_MS,
+  ALERT_QUEUE_BACKLOG: process.env.ALERT_QUEUE_BACKLOG,
 
   // Notification
-  APP_DOMAIN: process.env.APP_DOMAIN,
   ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,
   RESEND_API_KEY: process.env.RESEND_API_KEY,
   EMAIL_FROM: process.env.EMAIL_FROM,
@@ -168,12 +211,24 @@ module.exports = {
   COLL_MEDICATION_DICTIONARY: process.env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
   COLL_REFERENCE_SEED_RUNS: process.env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns',
   COLL_FOUNDATION_DATA_RUNS: process.env.COLL_FOUNDATION_DATA_RUNS || 'foundationDataRuns',
+  COLL_READINESS_REPORTS: process.env.COLL_READINESS_REPORTS || 'readinessReports',
+  COLL_CONFIGURATION_PROFILES: process.env.COLL_CONFIGURATION_PROFILES || 'configurationProfiles',
+  COLL_CONFIGURATION_RELEASES: process.env.COLL_CONFIGURATION_RELEASES || 'configurationReleases',
+  COLL_CONFIGURATION_CHANGE_EVENTS: process.env.COLL_CONFIGURATION_CHANGE_EVENTS || 'configurationChangeEvents',
+  COLL_CONFIGURATION_VALIDATION_RUNS: process.env.COLL_CONFIGURATION_VALIDATION_RUNS || 'configurationValidationRuns',
+  COLL_CANONICAL_MODEL_RELEASES: process.env.COLL_CANONICAL_MODEL_RELEASES || 'canonicalModelReleases',
+  COLL_GOVERNANCE_INVARIANT_CATALOGS: process.env.COLL_GOVERNANCE_INVARIANT_CATALOGS || 'governanceInvariantCatalogs',
+  COLL_INVARIANT_VIOLATIONS: process.env.COLL_INVARIANT_VIOLATIONS || 'invariantViolations',
   COLL_PARTICIPANT_IDENTITIES: process.env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   COLL_RCS_ASSESSMENTS: process.env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
+  COLL_RCS_INPUT_SNAPSHOTS: process.env.COLL_RCS_INPUT_SNAPSHOTS || 'rcsInputSnapshots',
+  COLL_RCS_GOVERNANCE_EVIDENCE_SNAPSHOTS: process.env.COLL_RCS_GOVERNANCE_EVIDENCE_SNAPSHOTS || 'rcsGovernanceEvidenceSnapshots',
+  COLL_RCS_RULE_PACKAGES: process.env.COLL_RCS_RULE_PACKAGES || 'rcsRulePackages',
   COLL_ENCOUNTERS: process.env.COLL_ENCOUNTERS || 'encounters',
   COLL_CONDITIONS: process.env.COLL_CONDITIONS || 'conditions',
   COLL_PHENOTYPE_OBSERVATIONS: process.env.COLL_PHENOTYPE_OBSERVATIONS || 'phenotypeObservations',
   COLL_CLINICAL_OBSERVATIONS: process.env.COLL_CLINICAL_OBSERVATIONS || 'clinicalObservations',
+  COLL_DIAGNOSTIC_REPORTS: process.env.COLL_DIAGNOSTIC_REPORTS || 'diagnosticReports',
   COLL_CLINICAL_OUTCOMES: process.env.COLL_CLINICAL_OUTCOMES || 'clinicalOutcomes',
   COLL_DERIVED_SCORES: process.env.COLL_DERIVED_SCORES || 'derivedScores',
   COLL_ALLERGY_INTOLERANCES: process.env.COLL_ALLERGY_INTOLERANCES || 'allergyIntolerances',
@@ -182,6 +237,21 @@ module.exports = {
   COLL_PROCEDURES: process.env.COLL_PROCEDURES || 'procedures',
   COLL_SPECIMEN_PREANALYTICS: process.env.COLL_SPECIMEN_PREANALYTICS || 'specimenPreanalytics',
   COLL_QUARANTINE_ACTIONS: process.env.COLL_QUARANTINE_ACTIONS || 'quarantineActions',
+  COLL_CONTAINERS: process.env.COLL_CONTAINERS || 'containers',
+  COLL_SPECIMEN_CONTAINER_ASSIGNMENTS: process.env.COLL_SPECIMEN_CONTAINER_ASSIGNMENTS || 'specimenContainerAssignments',
+  COLL_CONTAINER_POSITION_ASSIGNMENTS: process.env.COLL_CONTAINER_POSITION_ASSIGNMENTS || 'containerPositionAssignments',
+  COLL_RACK_LOCATION_ASSIGNMENTS: process.env.COLL_RACK_LOCATION_ASSIGNMENTS || 'rackLocationAssignments',
+  COLL_TELEMETRY_EXPOSURE_SUMMARIES: process.env.COLL_TELEMETRY_EXPOSURE_SUMMARIES || 'telemetryExposureSummaries',
+  COLL_STORAGE_LOCATIONS: process.env.COLL_STORAGE_LOCATIONS || 'storageLocations',
+  COLL_OPERATIONAL_STATE_DECISIONS: process.env.COLL_OPERATIONAL_STATE_DECISIONS || 'operationalStateDecisions',
+  COLL_LABEL_IDENTIFIERS: process.env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
+  COLL_SCAN_EVENTS: process.env.COLL_SCAN_EVENTS || 'scanEvents',
+  COLL_CUSTODIANSHIP_ASSIGNMENTS: process.env.COLL_CUSTODIANSHIP_ASSIGNMENTS || 'custodianshipAssignments',
+  COLL_SHIPMENTS: process.env.COLL_SHIPMENTS || 'shipments',
+  COLL_DEVICES: process.env.COLL_DEVICES || 'devices',
+  COLL_DEVICE_LIFECYCLE_EVENTS: process.env.COLL_DEVICE_LIFECYCLE_EVENTS || 'deviceLifecycleEvents',
+  COLL_DEVICE_REGISTRATIONS: process.env.COLL_DEVICE_REGISTRATIONS || 'deviceRegistrations',
+  COLL_TELEMETRY_DATASTREAMS: process.env.COLL_TELEMETRY_DATASTREAMS || 'telemetryDatastreams',
   COLL_REFERENCE_DATASET_RELEASES: process.env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
   COLL_REFERENCE_IMPORT_RUNS: process.env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
   COLL_REFERENCE_IMPORT_ISSUES: process.env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',
@@ -196,12 +266,24 @@ module.exports = {
   COLL_NOTIFICATIONS: process.env.COLL_NOTIFICATIONS || 'notifications',
   COLL_LABEL_GENERATIONS: process.env.COLL_LABEL_GENERATIONS || 'labelGenerations',
   COLL_ACCESS_REQUESTS: process.env.COLL_ACCESS_REQUESTS || 'accessRequests',
+  COLL_ACCESS_POLICIES: process.env.COLL_ACCESS_POLICIES || 'accessPolicies',
+  COLL_COLLECTION_GOVERNANCE_APPROVALS: process.env.COLL_COLLECTION_GOVERNANCE_APPROVALS || 'collectionGovernanceApprovals',
+  COLL_COLLECTION_GOVERNANCE_EVENTS: process.env.COLL_COLLECTION_GOVERNANCE_EVENTS || 'collectionGovernanceEvents',
+  COLL_CONSENT_DECISION_EVENTS: process.env.COLL_CONSENT_DECISION_EVENTS || 'consentDecisionEvents',
+  COLL_CONSENT_REVOCATIONS: process.env.COLL_CONSENT_REVOCATIONS || 'consentRevocations',
+  COLL_CONSENT_AUTHORIZATION_DECISIONS: process.env.COLL_CONSENT_AUTHORIZATION_DECISIONS || 'consentAuthorizationDecisions',
+  COLL_CONSENT_PERMISSIONS: process.env.COLL_CONSENT_PERMISSIONS || 'consentPermissions',
+  COLL_CONSENT_COMMUNICATION_EVENTS: process.env.COLL_CONSENT_COMMUNICATION_EVENTS || 'consentCommunicationEvents',
   COLL_REAGENT_LOTS: process.env.COLL_REAGENT_LOTS || 'reagentLots',
   COLL_NONCONFORMANCES: process.env.COLL_NONCONFORMANCES || 'nonconformances',
   COLL_LEGAL_HOLDS: process.env.COLL_LEGAL_HOLDS || 'legalHolds',
   COLL_DISPOSITION_ACTIONS: process.env.COLL_DISPOSITION_ACTIONS || 'dispositionActions',
+  COLL_DATA_FILE_VERSIONS: process.env.COLL_DATA_FILE_VERSIONS || 'dataFileVersions',
   COLL_INGESTION_IDEMPOTENCY_KEYS: process.env.COLL_INGESTION_IDEMPOTENCY_KEYS || 'ingestionIdempotencyKeys',
   COLL_INGESTION_QUARANTINE_RECORDS: process.env.COLL_INGESTION_QUARANTINE_RECORDS || 'ingestionQuarantineRecords',
+  COLL_MISSING_DATA_REASONS: process.env.COLL_MISSING_DATA_REASONS || 'missingDataReasons',
+  COLL_DATA_QUALITY_ASSESSMENTS: process.env.COLL_DATA_QUALITY_ASSESSMENTS || 'dataQualityAssessments',
+  COLL_REFERENCE_COVERAGE_MANIFESTS: process.env.COLL_REFERENCE_COVERAGE_MANIFESTS || 'referenceCoverageManifests',
 
   // Neo4j lineage behavior
   LINEAGE_MODE: process.env.LINEAGE_MODE || 'fail-open',

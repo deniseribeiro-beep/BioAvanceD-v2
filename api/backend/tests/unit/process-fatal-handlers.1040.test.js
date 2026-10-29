@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 // #1040: server.js, src/workers/worker.js, src/workers/import-worker.js and
 // src/workers/neo4jProjection.worker.js each register process-level
@@ -84,6 +84,36 @@ function addedListeners(event, before) {
 }
 
 describe('#1040 process-level fatal-error handlers (observability-only, still terminate)', () => {
+  // #1238: a cold require of server.js loads nearly the whole backend graph
+  // (~4 s in plain node, ~6 s under vitest) and import-worker.js's queue
+  // stack ~2.4 s, so each block's first test timed out on load cost alone.
+  // Every test deletes only the entry module from require.cache, so loading
+  // the three real entry modules once here leaves their dependency graphs
+  // warm. Every listener and guard flag the loads install is put back.
+  beforeAll(async () => {
+    const events = ['unhandledRejection', 'uncaughtException', 'SIGINT', 'SIGTERM'];
+    const guardKeys = [GUARD_KEY, SIGNAL_GUARD_KEY_SERVER, SIGNAL_GUARD_KEY_WORKER];
+    const listenersBefore = Object.fromEntries(events.map((e) => [e, process.listeners(e).slice()]));
+    const guardsBefore = guardKeys.map((k) => [k, Object.prototype.hasOwnProperty.call(process, k), process[k]]);
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+    try {
+      for (const path of [neo4jWorkerPath, importWorkerPath, serverPath]) {
+        require(path);
+        delete require.cache[path];
+      }
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      for (const e of events) {
+        for (const listener of addedListeners(e, listenersBefore[e])) process.removeListener(e, listener);
+      }
+      for (const [k, had, value] of guardsBefore) {
+        delete process[k];
+        if (had) process[k] = value;
+      }
+    }
+  }, 30000);
+
   describe('src/workers/neo4jProjection.worker.js', () => {
     let logger;
 
@@ -357,6 +387,11 @@ describe('#1040 process-level fatal-error handlers (observability-only, still te
     // is faked away here too -- its own #1040 registration is covered by its
     // own describe block above; this block is only about worker.js's.
     let fakeLogger;
+    // #979: worker.js now runs the real validateRedisOnly() before its
+    // connectivity loop, and vitest sets no Redis address; without one the
+    // check throws and startWorker() calls the real process.exit(1).
+    const REDIS_ENV_KEYS = ['REDIS_HOST', 'REDIS_PORT', 'REDIS_URL'];
+    let redisEnvBefore;
 
     function stub(path, exports) {
       require.cache[path] = { id: path, filename: path, loaded: true, exports };
@@ -364,18 +399,26 @@ describe('#1040 process-level fatal-error handlers (observability-only, still te
 
     beforeEach(() => {
       fakeLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      redisEnvBefore = Object.fromEntries(REDIS_ENV_KEYS.map((key) => [key, process.env[key]]));
+      process.env.REDIS_HOST = '127.0.0.1';
+      process.env.REDIS_PORT = '6379';
+      delete process.env.REDIS_URL;
       stub(dotenvPath, { config: vi.fn() });
       stub(loggerPath, fakeLogger);
       stub(importWorkerPath, { initWorker: vi.fn().mockResolvedValue({}), closeWorker: vi.fn() });
       stub(queueConfigPath, { testConnection: vi.fn().mockResolvedValue(true) });
       stub(redisConfigPath, {
         testRedisConnection: vi.fn().mockResolvedValue(true),
-        getRedisInstance: vi.fn(() => ({ ping: vi.fn().mockResolvedValue('PONG') })),
+        getRedisInstance: vi.fn(() => ({ ping: vi.fn().mockResolvedValue('PONG'), on: vi.fn(), removeListener: vi.fn() })),
       });
       stub(dailyMerkleJobPath, { scheduleNextRun: vi.fn() });
     });
 
     afterEach(() => {
+      for (const key of REDIS_ENV_KEYS) {
+        if (redisEnvBefore[key] === undefined) delete process.env[key];
+        else process.env[key] = redisEnvBefore[key];
+      }
       vi.restoreAllMocks();
       for (const path of [workerPath, importWorkerPath, queueConfigPath, redisConfigPath, loggerPath, dailyMerkleJobPath, dotenvPath]) {
         delete require.cache[path];

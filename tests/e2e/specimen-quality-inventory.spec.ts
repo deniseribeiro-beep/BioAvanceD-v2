@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
 import {
   createRealParticipant,
@@ -10,10 +10,14 @@ import {
   seedStudy,
   seedProtocol,
   seedCollectionEntity,
+  clearCollectionRegime,
+  seedQuarantineAction,
+  cleanupQuarantineActions,
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import { deleteOrganizations } from './helpers/listOrganizations';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -180,11 +184,11 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     // conditional, not the specimen registration this criterion covers.
     const first = await create();
     expect([201, 202]).toContain(first.status());
-    const firstSampleID = (await first.json()).data.sampleID;
+    const firstSampleID = (await first.json()).data.specimenId;
 
     const second = await create();
     expect([201, 202]).toContain(second.status());
-    const secondSampleID = (await second.json()).data.sampleID;
+    const secondSampleID = (await second.json()).data.specimenId;
 
     const [firstGet, secondGet] = await Promise.all([
       request.get(`${apiBaseURL}/api/samples/${firstSampleID}`, {
@@ -231,7 +235,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     });
 
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -263,7 +267,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -302,13 +306,69 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
   // the three, so the referent is seeded directly against Mongo (same
   // pattern as seedStorageBoxLocation).
   const seededStorageBoxes: SeededStorageBox[] = [];
+  const organizationIds: string[] = [];
 
-  test.afterAll(async () => {
+  test.afterAll(async ({ request }) => {
     await Promise.all(
       seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
     );
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
     await closeSeedDb();
   });
+
+  // RF004 AC3/AC4, RF021 AC2/AC3: give a biorepository collection its
+  // governance through the real API -- an organization, an ethics approval in
+  // force, then the `created` event carrying the context.
+  async function governBiorepository(
+    request: APIRequestContext,
+    token: string,
+    ids: { collectionId: string; studyId: string; protocolId: string }
+  ): Promise<{ organizationId: string; approvalId: string }> {
+    const headers = { Authorization: `Bearer ${token}` };
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: `RF004 ${Date.now()} ${Math.random().toString(36).slice(2, 6)}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+
+    const approval = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/approvals`, {
+      headers,
+      data: {
+        authority: 'CEP sintético',
+        caae: '00000000.0.0000.0000',
+        documentUri: 'https://docs.example.org/parecer.pdf',
+        documentChecksum: `sha256:${'a'.repeat(64)}`,
+        effectivePeriod: { start: '2026-01-01', end: '2030-12-31' },
+        status: 'active',
+        responsibleOrganizationId: organizationId,
+      },
+    });
+    expect(approval.status(), await approval.text()).toBe(201);
+    const approvalId = (await approval.json()).data.approvalId as string;
+
+    const event = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
+      headers,
+      data: {
+        justification: 'Contexto inicial do biorrepositório',
+        governanceContext: {
+          studyId: ids.studyId,
+          protocolId: ids.protocolId,
+          protocolVersion: '1.0',
+          caae: '00000000.0.0000.0000',
+          responsibleOrganizationId: organizationId,
+          responsibleInvestigatorId: 'investigator-e2e',
+          ethicsApprovalId: approvalId,
+          validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+          plannedEndDate: '2030-12-31',
+        },
+      },
+    });
+    expect(event.status(), await event.text()).toBe(201);
+    expect((await event.json()).data.event).toMatchObject({ decisionType: 'created', newRegime: 'biorepository', approvalIds: [approvalId] });
+    return { organizationId, approvalId };
+  }
 
   test('rejects a create when studyId does not resolve to a real Study', async ({ request }) => {
     const admin = await realLogin(request);
@@ -390,8 +450,9 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     const protocolId = `protocol-${Date.now()}`;
     const collectionId = `collection-${Date.now()}`;
     await seedStudy(studyId);
-    await seedProtocol(protocolId);
+    await seedProtocol(protocolId, { protocolVersion: '1.0' });
     await seedCollectionEntity(collectionId);
+    await governBiorepository(request, admin.token, { collectionId, studyId, protocolId });
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -407,7 +468,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     });
 
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -417,6 +478,154 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     expect(persisted.studyId).toBe(studyId);
     expect(persisted.protocolId).toBe(protocolId);
     expect(persisted.collectionId).toBe(collectionId);
+  });
+
+  // RF004 AC2/AC7: a collection with no governance regime takes no specimen.
+  test('rejects a create into a collection that carries no governance regime', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+
+    const collectionId = `collection-ungoverned-${Date.now()}`;
+    await seedCollectionEntity(collectionId);
+    await clearCollectionRegime(collectionId);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId,
+        positionCode,
+        collectionId,
+      },
+    });
+
+    expect(create.status(), await create.text()).toBe(422);
+    expect(JSON.stringify(await create.json())).toMatch(/sem regime de governança/);
+  });
+
+  // RF004 AC3 (RULE-001): a regime alone is not enough; the collection needs
+  // the one context the regime names.
+  test('rejects a create into a collection with a regime but no governance context', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+
+    const collectionId = `collection-no-context-${Date.now()}`;
+    await seedCollectionEntity(collectionId);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId },
+    });
+
+    expect(create.status(), await create.text()).toBe(422);
+    expect(JSON.stringify(await create.json())).toMatch(/sem contexto de governança/);
+  });
+
+  // RF004 AC7, RF021 AC6: an approval withdrawn stops registration.
+  test('rejects a create once the collection\'s ethics approval is suspended', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `collection-suspended-${stamp}`, studyId: `study-${stamp}`, protocolId: `protocol-${stamp}` };
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    const { approvalId } = await governBiorepository(request, admin.token, ids);
+
+    const suspend = await request.post(
+      `${apiBaseURL}/api/collections/${ids.collectionId}/governance/approvals/${approvalId}/status`,
+      { headers: { Authorization: `Bearer ${admin.token}` }, data: { status: 'suspended', reason: 'Parecer em reanálise' } }
+    );
+    expect(suspend.status(), await suspend.text()).toBe(200);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: ids.collectionId },
+    });
+
+    expect(create.status(), await create.text()).toBe(422);
+    expect(JSON.stringify(await create.json())).toMatch(/sem aprovação de governança vigente/);
+  });
+
+  // RF020 AC4: no silent conversion. An edit is refused; a governance event
+  // with a justification, an approval in force and the new regime's context
+  // converts the collection and stays on record.
+  test('converts a collection\'s regime only through a governance event', async ({ request }) => {
+    const admin = await realLogin(request);
+    const headers = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `collection-convert-${stamp}`, studyId: `study-${stamp}`, protocolId: `protocol-${stamp}` };
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    const { organizationId, approvalId } = await governBiorepository(request, admin.token, ids);
+
+    const edit = await request.put(`${apiBaseURL}/api/collections/${ids.collectionId}`, {
+      headers,
+      data: { governanceRegime: 'biobank' },
+    });
+    expect(edit.status(), await edit.text()).toBe(422);
+
+    // The biobank's policy, scoped to this test's own organization.
+    const policy = await request.post(`${apiBaseURL}/api/access-policies`, {
+      headers,
+      data: {
+        policyName: `RF020 e2e ${stamp}`,
+        policyVersion: '1.0.0',
+        applicableEntityTypes: ['AccessRequest'],
+        decisionEffect: 'review_required',
+        ruleExpression: 'all-conditions',
+        effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+        roleCodes: ['researcher'],
+        organizationScopeIds: [organizationId],
+        resourceScopes: ['Specimen'],
+        conditions: [{ consent: 'compatible' }],
+        decisionReasonsRequired: true,
+      },
+    });
+    expect(policy.status(), await policy.text()).toBe(201);
+    const accessPolicyId = (await policy.json()).data.accessPolicyId as string;
+
+    const biobankContext = {
+      broadPurpose: { code: 'health-research' },
+      governancePolicyId: accessPolicyId,
+      accessCommitteeId: 'committee-e2e',
+      institutionalCustodianId: organizationId,
+      futureUseConditions: ['compatible_consent'],
+      applicableConsentModel: ['broad'],
+      newEthicsReviewRule: 'when_required_by_policy',
+    };
+    const unjustified = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
+      headers,
+      data: { newRegime: 'biobank', approvalIds: [approvalId], governanceContext: biobankContext },
+    });
+    expect(unjustified.status(), await unjustified.text()).toBe(422);
+
+    const converted = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
+      headers,
+      data: { newRegime: 'biobank', approvalIds: [approvalId], governanceContext: biobankContext, justification: 'Ampliação para uso futuro' },
+    });
+    expect(converted.status(), await converted.text()).toBe(201);
+
+    const governance = (await (await request.get(`${apiBaseURL}/api/collections/${ids.collectionId}/governance`, { headers })).json()).data;
+    expect(governance.governanceRegime).toBe('biobank');
+    expect(governance.governanceContext).toMatchObject({ governancePolicyId: accessPolicyId, institutionalCustodianId: organizationId });
+    expect(governance.governanceContext.biorepositoryContextId).toBeUndefined();
+    expect(governance.events.map((e: any) => [e.decisionType, e.previousRegime, e.newRegime])).toEqual([
+      ['created', null, 'biorepository'],
+      ['regime_change', 'biorepository', 'biobank'],
+    ]);
   });
 });
 
@@ -510,8 +719,8 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
 });
 
 test.describe('Chain of custody (RF006) — real backend', () => {
-  // No spec, mocked or real, covered this RF before (#288) — see
-  // E2E_TRACEABILITY_PLAN.md. Building this exposed that the "blocked
+  // No spec, mocked or real, covered this RF before (#288). Building
+  // this exposed that the "blocked
   // status" guard in sample.service.js's withdrawSample checked a field
   // (`currentStatus`) and vocabulary that don't exist on Sample.js's real
   // schema (`lifecycleStatus`, enum incl. UNAVAILABLE/DESTROYED/DISPOSED/
@@ -548,7 +757,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
     return { sampleID };
   }
 
@@ -590,7 +799,10 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(movement.createdAt).toBeTruthy();
   });
 
-  test('transitions to PARTIAL after a partial withdrawal, then DEPLETED once fully withdrawn (criteria 2, 3)', async ({
+  // RF006 AC2/AC3: a withdrawal moves the derived quantityStatus, never
+  // specimenStatus; RF026 AC7: a depleted specimen is then closed through
+  // POST /close, the one status change in this flow, recorded as a decision.
+  test('moves quantityStatus to partial then depleted while specimenStatus stays available, then closes on validated consumption (criteria 2, 3)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -606,12 +818,24 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect(partial.status()).toBe(200);
-    expect((await partial.json()).data.newStatus).toBe('partial');
+    const partialBody = (await partial.json()).data;
+    expect(partialBody.newStatus).toBe('available');
+    expect(partialBody.quantityStatus).toBe('partial');
 
     const afterPartial = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
-    expect((await afterPartial.json()).data.specimenStatus).toBe('partial');
+    const afterPartialBody = (await afterPartial.json()).data;
+    expect(afterPartialBody.specimenStatus).toBe('available');
+    expect(afterPartialBody.quantityStatus).toBe('partial');
+
+    // A specimen still holding material is not closed.
+    const earlyClose = await request.post(`${apiBaseURL}/api/samples/${sampleID}/close`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {},
+    });
+    expect(earlyClose.status()).toBe(409);
+    expect((await earlyClose.json()).error).toBe('SPECIMEN_CLOSE_REFUSED');
 
     const total = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -622,25 +846,103 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect(total.status()).toBe(200);
-    expect((await total.json()).data.newStatus).toBe('depleted');
+    const totalBody = (await total.json()).data;
+    expect(totalBody.newStatus).toBe('available');
+    expect(totalBody.quantityStatus).toBe('depleted');
 
     const afterTotal = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
-    expect((await afterTotal.json()).data.specimenStatus).toBe('depleted');
+    const afterTotalBody = (await afterTotal.json()).data;
+    expect(afterTotalBody.specimenStatus).toBe('available');
+    expect(afterTotalBody.quantityStatus).toBe('depleted');
+
+    // RF006 AC7 (#1315): withdrawals change no status, so they record no decision.
+    const beforeClose = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(beforeClose.status()).toBe(200);
+    expect((await beforeClose.json()).data).toEqual([]);
+
+    const close = await request.post(`${apiBaseURL}/api/samples/${sampleID}/close`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {},
+    });
+    expect(close.status()).toBe(200);
+    const closeBody = (await close.json()).data;
+    expect(closeBody).toEqual(expect.objectContaining({
+      previousStatus: 'available',
+      specimenStatus: 'closed',
+      quantityStatus: 'depleted',
+    }));
+    expect(closeBody.operationalStateDecisionId).toBeTruthy();
+    expect(closeBody.triggerEventId).toBeTruthy();
+
+    const afterClose = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await afterClose.json()).data.specimenStatus).toBe('closed');
+
+    // The close is the one status change, append-only, naming RF026 AC7's rule.
+    const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(decisions.status()).toBe(200);
+    const rows = (await decisions.json()).data;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        previousStatus: 'available',
+        newStatus: 'closed',
+        rulesApplied: ['rf026_ac7_validated_consumption'],
+        triggerEventId: closeBody.triggerEventId,
+      }),
+    ]);
+
+    // closed is final: a second close is refused, and so is a withdrawal.
+    const again = await request.post(`${apiBaseURL}/api/samples/${sampleID}/close`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {},
+    });
+    expect(again.status()).toBe(409);
+    expect((await again.json()).error).toBe('SPECIMEN_CLOSE_REFUSED');
+
+    const withdrawClosed = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Custody Test Responsible',
+        linkedProject: 'RF006 e2e fixture project',
+      },
+    });
+    expect(withdrawClosed.status()).toBe(400);
+    expect((await withdrawClosed.json()).message).toMatch(/closed/);
   });
 
-  test('blocks a withdrawal against a specimen in a blocked lifecycle status (criterion 4)', async ({ request }) => {
+  test('blocks a withdrawal against a specimen in a blocked lifecycle status, and refuses a v1.3.0 status write (criterion 4)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedWithdrawableSample(request, admin);
 
-    const block = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    // RF006 AC2: destroyed is a v1.3.0 value no write accepts.
+    const legacy = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { specimenStatus: 'destroyed' },
     });
+    expect(legacy.status()).toBe(422);
+    const legacyBody = await legacy.json();
+    expect(legacyBody.error).toBe('SPECIMEN_STATUS_WRITE_REFUSED');
+    expect(legacyBody.details).toEqual(expect.any(Array));
+
+    const afterLegacy = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await afterLegacy.json()).data.specimenStatus).toBe('available');
+
+    const block = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { specimenStatus: 'unavailable' },
+    });
     expect(block.status()).toBe(200);
-    const blockBody = (await block.json()).data;
-    expect(blockBody.specimenStatus).toBe('destroyed');
+    expect((await block.json()).data.specimenStatus).toBe('unavailable');
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -653,9 +955,18 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(withdraw.status()).toBe(400);
     const body = await withdraw.json();
     expect(body.message).toMatch(/não está disponível para retirada/);
-    // specimenStatus (#408/#540) is lowercase-canonical ('destroyed'), not
-    // the uppercase legacy enum this assertion was written against.
-    expect(body.message).toMatch(/destroyed/);
+    // specimenStatus (#408/#540) is lowercase-canonical.
+    expect(body.message).toMatch(/unavailable/);
+
+    // RF006 AC7 (#1315): the accepted edit's status change is recorded; the
+    // refused write and the refused withdrawal record none.
+    const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(decisions.status()).toBe(200);
+    expect((await decisions.json()).data).toEqual([
+      expect.objectContaining({ previousStatus: 'available', newStatus: 'unavailable', rulesApplied: ['manual_status_update'] }),
+    ]);
   });
 
   test('custody events cannot be altered or deleted — no route accepts a mutation (criterion 5)', async ({ request }) => {
@@ -704,20 +1015,23 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
   // consent revocation, environmental excursion, RCS governance
   // failure, critical non-conformity, criteria 1-4) blocks withdrawal
   // via the BLOCKED_SPECIMEN_STATUSES guard proven for RF006/#288
-  // (criterion 5), and a specimenStatus: 'available' update logs a
-  // sample_release audit entry (criteria 7, 8). specimenStatus is what
+  // (criterion 5). Release is POST /:id/quarantine/release, with evidence,
+  // and a PUT to 'available' is refused (#1315, RF019 AC5); the release
+  // logs a sample_release audit entry (AC6). specimenStatus is what
   // updateSample's derivation and the withdraw guard actually key off
   // since #409; quarantineReason has no specimenStatus equivalent and
   // stays legacy-sourced (#407/#408) — lifecycleStatus/quarantineStatus
-  // were the dual-write bridge (#405), removed in #408. No dedicated
-  // quarantine route exists — release, like RF006's blocked-status
-  // seeding, goes through the generic update route.
+  // were the dual-write bridge (#405), removed in #408. Entering
+  // quarantine, like RF006's blocked-status seeding, still goes through
+  // the generic update route.
   const seededStorageBoxes: SeededStorageBox[] = [];
+  const seededQuarantineActionIds: string[] = [];
 
   test.afterAll(async () => {
     await Promise.all(
       seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
     );
+    await cleanupQuarantineActions(seededQuarantineActionIds).catch(() => {});
     await closeSeedDb();
   });
 
@@ -739,7 +1053,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
     return { sampleID };
   }
 
@@ -798,18 +1112,57 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
 
     const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
 
-    const release = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    // RF019 AC5 (#1315): leaving quarantine is not an edit of the status...
+    const edit = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: {
-        specimenStatus: 'available',
-        quarantineReason: 'RF019 e2e: cleared after evidence review',
-      },
+      data: { specimenStatus: 'available' },
     });
-    expect(release.status()).toBe(200);
-    const releaseBody = (await release.json()).data;
-    expect(releaseBody.specimenStatus).toBe('available');
+    expect(edit.status(), await edit.text()).toBe(409);
+    expect((await edit.json()).error).toBe('QUARANTINE_RELEASE_REQUIRED');
+
+    // ...nor a release without evidence...
+    const releaseUrl = `${apiBaseURL}/api/samples/${sampleID}/quarantine/release`;
+    const noEvidence = await request.post(releaseUrl, { headers: { Authorization: `Bearer ${admin.token}` }, data: { evidenceIds: [] } });
+    expect(noEvidence.status(), await noEvidence.text()).toBe(422);
+
+    // ...but an authorized release with its evidence, audited.
+    const release = await request.post(releaseUrl, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { evidenceIds: ['file-rf019-review'], reason: 'RF019 e2e: cleared after evidence review' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
+    expect((await release.json()).data.specimenStatus).toBe('available');
+    const specimen = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: { Authorization: `Bearer ${admin.token}` } });
+    expect((await specimen.json()).data.specimenStatus).toBe('available');
+    const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, { headers: { Authorization: `Bearer ${admin.token}` } });
+    expect((await decisions.json()).data.at(-1)).toMatchObject({ newStatus: 'available', rulesApplied: ['quarantine_release'] });
 
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+  // #1219: every QuarantineAction writer recorded the sample's Mongo _id, and
+  // this read queried the canonical specimenId, so it could not return a
+  // single real action. New actions carry the specimenId. The read matches
+  // both, because every row written before #1219 carries the _id.
+  test('#1219: GET /:id/quarantine-actions returns an action recorded under the sample _id and one under its specimenId', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const { sampleID: specimenId } = await seedQuarantinableSample(request, admin);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers: auth });
+    expect(sampleDoc.status()).toBe(200);
+    const mongoId = String((await sampleDoc.json()).data._id);
+    expect(mongoId).not.toBe(specimenId);
+
+    const legacyId = await seedQuarantineAction([mongoId], 'E2E_1219_LEGACY');
+    const canonicalId = await seedQuarantineAction([specimenId], 'E2E_1219_CANONICAL');
+    seededQuarantineActionIds.push(legacyId, canonicalId);
+
+    const res = await request.get(`${apiBaseURL}/api/samples/${specimenId}/quarantine-actions`, { headers: auth });
+    expect(res.status()).toBe(200);
+    const ids = ((await res.json()).data as Array<{ quarantineActionId: string }>).map((a) => a.quarantineActionId);
+    expect(ids).toEqual(expect.arrayContaining([legacyId, canonicalId]));
   });
 });
 
@@ -896,7 +1249,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     await closeSeedDb();
   });
 
-  async function createRealSample(request: any, token: string): Promise<{ sampleID: string; barcode: string }> {
+  async function createRealSample(request: any, token: string): Promise<{ specimenId: string; barcode: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
     const seededStorageBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(seededStorageBox);
@@ -909,11 +1262,11 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect([201, 202]).toContain(create.status());
     const body = (await create.json()).data;
 
-    const get = await request.get(`${apiBaseURL}/api/samples/${body.sampleID}`, {
+    const get = await request.get(`${apiBaseURL}/api/samples/${body.specimenId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const sample = (await get.json()).data;
-    return { sampleID: body.sampleID, barcode: sample.barcode };
+    return { specimenId: body.specimenId, barcode: sample.barcode };
   }
 
   test('generates Code128, DataMatrix and QR symbology assets tied to the specimen\'s own unique barcode (criteria 1, 2)', async ({ request }) => {
@@ -972,7 +1325,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 
     const res = await request.post(`${apiBaseURL}/api/samples/labels/batch`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { specimenIds: [sampleA.sampleID, sampleB.sampleID, 'does-not-exist'] },
+      data: { specimenIds: [sampleA.specimenId, sampleB.specimenId, 'does-not-exist'] },
     });
     expect(res.ok(), await res.text()).toBeTruthy();
     const body = (await res.json()).data;
@@ -981,7 +1334,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect(body.generated).toBe(2);
     expect(body.failed).toBe(1);
 
-    const resultA = body.results.find((r: any) => r.specimenId === sampleA.sampleID);
+    const resultA = body.results.find((r: any) => r.specimenId === sampleA.specimenId);
     expect(resultA).toMatchObject({ success: true, barcode: sampleA.barcode });
     expect(resultA.qr.payload).toBe(sampleA.barcode);
 
@@ -1025,7 +1378,7 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     await page.goto(`/samples/${sampleID}/label`);
 
@@ -1124,7 +1477,7 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
 
     const destination = await seedStorageBoxLocation();
     seededStorageBoxes.push(destination);
@@ -1196,6 +1549,8 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
   // through seedStorageBoxLocation() -- cleaned up via the API (like
   // human-showcase.spec.ts's own equipment fixture), not cleanupStorageBoxLocation.
   const equipmentIdsToDelete: string[] = [];
+  // #1282: the laboratories these tests create, deleted last.
+  const organizationIdsToDelete: string[] = [];
 
   test.afterAll(async ({ request }) => {
     await Promise.all(
@@ -1213,6 +1568,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
         );
       }
     }
+    await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
     await closeSeedDb();
   });
 
@@ -1233,7 +1589,9 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    const specimenId = String((await sampleRes.json()).data.sampleID);
+    // #1216/#1219: an assay references the specimen by the canonical
+    // specimenId the create response names, and stores it as given.
+    const specimenId = String((await sampleRes.json()).data.specimenId);
 
     const reagentRes = await request.post(`${apiBaseURL}/api/reagent-lots`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1268,6 +1626,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     });
     expect(orgRes.status(), await orgRes.text()).toBe(201);
     const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
 
     const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1309,7 +1668,9 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    const specimenId = String((await sampleRes.json()).data.sampleID);
+    // #1216/#1219: an assay references the specimen by the canonical
+    // specimenId the create response names, and stores it as given.
+    const specimenId = String((await sampleRes.json()).data.specimenId);
 
     const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1322,6 +1683,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     });
     expect(orgRes.status(), await orgRes.text()).toBe(201);
     const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
 
     return { specimenId, operatorId: String(admin.user._id), organizationId };
   }
@@ -1379,6 +1741,47 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(assayRes.status()).toBe(404);
     const body = await assayRes.json();
     expect(body.message).toMatch(/specimenIds/);
+  });
+
+  // #1221: PUT ran none of #664's reference checks, so an assay created
+  // with verified links could be edited to name a specimen that does not
+  // exist.
+  test('#1221: rejects an assay update whose specimenIds do not resolve, and leaves the assay unchanged', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+    const { specimenId, operatorId, organizationId } = await seedRealAssayLinkage(request, admin);
+
+    const created = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: auth,
+      data: {
+        studyId,
+        specimenIds: [specimenId],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId,
+        laboratoryId: organizationId,
+        assayDateTime: new Date().toISOString(),
+        intendedUse: '#1221 e2e update integrity',
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const assayId = (await created.json()).data.assayId;
+
+    const update = await request.put(`${apiBaseURL}/api/assays/${assayId}`, {
+      headers: auth,
+      data: { specimenIds: ['specimen-does-not-exist'] },
+    });
+    expect(update.status()).toBe(404);
+    expect((await update.json()).message).toMatch(/specimenIds/);
+
+    const after = await request.get(`${apiBaseURL}/api/assays/${assayId}`, { headers: auth });
+    expect(after.status()).toBe(200);
+    expect((await after.json()).data.specimenIds).toEqual([specimenId]);
   });
 
   test('#664: rejects an assay create when laboratoryId does not resolve to a real Organization', async ({ request }) => {
@@ -1488,6 +1891,30 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(stored.rootCause).toBeTruthy();
     expect(stored.correctiveAction.responsible).toBeTruthy();
     expect(stored.effectivenessVerification.outcome).toBe('effective');
+
+    // RF019 AC1 (#1315): a nonconformance naming the specimen quarantines it,
+    // with the rule on its state decision; the assay id quarantined nothing.
+    const onSpecimen = await request.post(`${apiBaseURL}/api/nonconformances`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        nonconformanceType: 'deviation',
+        detectedAt: new Date().toISOString(),
+        description: 'Hemólise visível no tubo após o ensaio',
+        affectedEntityIds: [specimenId],
+      },
+    });
+    expect(onSpecimen.status(), await onSpecimen.text()).toBe(201);
+    expect((await onSpecimen.json()).data.quarantinedSpecimenCount).toBe(1);
+    const specimen = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await specimen.json()).data.specimenStatus).toBe('quarantined');
+    const decisions = await request.get(`${apiBaseURL}/api/samples/${specimenId}/state-decisions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await decisions.json()).data).toEqual([
+      expect.objectContaining({ newStatus: 'quarantined', rulesApplied: ['nonconformance_quarantine'] }),
+    ]);
   });
 });
 
@@ -1513,6 +1940,11 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
         triggerEvent: 'creation',
         postRetentionAction: 'destroy',
         retentionPeriod: 'P365D',
+        // RF026 AC1/AC2 (#1315): jurisdiction, basis, legal-hold rules and review are required.
+        jurisdiction: 'BR',
+        retentionBasis: ['RF026 e2e fixture basis'],
+        legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+        reviewRequired: false,
         ...overrides,
       },
     });
@@ -1523,7 +1955,9 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
 
   test('records a disposition action linked to a real retention policy, with method/date/responsible/affected items preserved (criteria 1, 3, 4)', async ({ request }) => {
     const admin = await realLogin(request);
-    const retentionPolicyId = await createRetentionPolicy(request, admin);
+    // Review required, so executing before approval is refused below; a
+    // policy with reviewRequired false lets a planned action execute (AC2).
+    const retentionPolicyId = await createRetentionPolicy(request, admin, { reviewRequired: true });
 
     const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1542,8 +1976,28 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
     expect(disposition.affectedRecordIds).toEqual(['log-rf026-1', 'log-rf026-2']);
     expect(disposition.dispositionMethod).toBe('secure-wipe');
     expect(disposition.performedBy).toBeTruthy();
-    expect(disposition.dispositionDateTime).toBeTruthy();
     expect(disposition.legalHold).toBe(false);
+
+    // AC#4/#5 (#1315): recorded planned, with no certificate until it is
+    // authorized and executed with its evidence.
+    expect(disposition.actionStatus).toBe('planned');
+    expect(disposition.dispositionDateTime).toBeNull();
+    const base = `${apiBaseURL}/api/disposition-actions/${disposition.dispositionActionId}`;
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    expect((await request.get(`${base}/certificate`, { headers: auth })).status()).toBe(409);
+    expect((await request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-1'] } })).status()).toBe(409);
+
+    const approved = await request.post(`${base}/approve`, { headers: auth });
+    expect(approved.status(), await approved.text()).toBe(200);
+    expect((await approved.json()).data).toMatchObject({ actionStatus: 'approved', authorizationId: expect.any(String) });
+
+    expect((await request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: [] } })).status()).toBe(422);
+    const executed = await request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-1'] } });
+    expect(executed.status(), await executed.text()).toBe(200);
+    const executedBody = (await executed.json()).data;
+    expect(executedBody).toMatchObject({ actionStatus: 'executed', evidenceIds: ['file-rf026-1'] });
+    expect(executedBody.executedBy).toBeTruthy();
+    expect(executedBody.dispositionDateTime).toBeTruthy();
 
     // AC#5: gera evidência/certificado.
     const certRes = await request.get(`${apiBaseURL}/api/disposition-actions/${disposition.dispositionActionId}/certificate`, {
@@ -1620,6 +2074,52 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
     });
     expect(allowedRes.status(), await allowedRes.text()).toBe(201);
     expect((await allowedRes.json()).data.legalHold).toBe(false);
+  });
+
+  test('stores the policy\'s jurisdiction, basis, legal-hold rules and review, refuses a policy without them, and blocks what its own rules name under a hold (criteria 1, 2; #1315)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const missing = await request.post(`${apiBaseURL}/api/retention-policies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { applicableEntityTypes: ['Log'], triggerEvent: 'creation', postRetentionAction: 'destroy', retentionPeriod: 'P365D' },
+    });
+    expect(missing.status(), await missing.text()).toBe(422);
+    expect(await missing.text()).toMatch(/jurisdiction é obrigatório/);
+
+    const retentionPolicyId = await createRetentionPolicy(request, admin, {
+      legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }, { when: 'legalHold=true', block: 'transfer' }],
+      reviewRequired: true,
+    });
+    const stored = await request.get(`${apiBaseURL}/api/retention-policies/${retentionPolicyId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(stored.status(), await stored.text()).toBe(200);
+    expect((await stored.json()).data).toMatchObject({
+      jurisdiction: 'BR',
+      retentionBasis: ['RF026 e2e fixture basis'],
+      reviewRequired: true,
+      legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }, { when: 'legalHold=true', block: 'transfer' }],
+    });
+
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const affectedRecordIds = [`log-rf026-rule-${suffix}`];
+    const holdRes = await request.post(`${apiBaseURL}/api/legal-holds`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { targetEntityType: 'Log', targetEntityIds: affectedRecordIds, reason: 'Ordem judicial — RF026 e2e fixture' },
+    });
+    expect(holdRes.status(), await holdRes.text()).toBe(201);
+
+    const transferRes = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction: 'transfer' },
+    });
+    expect(transferRes.status(), await transferRes.text()).toBe(409);
+
+    const hold = (await holdRes.json()).data;
+    const releaseRes = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { releaseReason: 'Encerrado — RF026 e2e fixture' },
+    });
+    expect(releaseRes.status(), await releaseRes.text()).toBe(200);
   });
 
   test('refuses to release an already-released legal hold', async ({ request }) => {

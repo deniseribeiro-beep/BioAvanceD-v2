@@ -117,6 +117,21 @@ describe('GET /api/dictionary/disease-profile', () => {
     expect(res.body.disease.drug_classes).toEqual(['enzyme_replacement_therapy']);
   });
 
+  it('no longer serves the stored biomarker requirements, but keeps the other validation_requirements keys (#1206)', async () => {
+    collection.findOne.mockResolvedValue({
+      orpha_code: '324',
+      name: 'Doenca de Fabry',
+      validation_requirements: {
+        miabis: { requireTreatmentStatus: true },
+        biomarkers: { required: ['Lyso-Gb3'], recommended: [] },
+      },
+    });
+
+    const res = await request(app).get('/api/dictionary/disease-profile?orphaCode=324');
+    expect(res.status).toBe(200);
+    expect(res.body.disease.validation_requirements).toEqual({ miabis: { requireTreatmentStatus: true } });
+  });
+
   it('defaults validation_requirements to {} when it is not an object (e.g. a string)', async () => {
     collection.findOne.mockResolvedValue({
       orpha_code: '558',
@@ -189,6 +204,19 @@ describe('GET /api/dictionary/medications/search', () => {
       expect(regex.source).toBe('fabry');
       expect(regex.flags).toBe('i');
     });
+  });
+
+  // #1212: the query is a search term, not a pattern. Unescaped, '(' threw
+  // inside the handler and '.' matched any character.
+  it('matches regex metacharacters in the query literally', async () => {
+    const crash = await request(app).get('/api/dictionary/medications/search?query=' + encodeURIComponent('fab(ry'));
+    expect(crash.status).toBe(200);
+
+    await request(app).get('/api/dictionary/medications/search?query=' + encodeURIComponent('fa.ry'));
+    const calledFilter = collection.find.mock.calls[collection.find.mock.calls.length - 1][0];
+    const regex = calledFilter.$and.find((clause) => clause.$or).$or[0].name;
+    expect(regex.test('fa.ry')).toBe(true);
+    expect(regex.test('fabry')).toBe(false);
   });
 
   it('uses the base active filter alone (no $and) when no other params are provided', async () => {

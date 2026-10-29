@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -169,6 +169,150 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result.metadataLinked).toBe(true);
     });
 
+    // #1140: SensorMetadata.temperaturePolicy had no writer anywhere in
+    // src/ -- linkSensorMetadata pinned it null in $setOnInsert and nothing
+    // ever set it, so the only real values in the tracked tree came from the
+    // e2e fixture helper. Two live consumers read it and both degrade
+    // silently: TelemetryMonitor's per-sensor minimumDuration (#688) falls
+    // back to the global threshold for every sensor, and
+    // iot.controller#resolveTemperaturePolicy gates its whole threshold
+    // check on the populated value, so machine ingest compared nothing.
+    //
+    // Direction 1: bind at registration, exactly as #311 did for the sibling
+    // storageContainer field in be435d6c. Same function, same conditional
+    // $set, same ObjectId coercion.
+    it('#1140: binds temperaturePolicy from the request when provided', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      // #1179: createSensor now checks the policy exists before writing.
+      const temperaturePoliciesCollection = { findOne: vi.fn().mockResolvedValue({ _id: 'p' }) };
+      db.collection = vi.fn((name) => {
+        if (name === 'sensorMetadata') return sensorMetadataCollection;
+        if (name === 'temperaturePolicies') return temperaturePoliciesCollection;
+        return sensorsCollection;
+      });
+
+      const temperaturePolicyId = '507f1f77bcf86cd799439088';
+      const result = await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01',
+        temperaturePolicy: temperaturePolicyId
+      });
+
+      expect(sensorMetadataCollection.updateOne).toHaveBeenCalledTimes(1);
+      const [, update] = sensorMetadataCollection.updateOne.mock.calls[0];
+      expect(update.$set.temperaturePolicy.toString()).toBe(temperaturePolicyId);
+      expect(result.metadataLinked).toBe(true);
+    });
+
+    // #1145: the binding lives on SensorMetadata, and that row is only
+    // created when a macAddress is given. A policy without one used to be
+    // dropped silently -- a sensor that looked governed and was not -- so it
+    // is refused before anything is written.
+    it('#1145: refuses temperaturePolicy without macAddress, writing nothing', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn() };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      await expect(sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        temperaturePolicy: '507f1f77bcf86cd799439088'
+      })).rejects.toThrow(/temperaturePolicy exige macAddress/);
+
+      expect(sensorsCollection.insertOne).not.toHaveBeenCalled();
+      expect(sensorMetadataCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('#1179: refuses storageContainer without macAddress, writing nothing', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn() };
+      db.collection = vi.fn(() => sensorsCollection);
+
+      await expect(sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        storageContainer: '507f1f77bcf86cd799439099'
+      })).rejects.toThrow(/storageContainer exige macAddress/);
+
+      expect(sensorsCollection.insertOne).not.toHaveBeenCalled();
+    });
+
+    // #1179: a dangling policy reference used to bind silently, and the
+    // telemetry path then resolved null and checked nothing.
+    it('#1179: refuses a temperaturePolicy that names no policy, writing nothing', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn() };
+      const sensorMetadataCollection = { updateOne: vi.fn() };
+      const temperaturePoliciesCollection = { findOne: vi.fn().mockResolvedValue(null) };
+      db.collection = vi.fn((name) => {
+        if (name === 'sensorMetadata') return sensorMetadataCollection;
+        if (name === 'temperaturePolicies') return temperaturePoliciesCollection;
+        return sensorsCollection;
+      });
+
+      await expect(sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01',
+        temperaturePolicy: '507f1f77bcf86cd799439088'
+      })).rejects.toThrow(/temperaturePolicy não encontrada/);
+
+      expect(sensorsCollection.insertOne).not.toHaveBeenCalled();
+      expect(sensorMetadataCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    // This one is not cosmetic and the mock cannot catch it on its own:
+    // MongoDB REJECTS an update naming the same field in both $set and
+    // $setOnInsert. temperaturePolicy is already in $setOnInsert, unlike
+    // storageContainer, so the sibling pattern is not safe to copy verbatim
+    // -- the null default has to drop out whenever a value is supplied.
+    it('#1140: drops the $setOnInsert null when temperaturePolicy is supplied', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      const temperaturePoliciesCollection = { findOne: vi.fn().mockResolvedValue({ _id: 'p' }) };
+      db.collection = vi.fn((name) => {
+        if (name === 'sensorMetadata') return sensorMetadataCollection;
+        if (name === 'temperaturePolicies') return temperaturePoliciesCollection;
+        return sensorsCollection;
+      });
+
+      await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01',
+        temperaturePolicy: '507f1f77bcf86cd799439088'
+      });
+
+      const [, update] = sensorMetadataCollection.updateOne.mock.calls[0];
+      expect(update.$set).toHaveProperty('temperaturePolicy');
+      expect(update.$setOnInsert).not.toHaveProperty('temperaturePolicy');
+    });
+
+    // CONTROL: green before and after. The null default must still be there
+    // for a sensor registered without a policy, or an existing binding would
+    // be the only thing distinguishing the two paths.
+    it('CONTROL: keeps the $setOnInsert null when no temperaturePolicy is supplied', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      await sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        macAddress: 'AA:BB:CC:00:00:01'
+      });
+
+      const [, update] = sensorMetadataCollection.updateOne.mock.calls[0];
+      expect(update.$setOnInsert).toHaveProperty('temperaturePolicy', null);
+      expect(update.$set).not.toHaveProperty('temperaturePolicy');
+    });
+
     it('does not throw when the sensorMetadata upsert fails, but surfaces metadataLinked: false (#313)', async () => {
       const { db } = makeDb();
       const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
@@ -224,6 +368,8 @@ describe('sensor.service (non-quarantine paths)', () => {
       const chain = makeFindChain([{ sensorId: 'S-1' }]);
       collection.find = chain.find;
       collection.countDocuments.mockResolvedValue(1);
+      const sensorMetadata = { find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })) };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadata : collection));
 
       const result = await sensorService.listSensors(db, {});
 
@@ -233,6 +379,28 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(chain.limit).toHaveBeenCalledWith(50);
       expect(chain.skip).toHaveBeenCalledWith(0);
       expect(result).toEqual({ sensors: [{ sensorId: 'S-1' }], total: 1, limit: 50, skip: 0 });
+    });
+
+    // #1179: the edit form pre-fills the freezer and policy, which live on
+    // SensorMetadata -- one batched read for the page, stringified refs.
+    it('#1179: attaches each sensor\'s SensorMetadata bindings in one batched read', async () => {
+      const { db, collection } = makeDb();
+      const chain = makeFindChain([{ sensorId: 'S-1' }, { sensorId: 'S-2' }]);
+      collection.find = chain.find;
+      collection.countDocuments.mockResolvedValue(2);
+      const metadataFind = vi.fn(() => ({
+        toArray: vi.fn().mockResolvedValue([
+          { sensorId: 'S-1', storageContainer: 'freezer-1', temperaturePolicy: 'policy-1' }
+        ])
+      }));
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? { find: metadataFind } : collection));
+
+      const result = await sensorService.listSensors(db, {});
+
+      expect(metadataFind).toHaveBeenCalledTimes(1);
+      expect(metadataFind.mock.calls[0][0]).toEqual({ sensorId: { $in: ['S-1', 'S-2'] } });
+      expect(result.sensors[0]).toMatchObject({ storageContainer: 'freezer-1', temperaturePolicy: 'policy-1' });
+      expect(result.sensors[1]).not.toHaveProperty('temperaturePolicy');
     });
 
     it('builds a locationId $or/$in query when locationId filter given', async () => {
@@ -304,8 +472,8 @@ describe('sensor.service (non-quarantine paths)', () => {
     });
 
     // #645: real-backend Playwright run against compose.test.yml
-    // (e2e fixtures accumulate across sessions per docker-workflow's
-    // local-env) hit exactly this shape -- 51 pre-existing sensors, no sort
+    // (e2e fixtures accumulate across sessions in the named
+    // volumes) hit exactly this shape -- 51 pre-existing sensors, no sort
     // applied, default limit 50 -- and the just-created sensor from a real
     // UI submission silently never appeared in the list, misread as a
     // flaky Playwright locator timeout rather than a deterministic
@@ -403,6 +571,118 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result).toEqual({ success: true, quarantine: { triggered: false } });
     });
 
+    // #1179: the freezer and policy bindings live on SensorMetadata, which
+    // updateSensor never wrote, so the edit modal saved nothing for them.
+    describe('#1179: rebinding SensorMetadata on edit', () => {
+      const POLICY = '507f1f77bcf86cd799439088';
+      const FREEZER = '507f1f77bcf86cd799439099';
+
+      function routedDb({ metadataRow = { _id: 'm1' }, policy = { _id: POLICY } } = {}) {
+        const sensors = {
+          findOne: vi.fn().mockResolvedValue({ sensorId: 'S-1', maintenanceStatus: 'operational' }),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        };
+        const sensorMetadata = {
+          findOne: vi.fn().mockResolvedValue(metadataRow),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+        };
+        const temperaturePolicies = { findOne: vi.fn().mockResolvedValue(policy) };
+        const db = {
+          collection: vi.fn((name) => {
+            if (name === 'sensorMetadata') return sensorMetadata;
+            if (name === 'temperaturePolicies') return temperaturePolicies;
+            return sensors;
+          })
+        };
+        return { db, sensors, sensorMetadata, temperaturePolicies };
+      }
+
+      it('sets storageContainer and temperaturePolicy on the SensorMetadata row, as ObjectIds', async () => {
+        const { db, sensorMetadata } = routedDb();
+
+        await sensorService.updateSensor(db, 'S-1', { storageContainer: FREEZER, temperaturePolicy: POLICY });
+
+        expect(sensorMetadata.updateOne).toHaveBeenCalledTimes(1);
+        const [filter, update] = sensorMetadata.updateOne.mock.calls[0];
+        expect(filter).toEqual({ sensorId: 'S-1' });
+        expect(update.$set.storageContainer.toString()).toBe(FREEZER);
+        expect(update.$set.temperaturePolicy.toString()).toBe(POLICY);
+      });
+
+      it('an empty temperaturePolicy unbinds it (null), without a policy lookup', async () => {
+        const { db, sensorMetadata, temperaturePolicies } = routedDb();
+
+        await sensorService.updateSensor(db, 'S-1', { temperaturePolicy: '' });
+
+        expect(temperaturePolicies.findOne).not.toHaveBeenCalled();
+        const [, update] = sensorMetadata.updateOne.mock.calls[0];
+        expect(update.$set.temperaturePolicy).toBeNull();
+        expect(update.$set).not.toHaveProperty('storageContainer');
+      });
+
+      it('an edit naming neither field never touches SensorMetadata', async () => {
+        const { db, sensorMetadata } = routedDb();
+
+        await sensorService.updateSensor(db, 'S-1', { sensorModel: 'm2' });
+
+        expect(sensorMetadata.findOne).not.toHaveBeenCalled();
+        expect(sensorMetadata.updateOne).not.toHaveBeenCalled();
+      });
+
+      it('refuses when the sensor has no SensorMetadata row, before writing either collection', async () => {
+        const { db, sensors, sensorMetadata } = routedDb({ metadataRow: null });
+
+        await expect(sensorService.updateSensor(db, 'S-1', { sensorModel: 'm2', storageContainer: FREEZER }))
+          .rejects.toThrow(/sem SensorMetadata/);
+        expect(sensors.updateOne).not.toHaveBeenCalled();
+        expect(sensorMetadata.updateOne).not.toHaveBeenCalled();
+      });
+
+      // The MAC is read off both collections (buildSensorLookup), so a MAC
+      // changed on `sensors` alone left the metadata row on the old one.
+      it('a changed macAddress is mirrored onto the SensorMetadata row', async () => {
+        const { db, sensorMetadata } = routedDb({ metadataRow: { _id: 'm1', macAddress: 'AA:00:00:00:00:01' } });
+        sensorMetadata.findOne
+          .mockResolvedValueOnce({ _id: 'm1', macAddress: 'AA:00:00:00:00:01' })
+          .mockResolvedValueOnce(null); // no other sensor holds the new MAC
+
+        await sensorService.updateSensor(db, 'S-1', { macAddress: 'AA:00:00:00:00:02' });
+
+        const [, update] = sensorMetadata.updateOne.mock.calls[0];
+        expect(update.$set.macAddress).toBe('AA:00:00:00:00:02');
+      });
+
+      it('refuses a macAddress another sensor holds, before writing either collection', async () => {
+        const { db, sensors, sensorMetadata } = routedDb();
+        sensorMetadata.findOne
+          .mockResolvedValueOnce({ _id: 'm1', macAddress: 'AA:00:00:00:00:01' })
+          .mockResolvedValueOnce({ _id: 'other' });
+
+        await expect(sensorService.updateSensor(db, 'S-1', { macAddress: 'AA:00:00:00:00:09' }))
+          .rejects.toThrow(/macAddress já vinculado/);
+        expect(sensors.updateOne).not.toHaveBeenCalled();
+        expect(sensorMetadata.updateOne).not.toHaveBeenCalled();
+      });
+
+      it('a MAC-only edit on a sensor with no SensorMetadata row stays a sensors-only change', async () => {
+        const { db, sensors, sensorMetadata } = routedDb({ metadataRow: null });
+
+        await sensorService.updateSensor(db, 'S-1', { macAddress: 'AA:00:00:00:00:03' });
+
+        expect(sensors.updateOne).toHaveBeenCalledTimes(1);
+        expect(sensorMetadata.updateOne).not.toHaveBeenCalled();
+      });
+
+      it('refuses a policy that does not exist, before writing either collection', async () => {
+        const { db, sensors, sensorMetadata } = routedDb({ policy: null });
+
+        await expect(sensorService.updateSensor(db, 'S-1', { temperaturePolicy: POLICY }))
+          .rejects.toThrow(/temperaturePolicy não encontrada/);
+        expect(sensors.updateOne).not.toHaveBeenCalled();
+        expect(sensorMetadata.updateOne).not.toHaveBeenCalled();
+      });
+    });
+
     // #875: updateSensor used to $set the caller's updateData verbatim --
     // an unfiltered or under-filtered body could inject arbitrary keys or
     // overwrite identity fields. Only Sensor.create()'s own fields (minus
@@ -427,33 +707,8 @@ describe('sensor.service (non-quarantine paths)', () => {
     });
   });
 
-  describe('collectReading', () => {
-    it('throws "Sensor não encontrado" when the sensor does not exist', async () => {
-      const { db, collection } = makeDb();
-      collection.findOne.mockResolvedValue(null);
-
-      await expect(sensorService.collectReading(db, 'missing')).rejects.toThrow('Sensor não encontrado');
-    });
-
-    it('returns a shaped reading object with ready:true and fallback fields resolved', async () => {
-      const { db, collection } = makeDb();
-      collection.findOne.mockResolvedValue({
-        sensorID: 'S-9',
-        sensorType: 'humidity',
-        locationID: 'LOC-5',
-        policyId: 'POL-1'
-      });
-
-      const reading = await sensorService.collectReading(db, 'S-9');
-
-      expect(reading).toEqual({
-        sensorId: 'S-9',
-        sensorType: 'humidity',
-        locationId: 'LOC-5',
-        policyId: 'POL-1',
-        ready: true
-      });
-    });
+  it('has no collectReading: the manual read was removed (#1387)', () => {
+    expect(sensorService.collectReading).toBeUndefined();
   });
 
   describe('deleteSensor', () => {
@@ -515,13 +770,6 @@ describe('sensor.service (non-quarantine paths)', () => {
       await expect(
         sensorService.updateSensor(db, 'S-1', { status: 'maintenance' })
       ).rejects.toThrow('lookup failed');
-    });
-
-    it('collectReading rethrows when getSensor lookup fails', async () => {
-      const { db, collection } = makeDb();
-      collection.findOne.mockRejectedValue(new Error('reading lookup failed'));
-
-      await expect(sensorService.collectReading(db, 'S-1')).rejects.toThrow('reading lookup failed');
     });
 
     it('deleteSensor rethrows when deleteOne rejects', async () => {
@@ -616,6 +864,275 @@ describe('sensor.service (non-quarantine paths)', () => {
       );
       expect(quarantineBySensorStatus.mock.calls[0][3]).not.toHaveProperty('session');
       expect(result.quarantine.triggered).toBe(true);
+    });
+  });
+});
+
+// #1392: registration and edit write the sensor's temperature
+// TelemetryDatastream, which the readers take first. A query-matching fake,
+// as in sensorMetadataDatastreamMigration.service.test.js: equality (ObjectIds
+// by hex), dotted paths, `null` as missing-or-null, $or, and the
+// `$expr: { $eq: [{ $toString: '$_id' }, id] }` the container lookup sends.
+describe('sensor.service temperature TelemetryDatastream (#1392)', () => {
+  const { ObjectId } = require('mongodb');
+  const TelemetryDatastreamModel = require('../../src/models/TelemetryDatastream');
+
+  const NOW = new Date('2026-10-21T12:00:00.000Z');
+  const FREEZER_ID = new ObjectId('64e000000000000000000001');
+  const POLICY_A = new ObjectId('64f000000000000000000001');
+  const POLICY_B = new ObjectId('64f000000000000000000002');
+
+  const pathOf = (doc, path) => path.split('.').reduce((value, key) => (value == null ? undefined : value[key]), doc);
+  function same(a, b) {
+    if (a === b) return true;
+    if (a instanceof Date || b instanceof Date) return a != null && b != null && new Date(a).getTime() === new Date(b).getTime();
+    if (a && b && typeof a === 'object' && typeof b === 'object') return String(a) === String(b);
+    return false;
+  }
+  function matches(doc, filter = {}) {
+    return Object.entries(filter).every(([key, value]) => {
+      if (key === '$expr') return String(doc._id) === value.$eq[1];
+      if (key === '$or') return value.some((branch) => matches(doc, branch));
+      const actual = pathOf(doc, key);
+      if (value === null) return actual === null || actual === undefined;
+      return same(actual, value);
+    });
+  }
+  function setPath(doc, path, value) {
+    const keys = path.split('.');
+    let target = doc;
+    for (const key of keys.slice(0, -1)) target = target[key] = target[key] || {};
+    target[keys[keys.length - 1]] = value;
+  }
+
+  function createFakeDb(seed = {}) {
+    const collections = {};
+    const collection = (name) => {
+      if (collections[name]) return collections[name];
+      const docs = [];
+      collections[name] = {
+        docs,
+        collectionName: name,
+        async createIndex() {},
+        async insertOne(doc) { docs.push({ ...doc }); return { insertedId: `${name}-${docs.length}` }; },
+        async findOne(filter) { return docs.find((doc) => matches(doc, filter)) || null; },
+        find(filter) { return { toArray: async () => docs.filter((doc) => matches(doc, filter)) }; },
+        async updateOne(filter, update = {}, options = {}) {
+          let doc = docs.find((candidate) => matches(candidate, filter));
+          if (!doc) {
+            if (!options.upsert) return { matchedCount: 0 };
+            doc = { ...filter, ...(update.$setOnInsert || {}) };
+            docs.push(doc);
+          }
+          for (const [path, value] of Object.entries(update.$set || {})) setPath(doc, path, value);
+          return { matchedCount: 1 };
+        }
+      };
+      return collections[name];
+    };
+    for (const [name, docs] of Object.entries(seed)) collection(name).docs.push(...docs.map((doc) => ({ ...doc })));
+    return { collection: vi.fn(collection) };
+  }
+
+  const streamsOf = (db) => db.collection('telemetryDatastreams').docs;
+
+  // A FREEZER mirrored to loc-1 whose Equipment is 4201, two policies and a
+  // stored sampling ConfigurationProfile.
+  function topology(overrides = {}) {
+    return {
+      configurationProfiles: [{ profileId: 'sampling-1' }],
+      temperaturePolicies: [{ _id: POLICY_A }, { _id: POLICY_B }],
+      storageContainers: [{ _id: FREEZER_ID, containerType: 'FREEZER', containerID: 4201 }],
+      storageLocations: [{ storageLocationId: 'loc-1', code: `legacy-storage-container:${FREEZER_ID}` }],
+      ...overrides
+    };
+  }
+
+  function registration(overrides = {}) {
+    return {
+      sensorId: 'S-1',
+      sensorType: 'temperature',
+      macAddress: 'AA:BB:CC:00:00:01',
+      storageContainer: String(FREEZER_ID),
+      temperaturePolicy: String(POLICY_A),
+      samplingPolicyId: 'sampling-1',
+      ...overrides
+    };
+  }
+
+  beforeEach(() => {
+    sensorService.setQuarantineService({
+      isQuarantineTriggerStatus: vi.fn(() => false),
+      quarantineBySensorStatus: vi.fn()
+    });
+  });
+
+  describe('createSensor', () => {
+    it('inserts one telemetryDatastreams doc for a stored samplingPolicyId, a mirrored freezer and a policy', async () => {
+      const db = createFakeDb(topology());
+
+      const result = await sensorService.createSensor(db, registration());
+
+      expect(streamsOf(db)).toHaveLength(1);
+      const [stream] = streamsOf(db);
+      expect(stream).toMatchObject({
+        sensorId: 'S-1',
+        equipmentId: '4201',
+        storageLocationId: 'loc-1',
+        observedProperty: 'temperature',
+        unit: 'Cel',
+        samplingPolicyId: 'sampling-1',
+        thresholdProfileId: String(POLICY_A),
+        status: 'active'
+      });
+      expect(stream.validityPeriod.start).toBeInstanceOf(Date);
+      expect(stream.validityPeriod.end).toBeNull();
+      expect(result.datastreamBound).toBe(true);
+      expect(result.telemetryDatastreamId).toBe(stream.telemetryDatastreamId);
+      expect(result.metadataLinked).toBe(true);
+    });
+
+    it('refuses an unstored samplingPolicyId with a 422, inserting nothing', async () => {
+      const db = createFakeDb(topology({ configurationProfiles: [] }));
+
+      const error = await sensorService.createSensor(db, registration({ samplingPolicyId: 'nope' })).catch((e) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.statusCode).toBe(422);
+      expect(error.message).toBe('samplingPolicyId nope não encontrado');
+      expect(db.collection('sensors').docs).toHaveLength(0);
+      expect(db.collection('sensorMetadata').docs).toHaveLength(0);
+      expect(streamsOf(db)).toHaveLength(0);
+    });
+
+    it('reports freezer_not_located for an unmirrored freezer, with the sensor and SensorMetadata written', async () => {
+      const db = createFakeDb(topology({ storageLocations: [] }));
+
+      const result = await sensorService.createSensor(db, registration());
+
+      expect(result.datastreamBound).toBe(false);
+      expect(result.datastreamUnresolved).toBe('freezer_not_located');
+      expect(result).not.toHaveProperty('telemetryDatastreamId');
+      expect(db.collection('sensors').docs).toHaveLength(1);
+      expect(db.collection('sensorMetadata').docs).toHaveLength(1);
+      expect(streamsOf(db)).toHaveLength(0);
+    });
+
+    it('reports an overlapping datastream without throwing, the sensor already created (#313)', async () => {
+      const db = createFakeDb(topology({
+        telemetryDatastreams: [{ telemetryDatastreamId: 'open', sensorId: 'S-1', observedProperty: 'temperature', validityPeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null } }]
+      }));
+
+      const result = await sensorService.createSensor(db, registration());
+
+      expect(result.datastreamBound).toBe(false);
+      expect(result.datastreamUnresolved).toMatch(/já tem datastream de temperature/);
+      expect(db.collection('sensors').docs).toHaveLength(1);
+      expect(streamsOf(db)).toHaveLength(1);
+    });
+
+    it('CONTROL: writes no datastream and no datastreamBound key without a samplingPolicyId', async () => {
+      const db = createFakeDb(topology());
+
+      const result = await sensorService.createSensor(db, registration({ samplingPolicyId: undefined }));
+
+      expect(streamsOf(db)).toHaveLength(0);
+      expect(result).not.toHaveProperty('datastreamBound');
+      expect(result).not.toHaveProperty('datastreamUnresolved');
+      expect(db.collection('sensorMetadata').docs).toHaveLength(1);
+    });
+  });
+
+  describe('updateSensor rebind', () => {
+    const START = new Date('2026-10-20T00:00:00.000Z');
+
+    function boundTopology() {
+      return topology({
+        sensors: [{ sensorId: 'S-1', maintenanceStatus: 'operational' }],
+        sensorMetadata: [{ sensorId: 'S-1', macAddress: 'AA:BB:CC:00:00:01', equipment: null, storageContainer: FREEZER_ID, temperaturePolicy: POLICY_A }],
+        telemetryDatastreams: [{
+          telemetryDatastreamId: 'ds-old',
+          sensorId: 'S-1',
+          equipmentId: '4201',
+          storageLocationId: 'loc-1',
+          observedProperty: 'temperature',
+          unit: 'Cel',
+          samplingPolicyId: 'sampling-1',
+          thresholdProfileId: String(POLICY_A),
+          validityPeriod: { start: START, end: null },
+          status: 'active'
+        }]
+      });
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(NOW);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a changed temperaturePolicy ends the old stream at now and starts one with the new thresholdProfileId', async () => {
+      const db = createFakeDb(boundTopology());
+
+      const result = await sensorService.updateSensor(db, 'S-1', { temperaturePolicy: String(POLICY_B) });
+
+      const [old, current] = streamsOf(db);
+      expect(streamsOf(db)).toHaveLength(2);
+      expect(old.validityPeriod.end.getTime()).toBe(NOW.getTime());
+      expect(old.status).toBe('retired');
+      expect(current).toMatchObject({
+        sensorId: 'S-1',
+        equipmentId: '4201',
+        storageLocationId: 'loc-1',
+        unit: 'Cel',
+        samplingPolicyId: 'sampling-1',
+        thresholdProfileId: String(POLICY_B)
+      });
+      expect(current.validityPeriod.start.getTime()).toBe(NOW.getTime());
+      expect(() => TelemetryDatastreamModel.assertNoOverlap(current, [old])).not.toThrow();
+      expect(result.datastream).toEqual({ ended: true, rebound: true });
+    });
+
+    it('a cleared storageContainer only ends the stream, so SensorMetadata is the fallback', async () => {
+      const db = createFakeDb(boundTopology());
+
+      const result = await sensorService.updateSensor(db, 'S-1', { storageContainer: '' });
+
+      expect(streamsOf(db)).toHaveLength(1);
+      expect(streamsOf(db)[0].validityPeriod.end.getTime()).toBe(NOW.getTime());
+      expect(db.collection('sensorMetadata').docs[0].storageContainer).toBeNull();
+      expect(result.datastream).toEqual({ ended: true, rebound: false, reason: 'freezer_not_located' });
+    });
+
+    it('an edit with the same binding writes no datastream', async () => {
+      const db = createFakeDb(boundTopology());
+
+      const result = await sensorService.updateSensor(db, 'S-1', { storageContainer: String(FREEZER_ID), temperaturePolicy: String(POLICY_A) });
+
+      expect(streamsOf(db)).toHaveLength(1);
+      expect(streamsOf(db)[0].validityPeriod.end).toBeNull();
+      expect(result.datastream).toEqual({ ended: false, rebound: false });
+    });
+
+    it('CONTROL: a sensor with no datastream gets none on edit', async () => {
+      const db = createFakeDb({ ...boundTopology(), telemetryDatastreams: [] });
+
+      await sensorService.updateSensor(db, 'S-1', { temperaturePolicy: String(POLICY_B) });
+
+      expect(streamsOf(db)).toHaveLength(0);
+      expect(db.collection('sensorMetadata').docs[0].temperaturePolicy.toString()).toBe(String(POLICY_B));
+    });
+
+    it('CONTROL: an edit naming neither field leaves the result and the stream unchanged', async () => {
+      const db = createFakeDb(boundTopology());
+
+      const result = await sensorService.updateSensor(db, 'S-1', { sensorModel: 'm2' });
+
+      expect(result).toEqual({ success: true, quarantine: { triggered: false } });
+      expect(streamsOf(db)[0].validityPeriod.end).toBeNull();
     });
   });
 });

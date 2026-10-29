@@ -15,7 +15,10 @@ function makeDb({ sample = null, insertedId = 'result-1' } = {}) {
     collection: vi.fn((name) => {
       if (!collections[name]) {
         collections[name] = {
-          findOne: vi.fn().mockResolvedValue(sample),
+          // Only the samples collection holds the sample. Every collection
+          // used to return it, so the worker's read of 'amostras', a
+          // collection nothing writes, passed here and found nothing live.
+          findOne: vi.fn().mockResolvedValue(name === 'samples' ? sample : null),
           insertOne: vi.fn().mockResolvedValue({ insertedId }),
           updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
         };
@@ -142,6 +145,35 @@ describe('ResultWorker.process — CSV path (processResultRow)', () => {
 
     expect(result.success).toBe(0);
     expect(result.errors[0].error).toMatch(/Amostra não encontrada: BC-404/);
+  });
+
+  it('#1340: a specimenId-only row resolves its own sample, not the first barcode-less one', async () => {
+    vi.spyOn(fhirService, 'resultToFHIR').mockReturnValue({
+      observation: { id: 'obs-1340' },
+      diagnosticReport: { id: 'dr-1340' },
+    });
+    // The driver sends an undefined filter value as null, and Mongo's
+    // { field: null } matches a document that lacks the field. The fake
+    // applies both rules, with a barcode-less sample stored first.
+    const stored = [
+      { _id: 'other', specimenId: 'OTHER-RAW-1' },
+      { _id: 'mine', specimenId: 'SMP-1340' },
+    ];
+    const matches = (doc, clause) => Object.entries(clause).every(([k, v]) =>
+      (v === undefined || v === null) ? doc[k] === undefined || doc[k] === null : doc[k] === v);
+    const db = makeDb();
+    const samples = db.collection('samples');
+    samples.findOne.mockImplementation(async (filter) =>
+      stored.find((doc) => filter.$or.some((clause) => matches(doc, clause))) || null);
+    const csvFile = writeCsv(['specimenId,testName,resultValue', 'SMP-1340,Glicose,95']);
+
+    const result = await resultWorker.process(db, 'job-1340', csvFile);
+    fs.unlinkSync(csvFile);
+
+    expect(result.success).toBe(1);
+    const inserted = db.collection('results').insertOne.mock.calls[0][0];
+    expect(inserted.specimenId).toBe('SMP-1340');
+    expect(samples.findOne.mock.calls[0][0]).toEqual({ $or: [{ specimenId: 'SMP-1340' }] });
   });
 
   it('resolves the sample by barcode and falls back to alternate field names (test/code/value/testDate)', async () => {
@@ -717,5 +749,16 @@ describe('ResultWorker.processCSV — stream-level failures', () => {
 
     await expect(resultWorker.process(db, 'job-16', csvFile)).rejects.toThrow('row processing exploded');
     fs.unlinkSync(csvFile);
+  });
+
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a file
+  // removed after process()'s existsSync check crashed the worker with an
+  // uncaught exception instead of rejecting.
+  it('rejects when the source read stream fails (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `result-worker-missing-${Date.now()}.csv`);
+    const results = { success: 0, errors: [], total: 0 };
+
+    await expect(resultWorker.processCSV(makeDb(), 'job-17', missingPath, results, []))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

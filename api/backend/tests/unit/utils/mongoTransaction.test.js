@@ -12,7 +12,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { isTransactionCapable, isKnownStandaloneDeployment, withMongoTransaction } = require('../../../src/utils/mongoTransaction');
+const { isTransactionCapable, isKnownStandaloneDeployment, withMongoTransaction, isTransientTransactionError } = require('../../../src/utils/mongoTransaction');
+const { MongoServerError } = require('mongodb');
 const { createDbMock } = require('../../factories/db.factory');
 
 function createDb(commandImpl) {
@@ -124,5 +125,26 @@ describe('createDbMock client (#1000)', () => {
     const db = createDbMock({});
 
     expect(db.client.startSession()).toBe(db.session);
+  });
+});
+
+describe('isTransientTransactionError (#1370)', () => {
+  it('is true for a MongoServerError labelled TransientTransactionError', () => {
+    const conflict = new MongoServerError({ message: 'x', code: 112, errorLabels: ['TransientTransactionError'] });
+
+    expect(isTransientTransactionError(conflict)).toBe(true);
+  });
+
+  it('is false for a MongoServerError with no label', () => {
+    expect(isTransientTransactionError(new MongoServerError({ message: 'x', code: 112 }))).toBe(false);
+  });
+
+  it('is false for a plain Error', () => {
+    expect(isTransientTransactionError(new Error('x'))).toBe(false);
+  });
+
+  it('is false for null and undefined', () => {
+    expect(isTransientTransactionError(null)).toBe(false);
+    expect(isTransientTransactionError(undefined)).toBe(false);
   });
 });

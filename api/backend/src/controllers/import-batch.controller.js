@@ -3,7 +3,9 @@ const path = require('path');
 const fs = require('fs');
 
 const stagingImportService = require('../services/staging-import.service');
+const callerCreateOrganization = require('../services/callerCreateOrganization.service');
 const batchValidationEngine = require('../services/batch-validation-engine.service');
+const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const logger = require('../utils/logger');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
 
@@ -78,7 +80,38 @@ class ImportBatchController {
         });
       }
 
-      const result = await stagingImportService.createBatchImportJob(file);
+      // #1376: the organization the uploader's scope resolves is stamped on
+      // each sample the worker persists, so it is resolved here, before
+      // anything is staged.
+      const db = req.app?.locals?.db;
+      if (!db) {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      let organizationId;
+      try {
+        ({ organizationId } = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
+          userId: req.user?.userID,
+          organizationScope: req.organizationScope,
+          requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
+        }));
+      } catch (error) {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(error.statusCode || 403).json({
+          success: false,
+          error: error.message
+        });
+      }
+
+      const result = await stagingImportService.createBatchImportJob(file, { organizationId });
 
       if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
@@ -120,20 +153,27 @@ class ImportBatchController {
         });
       }
 
-      // #826: mesma causa-raiz do worker. Esta leitura só funcionava porque o
-      // upload (`createStagingImport`) conecta o Mongoose como efeito colateral
-      // -- consultar o status antes de qualquer upload neste processo (após um
-      // restart da API, por exemplo) enfileirava a query e a rejeitava após 10s.
-      const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
-      await connectMongoDB();
-
-      const StagingImport = require('../models/StagingImport');
-      const stagingImport = await StagingImport.findOne({ jobId });
+      // #826/#830: esta leitura dependia de o upload ter conectado o Mongoose
+      // como efeito colateral. StagingImport agora usa o driver nativo, pela
+      // mesma conexão do resto da API, então não há conexão extra a abrir.
+      const StagingImport = require('../services/stagingImport.store');
+      const stagingImport = await StagingImport.findOne({ jobId }, req.app?.locals?.db || null);
 
       if (!stagingImport) {
         return res.status(404).json({
           success: false,
           error: 'Lote não encontrado'
+        });
+      }
+
+      // #1384: the batch's organization rides in rawData.organizationId
+      // (#1376); a batch made before that has none, so only a global caller
+      // reads it.
+      if (req.organizationScope && !isRecordInOrganizationScope(stagingImport.rawData || {}, req.organizationScope, 'organizationId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este lote pertence a outra organização'
         });
       }
 
@@ -175,7 +215,9 @@ class ImportBatchController {
   async getQuarantineBatch(req, res) {
     try {
       const db = req.app.locals.db;
-      const result = await batchValidationEngine.getQuarantineBatch(db, req.params.id);
+      const result = await batchValidationEngine.getQuarantineBatch(db, req.params.id, {
+        organizationScope: req.organizationScope,
+      });
 
       return res.status(200).json({ success: true, ...result });
     } catch (error) {

@@ -28,7 +28,7 @@ function makeHappyDb() {
     }
   });
 
-  const consents = makeCollection('patient_consents', {
+  const consents = makeCollection('patientConsents', {
     countDocuments: async (filter) => {
       if (filter.status === 'ACTIVE') return 90;
       if (filter.status === 'REVOKED') return 10;
@@ -56,7 +56,7 @@ function makeHappyDb() {
     }
   });
 
-  const collections = { security_alerts: alerts, patient_consents: consents, logs };
+  const collections = { security_alerts: alerts, patientConsents: consents, logs };
   return { db: { collection: vi.fn((name) => collections[name]) }, collections };
 }
 

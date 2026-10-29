@@ -197,6 +197,14 @@ describe('generateUniqueSpecimenId', () => {
     expect(findOne).toHaveBeenCalledTimes(100);
   });
 
+  it('checks for a collision against the stored string form of the id (#1220)', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const db = { collection: () => ({ findOne }) };
+    const id = await generateUniqueSpecimenId(db);
+    expect(findOne).toHaveBeenCalledWith({ specimenId: String(id) });
+    expect(findOne.mock.calls[0][0].specimenId).toMatch(/^\d{7}$/);
+  });
+
   it('uses custom collection name', async () => {
     let usedName;
     const db = {

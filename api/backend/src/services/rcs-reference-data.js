@@ -4,6 +4,8 @@ const severitySeed = require('../reference-data/rcs-severity-mapping.RCS-GOV-1.0
 const weightsSeed = require('../reference-data/rcs-axis-weights.RCS-GOV-1.0.json');
 const thresholdsSeed = require('../reference-data/rcs-grade-thresholds.RCS-GOV-1.0.json');
 const governanceSeed = require('../reference-data/rcs-governance-rules.RCS-GOV-1.0.json');
+const matrixMappingSeed = require('../reference-data/rcs-matrix-mapping.RCS-GOV-1.0.json');
+const sprecMappingSeed = require('../reference-data/rcs-sprec-mapping.RCS-GOV-1.0.json');
 
 const MODEL_CODE = 'RCS-GOV-1.0';
 const SPREC_VERSION = 'SPREC-2.0';
@@ -44,6 +46,22 @@ const referenceData = Object.freeze({
     sprec_version: governanceSeed.sprec_version,
     ...item,
   }))),
+  // RF018 AC4 (#1320): the versioned release that resolves a matrix the
+  // payload does not state.
+  matrixMapping: Object.freeze({
+    ...matrixMappingSeed,
+    rules: Object.freeze(matrixMappingSeed.rules.map((rule) => Object.freeze({
+      ...rule,
+      ...(Array.isArray(rule.contains_any) ? { contains_any: Object.freeze([...rule.contains_any]) } : {}),
+      ...(Array.isArray(rule.fields_any) ? { fields_any: Object.freeze([...rule.fields_any]) } : {}),
+    }))),
+  }),
+  // RF018 AC1 (#1320): the versioned release of the SPREC codes, severities
+  // and weights the score reads.
+  sprecMapping: Object.freeze({
+    ...sprecMappingSeed,
+    tables: Object.freeze([...sprecMappingSeed.tables]),
+  }),
 });
 
 function buildRcsCatalogDocuments({ model_code = MODEL_CODE, sprec_version = SPREC_VERSION, matrix_type, catalog = [] } = {}) {

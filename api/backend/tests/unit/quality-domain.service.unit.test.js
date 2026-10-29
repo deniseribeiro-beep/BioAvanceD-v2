@@ -5,6 +5,7 @@ const {
   buildSprecCode,
   calculateMethodologyQualityFromSprec,
   evaluateQuality,
+  missingQualificationContextFields,
   resolveMethodologicalQuality,
   validateQualityForRelease,
 } = require('../../src/services/quality-domain.service');
@@ -148,5 +149,123 @@ describe('validateQualityForRelease', () => {
     expect(result.valid).toBe(true);
     expect(result.reason).toContain('aprovado');
     expect(result.assessment.final_grade).toBe('A');
+  });
+});
+
+// RF018 AC2 and AC3 (#1320): the result carries the input it was computed
+// from and, only when the request carries one, its use context.
+describe('evaluateQuality rcs_input and qualification_context', () => {
+  const rcsCertificationService = require('../../src/services/rcs-certification.service');
+  const qualityCompatibility = require('../../src/services/quality-compatibility.service');
+  const payload = { matrixType: 'fluid', sprec: validFluidSprec };
+
+  it('resolveMethodologicalQuality carries rcs_input, the read set of the normalized payload', () => {
+    const result = resolveMethodologicalQuality(payload);
+    expect(result.rcs_input).toEqual(rcsCertificationService.readInput(qualityCompatibility.normalizeSample(payload)));
+    expect(result.rcs_input).toMatchObject({ matrixType: 'fluid', sprec: expect.objectContaining({ sampleType: 'BLD' }) });
+  });
+
+  it('adds no qualification_context when the request carries none', () => {
+    expect(evaluateQuality(payload)).not.toHaveProperty('qualification_context');
+  });
+
+  it('keeps exactly the five context keys, each a non-empty string or plain object, else null', () => {
+    const result = evaluateQuality({
+      ...payload,
+      qualificationContext: {
+        intendedUseCode: { systemUri: 'urn:synthetic:use', code: 'research-sequencing' },
+        targetAnalyte: 'cfDNA',
+        assayFamily: '  ',
+        workflowProtocolId: 42,
+        extra: 'dropped',
+      },
+    });
+    expect(result.qualification_context).toEqual({
+      intendedUseCode: { systemUri: 'urn:synthetic:use', code: 'research-sequencing' },
+      targetAnalyte: 'cfDNA',
+      assayFamily: null,
+      workflowProtocolId: null,
+      workflowProtocolVersion: null,
+    });
+  });
+
+  it('reads the context from a sample wrapper too', () => {
+    const result = evaluateQuality({ sample: { ...payload, qualificationContext: { targetAnalyte: 'cfDNA' } } });
+    expect(result.qualification_context.targetAnalyte).toBe('cfDNA');
+  });
+
+  it('leaves the score, grade, route, penalties and trace as certify computes them', () => {
+    const { rcs_input: _input, ...rest } = evaluateQuality(payload);
+    expect(rest).toEqual({
+      ...rcsCertificationService.certify(qualityCompatibility.normalizeSample(payload)),
+      deprecated_legacy_fields: ['quality_score', 'quality_category', 'penalty_log', 'forcedQuarantine', 'category'],
+    });
+    expect(rest.final_grade).toBe('A');
+  });
+});
+
+// RF018 AC2 (#1320): a sent use context must name all five fields.
+describe('missingQualificationContextFields', () => {
+  const complete = {
+    intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+    workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+  };
+
+  it('gives no field for a complete context', () => {
+    expect(missingQualificationContextFields(complete)).toEqual([]);
+  });
+
+  it('gives the four absent fields of a partial context, in key order', () => {
+    expect(missingQualificationContextFields({ targetAnalyte: 'DNA' })).toEqual([
+      'intendedUseCode', 'assayFamily', 'workflowProtocolId', 'workflowProtocolVersion',
+    ]);
+  });
+
+  it('counts an empty string, a blank string, an array and a number as missing', () => {
+    expect(missingQualificationContextFields({
+      ...complete, intendedUseCode: '', targetAnalyte: '  ', assayFamily: ['sequencing'], workflowProtocolId: 42,
+    })).toEqual(['intendedUseCode', 'targetAnalyte', 'assayFamily', 'workflowProtocolId']);
+  });
+
+  it('counts a plain object as present', () => {
+    expect(missingQualificationContextFields({
+      ...complete, intendedUseCode: { systemUri: 'urn:synthetic:use', code: 'research-sequencing' },
+    })).toEqual([]);
+  });
+
+  it('gives all five fields for null and for a string', () => {
+    const all = ['intendedUseCode', 'targetAnalyte', 'assayFamily', 'workflowProtocolId', 'workflowProtocolVersion'];
+    expect(missingQualificationContextFields(null)).toEqual(all);
+    expect(missingQualificationContextFields('research-sequencing')).toEqual(all);
+  });
+});
+
+// RCS-002: the same sample under two use contexts gives two results whose
+// score, grade, route, trace and input are the same; only the context differs.
+describe('RCS-002 mesma amostra, dois contextos, dois resultados', () => {
+  it('keeps each context on its own result and moves nothing else', () => {
+    const sprec = {
+      matrixType: 'fluid', sampleType: 'SER', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'B',
+      secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A',
+    };
+    const sequencing = {
+      intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+      workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+    };
+    const proteomics = {
+      intendedUseCode: 'research-proteomics', targetAnalyte: 'protein', assayFamily: 'mass-spectrometry',
+      workflowProtocolId: 'p2', workflowProtocolVersion: '2.1',
+    };
+    const first = resolveMethodologicalQuality({ sprec, qualificationContext: sequencing });
+    const second = resolveMethodologicalQuality({ sprec, qualificationContext: proteomics });
+
+    expect(second.rcs_score).toEqual(first.rcs_score);
+    expect(second.final_grade).toEqual(first.final_grade);
+    expect(second.grade_route).toEqual(first.grade_route);
+    expect(JSON.stringify(second.calculation_trace)).toBe(JSON.stringify(first.calculation_trace));
+    expect(JSON.stringify(second.rcs_input)).toBe(JSON.stringify(first.rcs_input));
+    expect(first.qualification_context).toEqual(sequencing);
+    expect(second.qualification_context).toEqual(proteomics);
+    expect(second.qualification_context).not.toEqual(first.qualification_context);
   });
 });

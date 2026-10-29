@@ -238,31 +238,29 @@ const RETIRED_FILTER_KEYS = [
 // (lowercase d) was ever a written field. #628's comment names only
 // sampleID as the legacy form. If it was never written, that leg is dead
 // and should be dropped, which would shrink these four exemptions.
-const RETIRED_KEY_EXEMPT = new Set([
-  'interface/routes/result.routes.js:177',
-  // :440 -> :451 when #1082's destination scope check added 11 lines to
-  // POST /upload, above POST /'s own legacy-resolution tier.
-  'interface/routes/result.routes.js:451',
-  // :522 -> :543 when #875's allowlist rework added ~21 lines above the
-  // link-sample legacy-resolution tier (the entry itself is #628's
-  // deliberate _id -> specimenId -> legacy sampleID fallback; #804 owns
-  // sampleID's eventual retirement).
-  // :543 -> :599 (#875 era) -> :652 when #1082 added the source scope
-  // checks to PUT /:id and link-sample above this site.
-  'interface/routes/result.routes.js:652',
-  'services/result-specimenid-backfill.service.js:56',
-  // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
-  // :619/:696/:789 -> :683/:760/:853, a uniform +64 shift, when #789 added
-  // the shared NON_CANONICAL_SAMPLE_ALIASES constant, the GET query guard
-  // and the applied-filter echo above all three sites. The sites themselves
-  // are unchanged -- same reason the result.routes.js entry above moved
-  // under #875. Line-keyed exemptions are load-bearing bookkeeping: this
-  // guard went red on the shift alone, which is the intended behaviour.
-  'interface/routes/sample.routes.js:683',
-  'interface/routes/sample.routes.js:760',
-  'interface/routes/sample.routes.js:853',
-  'services/analysisValidation.service.js:29'
-]);
+// #1361: keyed by file plus the filter's whitespace-collapsed text (the
+// `raw` the sweep prints) and how many sites carry it, never by line. The
+// keys were `file:line` until then, renumbered for every line added above an
+// unchanged site (#875, #1082, #1185, #1216, #1266, #1299, #1334), and four
+// entries had outlived the filters they named: the result route's three
+// legacy lookups went with fc48faeb, and the backfill no longer queries
+// sampleID. A changed filter text or a new copy of one is an offender, and
+// an entry matching fewer sites than its count fails the #788 sweep below.
+const SAMPLE_TIERS = (id) => `.findOne({ $or: [ ...(ObjectId.isValid(${id}) ? [{ _id: new ObjectId(${id}) }] : []), { specimenId: ${id} }, `
+  + `...(Number.isFinite(numericId) ? [{ sampleID: numericId }] : []), { sampleID: ${id} }, { sampleId: ${id} }, { barcode: ${id} }, ], }`;
+const RETIRED_KEY_EXEMPT = [
+  // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode, in GET /:id
+  // and the SVG label route (both on `rawId`), and the ZPL label route.
+  { file: 'interface/routes/sample.routes.js', count: 2, call: SAMPLE_TIERS('rawId') },
+  { file: 'interface/routes/sample.routes.js', count: 1, call: SAMPLE_TIERS('id') },
+  // #628: the duplicate check resolves an identifier through each tier.
+  {
+    file: 'services/analysisValidation.service.js',
+    count: 1,
+    call: '.findOne({ _id: { $ne: sample._id }, $or: [{ specimenId: sampleIdentifier }, { sampleID: sampleIdentifier }, { barcode: sampleIdentifier }] }',
+  },
+];
+const exemptKey = (file, raw) => `${file} ${raw}`;
 
 function keysIn(text, pattern) {
   const keys = [];
@@ -959,16 +957,38 @@ function sweepSource() {
 // is not a sign the exemption mechanism is unused.
 const UNWRITTEN_KEY_EXEMPT = new Set([]);
 
+// #1361: which retired-key sites RETIRED_KEY_EXEMPT covers, each entry
+// covering at most `count` sites with its file and text, and the entries
+// left with sites unclaimed (stale, or a site whose text changed).
+function retiredExemptions(filterSites, exemptions = RETIRED_KEY_EXEMPT) {
+  const retired = new Set(RETIRED_FILTER_KEYS);
+  const budget = new Map(exemptions.map((entry) => [exemptKey(entry.file, entry.call), entry.count]));
+  const covered = new Set();
+  for (const site of filterSites) {
+    if (!site.keys.some((key) => retired.has(key))) continue;
+    const key = exemptKey(site.file, site.raw);
+    if ((budget.get(key) || 0) > 0) {
+      budget.set(key, budget.get(key) - 1);
+      covered.add(site);
+    }
+  }
+  const unused = exemptions
+    .filter((entry) => budget.get(exemptKey(entry.file, entry.call)) > 0)
+    .map((entry) => `${entry.file}: ${budget.get(exemptKey(entry.file, entry.call))} of ${entry.count} unmatched -- ${entry.call}`);
+  return { covered, unused };
+}
+
 function offendersIn({ filterSites, writtenFields }) {
   const offenders = [];
   const retired = new Set(RETIRED_FILTER_KEYS);
+  const { covered } = retiredExemptions(filterSites);
 
   for (const site of filterSites) {
     for (const key of site.keys) {
       if (key.startsWith('$')) continue; // an operator, not a field
 
       if (retired.has(key)) {
-        if (RETIRED_KEY_EXEMPT.has(`${site.file}:${site.line}`)) continue;
+        if (covered.has(site)) continue;
         offenders.push(`${site.file}:${site.line} filters on retired key '${key}' — ${site.raw}`);
         continue;
       }
@@ -996,7 +1016,17 @@ function offendersInSynthetic(source) {
 }
 
 test('#788: no .find()/.findOne() filters on a field nothing in src/ ever writes, or a retired one', () => {
-  const offenders = offendersIn(sweepSource());
+  const swept = sweepSource();
+  const offenders = offendersIn(swept);
+
+  // #1361: an exemption that no longer matches its sites is stale, and
+  // silently keeps a future copy of its text exempt.
+  assert.deepEqual(
+    retiredExemptions(swept.filterSites).unused,
+    [],
+    'RETIRED_KEY_EXEMPT names filter text fewer sites carry than its count: '
+      + 'the filter changed (re-read it and update the entry) or it is gone (drop the entry)'
+  );
 
   assert.deepEqual(
     offenders,
@@ -1637,8 +1667,8 @@ test('#1088: a filter literal wrapped in a helper call is collected, not skipped
 // absence.
 //
 // Keyed on file + helper NAME, deliberately not on line numbers: this file's
-// line-keyed RETIRED_KEY_EXEMPT entries have needed renumbering twice in a
-// single sitting (#875, #1082, #1087), and a churn-prone key trains readers
+// RETIRED_KEY_EXEMPT entries, line-keyed until #1361, needed renumbering twice
+// in a single sitting (#875, #1082, #1087), and a churn-prone key trains readers
 // to update the entry without re-reading what it asserts.
 //
 // QUERY_BUILDER reaches two of these helpers by DECLARATION (build*Query), so
@@ -1652,6 +1682,7 @@ test('#1088: every helper-wrapped filter whose argument is unresolvable is enume
     'controllers/createLinkedFileController.js:buildParentIdQuery': 'keys checked via QUERY_BUILDER',
     'interface/routes/reportTemplates.routes.js:resolveTemplateQuery': 'UNCHECKED -- name does not match build*Query',
     'interface/routes/workflow-run-file-link.routes.js:buildWorkflowRunQuery': 'keys checked via QUERY_BUILDER',
+    'scripts/rewriteEncryptedFields.js:buildEncryptionWorklistQuery': 'keys computed from utils/encryptedFieldRegistry.js, which encrypted-field-registry.arch pins',
     'services/SampleGraphValidator.js:normalizeSampleIdFilter': 'UNCHECKED -- name does not match build*Query',
     'services/equipment-sensor-quarantine.service.js:buildSensorLookup': 'UNCHECKED -- name does not match build*Query'
   };

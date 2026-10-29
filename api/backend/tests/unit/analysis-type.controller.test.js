@@ -119,7 +119,9 @@ describe('analysis-type.controller.createAnalysisType', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'Dados inválidos',
-      message: expect.stringContaining('name é obrigatório')
+      message: expect.stringContaining('name é obrigatório'),
+      // #1299: the model's error list beside the joined message.
+      details: expect.arrayContaining([expect.stringContaining('name é obrigatório')]),
     });
   });
 

@@ -13,12 +13,15 @@ function hashToken(token) {
 }
 
 // Minimal Mongo-query matcher covering the shapes revokeAllOtherSessions
-// builds (top-level equality, $and, $ne), so the mocked updateMany can
+// builds (top-level equality, $or, $and, $ne), so the mocked updateMany can
 // actually filter/mutate fake documents instead of just recording calls.
 function matchesMongoQuery(doc, query) {
   return Object.entries(query).every(([key, condition]) => {
     if (key === '$and') {
       return condition.every((clause) => matchesMongoQuery(doc, clause));
+    }
+    if (key === '$or') {
+      return condition.some((clause) => matchesMongoQuery(doc, clause));
     }
     if (condition && typeof condition === 'object' && '$ne' in condition) {
       return doc[key] !== condition.$ne;
@@ -54,7 +57,10 @@ describe('UserSecurityService DB-backed methods', () => {
   describe('getMFAStatus', () => {
     it('returns MFA status with recovery codes info', async () => {
       const users = buildCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaSetupDate: '2026-01-01' })
+        // The field the MFA enrolment writes (auth.service). This double once
+        // carried mfaSetupDate, which no writer emits, and kept the screen's
+        // always-null setup date green.
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaSetupAt: '2026-01-01' })
       });
       const recoveryCodes = buildCollection({
         findOne: vi.fn().mockResolvedValue({ remaining: 3 })
@@ -81,6 +87,30 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(result.recoveryCodes.remaining).toBe(0);
     });
 
+    it('prefers the canonical mfaSetupAt over mfaActivationDate for the setup date', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaSetupAt: '2026-02-02', mfaActivationDate: '2026-01-01' })
+      });
+      const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+      const db = buildDb({ users, recovery_codes: recoveryCodes });
+
+      const result = await userSecurityService.getMFAStatus(db, USER_ID);
+
+      expect(result.primarySetupDate).toBe('2026-02-02');
+    });
+
+    it('reads the canonical remainingCount, finding the set under either owner name', async () => {
+      const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID }) });
+      const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue({ remainingCount: 7 }) });
+      const db = buildDb({ users, recovery_codes: recoveryCodes });
+
+      const result = await userSecurityService.getMFAStatus(db, USER_ID);
+
+      expect(result.recoveryCodes.remaining).toBe(7);
+      const [filter] = recoveryCodes.findOne.mock.calls[0];
+      expect(filter.$or.map((clause) => Object.keys(clause)[0])).toEqual(['userAccountId', 'userID']);
+    });
+
     it('throws when user not found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
       const db = buildDb({ users });
@@ -95,11 +125,15 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({
           _id: USER_ID,
-          password: bcryptHash,
+          passwordHash: bcryptHash,
           passwordChangedAt: new Date('2026-01-01T00:00:00.000Z')
         })
       });
-      const db = buildDb({ users });
+      // #1257: a new deployment's default is 0 (no expiry), so this stores 90.
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { expirationDays: 90 } })
+      });
+      const db = buildDb({ users, security_config });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -113,7 +147,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('falls back to createdAt/now when passwordChangedAt is missing', async () => {
       const users = buildCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: 'short' })
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, passwordHash: 'short' })
       });
       const db = buildDb({ users });
 
@@ -130,15 +164,30 @@ describe('UserSecurityService DB-backed methods', () => {
       await expect(userSecurityService.getPasswordStatus(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
     });
 
+    it('#1257: a new deployment (no stored policy) reports no expiry', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, passwordHash: 'short', passwordChangedAt: new Date('2020-01-01T00:00:00.000Z') })
+      });
+      const security_config = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+
+      const result = await userSecurityService.getPasswordStatus(buildDb({ users, security_config }), USER_ID);
+
+      expect(result.expiresAt).toBeNull();
+    });
+
     it('parses passwordChangedAt when stored as a non-Date value', async () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({
           _id: USER_ID,
-          password: 'short',
+          passwordHash: 'short',
           passwordChangedAt: '2026-01-01T00:00:00.000Z'
         })
       });
-      const db = buildDb({ users });
+      // #1257: a new deployment's default is 0 (no expiry), so this stores 90.
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { expirationDays: 90 } })
+      });
+      const db = buildDb({ users, security_config });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -155,7 +204,7 @@ describe('UserSecurityService DB-backed methods', () => {
         findOne: vi.fn().mockResolvedValue({
           _id: USER_ID,
           mfaEnabled: true,
-          password: bcryptHash,
+          passwordHash: bcryptHash,
           passwordChangedAt: new Date()
         })
       });
@@ -171,7 +220,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('reports weak level for a bare-minimum account', async () => {
       const users = buildCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: false, password: null })
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: false, passwordHash: null })
       });
       const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
       const db = buildDb({ users, recovery_codes: recoveryCodes });
@@ -191,7 +240,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('reports medium level for a mid-range score', async () => {
       const users = buildCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, password: null })
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, passwordHash: null })
       });
       const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
       const db = buildDb({ users, recovery_codes: recoveryCodes });
@@ -207,7 +256,7 @@ describe('UserSecurityService DB-backed methods', () => {
   describe('updatePassword', () => {
     it('rejects an incorrect current password', async () => {
       const users = buildCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: await bcrypt.hash('correct-pass', 10) })
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, passwordHash: await bcrypt.hash('correct-pass', 10) })
       });
       const db = buildDb({ users });
 
@@ -218,7 +267,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('rejects a new password that fails complexity validation', async () => {
       const currentHash = await bcrypt.hash('correct-pass', 10);
-      const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash }) });
+      const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, passwordHash: currentHash }) });
       const db = buildDb({ users });
 
       await expect(
@@ -232,8 +281,8 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({
           _id: USER_ID,
-          password: currentHash,
-          passwordHistory: [reusedHash]
+          passwordHash: currentHash,
+          passwordHistoryHashes: [reusedHash]
         })
       });
       const db = buildDb({ users });
@@ -243,10 +292,86 @@ describe('UserSecurityService DB-backed methods', () => {
       ).rejects.toThrow('Você não pode reutilizar uma senha recente');
     });
 
+    // #1244: this site compared every stored history hash but never the
+    // current password, and kept 5 where the other writers kept 3.
+    it('#1244: rejects setting the current password again', async () => {
+      const currentHash = await bcrypt.hash('NewPassw0rd!123', 4);
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, passwordHash: currentHash, passwordHistoryHashes: [] })
+      });
+      const db = buildDb({ users });
+
+      await expect(
+        userSecurityService.updatePassword(db, USER_ID, 'NewPassw0rd!123', 'NewPassw0rd!123')
+      ).rejects.toThrow('Você não pode reutilizar uma senha recente');
+      expect(users.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('#1244: checks and stores history to passwordRules.maxReuseHistory', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const olderHash = await bcrypt.hash('NewPassw0rd!123', 4);
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, passwordHash: currentHash, passwordHistoryHashes: ['h1', olderHash] })
+      });
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 1 } })
+      });
+      const db = buildDb({ users, security_config });
+
+      // olderHash is history entry 2, past depth 1, so it is not checked.
+      await userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123');
+
+      const [, update] = users.updateOne.mock.calls[0];
+      expect(update.$set.passwordHistoryHashes).toEqual([currentHash]);
+    });
+
+    // #1246: this route had its own 12-character validator with no digit
+    // rule; it now checks the passwordRules policy like every other write.
+    it('#1246: checks strength against passwordRules, not a fixed 12', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const user = { _id: USER_ID, passwordHash: currentHash, passwordHistoryHashes: [] };
+      const strict = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { minLength: 14 } })
+      });
+      const users = buildCollection({ findOne: vi.fn().mockResolvedValue(user) });
+      await expect(
+        userSecurityService.updatePassword(buildDb({ users, security_config: strict }), USER_ID, 'correct-pass', 'Abcdef1!xyz12')
+      ).rejects.toThrow('pelo menos 14 caracteres');
+
+      // A stored policy of 8: 8 characters with a digit pass, which the old
+      // validator refused for being under 12.
+      const eight = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { minLength: 8 } })
+      });
+      const users2 = buildCollection({ findOne: vi.fn().mockResolvedValue(user) });
+      await userSecurityService.updatePassword(buildDb({ users: users2, security_config: eight }), USER_ID, 'correct-pass', 'Abcde1!x');
+      expect(users2.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    // #1257: a new deployment's floor depends on the account: 15 without MFA,
+    // 8 for an account enrolled in MFA (NIST SP 800-63B-4 §3.1.1.2).
+    it('#1257: with no stored policy, 15 characters without MFA and 8 with it', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const none = () => buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+      const single = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, passwordHash: currentHash, passwordHistoryHashes: [] }) });
+      await expect(
+        userSecurityService.updatePassword(buildDb({ users: single, security_config: none() }), USER_ID, 'correct-pass', 'eightchr')
+      ).rejects.toThrow('pelo menos 15 caracteres');
+      expect(single.updateOne).not.toHaveBeenCalled();
+
+      const enrolled = buildCollection({
+        findOne: vi.fn().mockResolvedValue({
+          _id: USER_ID, passwordHash: currentHash, passwordHistoryHashes: [], mfaEnabled: true, mfaSecretCiphertext: 'ciphertext'
+        })
+      });
+      await userSecurityService.updatePassword(buildDb({ users: enrolled, security_config: none() }), USER_ID, 'correct-pass', 'eightchr');
+      expect(enrolled.updateOne).toHaveBeenCalledTimes(1);
+    });
+
     it('updates the password and rotates history on success', async () => {
       const currentHash = await bcrypt.hash('correct-pass', 10);
       const users = buildCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash, passwordHistory: [] })
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, passwordHash: currentHash, passwordHistoryHashes: [] })
       });
       const db = buildDb({ users });
 
@@ -254,8 +379,13 @@ describe('UserSecurityService DB-backed methods', () => {
 
       expect(users.updateOne).toHaveBeenCalledTimes(1);
       const [, update] = users.updateOne.mock.calls[0];
-      expect(update.$set.passwordHistory).toEqual([currentHash]);
-      expect(await bcrypt.compare('NewPassw0rd!123', update.$set.password)).toBe(true);
+      // #1330: the legacy-named document's change is stored under the
+      // canonical names, and the legacy ones are removed.
+      expect(update.$set.passwordHistoryHashes).toEqual([currentHash]);
+      expect(await bcrypt.compare('NewPassw0rd!123', update.$set.passwordHash)).toBe(true);
+      expect(update.$unset).toEqual({ password: '', passwordHistory: '', forceReset: '' });
+      // #1250: the owner's own change satisfies a forced reset.
+      expect(update.$set.forcePasswordReset).toBe(false);
       // #995: this route is the fifth site verifying a user-supplied password.
       // It wrote neither lockout field, so it could only ever count up. A
       // successful change clears the counter AND the lock, the same pairing
@@ -271,7 +401,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({
           _id: USER_ID,
-          password: await bcrypt.hash('correct-pass', 10),
+          passwordHash: await bcrypt.hash('correct-pass', 10),
           failedLoginAttempts: 1
         })
       });
@@ -295,7 +425,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({
           _id: USER_ID,
-          password: await bcrypt.hash('correct-pass', 10),
+          passwordHash: await bcrypt.hash('correct-pass', 10),
           accountLockedUntil: lockedUntil
         })
       });
@@ -318,8 +448,8 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({
           _id: USER_ID,
-          password: await bcrypt.hash('correct-pass', 10),
-          passwordHistory: [],
+          passwordHash: await bcrypt.hash('correct-pass', 10),
+          passwordHistoryHashes: [],
           accountLockedUntil: expired
         })
       });
@@ -352,10 +482,35 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(codes).toHaveLength(10);
       expect(new Set(codes).size).toBe(10);
       expect(recoveryCodes.updateOne).toHaveBeenCalledTimes(1);
-      const [, update, options] = recoveryCodes.updateOne.mock.calls[0];
-      expect(update.$set.remaining).toBe(10);
-      expect(update.$set.codes).toHaveLength(10);
+      const [filter, update, options] = recoveryCodes.updateOne.mock.calls[0];
+      expect(update.$set.remainingCount).toBe(10);
+      expect(update.$set.codeHashes).toHaveLength(10);
+      expect(update.$set.usedCodeHashes).toEqual([]);
+      expect(String(update.$set.userAccountId)).toBe(USER_ID);
+      expect(update.$set.recoveryCodeSetId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(update.$set.generatedAt).toBeInstanceOf(Date);
+      expect(update.$set.regeneratedAt).toBeNull();
       expect(options).toEqual({ upsert: true });
+      // The filter finds a set under either owner name, and the update drops
+      // the pre-dictionary names a set written before them still carries.
+      expect(filter.$or.map((clause) => Object.keys(clause)[0])).toEqual(['userAccountId', 'userID']);
+      expect(Object.keys(update.$unset).sort()).toEqual(
+        ['codes', 'createdAt', 'remaining', 'updatedAt', 'usedCodes', 'userID']
+      );
+    });
+
+    it('marks a set that replaced an earlier one as regenerated, with a new id', async () => {
+      const recoveryCodes = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ recoveryCodeSetId: 'old-set', remainingCount: 2 })
+      });
+      const db = buildDb({ recovery_codes: recoveryCodes });
+
+      await userSecurityService.generateRecoveryCodes(db, USER_ID);
+
+      const [, update] = recoveryCodes.updateOne.mock.calls[0];
+      expect(update.$set.regeneratedAt).toBeInstanceOf(Date);
+      expect(update.$set.regeneratedAt).toEqual(update.$set.generatedAt);
+      expect(update.$set.recoveryCodeSetId).not.toBe('old-set');
     });
   });
 
@@ -363,7 +518,7 @@ describe('UserSecurityService DB-backed methods', () => {
     it('revokes a matching session and clears it from the in-memory cache', async () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
       const db = buildDb({ sessions });
-      sessionService.sessions.set('sess-1', { sessionID: 'sess-1', userID: USER_ID });
+      sessionService.sessions.set('sess-1', { sessionId: 'sess-1', userAccountId: USER_ID });
 
       await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
 
@@ -408,13 +563,37 @@ describe('UserSecurityService DB-backed methods', () => {
       await userSecurityService.revokeSession(db, USER_ID, validObjectId);
 
       const [query] = sessions.updateOne.mock.calls[0];
-      expect(query.$or).toHaveLength(2);
+      // #1386: the owner as userAccountId, and the id as sessionId or the
+      // document _id.
+      expect(query.userAccountId).toBe(USER_ID);
+      expect(query.$and[0].$or).toHaveLength(2);
+      expect(query.$and[0].$or[0]).toEqual({ sessionId: validObjectId });
+      expect(String(query.$and[0].$or[1]._id)).toBe(validObjectId);
+    });
+
+    it('#1386: does not revoke a session stored only under the legacy names', async () => {
+      const docs = [
+        { _id: 'a', sessionID: 'sess-legacy', userID: 'someone-else', isActive: true },
+        { _id: 'b', sessionID: 'sess-legacy', userID: USER_ID, isActive: true }
+      ];
+      const sessions = buildCollection({
+        updateOne: vi.fn(async (query, update) => {
+          const doc = docs.find((entry) => matchesMongoQuery(entry, query));
+          if (doc) Object.assign(doc, update.$set);
+          return { matchedCount: doc ? 1 : 0 };
+        })
+      });
+
+      await expect(userSecurityService.revokeSession(buildDb({ sessions }), USER_ID, 'sess-legacy'))
+        .rejects.toThrow('Sessão não encontrada');
+
+      expect(docs.map((doc) => doc.isRevoked === true)).toEqual([false, false]);
     });
 
     it('falls back to matching by sessionID/_id fields when the cache key differs from sessionId', async () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
       const db = buildDb({ sessions });
-      sessionService.sessions.set('cache-key', { sessionID: 'sess-1', userID: USER_ID });
+      sessionService.sessions.set('cache-key', { sessionId: 'sess-1', userAccountId: USER_ID });
 
       await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
 
@@ -426,7 +605,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
       const db = buildDb({ sessions });
       sessionService.sessions.set('cache-key', {
-        userID: USER_ID,
+        userAccountId: USER_ID,
         _id: { toString: () => validObjectId }
       });
 
@@ -440,8 +619,8 @@ describe('UserSecurityService DB-backed methods', () => {
     it('revokes all other sessions and clears them from the cache, keeping the current one', async () => {
       const sessions = buildCollection();
       const db = buildDb({ sessions });
-      sessionService.sessions.set('other', { userID: USER_ID, token: 'old-token' });
-      sessionService.sessions.set('current', { userID: USER_ID, token: 'current-token' });
+      sessionService.sessions.set('other', { userAccountId: USER_ID, token: 'old-token' });
+      sessionService.sessions.set('current', { userAccountId: USER_ID, token: 'current-token' });
 
       await userSecurityService.revokeAllSessions(db, USER_ID, 'current-token');
 
@@ -457,9 +636,13 @@ describe('UserSecurityService DB-backed methods', () => {
       // doc1 is the caller's own session -- stored (like real sessions) by
       // tokenHash only, no plaintext token field. doc2 is another session,
       // still on legacy plaintext token.
+      // #1386: doc3 and doc4 are stored only under the legacy names, so the
+      // owner filter matches neither.
       const docs = [
-        { _id: '1', userID: USER_ID, tokenHash: currentHash, isActive: true },
-        { _id: '2', userID: USER_ID, token: 'other-token', isActive: true }
+        { _id: '1', userAccountId: USER_ID, accessTokenHash: currentHash, isActive: true },
+        { _id: '2', userAccountId: USER_ID, token: 'other-token', isActive: true },
+        { _id: '3', userID: USER_ID, tokenHash: currentHash, isActive: true },
+        { _id: '4', userID: USER_ID, tokenHash: 'other-hash', isActive: true }
       ];
 
       const sessions = buildCollection({
@@ -485,11 +668,16 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(docs[1].isActive).toBe(false);
       expect(docs[1].revokedAt).toBeInstanceOf(Date);
       expect(docs[1].updatedAt).toBeInstanceOf(Date);
+      expect(docs[2].isRevoked).toBeUndefined();
+      expect(docs[3].isRevoked).toBeUndefined();
     });
   });
 
   describe('requestPasswordReset', () => {
+    const notificationService = require('../../src/services/NotificationService');
+
     it('generates and persists a reset token with the requested expiration', async () => {
+      vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
       });
@@ -501,6 +689,34 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(typeof result.resetToken).toBe('string');
       expect(result.expiresAt).toBeInstanceOf(Date);
       expect(users.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    // #1203: the route reported "Link ... enviado" while nothing was sent.
+    it('#1203: emails the link for the stored token, with the requested lifetime', async () => {
+      const sendSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
+      });
+      const db = buildDb({ users });
+
+      const result = await userSecurityService.requestPasswordReset(db, USER_ID, 2);
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const [to, link, opts] = sendSpy.mock.calls[0];
+      expect(to).toBe('user@example.com');
+      expect(opts).toEqual({ expiresInMinutes: 120 });
+      expect(new URL(link).pathname).toBe('/reset-password');
+      expect(new URL(link).searchParams.get('token')).toBe(result.resetToken);
+    });
+
+    it('#1203: a failed send rejects, so the route cannot report success', async () => {
+      vi.spyOn(notificationService, 'sendPasswordReset').mockRejectedValue(new Error('smtp down'));
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
+      });
+      const db = buildDb({ users });
+
+      await expect(userSecurityService.requestPasswordReset(db, USER_ID, 1)).rejects.toThrow('smtp down');
     });
 
     it('throws when user not found', async () => {
@@ -580,10 +796,10 @@ describe('UserSecurityService DB-backed methods', () => {
     it('returns sessions from the database with parsed device details', async () => {
       const dbSessions = [
         {
-          sessionID: 'sess-1',
+          sessionId: 'sess-1',
           token: 'current-token',
           sessionData: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', ip: '10.0.0.5' },
-          lastActivity: new Date()
+          lastActivityAt: new Date()
         }
       ];
       const sessions = buildCollection({
@@ -597,9 +813,15 @@ describe('UserSecurityService DB-backed methods', () => {
       const result = await userSecurityService.getSessions(db, USER_ID, 'current-token');
 
       expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('sess-1');
       expect(result[0].isCurrent).toBe(true);
       expect(result[0].os).toBe('Windows 10/11');
       expect(result[0].location).toBe('10.0.xxx.xxx');
+      // #1386: the owner matches under userAccountId only.
+      expect(sessions.find).toHaveBeenCalledWith({
+        userAccountId: USER_ID,
+        isActive: true
+      });
     });
 
     it('falls back to a synthetic current session when nothing is stored', async () => {
@@ -640,7 +862,7 @@ describe('UserSecurityService DB-backed methods', () => {
           _id: { toString: () => 'raw-id' },
           token: 'other-token',
           metadata: { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', ip: '10.0.0.9' },
-          createdAt: new Date('2026-01-01T00:00:00.000Z')
+          sessionStartedAt: new Date('2026-01-01T00:00:00.000Z')
         }
       ];
       const sessions = buildCollection({
@@ -715,7 +937,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const db = buildDb({ sessions });
       sessionService.sessions.clear();
       sessionService.sessions.set('cached-1', {
-        userID: USER_ID,
+        userAccountId: USER_ID,
         isActive: true,
         token: 'current-token',
         userAgent: 'Mozilla/5.0 (X11; Linux x86_64)'

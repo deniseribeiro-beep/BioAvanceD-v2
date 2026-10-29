@@ -63,6 +63,22 @@ class ReferenceDatasetReleaseModel {
     if (data.releaseStatus && !RELEASE_STATUSES.includes(data.releaseStatus)) {
       errors.push(`releaseStatus deve ser um de: ${RELEASE_STATUSES.join('|')}`);
     }
+    // V2E-0490: obrigatório quando active.
+    if (data.releaseStatus === 'active' && (typeof data.promotionApprovedBy !== 'string' || data.promotionApprovedBy.trim() === '')) {
+      errors.push('promotionApprovedBy é obrigatório quando releaseStatus é active');
+    }
+    // V2E-0491: release anterior para rollback.
+    if (data.rollbackTargetId !== undefined && data.rollbackTargetId !== null && typeof data.rollbackTargetId !== 'string') {
+      errors.push('rollbackTargetId deve ser string');
+    }
+    // V2E-0489 is 1..1, enforced by promoteRelease rather than here: a
+    // release is registered before its manifest exists (REL-0179 "Validated
+    // before promotion").
+    for (const field of ['coverageManifestId', 'dataQualityAssessmentId']) {
+      if (data[field] !== undefined && data[field] !== null && typeof data[field] !== 'string') {
+        errors.push(`${field} deve ser string`);
+      }
+    }
 
     return { isValid: errors.length === 0, errors };
   }
@@ -89,6 +105,15 @@ class ReferenceDatasetReleaseModel {
       mappingVersion: data.mappingVersion,
       releaseStatus: data.releaseStatus || 'planned',
       previousReleaseId: data.previousReleaseId || null,
+      promotionApprovedBy: data.promotionApprovedBy || null,
+      rollbackTargetId: data.rollbackTargetId || null,
+      promotionClaimedAt: data.promotionClaimedAt ? new Date(data.promotionClaimedAt) : null,
+      // V2E-0489.
+      coverageManifestId: data.coverageManifestId || null,
+      // INFERENCE, not a citation: not a dictionary field. The release's own
+      // DataQualityAssessment (RF028 AC7), kept beside it as
+      // promotionClaimedAt is.
+      dataQualityAssessmentId: data.dataQualityAssessmentId || null,
       createdAt: now,
       updatedAt: now,
     };

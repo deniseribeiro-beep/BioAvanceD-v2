@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 // through Node's own require cache (createRequire), which vi.resetModules()
 // does not clear -- so a spy installed here is the one the controller calls.
 const auditLogger = require('../../src/utils/auditLogger');
+const { createFakeCollection } = require('./ingestion/testHelpers');
 
 const {
   saveTelemetryPointMock,
@@ -66,8 +67,26 @@ vi.mock('../../src/services/equipment-sensor-quarantine.service', () => ({
 }));
 
 
+// #1207: an active incident whose excursion has already outlasted the 2-hour
+// TELEMETRY_CRITICAL_DURATION_HOURS fallback, for tests about what happens
+// once the quarantine does fire.
+function sustainedIncident(overrides = {}) {
+  return {
+    _id: 'incident-1',
+    sensorKey: 'sensor-1',
+    maxTemperature: 10,
+    minTemperature: 9,
+    samplesOutOfRange: 2,
+    status: 'open',
+    excursionStartedAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+    ...overrides,
+  };
+}
+
 function createResponse() {
   return {
+    // Express always supplies res.locals; #1120's audit reason is written there.
+    locals: {},
     statusCode: 200,
     body: null,
     status(code) {
@@ -89,6 +108,12 @@ describe('iot.controller', () => {
   let mongooseConnectSpy;
   let temperatureIncidentsCollection;
   let usersCollection;
+  let idempotencyKeysCollection;
+  // #1317: null unless a case binds the reading to a datastream.
+  let datastreamsCollection;
+  let temperaturePoliciesCollection;
+  // #1392: null unless a case reads the excursion's equipment key.
+  let excursionsCollection;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -135,12 +160,21 @@ describe('iot.controller', () => {
       }),
     };
 
+    idempotencyKeysCollection = createFakeCollection([]);
+    datastreamsCollection = null;
+    temperaturePoliciesCollection = null;
+    excursionsCollection = null;
+
     const fakeConnection = {
       collection: vi.fn().mockImplementation((name) => {
+        if (name === 'ingestionIdempotencyKeys') return idempotencyKeysCollection;
         if (name === 'temperatureIncidents') return temperatureIncidentsCollection;
         if (name === 'users') return usersCollection;
         if (name === 'roles') return rolesCollection;
         if (name === 'userRoleAssignments') return assignmentsCollection;
+        if (name === 'telemetryDatastreams' && datastreamsCollection) return datastreamsCollection;
+        if (name === 'temperaturePolicies' && temperaturePoliciesCollection) return temperaturePoliciesCollection;
+        if (name === 'environmentalExcursions' && excursionsCollection) return excursionsCollection;
         return {
           findOne: vi.fn().mockResolvedValue(null),
           updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
@@ -303,7 +337,7 @@ describe('iot.controller', () => {
     await ingestTelemetry(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ success: true, accepted: true });
+    expect(res.body).toEqual(expect.objectContaining({ success: true, accepted: true, telemetryReadingId: expect.any(String), clockStatus: expect.any(String) }));
     expect(saveTelemetryPointMock).toHaveBeenCalled();
     expect(connectMongoDBMock).toHaveBeenCalled();
 
@@ -437,8 +471,8 @@ describe('iot.controller', () => {
     await ingestTelemetry(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ success: true, accepted: true });
-    expect(saveTelemetryPointMock).toHaveBeenCalledWith('sensor-2', 5, expect.any(Date));
+    expect(res.body).toEqual(expect.objectContaining({ success: true, accepted: true, telemetryReadingId: expect.any(String), clockStatus: expect.any(String) }));
+    expect(saveTelemetryPointMock).toHaveBeenCalledWith('sensor-2', 5, expect.any(Date), expect.objectContaining({ telemetryReadingId: expect.any(String) }));
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
 
@@ -526,11 +560,13 @@ describe('iot.controller', () => {
     await ingestTelemetry(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ success: true, accepted: true });
+    expect(res.body).toEqual(expect.objectContaining({ success: true, accepted: true, telemetryReadingId: expect.any(String), clockStatus: expect.any(String) }));
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
 
-  it('retorna 500 quando ocorre um erro inesperado no processamento', async () => {
+  // #1317: an unparseable timestamp used to reach toISOString and answer 500;
+  // the reading contract refuses it first, with nothing written.
+  it('recusa com 422 um timestamp que não é data, sem gravar nada', async () => {
     const req = {
       body: {
         sensorId: 'sensor-2',
@@ -542,20 +578,21 @@ describe('iot.controller', () => {
 
     await ingestTelemetry(req, res);
 
-    expect(res.statusCode).toBe(500);
-    expect(res.body).toMatchObject({
-      success: false,
-      error: 'Erro ao processar telemetria',
-    });
+    expect(res.statusCode).toBe(422);
+    expect(res.body).toMatchObject({ success: false });
+    expect(saveTelemetryPointMock).not.toHaveBeenCalled();
   }, 15000);
 
   it('atualiza um incidente de temperatura existente em vez de criar um novo', async () => {
+    // #1207: an excursion already past the 2-hour fallback, so the
+    // quarantine this test expects is the sustained one.
     temperatureIncidentsCollection.findOne.mockResolvedValue({
       _id: 'incident-1',
       maxTemperature: 10,
       minTemperature: 9,
       samplesOutOfRange: 2,
       status: 'open',
+      excursionStartedAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
     });
 
     const req = { body: { sensorId: 'sensor-1', temperature: 12.5 } };
@@ -657,6 +694,7 @@ describe('iot.controller', () => {
   it('loga aviso quando a quarentena de cadeia fria é acionada', async () => {
     const loggerModule = require('../../src/utils/logger');
     const warnSpy = vi.spyOn(loggerModule, 'warn').mockImplementation(() => undefined);
+    temperatureIncidentsCollection.findOne.mockResolvedValue(sustainedIncident());
     quarantineByColdChainIncidentMock.mockResolvedValue({
       triggered: true,
       incidentId: 'incident-1',
@@ -683,6 +721,7 @@ describe('iot.controller', () => {
   it('loga erro quando a aplicação da quarentena de cadeia fria falha', async () => {
     const loggerModule = require('../../src/utils/logger');
     const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
+    temperatureIncidentsCollection.findOne.mockResolvedValue(sustainedIncident());
     quarantineByColdChainIncidentMock.mockRejectedValue(new Error('quarantine boom'));
 
     const req = { body: { sensorId: 'sensor-1', temperature: 12.5 } };
@@ -698,6 +737,156 @@ describe('iot.controller', () => {
     });
     errorSpy.mockRestore();
   }, 15000);
+
+  // #1207: the first out-of-range reading used to quarantine every sample
+  // under the sensor at once. The policy's minimumDuration -- the time half
+  // of ISBER's "critical limits (temperatures and time)", and v2.0.0
+  // ELM-0368's "primeira medição fora do limite conforme a regra" -- was read
+  // only by TelemetryMonitor, for the Neo4j COMPROMISED mark. The alarm stays
+  // immediate; the quarantine now waits until the excursion has lasted
+  // minimumDuration, measured from the first reading of an unbroken
+  // out-of-range run.
+  describe('#1207: the cold-chain quarantine waits for the policy minimumDuration', () => {
+    const READING_AT = '2026-04-08T12:00:00.000Z';
+    const minutesBefore = (minutes) => new Date(Date.parse(READING_AT) - minutes * 60 * 1000);
+    // The quarantine runs fire-and-forget after the incident write, so a
+    // "was not called" assertion needs the chain to have had its turn.
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+    function policyWith(minimumDuration) {
+      return {
+        sensorId: 'sensor-2',
+        alertEmail: 'alerts@example.test',
+        sensorName: 'sensor-2',
+        temperaturePolicy: { _id: 'policy-1', minTemp: 2, maxTemp: 8, minimumDuration },
+      };
+    }
+
+    async function ingest(temperature) {
+      const res = createResponse();
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature, timestamp: READING_AT } }, res);
+      expect(res.statusCode).toBe(200);
+    }
+
+    beforeEach(() => {
+      sensorMetadataLeanMock.mockResolvedValue(policyWith(30));
+    });
+
+    it('the first out-of-range reading opens the incident and starts the excursion clock, but quarantines nothing', async () => {
+      temperatureIncidentCreateMock.mockImplementation((payload) => ({ _id: 'incident-1', ...payload }));
+      usersCollection.find.mockReturnValue({
+        project: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([{ email: 'admin@example.test' }]),
+        }),
+      });
+
+      await ingest(12.5);
+
+      // The incident alert is sent after the point where the quarantine ran.
+      await vi.waitFor(() => {
+        expect(sendIncidentAlertEmailMock).toHaveBeenCalled();
+      });
+      expect(temperatureIncidentsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ excursionStartedAt: new Date(READING_AT) })
+      );
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+      // The alarm itself is not delayed.
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledTimes(1);
+    }, 15000);
+
+    it('a reading inside minimumDuration of the excursion start does not quarantine, and keeps the clock', async () => {
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', excursionStartedAt: minutesBefore(29) })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalled();
+      });
+      await settle();
+      expect(temperatureIncidentsCollection.updateOne.mock.calls[0][1].$set.excursionStartedAt).toEqual(minutesBefore(29));
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+    }, 15000);
+
+    it('CONTROL: a reading minimumDuration after the excursion start quarantines', async () => {
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', excursionStartedAt: minutesBefore(30) })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(quarantineByColdChainIncidentMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ _id: 'incident-1', sensorKey: 'sensor-2' })
+        );
+      });
+    }, 15000);
+
+    it('without a usable minimumDuration the 2-hour fallback governs: 60 minutes in, nothing is quarantined', async () => {
+      sensorMetadataLeanMock.mockResolvedValue(policyWith(null));
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', excursionStartedAt: minutesBefore(60) })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalled();
+      });
+      await settle();
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+    }, 15000);
+
+    it('CONTROL: without a usable minimumDuration, 120 minutes in, the quarantine fires', async () => {
+      sensorMetadataLeanMock.mockResolvedValue(policyWith(null));
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', excursionStartedAt: minutesBefore(120) })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(quarantineByColdChainIncidentMock).toHaveBeenCalled();
+      });
+    }, 15000);
+
+    it('an active incident with no excursion clock restarts it at this reading and does not quarantine', async () => {
+      // The temperature came back in range since the incident opened (which
+      // stopped the clock), or the incident predates #1207. Its openedAt is
+      // not when this excursion began.
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', openedAt: minutesBefore(180), excursionStartedAt: null })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalled();
+      });
+      await settle();
+      expect(temperatureIncidentsCollection.updateOne.mock.calls[0][1].$set.excursionStartedAt).toEqual(new Date(READING_AT));
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+    }, 15000);
+
+    it('an in-range reading stops the excursion clock on the sensor\'s active incident', async () => {
+      await ingest(5);
+
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalledWith(
+          {
+            sensorKey: 'sensor-2',
+            status: { $in: ['open', 'acknowledged', 'escalated'] },
+            excursionStartedAt: { $ne: null },
+          },
+          { $set: expect.objectContaining({ excursionStartedAt: null }) }
+        );
+      });
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+      expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
+    }, 15000);
+  });
 
   it('usa sensorId como sensorName de fallback quando metadata não possui sensorName', async () => {
     temperatureIncidentCreateMock.mockImplementation((payload) => payload);
@@ -718,7 +907,9 @@ describe('iot.controller', () => {
     });
   }, 15000);
 
-  it('continua processamento quando saveTelemetryPoint falha ao persistir no InfluxDB', async () => {
+  // #1317 (RF009 AC1, RNF016 C3): this case asserted the reverse, a reading
+  // accepted although InfluxDB never held it. InfluxDB is the authority now.
+  it('answers 503 when InfluxDB does not persist the reading, but still evaluates the policy', async () => {
     const loggerModule = require('../../src/utils/logger');
     const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
     saveTelemetryPointMock.mockRejectedValue(new Error('influx boom'));
@@ -728,14 +919,108 @@ describe('iot.controller', () => {
 
     await ingestTelemetry(req, res);
 
-    expect(res.statusCode).toBe(200);
-    await vi.waitFor(() => {
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[ISO20387][IOT] Falha ao persistir telemetria no InfluxDB:',
-        'influx boom'
-      );
-    });
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toMatchObject({ success: false, code: 'TELEMETRY_NOT_PERSISTED' });
+    expect(sensorMetadataLeanMock).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith('[ISO20387][IOT] Falha ao persistir telemetria no InfluxDB:', 'influx boom');
     errorSpy.mockRestore();
+  }, 15000);
+
+  it('control: a persisted reading answers 200 with its identity, the point carrying it', async () => {
+    saveTelemetryPointMock.mockResolvedValue(true);
+    const req = { body: { sensorId: 'sensor-2', temperature: 5, timestamp: new Date().toISOString() } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ clockStatus: 'synchronized' });
+    expect(res.body.persistedAt).toBeInstanceOf(Date);
+    expect(saveTelemetryPointMock.mock.calls[0][3]).toMatchObject({ telemetryReadingId: res.body.telemetryReadingId, ingestionService: 'iot-api' });
+  }, 15000);
+
+  // RF009 AC7 (#1317): a client idempotencyKey replays here as on the
+  // temperature route, from RF029's key store, once InfluxDB holds the reading.
+  it('a second send of one client key answers 200 replayed with the first reading, written and audited once', async () => {
+    const body = { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-1' };
+    const first = createResponse();
+    const second = createResponse();
+
+    await ingestTelemetry({ body }, first);
+    await ingestTelemetry({ body: { ...body } }, second);
+
+    expect(first.statusCode).toBe(200);
+    expect(first.body.replayed).toBeUndefined();
+    expect(second.statusCode).toBe(200);
+    expect(second.body).toMatchObject({ success: true, accepted: true, replayed: true, telemetryReadingId: first.body.telemetryReadingId });
+    expect(saveTelemetryPointMock).toHaveBeenCalledTimes(1);
+    expect(auditLogSpy.mock.calls.filter(([entry]) => entry.action === 'CREATE')).toHaveLength(1);
+  }, 15000);
+
+  it('control: the same client key on another sensor is not a replay', async () => {
+    const first = createResponse();
+    const second = createResponse();
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-1' } }, first);
+    await ingestTelemetry({ body: { sensorId: 'sensor-3', temperature: 5, idempotencyKey: 'k-1' } }, second);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.body.replayed).toBeUndefined();
+    expect(second.body.telemetryReadingId).not.toBe(first.body.telemetryReadingId);
+    expect(saveTelemetryPointMock).toHaveBeenCalledTimes(2);
+  }, 15000);
+
+  it('a first send that answers 503 records no key, so its retry is written and recorded', async () => {
+    const errorSpy = vi.spyOn(require('../../src/utils/logger'), 'error').mockImplementation(() => undefined);
+    saveTelemetryPointMock.mockRejectedValueOnce(new Error('influx boom'));
+    const body = { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-503' };
+    const first = createResponse();
+    const retry = createResponse();
+
+    await ingestTelemetry({ body }, first);
+    expect(first.statusCode).toBe(503);
+    expect(idempotencyKeysCollection.docs).toHaveLength(0);
+
+    await ingestTelemetry({ body: { ...body } }, retry);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.body.replayed).toBeUndefined();
+    expect(saveTelemetryPointMock).toHaveBeenCalledTimes(2);
+    expect(idempotencyKeysCollection.docs).toEqual([
+      expect.objectContaining({
+        idempotencyKey: 'k-503',
+        scope: 'TelemetryReading:sensor-2',
+        status: 'completed',
+        resultRef: expect.objectContaining({ telemetryReadingId: retry.body.telemetryReadingId }),
+      }),
+    ]);
+    errorSpy.mockRestore();
+  }, 15000);
+
+  it('a key store that cannot be read is logged, and the reading is accepted', async () => {
+    const errorSpy = vi.spyOn(require('../../src/utils/logger'), 'error').mockImplementation(() => undefined);
+    idempotencyKeysCollection.findOne = vi.fn().mockRejectedValue(new Error('key store down'));
+    const res = createResponse();
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-down' } }, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ success: true, accepted: true });
+    expect(saveTelemetryPointMock).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith('[ISO20387][IOT] Falha ao consultar idempotencyKey da telemetria:', 'key store down');
+    errorSpy.mockRestore();
+  }, 15000);
+
+  it('control: a reading without a client key never touches the key store', async () => {
+    const findSpy = vi.spyOn(idempotencyKeysCollection, 'findOne');
+    const updateSpy = vi.spyOn(idempotencyKeysCollection, 'updateOne');
+    const res = createResponse();
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(idempotencyKeysCollection.docs).toHaveLength(0);
+    expect(findSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
   }, 15000);
 
   it('não dispara alerta quando a política de temperatura tem limites não numéricos', async () => {
@@ -753,4 +1038,214 @@ describe('iot.controller', () => {
     expect(res.statusCode).toBe(200);
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
+
+  // RF009 AC4, V2E-0569 (#1317): a reading bound to a datastream is judged
+  // against the TemperaturePolicy its thresholdProfileId names; the
+  // SensorMetadata policy (2..8 here) is the fallback. The readings carry no
+  // timestamp, so observedAt is now, inside the stream's validity.
+  describe('#1317: the threshold profile of the datastream valid at observedAt', () => {
+    const mongoose = require('mongoose');
+    const HEX_PROFILE_ID = '64b7f0c2a1b2c3d4e5f60718';
+    let stream;
+
+    function bindTo(thresholdProfileId) {
+      stream = {
+        telemetryDatastreamId: 'ds-1',
+        sensorId: 'sensor-2',
+        observedProperty: 'temperature',
+        storageLocationId: 'loc-1',
+        validityPeriod: { start: new Date('2026-01-01'), end: null },
+        thresholdProfileId,
+      };
+      datastreamsCollection = {
+        find: vi.fn(() => ({ toArray: async () => [stream] })),
+        findOne: vi.fn(async (filter) => (filter.telemetryDatastreamId === stream.telemetryDatastreamId ? stream : null)),
+      };
+    }
+
+    function policies(byId) {
+      temperaturePoliciesCollection = {
+        findOne: vi.fn(async (filter) => byId[filter._id] || null),
+      };
+    }
+
+    it('a reading inside the datastream profile opens no excursion, though it is outside the sensor policy', async () => {
+      bindTo('policy-ds');
+      policies({ 'policy-ds': { _id: 'policy-ds', minTemp: 0, maxTemp: 20 } });
+
+      const res = createResponse();
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
+      // The in-range path's detached clock stop has run, so an incident
+      // insert would have run by now too.
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalled();
+      });
+      expect(temperatureIncidentsCollection.insertOne).not.toHaveBeenCalled();
+    }, 15000);
+
+    it('CONTROL: the same reading with no datastream fires against the sensor policy', async () => {
+      const res = createResponse();
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 12.5, 8, 'alerts@example.test');
+    }, 15000);
+
+    it('a reading inside the sensor policy fires when it is outside the datastream profile', async () => {
+      bindTo('policy-ds');
+      policies({ 'policy-ds': { _id: 'policy-ds', minTemp: -90, maxTemp: -70 } });
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, createResponse());
+
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 5, -70, 'alerts@example.test');
+      const alertLine = consoleLogSpy.mock.calls.find(([tag]) => tag === '[ALERTA][IOT] Temperatura fora da política');
+      expect(JSON.parse(alertLine[1])).toMatchObject({ policyId: 'policy-ds', minTemp: -90, maxTemp: -70 });
+    }, 15000);
+
+    it('a profile that names no policy falls back to the sensor policy, with a warning', async () => {
+      const warnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn').mockImplementation(() => undefined);
+      bindTo('policy-missing');
+      policies({});
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 12.5, 8, 'alerts@example.test');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('TelemetryDatastream'),
+        expect.objectContaining({ datastreamId: 'ds-1', thresholdProfileId: 'policy-missing' })
+      );
+      warnSpy.mockRestore();
+    }, 15000);
+
+    it('a 24-hex profile id is looked up as an ObjectId and as the raw string', async () => {
+      bindTo(HEX_PROFILE_ID);
+      policies({});
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, createResponse());
+
+      expect(temperaturePoliciesCollection.findOne).toHaveBeenCalledTimes(1);
+      const [filter] = temperaturePoliciesCollection.findOne.mock.calls[0];
+      expect(filter._id.$in).toHaveLength(2);
+      expect(filter._id.$in[0]).toBeInstanceOf(mongoose.Types.ObjectId);
+      expect(filter._id.$in[0].toHexString()).toBe(HEX_PROFILE_ID);
+      expect(filter._id.$in[1]).toBe(HEX_PROFILE_ID);
+    }, 15000);
+
+    it('a 24-hex profile id resolves the policy whose _id is that ObjectId', async () => {
+      bindTo(HEX_PROFILE_ID);
+      const policy = { _id: new mongoose.Types.ObjectId(HEX_PROFILE_ID), minTemp: -90, maxTemp: -70 };
+      // Matches as MongoDB does through the mongoose connection: only an
+      // ObjectId of mongoose's own bson equals the stored _id (#651).
+      temperaturePoliciesCollection = {
+        findOne: vi.fn(async (filter) => {
+          const candidates = filter._id?.$in || [filter._id];
+          return candidates.some((id) => id instanceof mongoose.Types.ObjectId && id.equals(policy._id)) ? policy : null;
+        }),
+      };
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, createResponse());
+
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 5, -70, 'alerts@example.test');
+    }, 15000);
+
+    it('a bound reading leaves the cached sensor policy as it was for the next unbound reading', async () => {
+      bindTo('policy-ds');
+      policies({ 'policy-ds': { _id: 'policy-ds', minTemp: 0, maxTemp: 20 } });
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+      expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
+
+      // The default collection has no find, so the binding fails and, under
+      // `record`, the reading goes on unbound; its policy is the cached one.
+      datastreamsCollection = null;
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+
+      expect(sensorMetadataFindOneMock).toHaveBeenCalledTimes(1);
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 12.5, 8, 'alerts@example.test');
+    }, 15000);
+  });
+
+  // #1392: the excursion is keyed by the equipmentId of the sensor's
+  // temperature datastream valid now; SensorMetadata's device is the
+  // fallback for an unbound sensor.
+  describe('#1392: the excursion equipment key', () => {
+    beforeEach(() => {
+      sensorMetadataLeanMock.mockResolvedValue({
+        sensorId: 'sensor-2',
+        alertEmail: 'alerts@example.test',
+        sensorName: 'sensor-2',
+        device: { _id: 'device-oid-1', deviceId: 'device-1' },
+        temperaturePolicy: { _id: 'policy-1', minTemp: 2, maxTemp: 8 },
+      });
+      excursionsCollection = {
+        findOne: vi.fn().mockResolvedValue(null),
+        updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'excursion-1' }),
+      };
+    });
+
+    it('a bound sensor opens its excursion under the equipmentId of its datastream (#1392)', async () => {
+      const stream = {
+        telemetryDatastreamId: 'ds-1',
+        sensorId: 'sensor-2',
+        equipmentId: 'equip-ds',
+        observedProperty: 'temperature',
+        storageLocationId: 'loc-1',
+        validityPeriod: { start: new Date('2026-01-01'), end: null },
+        thresholdProfileId: 'policy-ds',
+      };
+      datastreamsCollection = {
+        find: vi.fn(() => ({ toArray: async () => [stream] })),
+        findOne: vi.fn(async (filter) => (filter.telemetryDatastreamId === stream.telemetryDatastreamId ? stream : null)),
+      };
+      temperaturePoliciesCollection = {
+        findOne: vi.fn(async (filter) => (filter._id === 'policy-ds' ? { _id: 'policy-ds', minTemp: 2, maxTemp: 8 } : null)),
+      };
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+
+      await vi.waitFor(() => {
+        expect(excursionsCollection.insertOne).toHaveBeenCalled();
+      });
+      expect(excursionsCollection.findOne).toHaveBeenCalledWith({
+        equipmentId: 'equip-ds',
+        excursionStatus: { $in: ['open', 'under_assessment'] },
+      });
+      expect(excursionsCollection.insertOne.mock.calls[0][0].equipmentId).toBe('equip-ds');
+      await vi.waitFor(() => {
+        expect(dispatchNotificationMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            eventType: 'environmental_excursion',
+            payload: expect.objectContaining({ sensorId: 'sensor-2', equipmentId: 'equip-ds', deviceId: 'device-1' }),
+          })
+        );
+      });
+    }, 15000);
+
+    it('an unbound sensor keeps the deviceId of its SensorMetadata device as the key (#1392)', async () => {
+      const warnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn').mockImplementation(() => undefined);
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+
+      await vi.waitFor(() => {
+        expect(excursionsCollection.insertOne).toHaveBeenCalled();
+      });
+      expect(excursionsCollection.findOne).toHaveBeenCalledWith({
+        equipmentId: 'device-1',
+        excursionStatus: { $in: ['open', 'under_assessment'] },
+      });
+      expect(excursionsCollection.insertOne.mock.calls[0][0].equipmentId).toBe('device-1');
+      await vi.waitFor(() => {
+        expect(dispatchNotificationMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ payload: expect.objectContaining({ equipmentId: 'device-1', deviceId: 'device-1' }) })
+        );
+      });
+      warnSpy.mockRestore();
+    }, 15000);
+  });
 });

@@ -8,7 +8,7 @@ const { seedReportTemplates, SYSTEM_REPORT_TEMPLATES } = require('../../../src/s
  * Real query-matching fake (findOne exact-match on `code`, insertOne,
  * updateOne) — same shape as rbac-catalog-seed.service.test.js's fixture —
  * proves the seed's upsert-by-code idempotency actually depends on querying
- * by `code`, per build-loop's native-only "real backend" proof bar.
+ * by `code`, per this repo's native-only "real backend" proof bar.
  * `calls.updateOne` counts real invocations so a test can assert the #1064
  * no-op-reseed contract (no write at all when nothing changed) without
  * relying on vitest's `vi.fn()` spies.

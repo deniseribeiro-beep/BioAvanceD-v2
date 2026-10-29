@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const { ObjectId } = require('mongodb');
 const analysisValidationService = require('../../src/services/analysisValidation.service');
 const logger = require('../../src/utils/logger');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 /**
  * Fake `db` exposing `.collection(name)` directly, bypassing getCollection's
@@ -153,6 +154,47 @@ describe('analysisValidationService.validateSampleExists', () => {
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });
+
+  // #1336: the cases above script findOne's answers by call order. These seed
+  // the collection and let each filter pick, so a lookup on the wrong key
+  // resolves the wrong sample, or none, and fails.
+  describe('against a seeded collection', () => {
+    it('refuses an ObjectId-shaped identifier that is also another sample\'s barcode', async () => {
+      const oid = new ObjectId();
+      const owner = { _id: oid, specimenId: 'SP-1' };
+      const shadow = { _id: new ObjectId(), specimenId: 'SP-2', barcode: oid.toString() };
+      const db = createDb({ samples: createMatchingCollection([owner, shadow]) });
+
+      const result = await analysisValidationService.validateSampleExists(db, oid.toString());
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('ambíguo');
+    });
+
+    it('accepts an ObjectId identifier whose only match is its own sample', async () => {
+      const oid = new ObjectId();
+      const owner = { _id: oid, specimenId: 'SP-1', barcode: oid.toString() };
+      const other = { _id: new ObjectId(), specimenId: 'SP-2', barcode: 'BR-2' };
+      const db = createDb({ samples: createMatchingCollection([other, owner]) });
+
+      const result = await analysisValidationService.validateSampleExists(db, oid.toString());
+
+      expect(result).toEqual({ success: true, sample: owner });
+    });
+
+    it.each([
+      ['specimenId', 'SP-2'],
+      ['barcode', 'BR-2']
+    ])('resolves the sample whose %s is the identifier', async (_field, identifier) => {
+      const decoy = { _id: new ObjectId(), specimenId: 'SP-1', barcode: 'BR-1' };
+      const target = { _id: new ObjectId(), specimenId: 'SP-2', barcode: 'BR-2' };
+      const db = createDb({ samples: createMatchingCollection([decoy, target]) });
+
+      const result = await analysisValidationService.validateSampleExists(db, identifier);
+
+      expect(result).toEqual({ success: true, sample: target });
+    });
+  });
 });
 
 describe('analysisValidationService.validatePatientConsent', () => {
@@ -256,6 +298,20 @@ describe('analysisValidationService.validatePatientConsent', () => {
       error: 'Erro ao validar consentimento do paciente'
     });
     errSpy.mockRestore();
+  });
+
+  // #1336: a consented decoy comes first, so a lookup on a key the patient
+  // does not carry would degenerate to a null match, resolve the decoy and
+  // let an unconsented participant's upload through.
+  it('reads the consent of the sample\'s own participant, not another one\'s', async () => {
+    const consented = { participantId: 'P-other', status: 'ACCEPTED_CONSENT', consentAcceptedAt: new Date() };
+    const pending = { participantId: 'P-target', status: 'PENDING' };
+    const db = createDb({ patients: createMatchingCollection([consented, pending]) });
+
+    const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P-target' });
+
+    expect(result.success).toBe(false);
+    expect(result.patientStatus).toBe('PENDING');
   });
 });
 

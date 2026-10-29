@@ -2,8 +2,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const importAsyncService = require('../services/import-async.service');
+const callerCreateOrganization = require('../services/callerCreateOrganization.service');
 const logger = require('../utils/logger');
-const { parseGroupFields } = require('../utils/importGroupFields');
+const { parseGroupFields, groupFieldsErrorBody } = require('../utils/importGroupFields');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 // Configuração do multer para upload
@@ -99,7 +100,7 @@ class ImportAsyncController {
       }
 
       // Valida arquivo
-      const validation = await importAsyncService.validateFile(file, dataType);
+      const validation = await importAsyncService.validateFile(file, dataType, { db });
 
       if (!validation.valid) {
         // Limpa arquivo se validação falhar
@@ -166,15 +167,27 @@ class ImportAsyncController {
         });
       }
 
+      // #1376: a samples job stamps the uploader's organization. It is
+      // resolved here, at upload, because the worker has no request.
+      let organizationOptions = {};
+      if (String(dataType).trim().toLowerCase() === 'samples') {
+        try {
+          organizationOptions = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
+            userId: req.user?.userID,
+            organizationScope: req.organizationScope,
+            requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
+          });
+        } catch (error) {
+          importAsyncService.cleanupFile(file.path);
+          return res.status(error.statusCode || 403).json({ success: false, error: error.message });
+        }
+      }
+
       if (req.body.groupFields) {
         const parsed = parseGroupFields(req.body.groupFields);
         if (!parsed.ok) {
           importAsyncService.cleanupFile(file.path);
-          return res.status(400).json({
-            success: false,
-            error: 'Formato inválido para groupFields. Use JSON válido.',
-            message: `groupFields ${parsed.reason}`
-          });
+          return res.status(400).json(groupFieldsErrorBody(parsed.reason));
         }
         parsedGroupFields = parsed.value;
       }
@@ -192,6 +205,7 @@ class ImportAsyncController {
           autoIncrement: autoIncrement === 'true' || autoIncrement === true,
           groupFields: parsedGroupFields,
           fileName: file.originalname,
+          ...organizationOptions,
         }
       );
 
@@ -240,6 +254,26 @@ class ImportAsyncController {
   }
 
   /**
+   * #1384: an import job belongs to its uploader (importJobs.userID), so a
+   * job route answers only that user. Sends the 404/403 and returns false
+   * unless the caller's id positively matches the job's; it runs before the
+   * service, so a non-owner never triggers getJobStatus's status write.
+   */
+  async ensureJobOwner(db, req, res, jobID) {
+    const job = await db.collection('importJobs').findOne({ jobID }, { projection: { userID: 1 } });
+    if (!job) {
+      res.status(404).json({ success: false, error: 'Job não encontrado' });
+      return false;
+    }
+    const callerID = req.user?.userID || req.user?._id?.toString();
+    if (!callerID || job.userID == null || String(job.userID) !== String(callerID)) {
+      res.status(403).json({ success: false, error: 'Acesso negado', message: 'Este job pertence a outro usuário' });
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Obtém status do job
    */
   async getJobStatus(req, res) {
@@ -253,6 +287,7 @@ class ImportAsyncController {
       }
 
       const { jobID } = req.params;
+      if (!(await this.ensureJobOwner(db, req, res, jobID))) return;
       const job = await importAsyncService.getJobStatus(db, jobID);
 
       return res.status(200).json({
@@ -282,8 +317,15 @@ class ImportAsyncController {
         });
       }
 
+      // #1384: the service drops the userID filter when it is empty, which
+      // would list every user's jobs.
+      const callerID = req.user?.userID || req.user?._id?.toString();
+      if (!callerID) {
+        return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Este job pertence a outro usuário' });
+      }
+
       const filters = {
-        userID: req.user?.userID || req.user?._id?.toString(),
+        userID: callerID,
         dataType: req.query.dataType,
         status: req.query.status,
         limit: req.query.limit,
@@ -320,6 +362,7 @@ class ImportAsyncController {
       }
 
       const { jobID } = req.params;
+      if (!(await this.ensureJobOwner(db, req, res, jobID))) return;
       const result = await importAsyncService.cancelJob(db, jobID);
 
       return res.status(200).json({
@@ -350,6 +393,7 @@ class ImportAsyncController {
       }
 
       const { jobID } = req.params;
+      if (!(await this.ensureJobOwner(db, req, res, jobID))) return;
       const report = await importAsyncService.getJobReport(db, jobID);
 
       return res.status(200).json({

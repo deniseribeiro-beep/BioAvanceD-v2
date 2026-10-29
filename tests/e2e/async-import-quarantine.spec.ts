@@ -142,17 +142,25 @@ test.describe('RF029 AC#6 / RNF011 AC#4 -- the async importer quarantines reject
 
     expect(records.length).toBe(batch.counts.errors);
 
-    // The whole point of the issue: the row itself is there, and it is the
-    // row from the file -- not a line number, not an error message.
+    // #807: at rest the row is sealed -- no value from the file in the stored
+    // document, one envelope, and the rejection reasons still readable.
     const first = records[0];
     expect(first.status).toBe('ERROR');
     expect(first.errors.length).toBeGreaterThan(0);
-    expect(first.row).toBeTruthy();
-    expect(typeof first.row).toBe('object');
-    expect(first.row.participantId).toBe('81300001');
-    expect(first.row.barcode).toBe('E2E-813-A');
+    expect(first.row ?? null).toBeNull();
+    expect(first.sealedPayload).toMatchObject({ alg: 'aes-256-gcm' });
+    expect(JSON.stringify(records)).not.toContain('E2E-813-A');
     // rowNumber is still recorded, alongside the data rather than instead of it.
     expect(first.rowNumber).toBe(2);
+
+    // The whole point of the issue: the row itself is kept, and it is the row
+    // from the file -- read back through the reader that decrypts it.
+    const read = await request.get(`${apiBaseURL}/api/import/batch/quarantine/${batch._id}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(read.status()).toBe(200);
+    const { records: readRecords } = await read.json();
+    expect(readRecords[0].row).toMatchObject({ participantId: '81300001', barcode: 'E2E-813-A' });
   });
 
   // #799 in the other direction: import_batches is shared with the LGPD and
@@ -171,5 +179,53 @@ test.describe('RF029 AC#6 / RNF011 AC#4 -- the async importer quarantines reject
       .toArray();
 
     expect(lgpdListing.map((b) => String(b._id))).not.toContain(String(batch?._id));
+  });
+
+  // #813's patients half, unblocked by #807: a rejected patient row is
+  // quarantined too, and its civil values are sealed at rest the way
+  // participantIdentities stores them.
+  test('a rejected patient row is quarantined with its civil values sealed at rest', async ({ request }) => {
+    const admin = await realLogin(request);
+    const name = `E2E Paciente 813 ${Date.now()}`;
+    const csv = ['patientName,birthDate,email', `${name},not-a-date,e2e-813@example.com`].join('\n');
+
+    const upload = await request.post(`${apiBaseURL}/api/import/batch`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: { name: 'pacientes-813.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') },
+      },
+    });
+    expect(upload.status()).toBe(202);
+    const jobId = (await upload.json())?.data?.jobId;
+    expect(jobId).toBeTruthy();
+
+    let batch: any = null;
+    await expect
+      .poll(
+        async () => {
+          batch = await db.collection('import_batches').findOne({ type: 'ASYNC_BATCH_IMPORT', jobId: String(jobId) });
+          return batch ? 'found' : 'pending';
+        },
+        { timeout: 60_000, intervals: [1_000] }
+      )
+      .toBe('found');
+    createdBatchIds.push(batch._id);
+
+    expect(batch.dataType).toBe('patients');
+    expect(batch.counts.errors).toBe(1);
+
+    const records = await db.collection('import_staging_records').find({ batchId: batch._id }).toArray();
+    expect(records).toHaveLength(1);
+    expect(records[0].sealedPayload).toMatchObject({ alg: 'aes-256-gcm' });
+    const atRest = JSON.stringify(records);
+    expect(atRest).not.toContain(name);
+    expect(atRest).not.toContain('e2e-813@example.com');
+
+    const read = await request.get(`${apiBaseURL}/api/import/batch/quarantine/${batch._id}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(read.status()).toBe(200);
+    const { records: readRecords } = await read.json();
+    expect(readRecords[0].row).toMatchObject({ patientName: name, email: 'e2e-813@example.com' });
   });
 });

@@ -4,6 +4,13 @@ const env = require('../config/env');
 const backupService = require('./backup.service');
 const retentionSweepService = require('./retentionSweep.service');
 const backupPolicyService = require('./backup-policy.service');
+const {
+  ALERT_TYPES,
+  resolveActiveAlert,
+  resolveActiveAlertsOfType,
+  ensureActiveAlert
+} = require('./alertLifecycle.service');
+const influxTelemetryReadRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 
 const DEFAULT_STALE_MINUTES = 20;
 
@@ -12,6 +19,10 @@ let backupTask = null;
 let consentSyncTask = null;
 let retentionSweepTask = null;
 let restoreTestTask = null;
+let platformAlertTask = null;
+// #1325: bumped by each reloadBackupSchedule and by stopScheduler, so a
+// policy lookup that a newer reload or a stop has superseded schedules nothing.
+let backupScheduleGeneration = 0;
 
 function normalizeDate(value) {
   if (!value) return null;
@@ -20,37 +31,42 @@ function normalizeDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-async function resolveActiveAlert(alertsCollection, sensorId, type) {
-  await alertsCollection.updateMany(
-    { sensorId, type, status: 'active' },
-    { $set: { status: 'resolved', resolvedAt: new Date() } }
-  );
-}
-
-async function ensureActiveAlert(alertsCollection, payload) {
-  const existing = await alertsCollection.findOne({
-    sensorId: payload.sensorId,
-    type: payload.type,
-    status: 'active'
-  });
-
-  if (!existing) {
-    await alertsCollection.insertOne(payload);
-    return true;
-  }
-
-  return false;
-}
-
 async function checkStaleTemperatureReadings(db) {
   const sensorsCollection = db.collection('sensors');
-  const temperaturesCollection = db.collection('temperatures');
   const alertsCollection = db.collection('alerts');
 
   const sensors = await sensorsCollection.find({}).toArray();
   if (!sensors.length) {
     return { sensors: 0, alerts: 0 };
   }
+
+  // RF009 AC1 (#1317): the last reading comes from InfluxDB, one query per
+  // run. A query failure raises telemetry_store_unavailable per sensor (#1388)
+  // and rethrows, still writing or resolving no stale/missing alert; a
+  // successful run resolves those episodes.
+  let lastReadingAtBySensor;
+  try {
+    lastReadingAtBySensor = await influxTelemetryReadRepository.lastReadingAtBySensor();
+  } catch (error) {
+    for (const sensor of sensors) {
+      const sensorId = sensor.sensorId || sensor.sensorID;
+      if (!sensorId) continue;
+
+      await ensureActiveAlert(alertsCollection, {
+        sensorId,
+        organizationId: sensor.organizationId || null,
+        type: ALERT_TYPES.TELEMETRY_STORE_UNAVAILABLE,
+        message: 'Armazenamento de telemetria indisponível; leituras do sensor não verificadas',
+        severity: 'critical',
+        status: 'active',
+        timestamp: new Date(),
+        createdAt: new Date()
+      });
+    }
+    throw error;
+  }
+
+  await resolveActiveAlertsOfType(alertsCollection, ALERT_TYPES.TELEMETRY_STORE_UNAVAILABLE);
 
   const now = Date.now();
   const staleMinutes = Number(env.TEMP_STALE_MINUTES || DEFAULT_STALE_MINUTES);
@@ -62,26 +78,17 @@ async function checkStaleTemperatureReadings(db) {
     const sensorId = sensor.sensorId || sensor.sensorID;
     if (!sensorId) continue;
 
-    // #917: was `$or: [{ sensorId }, { sensorID: sensorId }]`. Nothing has
-    // ever written `sensorID` onto a temperature reading --
-    // `TemperatureModel.create` coalesces the alias into `sensorId` and has
-    // done since the initial commit -- so the second branch never matched.
-    // The `sensor.sensorId || sensor.sensorID` read above is untouched: that
-    // is a property read, not a filter key.
-    const lastReading = await temperaturesCollection.find({ sensorId })
-      .sort({ timestamp: -1, dateTime: -1, _id: -1 })
-      .limit(1)
-      .next();
+    const lastReadingAt = lastReadingAtBySensor.get(String(sensorId));
 
-    if (!lastReading) {
-      const created = await ensureActiveAlert(alertsCollection, {
+    if (lastReadingAt === undefined) {
+      const { created } = await ensureActiveAlert(alertsCollection, {
         sensorId,
         // #1062: the second alert writer. This one iterates full sensor
         // documents, so the organization comes from the sensor itself --
         // an admin-created record rather than per-request input, which is
         // the more trustworthy of the two provenances.
         organizationId: sensor.organizationId || null,
-        type: 'missing_reading',
+        type: ALERT_TYPES.MISSING_READING,
         message: 'Nenhuma leitura registrada para o sensor',
         severity: 'critical',
         status: 'active',
@@ -93,16 +100,16 @@ async function checkStaleTemperatureReadings(db) {
       continue;
     }
 
-    const lastTimestamp = normalizeDate(lastReading.timestamp || lastReading.dateTime || lastReading.createdAt);
+    const lastTimestamp = normalizeDate(lastReadingAt);
     if (!lastTimestamp) continue;
 
     const isStale = now - lastTimestamp.getTime() > staleMs;
 
     if (isStale) {
-      const created = await ensureActiveAlert(alertsCollection, {
+      const { created } = await ensureActiveAlert(alertsCollection, {
         sensorId,
         organizationId: sensor.organizationId || null,
-        type: 'stale_reading',
+        type: ALERT_TYPES.STALE_READING,
         message: `Última leitura há mais de ${staleMinutes} minutos`,
         severity: 'warning',
         status: 'active',
@@ -113,8 +120,8 @@ async function checkStaleTemperatureReadings(db) {
 
       if (created) alertsCreated += 1;
     } else {
-      await resolveActiveAlert(alertsCollection, sensorId, 'stale_reading');
-      await resolveActiveAlert(alertsCollection, sensorId, 'missing_reading');
+      await resolveActiveAlert(alertsCollection, sensorId, ALERT_TYPES.STALE_READING);
+      await resolveActiveAlert(alertsCollection, sensorId, ALERT_TYPES.MISSING_READING);
     }
   }
 
@@ -138,12 +145,35 @@ function startTemperatureMonitor(db) {
   logger.info(`⏱️ Monitoramento de temperatura agendado (${cronExpr})`);
 }
 
-// #728: boot-time schedule still resolves from env.BACKUP_CRON only (not
-// the persisted BackupPolicy) -- keeps startup synchronous, matching every
-// existing caller/test of initScheduler. reloadBackupSchedule below is the
-// actual "policy changes apply without a restart" mechanism the design
-// call asked for; it's invoked explicitly by backupPolicy.routes.js right
-// after a policy update, not on every boot.
+// RNF015 C2 (#1323): the platform alert check over the request metrics, the
+// queue depths and the graph-outbox DEAD_LETTER count.
+function startPlatformAlertMonitor(db) {
+  const cronExpr = env.PLATFORM_ALERT_CRON || '*/5 * * * *';
+  const timezone = process.env.TZ || 'America/Sao_Paulo';
+
+  platformAlertTask = cron.schedule(cronExpr, async () => {
+    try {
+      if (!db) return;
+      const { runPlatformAlertCheck } = require('./platformAlert.service');
+      const results = await runPlatformAlertCheck(db);
+      if (!results) return;
+      const firing = results.filter((result) => result.state === 'firing').length;
+      logger.info(`🚨 Verificação de alertas da plataforma executada: regras=${results.length} disparadas=${firing}`);
+    } catch (error) {
+      logger.error('Erro na verificação de alertas da plataforma:', error.message);
+    }
+  // noOverlap: a tick that outlasts the cadence (a slow Mongo) is not run
+  // twice at once; runPlatformAlertCheck guards the same for any other caller.
+  }, { timezone, noOverlap: true });
+
+  logger.info(`⏱️ Verificação de alertas da plataforma agendada (${cronExpr})`);
+}
+
+// #728, #1325 (RF013 AC6): initScheduler schedules env.BACKUP_CRON
+// synchronously, so a backup schedule exists from the first tick, then
+// applies the stored BackupPolicy's cronExpression through
+// reloadBackupSchedule below -- the same hook backupPolicy.routes.js calls
+// after a policy update -- so a restart no longer reverts to BACKUP_CRON.
 function scheduleBackupTask(db, cronExpr, timezone) {
   return cron.schedule(cronExpr, async () => {
     try {
@@ -163,23 +193,45 @@ function startBackupSchedule(db) {
   logger.info(`🗂️ Backup diário agendado (${cronExpr})`);
 }
 
-// #728 (RF013 AC#5/AC#6): re-creates the running backup cron task against
-// the current BackupPolicy's cronExpression -- called by
-// backupPolicy.routes.js's PUT handler right after a successful update, so
-// an admin's schedule change takes effect immediately, no process restart.
-// Falls back to env.BACKUP_CRON if the policy lookup fails (db down,
-// unexpected error) rather than leaving the schedule unset.
+// #728, #1325 (RF013 AC5/AC6): re-creates the running backup cron task
+// against the current BackupPolicy's cronExpression -- called at boot by
+// initScheduler and by backupPolicy.routes.js's PUT handler right after a
+// successful update, so the policy schedule holds across restarts and an
+// admin's change takes effect with no restart.
+// - A reload superseded by a newer reload or by stopScheduler while its
+//   lookup was in flight stops and schedules nothing.
+// - A failed lookup (db down, unexpected error) or a stored expression
+//   node-cron refuses keeps the running task; env.BACKUP_CRON is used only
+//   when no task is running, so the schedule is never left unset. Keeping
+//   the task on a failed lookup is inferred from the "mantendo agendamento
+//   anterior" log line: before #1325 it was replaced by the BACKUP_CRON one.
+// - A policy with no cronExpression falls back to env.BACKUP_CRON.
 async function reloadBackupSchedule(db) {
+  const generation = ++backupScheduleGeneration;
   const timezone = process.env.TZ || 'America/Sao_Paulo';
-  let cronExpr = env.BACKUP_CRON || '0 3 * * *';
+  const envCronExpr = env.BACKUP_CRON || '0 3 * * *';
 
+  let policy = null;
+  let lookupFailed = false;
   try {
-    const policy = await backupPolicyService.getPolicy(db);
-    if (policy?.cronExpression) {
-      cronExpr = policy.cronExpression;
-    }
+    policy = await backupPolicyService.getPolicy(db);
   } catch (error) {
     logger.error('Erro ao recarregar política de backup, mantendo agendamento anterior:', error.message);
+    lookupFailed = true;
+  }
+
+  if (generation !== backupScheduleGeneration) return;
+
+  let cronExpr = envCronExpr;
+  if (lookupFailed) {
+    if (backupTask) return;
+  } else if (policy?.cronExpression) {
+    if (cron.validate(policy.cronExpression)) {
+      cronExpr = policy.cronExpression;
+    } else {
+      logger.error('Expressão cron inválida na política de backup, mantendo agendamento anterior:', policy.cronExpression);
+      if (backupTask) return;
+    }
   }
 
   if (backupTask) {
@@ -242,10 +294,11 @@ function startRestoreTestSchedule(db) {
       const result = await backupService.testRestoreBackup(backupPath, db);
 
       // The checksum verdict is the point of the exercise (RNF010 AC#5
-      // "validados por checksum"), so a run that restored cleanly but
-      // failed verification must not read as a routine success.
-      if (result?.success && result?.checksumVerified === false) {
-        logger.warn(`Teste de restauração concluído sem validação de checksum: ${backupPath}`);
+      // "validados por checksum"): a failed run, a checksum mismatch or a
+      // missing manifest checksum included (#1325), is logged as an error
+      // and never as a routine success.
+      if (!result?.success) {
+        logger.error(`Teste de restauração periódico falhou: ${backupPath}`, result?.error || 'erro desconhecido');
         return;
       }
 
@@ -261,17 +314,28 @@ function startRestoreTestSchedule(db) {
 function initScheduler({ db, neo4jDriver }) {
   startTemperatureMonitor(db);
   startBackupSchedule(db);
+  const backupPolicyApplied = db
+    ? reloadBackupSchedule(db).catch((error) => {
+      logger.error('Erro ao aplicar política de backup no boot:', error.message);
+    })
+    : Promise.resolve();
   startConsentSyncSchedule({ db, neo4jDriver });
   startRetentionSweepSchedule(db);
   startRestoreTestSchedule(db);
+  // Last, so the tasks above keep their cron.schedule order.
+  startPlatformAlertMonitor(db);
+  return { backupPolicyApplied };
 }
 
 function stopScheduler() {
   if (temperatureTask) temperatureTask.stop();
   if (backupTask) backupTask.stop();
+  backupScheduleGeneration += 1;
+  backupTask = null;
   if (consentSyncTask) consentSyncTask.stop();
   if (retentionSweepTask) retentionSweepTask.stop();
   if (restoreTestTask) restoreTestTask.stop();
+  if (platformAlertTask) platformAlertTask.stop();
 }
 
 module.exports = {

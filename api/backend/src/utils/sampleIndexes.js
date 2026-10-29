@@ -1,4 +1,6 @@
 const logger = require('./logger');
+const { buildLookupIndex } = require('./lookupIndex');
+const { dropLegacyIndex } = require('./legacyIndex');
 
 /**
  * #936 item 1: a unique index on `samples.barcode`.
@@ -48,23 +50,42 @@ const logger = require('./logger');
 async function ensureSampleIndexes(collection) {
   if (!collection || typeof collection.createIndex !== 'function') return;
 
+  // #1164: `$gt: ''`, not `$type: 'string'`. Both keep missing/null rows
+  // out (comparisons are type-bracketed, so `$gt: ''` means "a non-empty
+  // string"), but the planner cannot prove a plain equality implies a
+  // `$type` filter, so the `$type` version enforced uniqueness while never
+  // serving a single lookup. The new name is built FIRST, then the
+  // superseded one dropped, so the constraint never has a gap.
   try {
     await collection.createIndex(
       { barcode: 1 },
       {
-        name: 'samples_barcode_unique_v1',
+        name: 'samples_barcode_unique_v2',
         unique: true,
-        partialFilterExpression: { barcode: { $type: 'string' } }
+        partialFilterExpression: { barcode: { $gt: '' } }
       }
     );
+    // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'samples_barcode_unique_v1', 'SAMPLES');
   } catch (error) {
     logger.warn(
-      '[SAMPLES][INDEX] Não foi possível criar samples_barcode_unique_v1 (#936). '
+      '[SAMPLES][INDEX] Não foi possível criar samples_barcode_unique_v2 (#936). '
         + 'Um E11000 aqui significa barcodes duplicados já gravados -- '
         + 'a unicidade segue apenas em nível de aplicação até que sejam corrigidos: '
         + (error?.message || error)
     );
   }
+
+  // #941: the two lookup indexes `Sample.js` declares with `index: true` and
+  // that, for the same autoIndex:false reason as barcode above, were never
+  // built. explain('executionStats') on mongo:7 over 20k samples:
+  // `findOne({ specimenId })` -- the lookup behind ~20 call sites -- examined
+  // 12,346 docs as a COLLSCAN and 1 with the index; `listSamples`'
+  // `{ participantId }` filter examined 20,000 and 5. Non-unique, because the
+  // declaration never said unique. Own catch each, after barcode, so an
+  // E11000 there cannot cost them (#1027).
+  await buildLookupIndex(collection, { specimenId: 1 }, 'samples_specimenid_idx_v1', 'SAMPLES');
+  await buildLookupIndex(collection, { participantId: 1 }, 'samples_participantid_idx_v1', 'SAMPLES');
 }
 
 module.exports = { ensureSampleIndexes };

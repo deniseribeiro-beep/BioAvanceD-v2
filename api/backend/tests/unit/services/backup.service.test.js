@@ -7,6 +7,8 @@ const cp = require('child_process');
 const mongodb = require('mongodb');
 const logger = require('../../../src/utils/logger');
 const env = require('../../../src/config/env');
+const backupStores = require('../../../src/services/backup-stores.service');
+const backupOffsite = require('../../../src/services/backup-offsite.service');
 
 // Note on `exec` and `MongoClient`: backup.service.js does
 // `const { exec } = require('child_process')` and
@@ -33,7 +35,22 @@ describe('backup.service', () => {
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'warn').mockImplementation(() => {});
     vi.spyOn(logger, 'error').mockImplementation(() => {});
+    // #1325: these cases mock fs, so the Neo4j/InfluxDB exports are replaced
+    // by their not-configured result unless a case says otherwise.
+    vi.spyOn(backupStores, 'exportSecondaryStores').mockResolvedValue({
+      neo4j: { status: 'skipped', reason: 'not_configured' },
+      influxdb: { status: 'skipped', reason: 'not_configured' },
+    });
+    // #1325 (RNF010 C1): the off-site upload is replaced by its
+    // not-configured result unless a case says otherwise.
+    vi.spyOn(backupOffsite, 'uploadBackupRunOffsite').mockResolvedValue({ status: 'skipped', reason: 'not_configured' });
   });
+
+  // #1325: an exported-shaped stores result, distinct from the default above.
+  const EXPORTED_STORES = {
+    neo4j: { status: 'exported', database: 'neo4j', nodes: 3, relationships: 2, files: [{ file: 'neo4j/nodes.ndjson', encrypted: false }] },
+    influxdb: { status: 'exported', bucket: 'bucket', org: 'org', points: 5, files: [{ file: 'influxdb/points.ndjson', encrypted: false }] },
+  };
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -43,6 +60,20 @@ describe('backup.service', () => {
     env.BACKUP_RETENTION_DAYS = originalRetentionDays;
     delete require.cache[backupServicePath];
   });
+
+  // #1325: runBackup aborts when its encryption policy cannot be read, so the
+  // cases that exercise performBackup's own paths pass a db whose policy
+  // explicitly turns encryption off.
+  function plaintextPolicyDb() {
+    const backupPolicyFindOne = vi.fn().mockResolvedValue({ encryptionEnabled: false });
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
+    return {
+      collection: vi.fn((name) => {
+        if (name === 'backup_policy') return { findOne: backupPolicyFindOne };
+        return { insertOne };
+      }),
+    };
+  }
 
   describe('getBackupBaseDir', () => {
     it('returns env.BACKUP_DIR when set', () => {
@@ -64,7 +95,7 @@ describe('backup.service', () => {
       env.MONGO_URI = undefined;
       const backupService = freshBackupService();
 
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result).toEqual({ success: false, skipped: true, reason: 'missing_mongo_uri' });
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('MONGO_URI'));
@@ -86,7 +117,7 @@ describe('backup.service', () => {
       });
 
       const backupService = freshBackupService();
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result.success).toBe(true);
       expect(result.path).toContain(env.BACKUP_DIR);
@@ -123,7 +154,7 @@ describe('backup.service', () => {
       });
 
       const backupService = freshBackupService();
-      await backupService.runBackup();
+      await backupService.runBackup(plaintextPolicyDb());
 
       expect(cp.exec).toHaveBeenCalledWith(
         expect.stringContaining('--db="mydb"'),
@@ -167,7 +198,7 @@ describe('backup.service', () => {
       vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
 
       const backupService = freshBackupService();
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result.success).toBe(true);
       expect(result.mode).toBe('json-fallback');
@@ -208,7 +239,7 @@ describe('backup.service', () => {
       vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
 
       const backupService = freshBackupService();
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('connection refused');
@@ -229,10 +260,199 @@ describe('backup.service', () => {
       });
 
       const backupService = freshBackupService();
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result).toEqual({ success: false, error: 'authentication failed' });
       expect(logger.error).toHaveBeenCalledWith('Erro ao executar backup:', 'authentication failed');
+    });
+
+    it('records the Neo4j and InfluxDB exports in the mongodump manifest and the run result (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-6');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb(null, 'ok stdout', '');
+      });
+      backupStores.exportSecondaryStores.mockResolvedValue(EXPORTED_STORES);
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(plaintextPolicyDb());
+
+      expect(result.success).toBe(true);
+      expect(result.stores).toEqual(EXPORTED_STORES);
+      expect(backupStores.exportSecondaryStores).toHaveBeenCalledWith(result.path, false);
+      const manifestWrite = fs.promises.writeFile.mock.calls.find(([filePath]) => String(filePath).endsWith('manifest.json'));
+      expect(JSON.parse(manifestWrite[1]).stores).toEqual(EXPORTED_STORES);
+    });
+
+    // #1325: the outer catch's dumpBinaryMissing test matches ENOENT, so a
+    // store error carrying it must be answered before that catch.
+    it('fails the run naming the store, with no manifest and no JSON fallback, when a store export rejects with ENOENT (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-7');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb(null, 'ok stdout', '');
+      });
+      const storeError = 'Backup de Neo4j falhou: connect ENOENT /run/neo4j.sock';
+      backupStores.exportSecondaryStores.mockRejectedValue(new Error(storeError));
+      const fakeClient = {
+        connect: vi.fn().mockRejectedValue(new Error('the JSON fallback must not run')),
+        db: vi.fn(),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+      const db = plaintextPolicyDb();
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(db);
+
+      expect(result).toEqual({ success: false, error: storeError });
+      expect(mongodb.MongoClient).not.toHaveBeenCalled();
+      expect(fs.promises.writeFile.mock.calls.filter(([filePath]) => String(filePath).endsWith('manifest.json'))).toEqual([]);
+      expect(db.collection('backupHistory').insertOne).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: storeError }));
+    });
+
+    it('records the Neo4j and InfluxDB exports in the JSON-fallback manifest and result (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-8');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: "'mongodump' is not recognized as an internal or external command" }, '', 'is not recognized');
+      });
+      const fakeDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+        collection: vi.fn()
+      };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+      backupStores.exportSecondaryStores.mockResolvedValue(EXPORTED_STORES);
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(plaintextPolicyDb());
+
+      expect(result.success).toBe(true);
+      expect(result.mode).toBe('json-fallback');
+      expect(result.stores).toEqual(EXPORTED_STORES);
+      expect(backupStores.exportSecondaryStores).toHaveBeenCalledWith(result.path, false);
+      const manifestWrite = fs.promises.writeFile.mock.calls.find(([filePath]) => String(filePath).endsWith('manifest.json'));
+      expect(JSON.parse(manifestWrite[1]).stores).toEqual(EXPORTED_STORES);
+    });
+
+    it('uploads the run off-site after the manifest is written and returns its result (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-9');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(plaintextPolicyDb());
+
+      expect(result.success).toBe(true);
+      expect(backupOffsite.uploadBackupRunOffsite).toHaveBeenCalledTimes(1);
+      expect(backupOffsite.uploadBackupRunOffsite).toHaveBeenCalledWith(result.path, false);
+      const manifestIndex = fs.promises.writeFile.mock.calls.findIndex(([filePath]) => String(filePath).endsWith('manifest.json'));
+      expect(manifestIndex).toBeGreaterThanOrEqual(0);
+      expect(backupOffsite.uploadBackupRunOffsite.mock.invocationCallOrder[0])
+        .toBeGreaterThan(fs.promises.writeFile.mock.invocationCallOrder[manifestIndex]);
+      expect(result.offsite).toEqual({ status: 'skipped', reason: 'not_configured' });
+    });
+
+    // #1325: the outer catch's dumpBinaryMissing test matches ENOENT, so an
+    // off-site error carrying it must be answered before that catch.
+    it('fails the run keeping path and checksum, with no retention and no JSON fallback, when the off-site upload rejects with ENOENT (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-10');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+      const offsiteError = 'Cópia off-site falhou: PUT de x falhou (ENOENT).';
+      backupOffsite.uploadBackupRunOffsite.mockRejectedValue(new Error(offsiteError));
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () {
+        throw new Error('the JSON fallback must not run');
+      });
+      const db = plaintextPolicyDb();
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(db);
+
+      expect(result).toEqual({ success: false, error: offsiteError, path: expect.any(String), checksum: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      expect(result.path).toContain(env.BACKUP_DIR);
+      expect(mongodb.MongoClient).not.toHaveBeenCalled();
+      // ensureDirSync(baseDir) at the start; cleanupOldBackups would be the second.
+      expect(fs.existsSync.mock.calls.filter(([dirPath]) => dirPath === env.BACKUP_DIR)).toHaveLength(1);
+      expect(db.collection('backupHistory').insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'error', error: offsiteError, path: result.path, checksum: result.checksum
+      }));
+    });
+
+    it('uploads the JSON-fallback run off-site and fails the run when that upload rejects (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-11');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: "'mongodump' is not recognized as an internal or external command" }, '', 'is not recognized');
+      });
+      const fakeDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+        collection: vi.fn()
+      };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+      const offsiteError = 'Cópia off-site falhou: PUT de manifest.json respondeu 500.';
+      backupOffsite.uploadBackupRunOffsite.mockRejectedValue(new Error(offsiteError));
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(plaintextPolicyDb());
+
+      expect(result).toEqual({ success: false, error: offsiteError });
+      expect(backupOffsite.uploadBackupRunOffsite).toHaveBeenCalledTimes(1);
+      expect(backupOffsite.uploadBackupRunOffsite.mock.calls[0][1]).toBe(false);
+      // ensureDirSync(baseDir) at the start; cleanupOldBackups would be the second.
+      expect(fs.existsSync.mock.calls.filter(([dirPath]) => dirPath === env.BACKUP_DIR)).toHaveLength(1);
     });
   });
 
@@ -242,10 +462,18 @@ describe('backup.service', () => {
   describe('runBackup history persistence (#723, RF013 AC#1/AC#3)', () => {
     function fakeHistoryDb() {
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
-      return { db: { collection: vi.fn(() => ({ insertOne })) }, insertOne };
+      const backupPolicyFindOne = vi.fn().mockResolvedValue({ encryptionEnabled: false });
+      return {
+        db: {
+          collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne })),
+        },
+        insertOne,
+      };
     }
 
-    it('does not touch the db when none is passed (backward-compatible default)', async () => {
+    // #1325: without a db the encryption policy cannot be read, so the run
+    // fails rather than writing a plaintext backup.
+    it('fails the run, writing nothing, when no db is passed', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = undefined;
       env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-1');
@@ -257,7 +485,37 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
 
       const backupService = freshBackupService();
-      await expect(backupService.runBackup()).resolves.toMatchObject({ success: true });
+      const result = await backupService.runBackup();
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('texto plano');
+      expect(cp.exec).not.toHaveBeenCalled();
+    });
+
+    it('fails the run, writing nothing, when the policy lookup throws', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-5');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
+      const backupPolicyFindOne = vi.fn().mockRejectedValue(new Error('db unavailable'));
+      const db = {
+        collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne })),
+      };
+      const result = await backupService.runBackup(db);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('texto plano');
+      expect(cp.exec).not.toHaveBeenCalled();
+      expect(db.collection).toHaveBeenCalledWith('backupHistory');
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: result.error }));
     });
 
     it('records a success history entry with the run checksum when db is passed', async () => {
@@ -328,12 +586,37 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
 
       const backupService = freshBackupService();
-      const db = { collection: vi.fn(() => ({ insertOne: vi.fn().mockRejectedValue(new Error('history db down')) })) };
+      const insertOne = vi.fn().mockRejectedValue(new Error('history db down'));
+      const backupPolicyFindOne = vi.fn().mockResolvedValue({ encryptionEnabled: false });
+      const db = {
+        collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne })),
+      };
 
       const result = await backupService.runBackup(db);
 
       expect(result.success).toBe(true);
       expect(logger.error).toHaveBeenCalledWith('Erro ao registrar histórico de backup:', 'history db down');
+    });
+
+    it('records the off-site result in the backupHistory row (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-6');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+      const uploaded = { status: 'uploaded', bucket: 'biobank-backups', prefix: 'backups/x/', files: 3 };
+      backupOffsite.uploadBackupRunOffsite.mockResolvedValue(uploaded);
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      const result = await backupService.runBackup(db);
+
+      expect(result.offsite).toEqual(uploaded);
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ status: 'success', offsite: uploaded }));
     });
   });
 
@@ -380,7 +663,7 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
 
       const backupService = freshBackupService();
-      const db = dbWithPolicy({ retentionDays: 90 });
+      const db = dbWithPolicy({ retentionDays: 90, encryptionEnabled: false });
       await backupService.runBackup(db);
 
       // A 45-day-old dated folder is stale under the env var's 30-day
@@ -404,7 +687,15 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
 
       const backupService = freshBackupService();
-      const db = { collection: vi.fn(() => { throw new Error('db unavailable'); }) };
+      // Retention is read first and fails; the encryption read then succeeds,
+      // since a policy that cannot be read for encryption aborts the run (#1325).
+      const backupPolicyFindOne = vi.fn()
+        .mockRejectedValueOnce(new Error('db unavailable'))
+        .mockResolvedValueOnce({ encryptionEnabled: false });
+      const historyInsertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
+      const db = {
+        collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne: historyInsertOne })),
+      };
       await backupService.runBackup(db);
 
       // 5-day env-var retention against a 45-day-old folder -- stale, gets removed.
@@ -900,7 +1191,7 @@ describe('backup.service', () => {
       }
     });
 
-    it('reports checksumVerified=false when the manifest checksum does not match the recomputed one', async () => {
+    it('fails the restore test when the manifest checksum does not match the recomputed one', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = 'mydb';
 
@@ -921,11 +1212,12 @@ describe('backup.service', () => {
       const backupService = freshBackupService();
       const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(result.checksumVerified).toBe(false);
+      expect(result.error).toContain('não confere');
     });
 
-    it('reports checksumVerified=false when there is no manifest at all', async () => {
+    it('fails the restore test when there is no manifest at all', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
 
       vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('manifest.json'));
@@ -939,8 +1231,9 @@ describe('backup.service', () => {
       const backupService = freshBackupService();
       const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(result.checksumVerified).toBe(false);
+      expect(result.error).toContain('sem manifest');
     });
 
     it('falls back to a JSON restore into the scratch db when mongorestore binary is missing, and still drops the scratch db', async () => {
@@ -977,6 +1270,43 @@ describe('backup.service', () => {
       expect(result.mode).toBe('json-fallback');
       expect(result.scratchDb).toMatch(/^mydb_restoretest_\d+$/);
       expect(fakeDb.collection).toHaveBeenCalledWith('patients');
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('fails the JSON-fallback restore test when the manifest checksum does not match', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      const backupPath = path.join('C:', 'tmp', 'backup-restoretest-2');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: 'stale', collections: [{ file: 'patients.json' }] });
+        }
+        return JSON.stringify([{ _id: 1, name: 'a' }]);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: 'mongorestore: not found' }, '', 'not found');
+      });
+
+      const fakeCollection = { deleteMany: vi.fn().mockResolvedValue(), insertMany: vi.fn().mockResolvedValue() };
+      const dropDatabase = vi.fn().mockResolvedValue();
+      const fakeDb = { collection: vi.fn(() => fakeCollection), dropDatabase };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath);
+
+      expect(result.success).toBe(false);
+      expect(result.mode).toBe('json-fallback');
+      expect(result.checksumVerified).toBe(false);
+      expect(result.error).toContain('não confere');
       expect(dropDatabase).toHaveBeenCalled();
     });
 
@@ -1143,6 +1473,116 @@ describe('backup.service', () => {
         error: 'MONGO_URI não configurado',
       }));
     });
+
+    // #1325 (RNF010 C5): the restore test also checks the Neo4j and InfluxDB
+    // exports through backupStores.verifySecondaryStores.
+    const NEO4J_FAILED = 'Teste de restauração de Neo4j falhou: neo4j/nodes.ndjson não pôde ser descriptografado';
+    const FAILED_STORES = {
+      stores: { neo4j: { status: 'failed', error: NEO4J_FAILED }, influxdb: { status: 'verified', points: 5 } },
+      error: NEO4J_FAILED,
+    };
+    const VERIFIED_STORES = {
+      stores: {
+        neo4j: { status: 'verified', nodes: 3, relationships: 2, constraints: 0, indexes: 0 },
+        influxdb: { status: 'verified', points: 5 },
+      },
+      error: null,
+    };
+
+    function mockStoresBackup({ restoreBinaryMissing = false } = {}) {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum, collections: [{ file: 'patients.json' }], stores: EXPORTED_STORES });
+        }
+        if (restoreBinaryMissing) return JSON.stringify([{ _id: 1, name: 'a' }]);
+        throw new Error(`unexpected readFile: ${p}`);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        if (restoreBinaryMissing) cb({ message: 'mongorestore: not found' }, '', 'not found');
+        else cb(null, 'restored', '');
+      });
+      const dropDatabase = vi.fn().mockResolvedValue();
+      const fakeDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+        collection: vi.fn(() => ({ countDocuments: vi.fn().mockResolvedValue(4), deleteMany: vi.fn().mockResolvedValue(), insertMany: vi.fn().mockResolvedValue() })),
+        dropDatabase,
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () {
+        return { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() };
+      });
+      return { dropDatabase };
+    }
+
+    it('fails the restore test when a store fails its check with a matching checksum, still restoring and dropping the scratch db', async () => {
+      const { dropDatabase } = mockStoresBackup();
+      const verify = vi.spyOn(backupStores, 'verifySecondaryStores').mockResolvedValue(FAILED_STORES);
+      const backupPath = path.join('C:', 'tmp', 'backup-stores-1');
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath);
+
+      expect(verify).toHaveBeenCalledWith(backupPath, EXPORTED_STORES, backupService.getRestoreScratchBaseDir());
+      expect(result.success).toBe(false);
+      expect(result.checksumVerified).toBe(true);
+      expect(result.error).toBe(NEO4J_FAILED);
+      expect(result.stores).toEqual(FAILED_STORES.stores);
+      expect(result.mode).toBe('mongorestore');
+      expect(cp.exec).toHaveBeenCalledTimes(1);
+      expect(result.restoredDocuments).toBe(4);
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('fails the JSON-fallback restore test when a store fails its check', async () => {
+      const { dropDatabase } = mockStoresBackup({ restoreBinaryMissing: true });
+      vi.spyOn(backupStores, 'verifySecondaryStores').mockResolvedValue(FAILED_STORES);
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup-stores-2'));
+
+      expect(result.mode).toBe('json-fallback');
+      expect(result.success).toBe(false);
+      expect(result.checksumVerified).toBe(true);
+      expect(result.error).toBe(NEO4J_FAILED);
+      expect(result.stores).toEqual(FAILED_STORES.stores);
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('passes the restore test with verified stores, reporting them in the result and the restoreTestHistory row', async () => {
+      mockStoresBackup();
+      vi.spyOn(backupStores, 'verifySecondaryStores').mockResolvedValue(VERIFIED_STORES);
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup-stores-3'), db);
+
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+      expect(result.stores).toEqual(VERIFIED_STORES.stores);
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'success',
+        stores: VERIFIED_STORES.stores,
+        error: null,
+      }));
+    });
+
+    it('fails the restore test, without taking the JSON fallback, when the store check itself throws', async () => {
+      mockStoresBackup();
+      vi.spyOn(backupStores, 'verifySecondaryStores').mockRejectedValue(new Error('ENOENT: no such file or directory'));
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup-stores-4'));
+
+      expect(result.success).toBe(false);
+      expect(result.mode).toBe('mongorestore');
+      expect(result.error).toBe('Teste de restauração dos stores falhou: ENOENT: no such file or directory');
+      expect(result.stores).toBeNull();
+      expect(cp.exec).toHaveBeenCalledTimes(1);
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('fallback'));
+    });
   });
 
   // #734: encryptionEnabled is read from the admin-editable BackupPolicy
@@ -1306,6 +1746,98 @@ describe('backup.service', () => {
       }
     });
 
+    // #1325: the store exports run after the dump tree is encrypted (so the
+    // dump encryption never touches their files) and before the checksum (so
+    // it covers them).
+    it('exports the Neo4j and InfluxDB stores after encrypting the mongodump tree and before its checksum (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-1325-order-'));
+      env.BACKUP_DIR = baseDir;
+
+      try {
+        vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+          const outDir = /--out="([^"]+)"/.exec(command)[1];
+          fs.mkdirSync(path.join(outDir, 'mydb'), { recursive: true });
+          fs.writeFileSync(path.join(outDir, 'mydb', 'patients.bson'), 'BSON-PAYLOAD');
+          cb(null, 'ok stdout', '');
+        });
+        const storeLine = '{"id":"4:a:1"}\n';
+        backupStores.exportSecondaryStores.mockImplementation(async (backupDir) => {
+          await fs.promises.mkdir(path.join(backupDir, 'neo4j'), { recursive: true });
+          await fs.promises.writeFile(path.join(backupDir, 'neo4j', 'x.ndjson'), storeLine);
+          return EXPORTED_STORES;
+        });
+
+        const backupService = freshBackupService();
+        const result = await backupService.runBackup(makeAppDbWithPolicy(true));
+
+        expect(result.success).toBe(true);
+        expect(result.mode).toBe('mongodump');
+        expect(backupStores.exportSecondaryStores).toHaveBeenCalledWith(result.path, true);
+
+        const manifest = JSON.parse(await fs.promises.readFile(path.join(result.path, 'manifest.json'), 'utf8'));
+        expect(manifest.encryptedFiles.map((entry) => entry.file)).toEqual(['mydb/patients.bson']);
+        expect(manifest.stores).toEqual(EXPORTED_STORES);
+
+        const storeBytes = await fs.promises.readFile(path.join(result.path, 'neo4j', 'x.ndjson'));
+        expect(storeBytes.toString('utf8')).toBe(storeLine);
+        const dumpBytes = await fs.promises.readFile(path.join(result.path, 'mydb', 'patients.bson'));
+        const expectedChecksum = crypto.createHash('sha256')
+          .update('mydb/patients.bson').update(dumpBytes)
+          .update('neo4j/x.ndjson').update(storeBytes)
+          .digest('hex');
+        expect(manifest.checksum).toBe(expectedChecksum);
+        expect(result.checksum).toBe(expectedChecksum);
+      } finally {
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    // #1325: a store's files are encrypted once all are written, so a store
+    // failing partway must not leave its plaintext in the backup folder.
+    it('leaves no plaintext store file when the Neo4j export fails mid-stream with encryption on (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-1325-midstream-'));
+      env.BACKUP_DIR = baseDir;
+      const storeEnv = { NEO4J_URI: env.NEO4J_URI, NEO4J_USERNAME: env.NEO4J_USERNAME, NEO4J_PASSWORD: env.NEO4J_PASSWORD };
+      Object.assign(env, { NEO4J_URI: 'bolt://neo4j:7687', NEO4J_USERNAME: 'neo4j', NEO4J_PASSWORD: 'secret' });
+
+      try {
+        vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+          const outDir = /--out="([^"]+)"/.exec(command)[1];
+          fs.mkdirSync(path.join(outDir, 'mydb'), { recursive: true });
+          fs.writeFileSync(path.join(outDir, 'mydb', 'patients.bson'), 'BSON-PAYLOAD');
+          cb(null, 'ok stdout', '');
+        });
+        backupStores.exportSecondaryStores.mockRestore();
+        async function* nodeRows() {
+          yield { get: (key) => ({ id: '4:a:1', labels: ['Patient'], props: { name: 'PLAINTEXT-PHI-MARKER' } })[key] };
+        }
+        async function* resetMidStream() {
+          throw new Error('connection reset mid-stream');
+        }
+        const tx = { run: vi.fn((query) => (query.startsWith('MATCH (n)') ? nodeRows() : resetMidStream())), close: vi.fn().mockResolvedValue() };
+        const session = { beginTransaction: vi.fn(() => tx), run: vi.fn(), close: vi.fn().mockResolvedValue() };
+        vi.spyOn(backupStores.clients, 'neo4jDriver').mockReturnValue({ session: vi.fn(() => session), close: vi.fn().mockResolvedValue() });
+
+        const backupService = freshBackupService();
+        const result = await backupService.runBackup(makeAppDbWithPolicy(true));
+
+        expect(result).toEqual({ success: false, error: 'Backup de Neo4j falhou: connection reset mid-stream' });
+        const [folder] = await fs.promises.readdir(baseDir);
+        const backupDir = path.join(baseDir, folder);
+        expect(fs.existsSync(path.join(backupDir, 'neo4j'))).toBe(false);
+        expect(fs.existsSync(path.join(backupDir, 'manifest.json'))).toBe(false);
+      } finally {
+        Object.assign(env, storeEnv);
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
     it('fails the backup loudly instead of writing plaintext when encryption is enabled but no key is configured', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = 'mydb';
@@ -1351,6 +1883,132 @@ describe('backup.service', () => {
         } else {
           process.env.ENCRYPTION_KEY = originalEncryptionKey;
         }
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    // #1325: only an explicit encryptionEnabled: false writes plaintext. With
+    // no key configured, the no-key failure proves encryption was demanded.
+    it('encrypts when the stored policy has no boolean encryptionEnabled', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-1325-nofield-'));
+      env.BACKUP_DIR = baseDir;
+
+      const originalEncryptionKey = process.env.ENCRYPTION_KEY;
+      delete process.env.ENCRYPTION_KEY;
+
+      try {
+        mockMongodumpAndMongorestoreMissing();
+
+        const fakeCollection = {
+          find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 1, ssn: 'x' }]) }))
+        };
+        const fakeBackupDb = {
+          listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+          collection: vi.fn(() => fakeCollection)
+        };
+        const fakeClient = {
+          connect: vi.fn().mockResolvedValue(),
+          db: vi.fn(() => fakeBackupDb),
+          close: vi.fn().mockResolvedValue()
+        };
+        vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+        // A stored policy document with no encryptionEnabled field at all:
+        // getPolicy strips _id and returns {}.
+        const backupPolicyFindOne = vi.fn().mockResolvedValue({ _id: 'main' });
+        const historyInsertOne = vi.fn().mockResolvedValue({ insertedId: 'h1' });
+        const appDb = {
+          collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne: historyInsertOne })),
+        };
+
+        const backupService = freshBackupService();
+        const result = await backupService.runBackup(appDb);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('ENCRYPTION_KEY');
+
+        const entries = await fs.promises.readdir(baseDir, { recursive: true });
+        expect(entries.filter((entry) => String(entry).endsWith('patients.json'))).toHaveLength(0);
+      } finally {
+        if (originalEncryptionKey === undefined) {
+          delete process.env.ENCRYPTION_KEY;
+        } else {
+          process.env.ENCRYPTION_KEY = originalEncryptionKey;
+        }
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    // #1325 (RNF010 C1): mongodump writes a plaintext dump file, its
+    // encryption throws ENOENT, and the JSON fallback reuses the folder. The
+    // leftover dump file is in no manifest entry, so the off-site copy sends
+    // nothing and the run fails.
+    it('sends no leftover plaintext dump file off-site when the JSON fallback reuses the folder (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const http = require('http');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-1325-offsite-'));
+      env.BACKUP_DIR = baseDir;
+      const offsiteNames = ['BACKUP_OFFSITE_S3_ENDPOINT', 'BACKUP_OFFSITE_S3_BUCKET', 'BACKUP_OFFSITE_S3_ACCESS_KEY_ID', 'BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY'];
+      const offsiteEnv = Object.fromEntries(offsiteNames.map((name) => [name, env[name]]));
+      const requests = [];
+      const server = http.createServer((req, res) => {
+        req.resume();
+        req.on('end', () => {
+          requests.push(`${req.method} ${req.url}`);
+          res.statusCode = 200;
+          res.end();
+        });
+      });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+      try {
+        env.BACKUP_OFFSITE_S3_ENDPOINT = `http://127.0.0.1:${server.address().port}`;
+        env.BACKUP_OFFSITE_S3_BUCKET = 'biobank-backups';
+        env.BACKUP_OFFSITE_S3_ACCESS_KEY_ID = 'TESTACCESSKEY';
+        env.BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY = 'test-secret-key-never-logged';
+        backupOffsite.uploadBackupRunOffsite.mockRestore();
+
+        vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+          const outDir = /--out="([^"]+)"/.exec(command)[1];
+          fs.mkdirSync(path.join(outDir, 'biobank'), { recursive: true });
+          fs.writeFileSync(path.join(outDir, 'biobank', 'patients.bson'), 'PLAINTEXT-PATIENT-RECORD');
+          cb(null, 'ok', '');
+        });
+        vi.spyOn(backupStores, 'encryptFileInPlace')
+          .mockRejectedValueOnce(new Error('ENOENT: no such file or directory, open patients.bson'));
+        const fakeCollection = {
+          find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 1, name: 'x' }]) }))
+        };
+        const fakeBackupDb = {
+          listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+          collection: vi.fn(() => fakeCollection)
+        };
+        const fakeClient = {
+          connect: vi.fn().mockResolvedValue(),
+          db: vi.fn(() => fakeBackupDb),
+          close: vi.fn().mockResolvedValue()
+        };
+        vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+        const backupService = freshBackupService();
+        const appDb = makeAppDbWithPolicy(true);
+        const result = await backupService.runBackup(appDb);
+
+        expect(mongodb.MongoClient).toHaveBeenCalled();
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Cópia off-site falhou: biobank/patients.bson não consta do manifest.json.');
+        expect(requests).toEqual([]);
+        expect(appDb.collection('backupHistory').insertOne).toHaveBeenCalledWith(expect.objectContaining({
+          status: 'error', error: result.error
+        }));
+      } finally {
+        Object.assign(env, offsiteEnv);
+        await new Promise((resolve) => server.close(resolve));
         await fs.promises.rm(baseDir, { recursive: true, force: true });
       }
     });

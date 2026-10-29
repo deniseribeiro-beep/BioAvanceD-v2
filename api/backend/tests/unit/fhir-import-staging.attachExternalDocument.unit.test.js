@@ -124,6 +124,35 @@ describe('fhir-import-staging.service#attachExternalDocument -- validation gate 
     expect(sample.specimenStatus).toBe('available');
   });
 
+  // RF026 AC7: closed is final; attaching a document does not reopen it.
+  it('refuses a closed specimen with 422, leaves it closed and the record uncommitted, and records no decision', async () => {
+    const { batchId, recordId } = await seedFhirBatch(db);
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'closed' });
+
+    await expect(
+      fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'op-1' })
+    ).rejects.toMatchObject({ statusCode: 422 });
+
+    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-801');
+    expect(sample.specimenStatus).toBe('closed');
+    expect(sample.consentStatus).toBeUndefined();
+    expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    expect(db.collections.import_staging_records.docs[0].status).toBe(fhirImportStagingService.STATUS.NEEDS_REVIEW);
+    expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+  });
+
+  it('still releases an open quarantined specimen and records the decision', async () => {
+    const { batchId, recordId } = await seedFhirBatch(db);
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'quarantined' });
+
+    await fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'op-1' });
+
+    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-801');
+    expect(sample.specimenStatus).toBe('available');
+    const [decision] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
+    expect(decision).toMatchObject({ specimenId: 'SPEC-801', previousStatus: 'quarantined', newStatus: 'available' });
+  });
+
   it('refuses when the samples.updateOne write matches nothing, and does not leave the record COMMITTED', async () => {
     const { batchId, recordId } = await seedFhirBatch(db);
     // Deliberately no matching `samples` document for SPEC-801.
@@ -193,7 +222,29 @@ describe('fhir-import-staging.service#attachExternalDocument -- transactional re
     const stagingUpdateCall = db.collections.import_staging_records.updateOne.mock.calls.find((call) => call[2]);
     expect(stagingUpdateCall[2]).toEqual({ session: mockSession });
 
-    expect(releaseSpy).toHaveBeenCalledWith(db, expect.any(String), 'op-1', undefined, mockSession);
+    // #1219: handed the sample document, not its _id string.
+    expect(releaseSpy).toHaveBeenCalledWith(db, expect.objectContaining({ _id: expect.anything() }), 'op-1', undefined, mockSession);
+
+    // RF006 AC7 (#1315): the release is an append-only decision, in the same transaction.
+    const [decision, decisionOptions] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
+    expect(decision).toMatchObject({
+      specimenId: 'SPEC-801',
+      previousStatus: 'quarantined',
+      newStatus: 'available',
+      triggerEventId: String(recordId),
+      rulesApplied: ['fhir_external_document_release'],
+      reasonCodes: ['EXTERNAL_ATTACHED'],
+    });
+    expect(decisionOptions).toEqual({ session: mockSession });
+  });
+
+  it('records no decision when the released specimen was already available (RF006 AC7, #1315)', async () => {
+    const { batchId, recordId } = await seedFhirBatch(db);
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'available' });
+
+    await fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'op-1' });
+
+    expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
   });
 
   it('aborts the transaction when samples.updateOne matches nothing, and never runs the staging write', async () => {

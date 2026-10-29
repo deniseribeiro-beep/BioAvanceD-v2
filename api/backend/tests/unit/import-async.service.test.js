@@ -268,6 +268,42 @@ describe('import-async.service', () => {
       expect(result.valid).toBe(true);
       expect(result.metadata.fhir).toBe(true);
     });
+
+    // RF011 AC3 (#1322): the stored IdentifierNamespaceRegistry rows reach the validator.
+    describe('identifier.system against the stored namespaces', () => {
+      const systemUri = 'https://id.bioadvanced.dev/ns/specimen';
+      const row = {
+        namespaceKey: 'specimen', systemUri, authorityDomain: 'bioadvanced.dev', targetTypes: ['specimen'],
+        semanticVersion: '1.0.0', status: 'active', effectivePeriod: { start: '2026-01-01' }, configurationReleaseId: 'cfg-2026-10',
+      };
+      const fhirPatientFile = () => {
+        const filePath = writeFile('patient-ns.json', JSON.stringify({
+          resourceType: 'Patient', name: [{ family: 'Silva', given: ['Ana'] }], gender: 'female', birthDate: '1990-01-01',
+          identifier: [{ system: systemUri, value: 'S-0001' }],
+        }));
+        return { originalname: 'patient-ns.json', size: 200, mimetype: 'application/json', path: filePath };
+      };
+
+      it('is valid when the store holds a row for the system', async () => {
+        const db = createDb({ toArray: vi.fn().mockResolvedValue([row]) });
+
+        const result = await service.validateFile(fhirPatientFile(), 'patients', { db });
+
+        expect(db.collection).toHaveBeenCalledWith('identifierNamespaceRegistries');
+        expect(result.errors).toEqual([]);
+        expect(result.valid).toBe(true);
+        expect(result.metadata.fhir).toBe(true);
+      });
+
+      it('is invalid when the store holds no row for the system', async () => {
+        const db = createDb();
+
+        const result = await service.validateFile(fhirPatientFile(), 'patients', { db });
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toEqual([`identifier.system fora de namespace registrado: ${systemUri}`]);
+      });
+    });
   });
 
   describe('getHeadersFromFile', () => {

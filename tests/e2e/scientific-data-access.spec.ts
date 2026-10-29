@@ -8,12 +8,14 @@ import {
   seedStorageBoxLocation,
   cleanupStorageBoxLocation,
   seedStudy,
+  seedProtocol,
   seedActiveConsent,
   seedDuoConcept,
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import { deleteOrganizations } from './helpers/listOrganizations';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -52,7 +54,7 @@ async function createRealSample(request: any, token: string): Promise<string> {
     },
   });
   expect([201, 202]).toContain(create.status());
-  return (await create.json()).data.sampleID;
+  return (await create.json()).data.specimenId;
 }
 
 test.afterAll(async () => {
@@ -129,6 +131,93 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(listedFile.checksum).toBe(expectedChecksum);
     expect(listedFile.uri).toMatch(/^objstore:\/\/samples\//);
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, listWatch);
+  });
+
+  test('serves a download through a short-lived file access token and refuses a tampered one (RNF029 C5, #1321)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const fileContent = Buffer.from('RNF029 C5 e2e payload, served only through a file access token');
+    const expectedChecksum = crypto.createHash('sha256').update(fileContent).digest('hex');
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: auth,
+      multipart: {
+        file: {
+          name: 'raw-data.csv',
+          mimeType: 'text/csv',
+          buffer: fileContent,
+        },
+      },
+    });
+    expect(upload.status()).toBe(201);
+    const fileID = (await upload.json()).data._id;
+
+    // The authenticated download answers with a redirect, not the bytes.
+    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, {
+      headers: auth,
+      maxRedirects: 0,
+    });
+    expect(download.status()).toBe(302);
+    const location = download.headers()['location'];
+    expect(location).toMatch(/^\/api\/file-access\?token=/);
+
+    // The token is the credential: no Authorization header is sent.
+    const served = await request.get(`${apiBaseURL}${location}`);
+    expect(served.status()).toBe(200);
+    const servedChecksum = crypto.createHash('sha256').update(await served.body()).digest('hex');
+    expect(servedChecksum).toBe(expectedChecksum);
+
+    // A token with its last character replaced is refused and audited.
+    const tampered = location.slice(0, -1) + (location.slice(-1) === 'A' ? 'B' : 'A');
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+    const refused = await request.get(`${apiBaseURL}${tampered}`);
+    expect(refused.status()).toBe(403);
+    expect((await refused.json()).code).toBe('FILE_ACCESS_TOKEN_INVALID');
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+
+  test('links a file to its specimen and a study, and records its MIME type and owner (AC#3/AC#5, V2E-0471/0474/0476, #1321)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+
+    const studyId = `study-rf007-ac5-${Date.now()}`;
+    const createStudy = await request.post(`${apiBaseURL}/api/studies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { studyId, studyTitle: `e2e RF007 AC5 ${studyId}`, ethicsApprovalId: ['CAAE-e2e-rf007-ac5'] },
+    });
+    expect(createStudy.status()).toBe(201);
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: { name: 'raw-data.csv', mimeType: 'text/csv', buffer: Buffer.from('a,b\n1,2\n') },
+        studyId,
+      },
+    });
+    expect(upload.status()).toBe(201);
+    const { data } = await upload.json();
+    expect(data.mimeType).toBe('text/csv');
+    expect(data.ownerId).toBe(data.uploaderAnonId);
+    expect(data.linkedEntityRefs).toEqual([
+      { entityType: 'Specimen', entityId: data.specimenId },
+      { entityType: 'Study', entityId: studyId },
+    ]);
+
+    // A study that does not exist is refused before anything is stored.
+    const refused = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: { name: 'raw-data.csv', mimeType: 'text/csv', buffer: Buffer.from('a,b\n3,4\n') },
+        studyId: `no-such-study-${Date.now()}`,
+      },
+    });
+    expect(refused.status()).toBe(422);
   });
 
   test('accepts an explicit fileRole and records it (dict-02 ELM-0317, #679)', async ({ request }) => {
@@ -254,6 +343,26 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(body.success).toBe(false);
   });
 
+  test('rejects a file whose content does not match its extension (AC#1, #1321)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: {
+          name: 'fake.pdf',
+          mimeType: 'application/pdf',
+          buffer: Buffer.from('not a pdf'),
+        },
+      },
+    });
+
+    expect(upload.status()).toBe(400);
+    const body = await upload.json();
+    expect(body.success).toBe(false);
+  });
+
   test('rejects a file over the configured size limit (AC#2)', async ({ request }) => {
     const admin = await realLogin(request);
     const sampleID = await createRealSample(request, admin.token);
@@ -278,11 +387,28 @@ test.describe('Scientific files (RF007) — real backend', () => {
 });
 
 test.describe('Access and distribution requests (RF024) — real backend', () => {
+  const organizationIds: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+  });
+
+  // AC#1: a request names a real organization and an approved protocol.
   async function createRequestForSample(
     request: any,
     token: string,
     opts: { studyId: string; duoCode?: string }
   ): Promise<any> {
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { officialName: `RF024 ${Date.now()} ${Math.random().toString(36).slice(2, 6)}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    const protocolId = `rf024-protocol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    await seedProtocol(protocolId, { protocolVersion: '1.2' });
+
     const sampleID = await createRealSample(request, token);
     const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -295,14 +421,30 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       headers: { Authorization: `Bearer ${token}` },
       data: {
         requesterId: `researcher-${Date.now()}`,
+        organizationId,
         studyId: opts.studyId,
+        protocolId,
         requestedPurpose: 'RF024 e2e — pesquisa em biomarcadores oncológicos',
         duoCode: opts.duoCode,
         requestedItems: [{ itemType: 'specimen', itemId: specimenId }],
       },
     });
-    expect(create.status()).toBe(201);
-    return (await create.json()).data;
+    expect(create.status(), await create.text()).toBe(201);
+    const created = (await create.json()).data;
+    expect(created).toMatchObject({ organizationId, protocolId, protocolVersion: '1.2' });
+    return created;
+  }
+
+  // An approval needs a passing evaluation (AC#6): seed the ACTIVE consent
+  // for the request's real participant, then evaluate it compatible.
+  async function evaluateCompatible(request: any, token: string, accessRequestId: string): Promise<void> {
+    const url = `${apiBaseURL}/api/access-requests/${accessRequestId}/evaluate`;
+    const first = await request.post(url, { headers: { Authorization: `Bearer ${token}` } });
+    expect(first.status()).toBe(200);
+    await seedActiveConsent((await first.json()).data.consentCompatibility[0].participantId);
+    const second = await request.post(url, { headers: { Authorization: `Bearer ${token}` } });
+    expect(second.status()).toBe(200);
+    expect((await second.json()).data.overallCompatible).toBe(true);
   }
 
   test('registers a request, evaluates real consent/DUO/study compatibility, and only an approved in-force decision unblocks distribution (AC#1/2/3/4)', async ({
@@ -340,6 +482,17 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     const participantId = earlyBody.consentCompatibility[0].participantId;
     expect(participantId).toBeTruthy();
 
+    // AC#6 - an evaluated but incompatible request cannot be approved.
+    const incompatibleApproval = await request.post(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`,
+      {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { status: 'approved', justification: 'Aprovação sem consentimento ativo — RF024 e2e' },
+      }
+    );
+    expect(incompatibleApproval.status()).toBe(400);
+    expect((await incompatibleApproval.json()).message).toMatch(/incompatível/);
+
     // Seed the real ACTIVE consent for that real participant, then re-evaluate.
     await seedActiveConsent(participantId);
     const evaluate = await request.post(
@@ -353,6 +506,10 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       consentValid: true,
       duoCompatible: true,
       studyActive: true,
+      // RF010 AC7: the consent in force answered for this use, recorded as
+      // its own ConsentAuthorizationDecision.
+      consentAuthorizationResult: 'permit',
+      consentAuthorizationDecisionId: expect.any(String),
     });
 
     // AC#3 - committee decision recorded with justification and validity.
@@ -374,6 +531,14 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     const decisionBody = (await decision.json()).data;
     expect(decisionBody.committeeDecision.status).toBe('approved');
     expect(decisionBody.committeeDecision.decidedBy).toBeTruthy();
+    // AC#4 - the policy version, the configuration release key and the instant.
+    expect(decisionBody.committeeDecision.policyVersion).toBeTruthy();
+    expect(decisionBody.committeeDecision).toHaveProperty('configurationReleaseId');
+    expect(decisionBody.committeeDecision.decidedAt).toBeTruthy();
+    expect(decisionBody.committeeDecision.decisionId).toBeTruthy();
+    // AC#3 - no AccessPolicy covers this request's organization, so the
+    // effect was review_required, which this committee decision resolved.
+    expect(decisionBody.committeeDecision).toMatchObject({ policyEffect: 'review_required', appliedPolicies: [] });
 
     // AC#5 - now allowed.
     const allowedCheck = await request.get(
@@ -381,6 +546,27 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       { headers: { Authorization: `Bearer ${admin.token}` } }
     );
     expect((await allowedCheck.json()).data).toMatchObject({ allowed: true, reason: 'approved' });
+
+    // RF019 AC3 (#1315): a specimen quarantined after the approval is not sent.
+    const specimenId = accessRequest.requestedItems[0].itemId;
+    const setStatus = (specimenStatus: string) => request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { specimenStatus },
+    });
+    expect((await setStatus('quarantined')).status()).toBe(200);
+    const refused = await request.post(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/distribute`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(refused.status()).toBe(400);
+    expect((await refused.json()).message).toMatch(/quarentena/);
+    // RF019 AC5: a quarantined specimen leaves quarantine only through the
+    // evidenced release, never a PUT of its status.
+    const release = await request.post(`${apiBaseURL}/api/samples/${specimenId}/quarantine/release`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { evidenceIds: ['file-rf024-review'], reason: 'RF024 e2e: cleared before distribution' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
 
     // AC#4 - approval linked to real distribution/availability.
     const distribute = await request.post(
@@ -391,6 +577,176 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     const distributeBody = (await distribute.json()).data;
     expect(distributeBody.distributionStatus).toBe('released');
     expect(distributeBody.distributedAt).toBeTruthy();
+    // AC#7 - the distribution names the decision that authorized it.
+    expect(distributeBody.distributionDecisionId).toBe(decisionBody.committeeDecision.decisionId);
+
+    // #660 (RF024 AC5): the released distribution is carried out by a
+    // Shipment of the specimens it names, received by the recipient.
+    const sender = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { officialName: `RF024 sender ${Date.now()}`, countryCode: 'BR' },
+    });
+    expect(sender.ok(), await sender.text()).toBeTruthy();
+    const senderOrganization = (await sender.json()).data.organizationId as string;
+    organizationIds.push(senderOrganization);
+    const recipientOrganization = accessRequest.organizationId as string;
+    const shipmentBody = {
+      specimenIds: [specimenId],
+      senderOrganization,
+      recipientOrganization,
+      mtaId: 'MTA-RF024-e2e',
+      packagingType: { code: 'UN3373', display: 'Biological substance, category B' },
+      carrier: 'synthetic courier',
+      dispatchDateTime: new Date().toISOString(),
+      accessRequestId: accessRequest.accessRequestId,
+    };
+    const unlisted = await request.post(`${apiBaseURL}/api/shipments`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { ...shipmentBody, specimenIds: [specimenId, 'SPC-NOT-REQUESTED'] },
+    });
+    expect(unlisted.status(), await unlisted.text()).toBe(422);
+    const shipped = await request.post(`${apiBaseURL}/api/shipments`, { headers: { Authorization: `Bearer ${admin.token}` }, data: shipmentBody });
+    expect(shipped.status(), await shipped.text()).toBe(201);
+    const shipment = (await shipped.json()).data;
+    expect(shipment).toMatchObject({ specimenIds: [specimenId], shipmentStatus: 'dispatched', accessRequestId: accessRequest.accessRequestId, mtaId: 'MTA-RF024-e2e' });
+    const received = await request.post(`${apiBaseURL}/api/shipments/${shipment.shipmentId}/receive`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { receiptDateTime: new Date(Date.now() + 1000).toISOString(), conditionOnReceipt: { integrity: 'intact', temperature: 'ambient' } },
+    });
+    expect(received.status(), await received.text()).toBe(200);
+    expect((await received.json()).data).toMatchObject({ shipmentStatus: 'received', conditionOnReceipt: { integrity: 'intact', temperature: 'ambient' } });
+  });
+
+  test('an AccessPolicy permits, a newer deny version refuses the approval, and the decision names each version (AC#3, RNF008 AC4)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const studyId = `rf024-study-${Date.now()}`;
+    await seedStudy(studyId);
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId });
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+
+    // A permit policy scoped to this request's own organization.
+    const policyBody = {
+      policyName: `RF024 e2e ${Date.now()}`,
+      policyVersion: '1.0.0',
+      applicableEntityTypes: ['AccessRequest'],
+      decisionEffect: 'permit',
+      ruleExpression: 'all-conditions',
+      effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+      roleCodes: ['researcher'],
+      organizationScopeIds: [accessRequest.organizationId],
+      resourceScopes: ['Specimen'],
+      conditions: [{ consent: 'compatible', study: 'active' }],
+      decisionReasonsRequired: true,
+    };
+    const created = await request.post(`${apiBaseURL}/api/access-policies`, { headers: auth, data: policyBody });
+    expect(created.status(), await created.text()).toBe(201);
+    const accessPolicyId = (await created.json()).data.accessPolicyId;
+
+    const evaluateUrl = `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`;
+    const permitted = (await (await request.post(evaluateUrl, { headers: auth })).json()).data;
+    expect(permitted.policyDecision).toMatchObject({
+      effect: 'permit',
+      appliedPolicies: [expect.objectContaining({ accessPolicyId, policyVersion: '1.0.0', decisionEffect: 'permit' })],
+    });
+
+    // A new version, never an edit: 1.1.0 denies, and it is the one in force.
+    const denyVersion = await request.post(`${apiBaseURL}/api/access-policies/${accessPolicyId}/versions`, {
+      headers: auth,
+      data: { ...policyBody, policyVersion: '1.1.0', decisionEffect: 'deny' },
+    });
+    expect(denyVersion.status(), await denyVersion.text()).toBe(201);
+    const stale = await request.post(`${apiBaseURL}/api/access-policies/${accessPolicyId}/versions`, {
+      headers: auth,
+      data: { ...policyBody, policyVersion: '1.0.1' },
+    });
+    expect(stale.status()).toBe(422);
+    const versions = (await (await request.get(`${apiBaseURL}/api/access-policies/${accessPolicyId}`, { headers: auth })).json()).data;
+    expect(versions.map((v: any) => v.policyVersion)).toEqual(['1.1.0', '1.0.0']);
+
+    const denied = (await (await request.post(evaluateUrl, { headers: auth })).json()).data;
+    expect(denied.overallCompatible).toBe(true);
+    expect(denied.policyDecision.effect).toBe('deny');
+
+    const approval = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
+      headers: auth,
+      data: { status: 'approved', justification: 'Aprovação contra uma política que nega — RF024 e2e' },
+    });
+    expect(approval.status()).toBe(400);
+    expect((await approval.json()).message).toMatch(/negada pela política de acesso/);
+
+    const rejection = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
+      headers: auth,
+      data: { status: 'rejected', justification: 'Negada pela política de acesso — RF024 e2e' },
+    });
+    expect(rejection.status()).toBe(200);
+    expect((await rejection.json()).data.committeeDecision).toMatchObject({
+      status: 'rejected',
+      policyEffect: 'deny',
+      appliedPolicies: [{ accessPolicyId, policyVersion: '1.1.0', decisionEffect: 'deny' }],
+    });
+  });
+
+  // #1347 (RF010 AC3/AC7): a term's permissions name governed purposes (DUO
+  // codes), so a consent revoked for one purpose is judged on the requested
+  // purpose: the revoked one is denied, rather than sent to review.
+  test('a consent revoked for the requested DUO purpose denies the request\'s item (RF010 AC7)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `rf1347-study-${run}`;
+    await seedStudy(studyId);
+    const healthCode = `DUO:rf1347-hmb-${run}`;
+    const diseaseCode = `DUO:rf1347-ds-${run}`;
+    await seedDuoConcept(healthCode);
+    await seedDuoConcept(diseaseCode);
+
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, duoCode: healthCode });
+    const evaluateUrl = `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`;
+    const first = await request.post(evaluateUrl, { headers: auth });
+    expect(first.status()).toBe(200);
+    const participantId = (await first.json()).data.consentCompatibility[0].participantId;
+    expect(participantId).toBeTruthy();
+
+    const term = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
+      headers: auth,
+      data: {
+        title: `TCLE e2e 1347 ${run}`,
+        content: 'Termo com finalidades codificadas pela DUO (#1347).',
+        permissions: [
+          { key: 'health-1347', label: 'Pesquisa em saúde', required: false, purposeCode: healthCode },
+          { key: 'disease-1347', label: 'Pesquisa da doença', required: false, purposeCode: diseaseCode },
+        ],
+      },
+    });
+    expect(term.status(), await term.text()).toBe(201);
+    const termBody = (await term.json()).data;
+    expect(termBody.permissions[0]).toMatchObject({ key: 'health-1347', purposeCode: healthCode });
+
+    const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: auth,
+      data: { participantId, consentTemplateId: String(termBody._id), responses: { 'health-1347': true, 'disease-1347': true } },
+    });
+    expect(signed.status(), await signed.text()).toBe(201);
+    const consentDocId = String((await signed.json()).data._id);
+
+    const revoked = await request.post(`${apiBaseURL}/api/e-consent/consents/${consentDocId}/revoke`, {
+      headers: auth,
+      data: { scope: ['health-1347'] },
+    });
+    expect(revoked.status(), await revoked.text()).toBe(200);
+
+    const evaluated = await request.post(evaluateUrl, { headers: auth });
+    expect(evaluated.status()).toBe(200);
+    const body = (await evaluated.json()).data;
+    expect(body.overallCompatible).toBe(false);
+    expect(body.consentCompatibility[0]).toMatchObject({
+      consentValid: false,
+      consentAuthorizationResult: 'deny',
+      consentAuthorizationReasons: [expect.stringContaining(healthCode)],
+    });
   });
 
   test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {
@@ -426,10 +782,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
 
     // Revoked branch — starts from a genuine approval, then gets revoked.
     const toRevoke = await createRequestForSample(request, admin.token, { studyId });
-    await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/evaluate`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/decision`, {
+    await evaluateCompatible(request, admin.token, toRevoke.accessRequestId);
+    const approve = await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/decision`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         status: 'approved',
@@ -440,6 +794,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
         },
       },
     });
+    expect(approve.status(), await approve.text()).toBe(200);
 
     const revoke = await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/revoke`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -461,10 +816,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     await seedStudy(studyId);
 
     const accessRequest = await createRequestForSample(request, admin.token, { studyId });
-    await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+    const approve = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         status: 'approved',
@@ -472,6 +825,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
         approvalPeriod: { start: '2020-01-01T00:00:00.000Z', end: '2020-01-31T00:00:00.000Z' },
       },
     });
+    expect(approve.status(), await approve.text()).toBe(200);
 
     const expiredCheck = await request.get(
       `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/access-check`,
@@ -524,6 +878,8 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
         startedAt,
         completedAt: new Date().toISOString(),
         runStatus: 'succeeded',
+        hardwareProfile: { cpu: 'synthetic', gpu: null },
+        environmentManifestUri: 'object://synthetic/environment.json',
       },
     });
     expect(createRun.status()).toBe(201);
@@ -581,6 +937,73 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
     expect(omicsRun.status()).toBe(201);
     expect((await omicsRun.json()).data.referenceAssembly).toBeNull();
   });
+
+  test('registers an imaging study with its DICOM series (dict ELM-0353/0354, #721)', async ({ request }) => {
+    const admin = await realLogin(request);
+    // A UID per run, so a rerun against the same database never collides.
+    const root = `1.2.826.0.1.3680043.2.${Date.now()}`;
+    const dicomStudyUid = `${root}.1`;
+    const series = [{ uid: `${root}.2`, modality: 'CT', numberOfInstances: 1 }];
+
+    const created = await request.post(`${apiBaseURL}/api/imaging-studies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { dicomStudyUid, series },
+    });
+    expect(created.status()).toBe(201);
+    const study = (await created.json()).data;
+    expect(study.dicomStudyUid).toBe(dicomStudyUid);
+    expect(study.series).toEqual(series);
+    expect(study.imagingStudyId).toBeTruthy();
+
+    const read = await request.get(`${apiBaseURL}/api/imaging-studies/${study.imagingStudyId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(read.status()).toBe(200);
+    const readBody = (await read.json()).data;
+    expect(readBody.dicomStudyUid).toBe(dicomStudyUid);
+    expect(readBody.series).toEqual(series);
+
+    // ELM-0354 is 1..*: a study with no series is refused.
+    const empty = await request.post(`${apiBaseURL}/api/imaging-studies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { dicomStudyUid: `${root}.3`, series: [] },
+    });
+    expect(empty.status()).toBe(422);
+  });
+
+  test('registers imaging-derived data with a segmentation and a feature set (dict ELM-0355/0356, #721)', async ({ request }) => {
+    const admin = await realLogin(request);
+    // A file id per run, so a rerun against the same database is told apart.
+    const segmentationFile = `file-seg-${Date.now()}`;
+    const featureSet = [
+      { software: 'pyradiomics', features: [{ name: 'firstorder_Mean', value: 41.2 }], regionOfInterest: 'tumor' },
+    ];
+
+    const created = await request.post(`${apiBaseURL}/api/imaging-derived-data`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { segmentationFile, featureSet },
+    });
+    expect(created.status()).toBe(201);
+    const derived = (await created.json()).data;
+    expect(derived.segmentationFile).toBe(segmentationFile);
+    expect(derived.featureSet).toEqual(featureSet);
+    expect(derived.imagingDerivedDataId).toBeTruthy();
+
+    const read = await request.get(`${apiBaseURL}/api/imaging-derived-data/${derived.imagingDerivedDataId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(read.status()).toBe(200);
+    const readBody = (await read.json()).data;
+    expect(readBody.segmentationFile).toBe(segmentationFile);
+    expect(readBody.featureSet).toEqual(featureSet);
+
+    // ELM-0355 and ELM-0356 are both optional, but a row must fill one.
+    const empty = await request.post(`${apiBaseURL}/api/imaging-derived-data`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {},
+    });
+    expect(empty.status()).toBe(422);
+  });
 });
 
 // RF008 (Relatórios) — Wave 4 kickoff (#723). The report pipeline
@@ -622,7 +1045,7 @@ test.describe('Reports (RF008) — real backend', () => {
   async function createRealSampleWithParticipant(
     request: any,
     token: string
-  ): Promise<{ sampleID: string; participantId: string }> {
+  ): Promise<{ specimenId: string; participantId: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
     const seededStorageBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(seededStorageBox);
@@ -638,7 +1061,7 @@ test.describe('Reports (RF008) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    return { sampleID: (await create.json()).data.sampleID, participantId: participant.participantId };
+    return { specimenId: (await create.json()).data.specimenId, participantId: participant.participantId };
   }
 
   async function previewReport(request: any, token: string, type: string, filters: Record<string, unknown>) {
@@ -749,7 +1172,7 @@ test.describe('Reports (RF008) — real backend', () => {
     expect(unauthenticated.status()).toBe(401);
 
     const username = `tecnico.rf008.${Date.now()}`;
-    const password = 'Tecnico@123';
+    const password = 'Tecnico@123-forte';
     const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
@@ -943,5 +1366,32 @@ test.describe('Reports (RF008) — real backend', () => {
     expect(downloadedPath).toBeTruthy();
     const csv = fs.readFileSync(downloadedPath!, 'utf8');
     expect(csv.split('\n')[0].split(',')).toContain('participantId');
+  });
+
+  // #733: `audit` and `access_logs` were two menu entries over one `logs`
+  // query. RF008 names AuditEvent, so `audit` now reads the hash-chained
+  // audit_events trail. The login itself is audited, so the trail is never
+  // empty here.
+  test('the audit report reads the AuditEvent trail, distinct from access_logs (#733)', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    const audit = await previewReport(request, admin.token, 'audit', {});
+    expect(audit.ok(), await audit.text()).toBe(true);
+    const auditData = (await audit.json()).data;
+    expect(auditData.logs).toBeUndefined();
+    expect(Array.isArray(auditData.auditEvents)).toBe(true);
+    expect(auditData.auditEvents.length).toBeGreaterThan(0);
+    for (const row of auditData.auditEvents) {
+      expect(row.eventId).toBeTruthy();
+      expect(row.actorPseudonym).toMatch(/^USR-/);
+      expect(row.eventHash).toBeUndefined();
+      expect(row.entityId).toBeUndefined();
+    }
+
+    const accessLogs = await previewReport(request, admin.token, 'access_logs', {});
+    expect(accessLogs.ok(), await accessLogs.text()).toBe(true);
+    const accessLogsData = (await accessLogs.json()).data;
+    expect(accessLogsData.auditEvents).toBeUndefined();
+    expect(Array.isArray(accessLogsData.logs)).toBe(true);
   });
 });

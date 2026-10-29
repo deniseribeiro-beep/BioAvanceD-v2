@@ -23,6 +23,7 @@
     "typecheck:e2e": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "^1.58.2",
     "@types/node": "^22.20.1",
     "baseline-browser-mapping": "^2.9.16",

@@ -8,13 +8,60 @@ function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+// RF018 AC2 (#1320): the assessment's use context, kept only when the request
+// carries one. Each field is a non-empty string or a plain object, else null.
+const QUALIFICATION_CONTEXT_KEYS = Object.freeze([
+  'intendedUseCode', 'targetAnalyte', 'assayFamily', 'workflowProtocolId', 'workflowProtocolVersion',
+]);
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date);
+}
+
+function isKeptContextValue(value) {
+  return (typeof value === 'string' && value.trim() !== '') || isPlainObject(value);
+}
+
+// RF018 AC2 (#1320): the fields a sent context lacks, in key order. Reads
+// with the same rule readQualificationContext keeps a value by.
+function missingQualificationContextFields(context) {
+  if (!isPlainObject(context)) return [...QUALIFICATION_CONTEXT_KEYS];
+  return QUALIFICATION_CONTEXT_KEYS.filter((key) => !isKeptContextValue(context[key]));
+}
+
+// RF018 AC2 (#1320): the 422 messages for a request body's use context, one
+// rule for every route that creates a sample. An absent or null one is none.
+function qualificationContextErrors(context) {
+  if (context === undefined || context === null) return [];
+  if (!isPlainObject(context)) return ['qualificationContext deve ser um objeto (RF018 AC2)'];
+  return missingQualificationContextFields(context).map(
+    (field) => `qualificationContext.${field} é obrigatório quando o contexto de uso é informado (RF018 AC2)`
+  );
+}
+
+function readQualificationContext(payload = {}) {
+  const source = normalizeObject(payload);
+  const context = isPlainObject(source.qualificationContext)
+    ? source.qualificationContext
+    : normalizeObject(source.sample).qualificationContext;
+  if (!isPlainObject(context)) return null;
+  return Object.fromEntries(QUALIFICATION_CONTEXT_KEYS.map((key) => {
+    const value = context[key];
+    return [key, isKeptContextValue(value) ? value : null];
+  }));
+}
+
 function evaluateQuality(payload = {}) {
   // Normalize legacy input to canonical fields without destroying legacy values
   const normalized = qualityCompatibility.normalizeSample(payload || {});
   const result = rcsCertificationService.certify(normalized);
+  const qualificationContext = readQualificationContext(payload);
   return {
     ...result,
     deprecated_legacy_fields: ['quality_score', 'quality_category', 'penalty_log', 'forcedQuarantine', 'category'],
+    // RF018 AC3: the input this result was computed from, for its snapshot.
+    rcs_input: rcsCertificationService.readInput(normalized),
+    ...(qualificationContext ? { qualification_context: qualificationContext } : {}),
   };
 }
 
@@ -104,6 +151,8 @@ module.exports = {
   QUALITY_RULE_VERSION,
   resolveMethodologicalQuality,
   evaluateQuality,
+  missingQualificationContextFields,
+  qualificationContextErrors,
   calculateMethodologyQualityFromSprec,
   buildPenaltyLog,
   buildSprecCode,

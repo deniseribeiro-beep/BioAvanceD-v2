@@ -23,6 +23,8 @@ const { randomUUID } = require('crypto');
  * metadata, not file-reference bundles, so folding them into
  * `fileLinks` would misrepresent their real shape. Filed as a follow-up
  * (see #716's own closing comment) rather than silently absorbed.
+ * ImagingStudy is now ImagingStudy.js and ImagingDerivedData is now
+ * ImagingDerivedData.js (#721).
  */
 const MODALITIES = ['genomics', 'transcriptomics', 'proteomics', 'metabolomics', 'microbiome'];
 

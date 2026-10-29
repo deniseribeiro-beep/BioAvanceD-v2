@@ -195,6 +195,157 @@ describe('notificationDispatch.service', () => {
       ]);
     });
 
+    it('#903 (RF015 AC3/AC1): stores the notification and its attempt before the channel is called, naming the ConfigurationRelease in force', async () => {
+      const notificationRules = statefulCollection();
+      const notifications = statefulCollection();
+      const securityConfig = createCollectionMock({
+        findOne: vi.fn(async (query) => (query?._id === 'main' ? { _id: 'main', configurationReleaseId: 'rel-7' } : null)),
+      });
+      const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock, security_config: securityConfig });
+      await notificationRuleService.createRule(db, {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: [],
+        maxDeliveryMinutes: 2,
+      });
+      let atSend = null;
+      vi.spyOn(notificationServiceV2, 'sendEmail').mockImplementation(async () => {
+        atSend = JSON.parse(JSON.stringify(notifications.docs));
+        throw new Error('transport down');
+      });
+
+      const result = await notificationDispatchService.dispatchNotification(db, { eventType: 'environmental_excursion', payload: {} });
+
+      expect(atSend).toHaveLength(1);
+      expect(atSend[0]).toMatchObject({ status: 'dispatching', configurationReleaseId: 'rel-7' });
+      expect(atSend[0].attempts).toEqual([expect.objectContaining({ channel: 'email', result: 'attempted' })]);
+      expect(notifications.docs).toHaveLength(1);
+      expect(notifications.docs[0]).toMatchObject({ status: 'failed', configurationReleaseId: 'rel-7' });
+      expect(notifications.docs[0].attempts).toEqual([expect.objectContaining({ channel: 'email', result: 'failure', reason: 'transport down' })]);
+      expect(result).toMatchObject({ status: 'failed', configurationReleaseId: 'rel-7', ruleVersion: 'v1' });
+    });
+
+    it('#903 (RNF026 AC2): retries a failing channel as the rule configures, recording each attempt', async () => {
+      const notificationRules = statefulCollection();
+      const notifications = statefulCollection();
+      const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+      await notificationRuleService.createRule(db, {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: [],
+        maxDeliveryMinutes: 2,
+        retry: { maxAttempts: 3, backoffSeconds: 0 },
+      });
+      let calls = 0;
+      vi.spyOn(notificationServiceV2, 'sendEmail').mockImplementation(async () => {
+        calls += 1;
+        if (calls < 3) throw new Error(`transient ${calls}`);
+      });
+
+      const result = await notificationDispatchService.dispatchNotification(db, { eventType: 'environmental_excursion', payload: {} });
+
+      expect(result).toMatchObject({ status: 'delivered', deliveredChannel: 'email', escalated: false, slaBreached: false });
+      expect(result.attempts.map((a) => a.result)).toEqual(['failure', 'failure', 'success']);
+    });
+
+    it('#903 (RF015 AC6): once the delivery window closes undelivered, retrying stops and the escalation runs at once', async () => {
+      const notificationRules = statefulCollection();
+      const notifications = statefulCollection();
+      const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+      await notificationRuleService.createRule(db, {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: [],
+        maxDeliveryMinutes: 0.0005, // 30 ms
+        retry: { maxAttempts: 10, backoffSeconds: 0 },
+        escalation: { enabled: true, afterFailures: 10, channel: 'in_app' },
+      });
+      vi.spyOn(notificationServiceV2, 'sendEmail').mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error('transport down');
+      });
+
+      const result = await notificationDispatchService.dispatchNotification(db, { eventType: 'environmental_excursion', payload: {} });
+
+      const emailTries = result.attempts.filter((a) => a.channel === 'email');
+      expect(emailTries.length).toBeGreaterThan(0);
+      expect(emailTries.length).toBeLessThan(10);
+      expect(result).toMatchObject({ slaBreached: true, escalated: true, deliveredChannel: 'in_app', status: 'delivered', withinSla: false });
+      expect(result.attempts.at(-1)).toMatchObject({ channel: 'in_app', escalation: true, result: 'success' });
+    });
+
+    describe('#1366: the SLA boundary is one comparison, on a fixed clock', () => {
+      const START = new Date('2026-10-11T12:00:00.000Z').getTime();
+      const MAX_MS = 60000;
+
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(START);
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      async function dispatchWith(rule, sendEmail) {
+        const notificationRules = statefulCollection();
+        const notifications = statefulCollection();
+        const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+        await notificationRuleService.createRule(db, {
+          eventType: 'environmental_excursion',
+          channels: ['email'],
+          recipientRoleCodes: ['administrator'],
+          sensitiveFieldsAllowlist: [],
+          maxDeliveryMinutes: MAX_MS / 60000,
+          ...rule,
+        });
+        vi.spyOn(notificationServiceV2, 'sendEmail').mockImplementation(sendEmail);
+        return notificationDispatchService.dispatchNotification(db, { eventType: 'environmental_excursion', payload: {} });
+      }
+
+      it('a delivery one millisecond before the deadline is within the SLA', async () => {
+        const result = await dispatchWith({}, async () => { vi.setSystemTime(START + MAX_MS - 1); });
+        expect(result).toMatchObject({ status: 'delivered', slaBreached: false, withinSla: true, deliveryDurationMs: MAX_MS - 1 });
+      });
+
+      it('a delivery in the deadline\'s own millisecond is not within the SLA', async () => {
+        const result = await dispatchWith({}, async () => { vi.setSystemTime(START + MAX_MS); });
+        expect(result).toMatchObject({ status: 'delivered', withinSla: false, deliveryDurationMs: MAX_MS });
+      });
+
+      it('an escalation delivered in the deadline\'s own millisecond after the window lapsed reads breached and not within', async () => {
+        const result = await dispatchWith(
+          { retry: { maxAttempts: 10, backoffSeconds: 0 }, escalation: { enabled: true, afterFailures: 10, channel: 'in_app' } },
+          async () => { vi.setSystemTime(START + MAX_MS); throw new Error('transport down'); }
+        );
+        expect(result.attempts.filter((a) => a.channel === 'email')).toHaveLength(1);
+        expect(result).toMatchObject({ slaBreached: true, escalated: true, deliveredChannel: 'in_app', deliveryDurationMs: MAX_MS, withinSla: false });
+      });
+    });
+
+    it('#903 (RF015 AC5): records the purpose (the caller\'s, else the rule\'s) and the consent concerned, outside the message payload', async () => {
+      const notificationRules = statefulCollection();
+      const notifications = statefulCollection();
+      const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+      await notificationRuleService.createRule(db, {
+        eventType: 'consent_revoked',
+        channels: ['in_app'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: [],
+        maxDeliveryMinutes: 2,
+        purpose: 'consent_governance',
+      });
+
+      const linked = await notificationDispatchService.dispatchNotification(db, {
+        eventType: 'consent_revoked', payload: { consentId: 'C-1' }, purpose: 'consent_revocation', consentId: 'C-1',
+      });
+      expect(linked).toMatchObject({ purpose: 'consent_revocation', consentId: 'C-1', payload: {} });
+      const byRule = await notificationDispatchService.dispatchNotification(db, { eventType: 'consent_revoked', payload: {} });
+      expect(byRule).toMatchObject({ purpose: 'consent_governance', consentId: null });
+    });
+
     it('does not escalate when escalation is disabled and every channel fails', async () => {
       const notificationRules = statefulCollection();
       const notifications = statefulCollection();

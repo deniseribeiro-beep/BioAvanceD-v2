@@ -42,6 +42,24 @@ export function selectAccessLogRows(reportData: Record<string, unknown> | null |
   return Array.isArray(rows) ? (rows as AccessLogRow[]) : [];
 }
 
+export interface AuditEventRow {
+  eventId?: string;
+  sequenceNumber?: number;
+  occurredAt?: string;
+  actorPseudonym?: string;
+  action?: string;
+  entityType?: string;
+  result?: string;
+  source?: string;
+}
+
+// #733: `handleAuditEvents` (reports.routes.js) returns
+// `{ total, auditEvents, previewLimited }` for the `audit` report.
+export function selectAuditEventRows(reportData: Record<string, unknown> | null | undefined): AuditEventRow[] {
+  const rows = (reportData as { auditEvents?: unknown })?.auditEvents;
+  return Array.isArray(rows) ? (rows as AuditEventRow[]) : [];
+}
+
 // Both Temperature and Log write `logId` (lowercase d) -- `logID` is an
 // accepted INPUT alias on the way in, never an output field. Falls back to
 // `_id`, which every row read straight off a Mongo cursor carries.

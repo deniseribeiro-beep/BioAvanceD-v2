@@ -1,5 +1,6 @@
 const defaultLogger = require('../../utils/logger');
 const env = require('../../config/env');
+const { isTransientTransactionError } = require('../../utils/mongoTransaction');
 
 class RegisterSampleUseCase {
   constructor({ sampleRepository, lineageRepository, quarantineService, logger } = {}) {
@@ -23,6 +24,7 @@ class RegisterSampleUseCase {
     let topologySynced = false;
     let fallbackQueued = false;
     try {
+      const strictMode = this.resolveStrictMode(sampleData);
       const createOptions = {
         ...(command?.options || {}),
         auditInfo: {
@@ -34,9 +36,67 @@ class RegisterSampleUseCase {
         }
       };
 
-      createdSample = await this.sampleRepository.create(sampleData, createOptions);
+      // RF023 AC3, RNF019 C1: where the create runs a transaction, the
+      // register custody event is appended inside it. A strict-mode failure
+      // aborts the create, so no sample is left to roll back. A permissive
+      // failure has already aborted the transaction at the server (#1370), so
+      // it aborts the create too, the create is re-run without this step, and
+      // the append follows the commit as below, queued if it fails again. A
+      // transient conflict is rethrown as itself for the driver's retry.
+      // A create that runs no transaction never calls this, and the append
+      // follows the create as below.
+      let inTransaction = null;
+      if (typeof this.lineageRepository?.recordCustodyEvent === 'function') {
+        createOptions.onCreatedInTransaction = async (sampleInTransaction, session) => {
+          const lineagePayload = this.buildLineagePayload(sampleInTransaction, sampleData, command);
+          inTransaction = { lineagePayload, error: null };
+          try {
+            await this.persistTopology(lineagePayload, { session });
+          } catch (appendError) {
+            inTransaction.error = appendError;
+            if (isTransientTransactionError(appendError) || strictMode) {
+              throw appendError;
+            }
+            // A plain Error, never a MongoError, so the driver aborts the
+            // transaction without retrying it.
+            const deferred = new Error(`REGISTER_APPEND_DEFERRED: ${appendError?.message || appendError}`);
+            deferred.code = 'REGISTER_APPEND_DEFERRED';
+            deferred.cause = appendError;
+            throw deferred;
+          }
+        };
+      }
 
-      const strictMode = this.resolveStrictMode(sampleData);
+      try {
+        createdSample = await this.sampleRepository.create(sampleData, createOptions);
+      } catch (createError) {
+        if (strictMode && inTransaction?.error) {
+          throw this.strictModeBlocked(createError);
+        }
+        if (strictMode || createError?.code !== 'REGISTER_APPEND_DEFERRED') {
+          throw createError;
+        }
+        const { onCreatedInTransaction, ...createOptionsWithoutHook } = createOptions;
+        createdSample = await this.sampleRepository.create(sampleData, createOptionsWithoutHook);
+        inTransaction = null;
+      }
+
+      if (inTransaction) {
+        if (inTransaction.error) {
+          fallbackQueued = await this.enqueueForSelfHealing(inTransaction.lineagePayload, inTransaction.error, strictMode);
+        } else {
+          topologySynced = true;
+        }
+        return {
+          sample: createdSample,
+          strictMode,
+          topology: {
+            synced: topologySynced,
+            fallbackQueued
+          }
+        };
+      }
+
       const lineagePayload = this.buildLineagePayload(createdSample, sampleData, command);
 
       try {
@@ -45,10 +105,7 @@ class RegisterSampleUseCase {
       } catch (neo4jError) {
         if (strictMode) {
           await this.rollbackMongoSample(createdSample);
-          const strictError = new Error(`STRICT_MODE_BLOCKED: ${neo4jError.message || 'Falha ao persistir linhagem no Neo4j'}`);
-          strictError.code = 'STRICT_MODE_BLOCKED';
-          strictError.statusCode = 403;
-          throw strictError;
+          throw this.strictModeBlocked(neo4jError);
         }
 
         fallbackQueued = await this.enqueueForSelfHealing(lineagePayload, neo4jError, strictMode);
@@ -66,6 +123,13 @@ class RegisterSampleUseCase {
       this.logger.error('[RegisterSampleUseCase] Falha no registro de amostra:', error.message || error);
       throw error;
     }
+  }
+
+  strictModeBlocked(cause) {
+    const strictError = new Error(`STRICT_MODE_BLOCKED: ${cause?.message || 'Falha ao persistir linhagem no Neo4j'}`);
+    strictError.code = 'STRICT_MODE_BLOCKED';
+    strictError.statusCode = 403;
+    return strictError;
   }
 
   resolveStrictMode(sampleData) {
@@ -102,18 +166,22 @@ class RegisterSampleUseCase {
     };
   }
 
-  async persistTopology(lineagePayload) {
+  async persistTopology(lineagePayload, options = {}) {
     if (!this.lineageRepository) {
       throw new Error('LineageRepository não injetado');
     }
 
-    if (typeof this.lineageRepository.createSampleNodeWithParent === 'function' && lineagePayload.parentSampleId) {
-      await this.lineageRepository.createSampleNodeWithParent(lineagePayload);
-      return;
-    }
-
+    // #1312: the register step is an outbox append (CUSTODY_EVENT_RECORDED),
+    // never a Neo4j write. With `options.session` it is appended inside the
+    // create's own transaction; without one it follows the create: a
+    // strict-mode failure rolls the sample back, a permissive one queues the
+    // step for retry.
     if (typeof this.lineageRepository.recordCustodyEvent === 'function') {
-      await this.lineageRepository.recordCustodyEvent(lineagePayload);
+      if (options?.session) {
+        await this.lineageRepository.recordCustodyEvent(lineagePayload, { session: options.session });
+      } else {
+        await this.lineageRepository.recordCustodyEvent(lineagePayload);
+      }
       return;
     }
 

@@ -66,7 +66,7 @@ describe('neo4jCanonicalProjection.service', () => {
     it('routes LINEAGE_REGISTERED to applyLineageProjection', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      const result = await service.applyEvent(session, { eventType: 'LINEAGE_REGISTERED', payload: {} });
+      const result = await service.applyEvent(session, { eventType: 'LINEAGE_REGISTERED', payload: { specimenId: 'c-1', parentSpecimenId: 'p-1' } });
       expect(result.projected).toBe(true);
     });
 
@@ -149,11 +149,82 @@ describe('neo4jCanonicalProjection.service', () => {
       const event = { eventType: 'CONSENT_REVOKED', aggregateId: 'agg-2', payload: {} };
       await service.applyConsentProjection(session, event);
       const params = session.run.mock.calls[0][1];
-      expect(params.specimenId).toBe('agg-2');
+      // #1225: the aggregateId is the consent's id, never a specimen's.
+      expect(params.specimenId).toBe('');
       expect(params.consentId).toBe('agg-2');
       expect(params.consentStatus).toBe('ACTIVE');
       expect(params.sourceService).toBe('unknown');
       expect(params.schemaVersion).toBe(1);
+    });
+  });
+
+  describe('#1225 consent governance', () => {
+    it('a consent event without specimenId keys no Sample by the consent id', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyConsentProjection(session, {
+        eventType: 'CONSENT_UPSERTED',
+        aggregateType: 'EthicalConsent',
+        aggregateId: 'consent-9',
+        payload: { participantId: 'P-9', specimenId: null, ethicalConsentId: 'consent-9', status: 'ACTIVE' },
+      });
+      const params = session.run.mock.calls[0][1];
+      expect(params.specimenId).toBe('');
+      expect(params.consentId).toBe('consent-9');
+    });
+
+    it('a consent event governs the samples its donor already DONATED', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyConsentProjection(session, {
+        eventType: 'CONSENT_UPSERTED',
+        aggregateId: 'consent-9',
+        payload: { participantId: 'P-9', ethicalConsentId: 'consent-9' },
+      });
+      const cypher = session.run.mock.calls[0][0];
+      expect(cypher).toMatch(/OPTIONAL MATCH \(donor\)-\[:DONATED\]->\(donated:Sample\)/);
+      expect(cypher).toMatch(/MERGE \(owned\)-\[r4:GOVERNED_BY\]->\(consent\)/);
+    });
+
+    it('routes SPECIMEN_UPSERTED to the specimen projection, linking the donor and its consents', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, {
+        eventType: 'SPECIMEN_UPSERTED',
+        aggregateType: 'Sample',
+        aggregateId: 'mongo-1',
+        eventId: 'evt-s1',
+        sourceService: 'sample.service',
+        payload: { specimenId: 'mongo-1', participantId: 'P-9' },
+      });
+      expect(result).toEqual({
+        projected: true,
+        eventType: 'SPECIMEN_UPSERTED',
+        specimenId: 'mongo-1',
+        donorId: service.pseudonymizeDonorId('P-9'),
+      });
+      expect(session.run).toHaveBeenCalledTimes(1);
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(params.specimenId).toBe('mongo-1');
+      expect(params.donorId).toBe(service.pseudonymizeDonorId('P-9'));
+      expect(cypher).toMatch(/MERGE \(donor\)-\[r1:DONATED\]->\(sample\)/);
+      expect(cypher).toMatch(/OPTIONAL MATCH \(donor\)-\[:CONSENTED_UNDER\]->\(consent:EthicalConsent\)/);
+      expect(cypher).toMatch(/MERGE \(sample\)-\[r2:GOVERNED_BY\]->\(governing\)/);
+    });
+
+    it('a SPECIMEN_UPSERTED with no participant merges the Sample alone and mints no Donor', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, {
+        eventType: 'SPECIMEN_UPSERTED',
+        aggregateId: 'mongo-2',
+        payload: { specimenId: 'mongo-2', participantId: null },
+      });
+      expect(result.donorId).toBeNull();
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(params.specimenId).toBe('mongo-2');
+      expect(cypher).not.toMatch(/Donor/);
+      expect(cypher).not.toMatch(/GOVERNED_BY/);
     });
   });
 
@@ -176,8 +247,191 @@ describe('neo4jCanonicalProjection.service', () => {
     it('falls back to aggregateId for specimenId when payload omits it', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      const result = await service.applyLineageProjection(session, { aggregateId: 'agg-4', payload: {} });
+      const result = await service.applyLineageProjection(session, { aggregateId: 'agg-4', payload: { parentSpecimenId: 'p-1' } });
       expect(result.specimenId).toBe('agg-4');
+    });
+
+    // #1368: an event without both ends, or with the child as its own parent,
+    // writes no edge.
+    it.each([
+      ['no parent', { specimenId: 'c-1' }],
+      ['no child', { parentSpecimenId: 'p-1' }],
+      ['the child as its own parent', { specimenId: 'c-1', parentSpecimenId: 'c-1' }],
+    ])('skips an event with %s', async (_label, payload) => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyLineageProjection(session, { eventType: 'LINEAGE_REGISTERED', payload });
+      expect(result).toMatchObject({ skipped: true, eventType: 'LINEAGE_REGISTERED', reason: 'missing specimenId or parentSpecimenId' });
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
+    // #1368: the edge points child -> parent, the direction the compromise
+    // projection walks backwards from its root to reach the descendants.
+    it('writes DERIVED_FROM from child to parent, the direction the compromise projection walks', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyLineageProjection(session, {
+        eventType: 'LINEAGE_REGISTERED',
+        eventId: 'evt-9',
+        payload: { specimenId: 'c-1', parentSpecimenId: 'p-1' },
+      });
+      const [lineageCypher, params] = session.run.mock.calls[0];
+      const lineage = lineageCypher.replace(/\s+/g, ' ');
+      expect(lineage).toContain('MERGE (child:Sample {id: $specimenId})');
+      expect(lineage).toContain('MERGE (parent:Sample {id: $parentSpecimenId})');
+      expect(lineage).toContain('MERGE (child)-[r:DERIVED_FROM]->(parent)');
+      expect(params).toMatchObject({ specimenId: 'c-1', parentSpecimenId: 'p-1', eventId: 'evt-9' });
+
+      await service.applySpecimenCompromiseProjection(session, { eventType: 'SPECIMEN_COMPROMISED', payload: { specimenId: 'p-1' } });
+      const compromise = session.run.mock.calls[1][0].replace(/\s+/g, ' ');
+      expect(compromise).toContain('(root)<-[:DERIVED_FROM*0..]-(descendant:Sample)');
+    });
+  });
+
+  // #1312: the placement and the cold-chain compromise, projected from the
+  // outbox instead of written by storageService and TelemetryMonitor.
+  describe('#1312 storage and compromise projections', () => {
+    // #1313 (RF023 AC5): the placement is a temporal edge; the earlier one is
+    // closed at the new validFrom, never deleted.
+    it('routes STORAGE_POSITION_ASSIGNED to a temporal STORED_AT, closing an earlier position', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, {
+        eventType: 'STORAGE_POSITION_ASSIGNED',
+        eventId: 'evt-s',
+        occurredAt: '2026-10-09T10:00:00.000Z',
+        payload: { specimenId: 'sample-1', boxId: 'box-1', position: 'A3' },
+      });
+      expect(result).toMatchObject({ projected: true, specimenId: 'sample-1' });
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(cypher).toContain('MERGE (pos:StoragePosition {boxId: $boxId, position: $position})');
+      expect(cypher).not.toContain('DELETE old');
+      expect(cypher).toContain('SET old.validTo = datetime($validFrom)');
+      expect(cypher).toContain('MERGE (sample)-[r:STORED_AT {validFrom: datetime($validFrom)}]->(pos)');
+      expect(cypher).toContain('r.transactionTime = datetime()');
+      expect(cypher).not.toContain('STORED_IN');
+      expect(params).toMatchObject({
+        specimenId: 'sample-1', boxId: 'box-1', position: 'A3', eventId: 'evt-s', validFrom: '2026-10-09T10:00:00.000Z',
+      });
+    });
+
+    it('takes the placement instant from payload.assignedAt over the event time', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyEvent(session, {
+        eventType: 'STORAGE_POSITION_ASSIGNED',
+        occurredAt: '2026-10-09T10:00:00.000Z',
+        payload: { specimenId: 'sample-1', boxId: 'box-1', position: 'A3', assignedAt: '2026-10-08T09:00:00.000Z' },
+      });
+      expect(session.run.mock.calls[0][1].validFrom).toBe('2026-10-08T09:00:00.000Z');
+    });
+
+    it('skips a STORAGE_POSITION_ASSIGNED missing its box or position, writing nothing', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'STORAGE_POSITION_ASSIGNED', payload: { specimenId: 'sample-1', boxId: 'box-1' } });
+      expect(result.skipped).toBe(true);
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
+    it('routes SPECIMEN_COMPROMISED to the root and its DERIVED_FROM descendants, with no temperature', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, {
+        eventType: 'SPECIMEN_COMPROMISED',
+        eventId: 'evt-c',
+        payload: { specimenId: 'root-1', freezerKey: 'freezer-A', breachedSince: '2026-01-01T00:00:00Z', maxObservedTemp: -50 },
+      });
+      expect(result).toMatchObject({ projected: true, specimenId: 'root-1' });
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(cypher).toContain('(root)<-[:DERIVED_FROM*0..]-(descendant:Sample)');
+      expect(cypher).toContain("SET sample.status = 'COMPROMISED'");
+      expect(cypher).not.toContain('Temp');
+      expect(params).toEqual({ specimenId: 'root-1', freezerKey: 'freezer-A', breachedSince: '2026-01-01T00:00:00.000Z', eventId: 'evt-c' });
+    });
+
+    it('skips a SPECIMEN_COMPROMISED with no sample, writing nothing', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'SPECIMEN_COMPROMISED', payload: {} });
+      expect(result.skipped).toBe(true);
+      expect(session.run).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1312: the custody step the custody use cases used to write directly,
+  // now projected from CUSTODY_EVENT_RECORDED with the same graph shape.
+  describe('#1312 custody event projection', () => {
+    const custodyEvent = (payload = {}) => ({
+      eventType: 'CUSTODY_EVENT_RECORDED',
+      eventId: 'evt-cust-1',
+      sourceService: 'lineage-repository',
+      schemaVersion: 1,
+      payload: {
+        specimenId: 'sample-1',
+        barcode: 'BC-1',
+        custodyEventType: 'move',
+        happenedAt: '2026-01-02T03:04:05.000Z',
+        actorId: 'user-1',
+        reason: 'reorg',
+        from: { boxId: 'box-1', position: 'a1' },
+        to: { boxId: 'box-2', position: 'B2' },
+        ...payload,
+      },
+    });
+
+    it('writes Sample-[:HAS_CUSTODY_EVENT]->CustodyEvent with FROM and TO StoragePositions, keyed by the outbox eventId', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+
+      const result = await service.applyEvent(session, custodyEvent());
+
+      expect(result).toMatchObject({ projected: true, specimenId: 'sample-1', custodyEventId: 'evt-cust-1' });
+      expect(session.run).toHaveBeenCalledTimes(1);
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(cypher).toContain('MERGE (sample:Sample {id: $specimenId})');
+      expect(cypher).toContain('MERGE (custody:CustodyEvent {id: $eventId})');
+      expect(cypher).toContain('MERGE (sample)-[:HAS_CUSTODY_EVENT]->(custody)');
+      expect(cypher).toContain('MERGE (fromPos:StoragePosition {boxId: $fromBoxId, position: $fromPosition})');
+      expect(cypher).toContain('MERGE (custody)-[:FROM]->(fromPos)');
+      expect(cypher).toContain('MERGE (toPos:StoragePosition {boxId: $toBoxId, position: $toPosition})');
+      expect(cypher).toContain('MERGE (custody)-[:TO]->(toPos)');
+      expect(cypher).toContain("custody.source = 'ISO20387'");
+      expect(params).toMatchObject({
+        specimenId: 'sample-1',
+        barcode: 'BC-1',
+        eventId: 'evt-cust-1',
+        custodyEventType: 'move',
+        happenedAt: '2026-01-02T03:04:05.000Z',
+        actorId: 'user-1',
+        reason: 'reorg',
+        fromBoxId: 'box-1',
+        fromPosition: 'A1',
+        toBoxId: 'box-2',
+        toPosition: 'B2',
+      });
+    });
+
+    it('passes null positions for a step without a destination (release), so no TO edge is written', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+
+      await service.applyEvent(session, custodyEvent({ custodyEventType: 'release', to: null }));
+
+      const [, params] = session.run.mock.calls[0];
+      expect(params).toMatchObject({ fromBoxId: 'box-1', fromPosition: 'A1', toBoxId: null, toPosition: null });
+    });
+
+    it('skips a custody event with no sample or custody type, writing nothing', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+
+      const noType = await service.applyEvent(session, custodyEvent({ custodyEventType: null }));
+      const noSample = await service.applyEvent(session, { ...custodyEvent({ specimenId: null }), aggregateId: '' });
+
+      expect(noType.skipped).toBe(true);
+      expect(noSample.skipped).toBe(true);
+      expect(session.run).not.toHaveBeenCalled();
     });
   });
 
@@ -351,5 +605,35 @@ describe('neo4jCanonicalProjection.service', () => {
       const result = stableStringify({ when: date });
       expect(result).toBe('{"when":"2026-01-01T00:00:00.000Z"}');
     });
+  });
+});
+
+// #1323: RNF015 C1 -- the outbox event's traceId rides each projection write
+// as Neo4j transaction metadata.
+describe('neo4jCanonicalProjection.service applyEvent traceId', () => {
+  beforeEach(() => {
+    process.env.NEO4J_CANONICAL_SALT = 'test-salt';
+  });
+
+  it('#1323 passes the traceId as transaction metadata to session.run', async () => {
+    const session = makeSession();
+    await new Neo4jCanonicalProjectionService().applyEvent(session, {
+      eventType: 'SPECIMEN_UPSERTED',
+      traceId: 'req-proj-0001',
+      payload: { specimenId: 's-1' },
+    });
+    expect(session.run).toHaveBeenCalled();
+    expect(session.run.mock.calls[0][2]).toEqual({ metadata: { requestId: 'req-proj-0001' } });
+  });
+
+  it('#1323 adds no transaction config for a malformed traceId', async () => {
+    const session = makeSession();
+    await new Neo4jCanonicalProjectionService().applyEvent(session, {
+      eventType: 'SPECIMEN_UPSERTED',
+      traceId: 'bad id!',
+      payload: { specimenId: 's-1' },
+    });
+    expect(session.run).toHaveBeenCalled();
+    expect(session.run.mock.calls[0].length).toBe(2);
   });
 });

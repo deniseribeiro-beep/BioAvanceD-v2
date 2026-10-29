@@ -18,6 +18,10 @@ describe('canonical.v1.workflow (RF029 slice 6/6, #674)', () => {
       startedAt: '2026-08-21T10:00:00.000Z',
       completedAt: '2026-08-21T11:00:00.000Z',
       runStatus: 'succeeded',
+      hardwareProfile: { cpu: 'synthetic', gpu: null },
+      randomSeed: 20260504,
+      datasetSnapshotId: 'snapshot-synthetic-001',
+      environmentManifestUri: 'object://synthetic/environment.json',
     });
     expect(valid).toBe(true);
     expect(errors).toEqual([]);
@@ -30,6 +34,8 @@ describe('canonical.v1.workflow (RF029 slice 6/6, #674)', () => {
       createdBy: 'User/user-1',
       startedAt: '2026-08-21T10:00:00.000Z',
       runStatus: 'succeeded',
+      hardwareProfile: { cpu: 'synthetic' },
+      environmentManifestUri: 'object://synthetic/environment.json',
     });
     expect(valid).toBe(true);
     expect(errors).toEqual([]);
@@ -69,6 +75,65 @@ describe('canonical.v1.workflow (RF029 slice 6/6, #674)', () => {
     });
     expect(valid).toBe(false);
     expect(errors.some((e) => e.keyword === 'additionalProperties')).toBe(true);
+  });
+
+  describe('the v2 provenance companions (V2E-0477..0480, #1322)', () => {
+    const minimalRun = {
+      workflowId: 'variant-calling-pipeline',
+      workflowVersion: '2.3.1',
+      createdBy: 'User/user-1',
+      startedAt: '2026-08-21T10:00:00.000Z',
+      runStatus: 'succeeded',
+      hardwareProfile: { cpu: 'synthetic' },
+      environmentManifestUri: 'object://synthetic/environment.json',
+    };
+
+    it('rejects a payload missing hardwareProfile (V2E-0477, 1..1)', () => {
+      const { hardwareProfile: _omitted, ...payload } = minimalRun;
+      const { valid, errors } = validate('canonical.v1.workflow', payload);
+      expect(valid).toBe(false);
+      expect(errors.some((e) => e.keyword === 'required')).toBe(true);
+    });
+
+    it('rejects an environmentManifestUri that is not an absolute URI (V2E-0480)', () => {
+      const { valid, errors } = validate('canonical.v1.workflow', { ...minimalRun, environmentManifestUri: 'not a uri' });
+      expect(valid).toBe(false);
+      expect(errors.some((e) => e.keyword === 'pattern')).toBe(true);
+    });
+
+    it('rejects a drive-letter environmentManifestUri, a path rather than a URI (V2E-0480, #1398)', () => {
+      const { valid, errors } = validate('canonical.v1.workflow', { ...minimalRun, environmentManifestUri: 'C:\\manifests\\env.json' });
+      expect(valid).toBe(false);
+      expect(errors.some((e) => e.keyword === 'pattern')).toBe(true);
+    });
+
+    it('rejects a whitespace-only datasetSnapshotId (V2E-0479, #1398)', () => {
+      const { valid, errors } = validate('canonical.v1.workflow', { ...minimalRun, datasetSnapshotId: '   ' });
+      expect(valid).toBe(false);
+      expect(errors.some((e) => e.keyword === 'pattern')).toBe(true);
+    });
+
+    it('rejects a fractional randomSeed (V2E-0478)', () => {
+      const { valid, errors } = validate('canonical.v1.workflow', { ...minimalRun, randomSeed: 1.5 });
+      expect(valid).toBe(false);
+      expect(errors.some((e) => e.keyword === 'type')).toBe(true);
+    });
+
+    it('rejects a randomSeed beyond the safe integers', () => {
+      const { valid, errors } = validate('canonical.v1.workflow', { ...minimalRun, randomSeed: 2 ** 60 });
+      expect(valid).toBe(false);
+      expect(errors.some((e) => e.keyword === 'maximum')).toBe(true);
+    });
+
+    it('accepts all four companions, a seed of 0 included', () => {
+      const { valid, errors } = validate('canonical.v1.workflow', {
+        ...minimalRun,
+        randomSeed: 0,
+        datasetSnapshotId: 'snapshot-synthetic-001',
+      });
+      expect(valid).toBe(true);
+      expect(errors).toEqual([]);
+    });
   });
 });
 

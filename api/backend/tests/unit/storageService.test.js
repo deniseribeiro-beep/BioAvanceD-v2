@@ -19,6 +19,34 @@ function makeDb(overrides = {}) {
   };
 }
 
+// #1374: the physical chain collections the placement reader consults.
+const CHAIN_COLLECTIONS = ['specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments'];
+
+// #1374: a physical-chain collection, empty at first, that keeps what is
+// inserted and matches a query by equality and `$or`.
+function matchesChainQuery(doc, filter) {
+  return Object.entries(filter).every(([key, value]) =>
+    key === '$or' ? value.some((branch) => matchesChainQuery(doc, branch)) : doc[key] === value
+  );
+}
+
+function makeChainCollection() {
+  const docs = [];
+  return {
+    findOne: vi.fn(async (filter) => docs.find((doc) => matchesChainQuery(doc, filter)) || null),
+    find: vi.fn((filter = {}) => ({ toArray: async () => docs.filter((doc) => matchesChainQuery(doc, filter)) })),
+    insertOne: vi.fn(async (doc) => {
+      docs.push({ ...doc });
+      return { insertedId: docs.length };
+    }),
+    updateOne: vi.fn(async (filter, update) => {
+      const doc = docs.find((row) => matchesChainQuery(row, filter));
+      if (doc) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0 };
+    })
+  };
+}
+
 describe('StorageService - pure/near-pure helpers', () => {
   let service;
 
@@ -237,24 +265,28 @@ describe('StorageService.autoAssignSampleToBox', () => {
   let storageAssignmentsFindOne;
   let storageAssignmentsInsertOne;
   let storageAssignmentsUpdateOne;
+  let chain;
   let movements;
   let counters;
   let db;
   let service;
+  // #1312: the placement reaches the graph only as an outbox event.
+  let graphProjection;
 
   beforeEach(() => {
+    graphProjection = { appendStoragePositionEvent: vi.fn().mockResolvedValue({ eventId: 'evt-1' }) };
     boxesFindOne = vi.fn();
     boxesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     samplesFindOne = vi.fn();
     samplesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     // No open StorageAssignment by default (sample not currently allocated).
     storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
-    // #1003: autoAssignSamplePosition/rollbackAutoAssignedPosition now open/
-    // close a StorageAssignment row (insertOne/updateOne respectively) --
-    // without these spies the existing cases below would go red on "insertOne
-    // is not a function" rather than on anything this block actually tests.
+    // #1374: autoAssignSamplePosition places the specimen on the physical
+    // chain, not a StorageAssignment row; the spies stay so a case can
+    // assert no row is written.
     storageAssignmentsInsertOne = vi.fn().mockResolvedValue({ insertedId: 'stub' });
     storageAssignmentsUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    chain = Object.fromEntries(['containers', ...CHAIN_COLLECTIONS].map((name) => [name, makeChainCollection()]));
     movements = makeMovementsCollection();
     // #988: appendImmutableAudit (now called inside the transaction) reads
     // 'counters' via MongoAuditRepository.generateMovementID.
@@ -279,6 +311,9 @@ describe('StorageService.autoAssignSampleToBox', () => {
         // matching every existing test in this block (none exercises AC#7 itself).
         if (name === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
         if (name === 'storageContainers') return { findOne: vi.fn().mockResolvedValue(null) };
+        // #1374: the sample's placement is read from, and written to, the
+        // physical chain; nothing is loaded there by default.
+        if (chain[name]) return chain[name];
         throw new Error(`unexpected collection: ${name}`);
       }),
       // #994: this was `getMongo: vi.fn(() => ({ startSession: ... }))`, and it
@@ -292,10 +327,10 @@ describe('StorageService.autoAssignSampleToBox', () => {
       // both derive the session from (`db?.client || db?.s?.client`).
       client: { startSession: vi.fn(() => makeSession()) }
     });
-    service = new StorageService(db);
+    service = new StorageService(db, { graphProjection });
   });
 
-  it('happy path: finds the first free position and allocates the specimen there (no neo4j configured)', async () => {
+  it('happy path: finds the first free position and allocates the specimen there', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
 
@@ -308,6 +343,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
     });
     samplesFindOne.mockResolvedValue({
       _id: specimenId,
+      specimenId: 'SPC-9',
       barcode: 'BC-9',
       storageLocation: null
     });
@@ -316,7 +352,8 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
     expect(result.success).toBe(true);
     expect(result.sampleLocation.position).toBe('A2');
-    expect(result.graphPersisted).toBe(false);
+    expect(result.sampleLocation.specimenId).toBe('SPC-9');
+    expect(result.graphPersisted).toBe(true);
 
     const boxUpdateCall = boxesUpdateOne.mock.calls[0];
     expect(boxUpdateCall[0][`occupancyGrid.A2`]).toEqual({ $exists: false });
@@ -330,6 +367,19 @@ describe('StorageService.autoAssignSampleToBox', () => {
     // #544: status is a retired legacy field (specimenStatus is the sole
     // source of truth since #408) — auto-assign must not write it.
     expect(sampleUpdateCall[1].$set['status']).toBeUndefined();
+
+    // #1374: the placement goes on the physical chain, keyed by the business
+    // specimenId, in the transaction's session; no StorageAssignment row.
+    const session = sampleUpdateCall[2].session;
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'SPC-9' }),
+      { session }
+    );
+    expect(chain.containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ storagePositionId: `${boxId}:A02` }),
+      { session }
+    );
+    expect(storageAssignmentsInsertOne).not.toHaveBeenCalled();
   });
 
   it('#479: reports the transaction-committed position, not the stale pre-transaction scan, when they diverge', async () => {
@@ -355,6 +405,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
     });
     samplesFindOne.mockResolvedValue({
       _id: specimenId,
+      specimenId: 'SPC-9',
       barcode: 'BC-9',
       storageLocation: null
     });
@@ -562,15 +613,9 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(boxesUpdateOne).not.toHaveBeenCalled();
   });
 
-  it('persists to Neo4j and reports graphPersisted:true when a driver is configured', async () => {
+  it('#1312: appends STORAGE_POSITION_ASSIGNED to the outbox, never a Neo4j write, and reports graphPersisted:true', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
-    const runMock = vi.fn().mockResolvedValue({});
-    const closeMock = vi.fn().mockResolvedValue(undefined);
-    const neo4jSessionMock = vi.fn(() => ({ run: runMock, close: closeMock }));
-    const neo4jDriver = { session: neo4jSessionMock };
-
-    service = new StorageService(db, neo4jDriver);
 
     boxesFindOne.mockResolvedValue({
       _id: boxId,
@@ -579,31 +624,25 @@ describe('StorageService.autoAssignSampleToBox', () => {
       occupancyGrid: {},
       currentOccupancy: 0
     });
-    samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SPC-9', barcode: 'BC-9', storageLocation: null });
 
     const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
     expect(result.success).toBe(true);
     expect(result.graphPersisted).toBe(true);
-    expect(neo4jSessionMock).toHaveBeenCalled();
-    expect(runMock).toHaveBeenCalledTimes(1);
-    expect(runMock.mock.calls[0][1]).toMatchObject({
+    expect(graphProjection.appendStoragePositionEvent).toHaveBeenCalledTimes(1);
+    // #1313 (RF023 AC3): appended with the placement's own session.
+    expect(graphProjection.appendStoragePositionEvent).toHaveBeenCalledWith(db, {
       specimenId: specimenId.toString(),
       boxId: boxId.toString(),
-      coordinate: 'A1'
-    });
-    expect(closeMock).toHaveBeenCalled();
+      position: 'A1',
+      sourceService: 'storage-service'
+    }, { session: expect.objectContaining({ withTransaction: expect.any(Function) }) });
   });
 
-  it('#1004: Neo4j MERGE row/column stay consistent with coordinate when the transaction-committed position diverges from the pre-scan', async () => {
+  it('#1004: the event carries the transaction-committed position when it diverges from the pre-scan', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
-    const runMock = vi.fn().mockResolvedValue({});
-    const closeMock = vi.fn().mockResolvedValue(undefined);
-    const neo4jSessionMock = vi.fn(() => ({ run: runMock, close: closeMock }));
-    const neo4jDriver = { session: neo4jSessionMock };
-
-    service = new StorageService(db, neo4jDriver);
 
     // Pre-transaction scan sees only A1 occupied -> would pick A2.
     boxesFindOne.mockResolvedValueOnce({
@@ -624,6 +663,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
     });
     samplesFindOne.mockResolvedValue({
       _id: specimenId,
+      specimenId: 'SPC-9',
       barcode: 'BC-9',
       storageLocation: null
     });
@@ -633,54 +673,29 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(result.success).toBe(true);
     expect(result.sampleLocation.position).toBe('A3');
 
-    const mergeParams = runMock.mock.calls[0][1];
-    // The MERGE must describe a single, self-consistent position: rowLetter
-    // and column must match coordinate, not the stale pre-transaction scan
-    // (which would have decomposed to row 'A', column 2).
-    expect(mergeParams.coordinate).toBe('A3');
-    expect(mergeParams.rowLetter).toBe('A');
-    expect(mergeParams.column).toBe(3);
+    // The event names the committed slot, never the stale pre-transaction
+    // scan's A2.
+    expect(graphProjection.appendStoragePositionEvent.mock.calls[0][1].position).toBe('A3');
   });
 
-  it('rolls back the Mongo allocation when the Neo4j sync fails, and surfaces the Neo4j error', async () => {
+  // #1313 (RF023 AC3): the append runs inside the placement's transaction, so
+  // a failed append aborts the placement with it; no compensating write runs.
+  it('appends inside the placement transaction, and a failed append surfaces with no compensating write', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
-    const neo4jError = new Error('neo4j unreachable');
-    const runMock = vi.fn().mockRejectedValue(neo4jError);
-    const closeMock = vi.fn().mockResolvedValue(undefined);
-    const neo4jDriver = { session: vi.fn(() => ({ run: runMock, close: closeMock })) };
-
-    const rollbackBoxUpdate = vi.fn().mockResolvedValue({});
-    const rollbackSampleUpdate = vi.fn().mockResolvedValue({});
-    // Second startSession() call (rollback) needs its own session object.
-    const rollbackSession = makeSession();
-    let sessionCallCount = 0;
-    // #994: was `db.getMongo = vi.fn(() => ({ startSession: ... }))`. This
-    // site passed even with the fabrication left in place -- the block's
-    // default `db.client.startSession` already returned a fresh session per
-    // call, so the test went green while this override was never consulted
-    // and the two-session distinction it exists to express was silently
-    // inert. Repointed at the real entry point so the second startSession
-    // (the rollback's own transaction) is observable again.
-    db.client = {
-      ...db.client,
-      startSession: vi.fn(() => {
-        sessionCallCount += 1;
-        return sessionCallCount === 1 ? makeSession() : rollbackSession;
-      })
-    };
-    // Route updateOne calls made during rollback to dedicated spies while keeping
-    // the original allocation-phase updateOne behavior for the first calls.
-    boxesUpdateOne.mockImplementation((...args) => {
-      if (args[1]?.$unset) return rollbackBoxUpdate(...args);
-      return Promise.resolve({ matchedCount: 1 });
+    const session = makeSession();
+    let inTransaction = false;
+    session.withTransaction = vi.fn(async (fn) => {
+      inTransaction = true;
+      try { await fn(); } finally { inTransaction = false; }
     });
-    samplesUpdateOne.mockImplementation((...args) => {
-      if (args[1]?.$unset) return rollbackSampleUpdate(...args);
-      return Promise.resolve({ matchedCount: 1 });
+    db.client = { ...db.client, startSession: vi.fn(() => session) };
+    let appendedInTransaction = null;
+    graphProjection.appendStoragePositionEvent.mockImplementation(async (_db, _payload, options) => {
+      appendedInTransaction = inTransaction && options?.session === session;
+      throw new Error('outbox unreachable');
     });
-
-    service = new StorageService(db, neo4jDriver);
+    service = new StorageService(db, { graphProjection });
 
     boxesFindOne.mockResolvedValue({
       _id: boxId,
@@ -689,16 +704,17 @@ describe('StorageService.autoAssignSampleToBox', () => {
       occupancyGrid: {},
       currentOccupancy: 0
     });
-    samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SPC-9', barcode: 'BC-9', storageLocation: null });
 
     const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
+    expect(appendedInTransaction).toBe(true);
+    expect(db.client.startSession).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
     expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
-    expect(result.message).toBe('neo4j unreachable');
-    expect(rollbackBoxUpdate).toHaveBeenCalledTimes(1);
-    expect(rollbackSampleUpdate).toHaveBeenCalledTimes(1);
-    expect(closeMock).toHaveBeenCalled();
+    expect(result.message).toBe('outbox unreachable');
+    const unsets = [...boxesUpdateOne.mock.calls, ...samplesUpdateOne.mock.calls].filter((call) => call[1]?.$unset);
+    expect(unsets).toHaveLength(0);
   });
 
   // #988 Part 1: same topology refusal MongoStorageRepository.withTransaction
@@ -747,7 +763,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
         occupancyGrid: {},
         currentOccupancy: 0
       });
-      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SPC-9', barcode: 'BC-9', storageLocation: null });
 
       const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
@@ -772,7 +788,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
         occupancyGrid: {},
         currentOccupancy: 0
       });
-      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SPC-9', barcode: 'BC-9', storageLocation: null });
 
       const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
@@ -794,7 +810,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
       // the session in its own finally, so the ordering assertion below (audit
       // write BEFORE endSession) still measures the same thing.
       db.client = { ...db.client, startSession: vi.fn(() => txSession) };
-      service = new StorageService(db);
+      service = new StorageService(db, { graphProjection });
 
       boxesFindOne.mockResolvedValue({
         _id: boxId,
@@ -803,7 +819,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
         occupancyGrid: {},
         currentOccupancy: 0
       });
-      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SP-9', barcode: 'BC-9', storageLocation: null });
 
       const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
@@ -812,7 +828,10 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
       const [auditRow, auditOptions] = movements.insertOne.mock.calls[0];
       expect(auditRow.type).toBe('auto_allocate');
-      expect(auditRow.specimenId).toBe(specimenId.toString());
+      // #1220: keyed by the canonical specimenId, as the create path writes it;
+      // the graph event keeps the _id.
+      expect(auditRow.specimenId).toBe('SP-9');
+      expect(graphProjection.appendStoragePositionEvent.mock.calls[0][1].specimenId).toBe(specimenId.toString());
       expect(auditRow.barcode).toBe('BC-9');
       expect(auditRow.previousState).toEqual({ storageLocation: null });
       expect(auditRow.newState).toEqual({
@@ -827,6 +846,25 @@ describe('StorageService.autoAssignSampleToBox', () => {
       expect(boxesUpdateOne.mock.calls[0][2]).toEqual({ session: txSession });
       expect(movements.insertOne.mock.invocationCallOrder[0])
         .toBeLessThan(txSession.endSession.mock.invocationCallOrder[0]);
+    });
+
+    it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+
+      boxesFindOne.mockResolvedValue({
+        _id: boxId,
+        name: 'Box A',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(true);
+      expect(movements.insertOne.mock.calls[0][0].specimenId).toBe(specimenId.toString());
     });
 
     it('does not append an audit row when the auto-assignment fails before the transaction (e.g. BOX_FULL)', async () => {
@@ -855,6 +893,8 @@ describe('StorageService.releaseSampleFromPosition', () => {
   let samplesUpdateOne;
   let boxesUpdateOne;
   let storageAssignmentsFindOne;
+  let storageAssignments;
+  let chain;
   let movements;
   let db;
   let service;
@@ -865,19 +905,35 @@ describe('StorageService.releaseSampleFromPosition', () => {
     boxesUpdateOne = vi.fn().mockResolvedValue({});
     // No open StorageAssignment by default (sample not currently allocated).
     storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
+    // #1374: release adopts a legacy-only specimen from its rows; the open
+    // row the reader resolves is the only one.
+    storageAssignments = {
+      findOne: storageAssignmentsFindOne,
+      find: vi.fn(() => ({
+        toArray: async () => {
+          const open = await storageAssignmentsFindOne();
+          return open ? [open] : [];
+        }
+      })),
+      insertOne: vi.fn(),
+      updateOne: vi.fn()
+    };
+    chain = Object.fromEntries(['containers', ...CHAIN_COLLECTIONS].map((name) => [name, makeChainCollection()]));
     movements = makeMovementsCollection();
 
     db = makeDb({
       collection: vi.fn((name) => {
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
-        if (name === 'storageBoxes') return { updateOne: boxesUpdateOne };
+        if (name === 'storageBoxes') return { updateOne: boxesUpdateOne, findOne: vi.fn().mockResolvedValue(null) };
         if (name === 'sample_movements') return movements;
         if (name === 'counters') return makeCountersCollection();
-        if (name === 'storageAssignments') {
-          return { updateOne: vi.fn().mockResolvedValue({}), findOne: storageAssignmentsFindOne };
-        }
+        if (name === 'storageAssignments') return storageAssignments;
+        if (chain[name]) return chain[name];
         throw new Error(`unexpected collection: ${name}`);
-      })
+      }),
+      // #1374: the release runs in MongoStorageRepository.withTransaction,
+      // which derives its session from `db.client`, as autoAssign's does.
+      client: { startSession: vi.fn(() => makeSession()) }
     });
     service = new StorageService(db);
   });
@@ -908,6 +964,80 @@ describe('StorageService.releaseSampleFromPosition', () => {
 
     const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
     expect(sampleUpdateCall[1].$unset).toHaveProperty('storageLocation');
+  });
+
+  // #1374: release closes the specimen's position on the physical chain; a
+  // legacy-only specimen is adopted first and stays loaded in its container.
+  // No StorageAssignment row is written.
+  it('closes the released position on the physical chain, adopting a legacy-only specimen, not a StorageAssignment row (#1374)', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      specimenId: 'SP-6',
+      barcode: 'BC-6',
+      storageLocation: { boxId, position: 'C3' }
+    });
+    storageAssignmentsFindOne.mockResolvedValue({
+      storageAssignmentId: 'SA-6', specimenId: sampleId, boxId, positionCode: 'C3', placedAt: new Date('2026-01-01T00:00:00Z'), removedAt: null
+    });
+
+    const result = await service.releaseSampleFromPosition(sampleId);
+
+    expect(result.success).toBe(true);
+    const { containerId } = chain.containers.insertOne.mock.calls[0][0];
+    expect(chain.containers.insertOne).toHaveBeenCalledTimes(1);
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'SP-6', containerId, sourceEventId: 'legacy-storage-assignment:SA-6' }),
+      { session: db.client.startSession.mock.results[0].value }
+    );
+    const placements = await chain.containerPositionAssignments.find({}).toArray();
+    expect(placements.map((row) => [row.containerId, row.storagePositionId, row.assignmentStatus])).toEqual([
+      [containerId, `${boxId}:C03`, 'ended']
+    ]);
+    const loads = await chain.specimenContainerAssignments.find({}).toArray();
+    expect(loads.map((row) => row.assignmentStatus)).toEqual(['active']);
+    expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+  });
+
+  // #1220: the custody ledger row is keyed by the canonical specimenId, as the
+  // create path writes it, and the release response echoes it.
+  it('#1220: the audit row and the response carry the canonical specimenId', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      specimenId: 'SP-5',
+      barcode: 'BC-5',
+      storageLocation: { boxId, position: 'C3' }
+    });
+    storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'C3', removedAt: null });
+
+    const result = await service.releaseSampleFromPosition(sampleId);
+
+    expect(result.success).toBe(true);
+    expect(result.releasedFrom.specimenId).toBe('SP-5');
+    expect(movements.insertOne.mock.calls[0][0].specimenId).toBe('SP-5');
+  });
+
+  it('#1220: a legacy sample without a specimenId keys its release audit row by the _id', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      barcode: 'BC-5',
+      storageLocation: { boxId, position: 'C3' }
+    });
+    storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'C3', removedAt: null });
+
+    const result = await service.releaseSampleFromPosition(sampleId);
+
+    expect(result.success).toBe(true);
+    expect(movements.insertOne.mock.calls[0][0].specimenId).toBe(sampleId);
   });
 
   it('returns NO_STORAGE_LOCATION when the sample is not currently allocated anywhere', async () => {
@@ -942,6 +1072,69 @@ describe('StorageService.releaseSampleFromPosition', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe('RELEASE_ERROR');
     expect(result.message).toBe('db down');
+  });
+
+  // #1374: the box, sample and audit writes share one transaction, so a
+  // release never commits without its sample_movements row.
+  describe('in one transaction (#1374)', () => {
+    let session;
+    let inTransaction;
+
+    beforeEach(() => {
+      session = makeSession();
+      inTransaction = false;
+      session.withTransaction = vi.fn(async (fn) => {
+        inTransaction = true;
+        try { await fn(); } finally { inTransaction = false; }
+      });
+      db.client = { ...db.client, startSession: vi.fn(() => session) };
+      service = new StorageService(db);
+
+      const boxId = new ObjectId().toString();
+      samplesFindOne.mockResolvedValue({
+        _id: new ObjectId(),
+        specimenId: 'SP-8',
+        barcode: 'BC-8',
+        storageLocation: { boxId, position: 'B2' }
+      });
+      storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'B2', removedAt: null });
+    });
+
+    it('writes the box, the sample and the audit row in the release transaction', async () => {
+      const seen = {};
+      const track = (name, spy, result) => spy.mockImplementation(async (...args) => {
+        seen[name] = inTransaction && args[args.length - 1]?.session === session;
+        return result;
+      });
+      track('box', boxesUpdateOne, { matchedCount: 1 });
+      track('sample', samplesUpdateOne, { matchedCount: 1 });
+      track('audit', movements.insertOne, { insertedId: new ObjectId() });
+
+      const result = await service.releaseSampleFromPosition(new ObjectId().toString());
+
+      expect(result.success).toBe(true);
+      expect(db.client.startSession).toHaveBeenCalledTimes(1);
+      expect(seen).toEqual({ box: true, sample: true, audit: true });
+    });
+
+    it('a failed audit insert surfaces from the transaction as RELEASE_ERROR, with no compensating write', async () => {
+      let failedInTransaction = null;
+      movements.insertOne.mockImplementation(async (_doc, options) => {
+        failedInTransaction = inTransaction && options?.session === session;
+        throw new Error('ledger unreachable');
+      });
+
+      const result = await service.releaseSampleFromPosition(new ObjectId().toString());
+
+      expect(failedInTransaction).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('RELEASE_ERROR');
+      expect(result.message).toBe('ledger unreachable');
+      expect(boxesUpdateOne).toHaveBeenCalledTimes(1);
+      expect(samplesUpdateOne).toHaveBeenCalledTimes(1);
+      const compensations = boxesUpdateOne.mock.calls.filter((call) => call[1]?.$set?.[`occupancyGrid.B2`]);
+      expect(compensations).toHaveLength(0);
+    });
   });
 
   it('falls back to the raw specimenId when ObjectId.isValid throws while converting it', async () => {

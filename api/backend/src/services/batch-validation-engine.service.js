@@ -1,15 +1,19 @@
 const fs = require('fs');
 const path = require('path');
+const { Transform } = require('stream');
 const ExcelJS = require('exceljs');
 const csvParser = require('csv-parser');
 const { ObjectId } = require('mongodb');
 
-const StagingImport = require('../models/StagingImport');
+const StagingImport = require('./stagingImport.store');
 const importLGPDService = require('./import-lgpd.service');
 const patientService = require('./patient.service');
+const participantIdentityService = require('./participantIdentity.service');
 const sampleService = require('./sample.service');
 const biomarkerObservationService = require('./biomarker-observation.service');
 const logger = require('../utils/logger');
+const { sealStagedRecord, revealStagedRecord } = require('../utils/stagedRowCrypto');
+const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
 
 const CHUNK_SIZE = 100;
 
@@ -216,18 +220,48 @@ class BatchValidationEngine {
       // incremented on EVERY data event and pushed only for rows we keep --
       // the same shape as import-lgpd.service.js's #1023 reader.
       //
-      // The residual is #1035's and is unchanged here: csv-parser emits one
-      // data event per RECORD, so a quoted embedded newline still spans
-      // physical lines this counter cannot see.
-      let physicalLine = 1;
+      // #1065: the physical line comes from the record's `byteOffset`
+      // (csv-parser 3.2.0, `outputByteOffset: true`), not a per-event counter.
+      // csv-parser emits one data event per RECORD, so a quoted field with an
+      // embedded newline spans several physical lines in one event, and a
+      // counter drifts low for every record after it. Same derivation as
+      // import-lgpd.service.js#readCSV (#1035), with one difference: that
+      // reader already held the whole file, this one streams it. So the 0x0A
+      // positions are collected from each chunk as it passes to the parser --
+      // a chunk always passes before any record starting in it is emitted --
+      // costing 8 bytes per line instead of a resident copy of the file.
+      // Bytes, not characters: the corpus is accented Portuguese.
+      const newlineByteOffsets = [];
+      let bytesSeen = 0;
+      const newlineIndexer = new Transform({
+        transform(chunk, _encoding, callback) {
+          for (let i = 0; i < chunk.length; i += 1) {
+            if (chunk[i] === 0x0a) newlineByteOffsets.push(bytesSeen + i);
+          }
+          bytesSeen += chunk.length;
+          callback(null, chunk);
+        },
+      });
+      const physicalLineForByteOffset = (byteOffset) => {
+        let lo = 0;
+        let hi = newlineByteOffsets.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (newlineByteOffsets[mid] < byteOffset) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo + 1;
+      };
       const sourceLines = [];
       const separator = this.detectCsvSeparator(filePath);
 
       fs.createReadStream(filePath)
-        .pipe(csvParser({ separator }))
-        .on('data', (row) => {
+        .on('error', reject)
+        .pipe(newlineIndexer)
+        .pipe(csvParser({ separator, outputByteOffset: true }))
+        .on('data', ({ row, byteOffset }) => {
           if (row && typeof row === 'object') {
-            physicalLine += 1;
+            const physicalLine = physicalLineForByteOffset(byteOffset);
             const hasData = Object.values(row).some((value) => value && String(value).trim());
             if (hasData) {
               rows.push(row);
@@ -348,9 +382,21 @@ class BatchValidationEngine {
   buildSampleRow(rawRow = {}) {
     const mapped = {};
     const headerMap = {
-      patientid: 'patientID',
-      sampleid: 'sampleID',
-      specimenid: 'sampleID',
+      // The #767 failure mode on the participant column: these targeted
+      // 'patientID', which parseSampleRow never reads (it reads
+      // participantId), and a `participantId` header was not mapped at all,
+      // so no batch-imported sample carried its participant's id.
+      participantid: 'participantId',
+      patientid: 'participantId',
+      // The same failure mode on the specimen column: these targeted
+      // 'sampleID', which parseSampleRow never reads, so a file's own id was
+      // dropped silently. specimenId is the system's internal id (v2.0.0
+      // ELM-0114) and createSample generates it; the source system's id is
+      // BaseRecord.sourceRecordId (ELM-0011), which RF029 AC#2 requires an
+      // ingestion to keep.
+      sampleid: 'sourceRecordId',
+      specimenid: 'sourceRecordId',
+      sourcerecordid: 'sourceRecordId',
       sampletype: 'sampleType',
       tipodeamostra: 'sampleType',
       sampleorigin: 'sampleOrigin',
@@ -379,6 +425,14 @@ class BatchValidationEngine {
       // Recognizing the header names is still useful for detectDataType()'s
       // sample-vs-patient heuristic below, so they stay out of that list;
       // they just no longer feed a dead target field here.
+      //
+      // The canonical pair itself was never mapped, so it was dropped the
+      // same way, and createSample, which requires a box and a position,
+      // rejected every row this importer handed it.
+      boxid: 'boxId',
+      positioncode: 'positionCode',
+      position: 'positionCode',
+      wellposition: 'positionCode',
       linkedproject: 'linkedProject',
       projetovinculado: 'linkedProject',
       currentstatus: 'currentStatus',
@@ -455,7 +509,7 @@ class BatchValidationEngine {
     const criteria = [];
 
     const patientID = this.normalizePatientID(
-      patientData.patientID || rawRow.patientID || rawRow.patientId || rawRow.patient_id
+      patientData.participantId || rawRow.participantId || rawRow.patientID || rawRow.patientId || rawRow.patient_id
     );
     if (patientID) {
       // #853: `patients` never persists a `patientID` key (Patient.js's
@@ -489,11 +543,34 @@ class BatchValidationEngine {
     return criteria;
   }
 
+  // #1386: a blank number runs no identity query.
+  async findPatientByIdentityRecordNumber(db, patientsCollection, recordNumber) {
+    const recordNumberQuery = participantIdentityService.recordNumberIdentityQuery(recordNumber);
+    if (!recordNumberQuery) return null;
+    const identity = await db.collection('participantIdentities').findOne(recordNumberQuery);
+    return identity ? patientsCollection.findOne({ participantId: identity.participantId }) : null;
+  }
+
   async findLinkedPatient(db, rawRow = {}, patientData = {}) {
     const patientsCollection = db.collection('patients');
     const criteria = this.buildPatientLinkageQuery(rawRow, patientData);
 
+    let identityRecordNumberTried = false;
     for (const filter of criteria) {
+      // #1386: a record number is ParticipantIdentity's (P1X-0355), matched
+      // on recordNumberHash once. No recordNumber criterion is matched on
+      // patients, so a number held only on the legacy patients.recordNumber
+      // links nothing.
+      if (!identityRecordNumberTried && Object.prototype.hasOwnProperty.call(filter, 'recordNumber')) {
+        identityRecordNumberTried = true;
+        // eslint-disable-next-line no-await-in-loop
+        const identityLinked = await this.findPatientByIdentityRecordNumber(db, patientsCollection, filter.recordNumber);
+        if (identityLinked) {
+          return identityLinked;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(filter, 'recordNumber')) continue;
+
       // Prioriza a igualdade exata para manter o record linkage previsível.
       // A ordem dos critérios é significativa: patientID, CPF, prontuário e, por fim, _id.
       // eslint-disable-next-line no-await-in-loop
@@ -516,14 +593,13 @@ class BatchValidationEngine {
     });
 
     const specimenIdentifier = String(
-      specimen?.sampleID
-      || specimen?.sampleId
+      specimen?.specimenId
       || specimen?._id
       || specimen?.barcode
       || ''
     ).trim();
     const specimenObjectId = specimen?._id ? String(specimen._id).trim() : null;
-    const patientIdentifier = String(patient?.patientID || rawRow.patientID || '').trim();
+    const patientIdentifier = String(patient?.participantId || '').trim();
     const patientObjectId = patient?._id ? String(patient._id).trim() : null;
     // #768: the specimen legs used to read `registrationDate`/`registerDate`,
     // names e2549bee canonicalized away. Sample.js:38 declares `registeredAt`
@@ -586,7 +662,7 @@ class BatchValidationEngine {
       }
 
       payloads.push({
-        patientID: patientIdentifier,
+        participantId: patientIdentifier,
         patientObjectId,
         biomarkerType,
         value: numericValue,
@@ -754,18 +830,21 @@ class BatchValidationEngine {
    *
    * Fluxo de record linkage:
    * 1. Procura o paciente por identificadores estáveis informados na linha
-   *    (CPF, prontuário, patientID ou _id legado).
+   *    (participantId ou a coluna patientID, CPF, prontuário ou _id legado).
    * 2. Se o paciente existir, reutiliza o _id interno de MongoDB.
    * 3. Se não existir, cria um novo Patient e captura o novo _id.
-   * 4. Cria a Specimen vinculada ao patientID legado e ao patientObjectId interno.
+   * 4. Cria a Specimen vinculada ao participantId do paciente e ao patientObjectId interno.
    * 5. Cria Observations apenas quando a linha traz biomarcadores válidos.
    *
    * Isso permite importar follow-ups clínicos sem duplicar pacientes e sem
    * bloquear linhas históricas que contenham apenas inventário de amostras.
    */
   async persistSample(db, rawRow, rowNumber, context = {}) {
+    // #1376, #1192: the uploader's organization stamps the sample only; the
+    // participant created below gets none from it.
+    const { organizationId = null, ...rowContext } = context;
     const sampleData = importLGPDService.parseSampleRow(this.buildSampleRow(rawRow));
-    sampleData.patientID = sampleData.patientID ? String(sampleData.patientID).trim() : null;
+    sampleData.participantId = sampleData.participantId ? String(sampleData.participantId).trim() : null;
     sampleData.sampleType = sampleData.sampleType ? String(sampleData.sampleType).trim() : null;
     sampleData.sampleOrigin = sampleData.sampleOrigin ? String(sampleData.sampleOrigin).trim() : null;
     sampleData.extractionProtocol = sampleData.extractionProtocol ? String(sampleData.extractionProtocol).trim() : null;
@@ -830,11 +909,13 @@ class BatchValidationEngine {
           source: 'batch-import',
           skipConsentNotification: true,
           skipBiomarkerArtifacts: true,
-          ...context,
+          ...rowContext,
         });
       }
 
-      sampleData.patientID = String(patient.patientID || sampleData.patientID || '').trim();
+      // The linked or created patient is the authority for the id, as it is
+      // in import-lgpd's importSamples.
+      sampleData.participantId = String(patient.participantId || sampleData.participantId || '').trim();
       sampleData.patientObjectId = String(patient._id || '').trim();
       sampleData.semanticCascade = {
         disease: semanticCascade.disease,
@@ -842,11 +923,18 @@ class BatchValidationEngine {
         biomarkers: semanticCascade.biomarkers,
       };
 
+      // #1376: as POST /api/samples does, an unnamed collection site defaults
+      // to the uploader's organization. buildSampleRow maps no site column.
+      if (organizationId && (sampleData.collectionSite === undefined || sampleData.collectionSite === null || sampleData.collectionSite === '')) {
+        sampleData.collectionSite = organizationId;
+      }
+
       const createdSample = await sampleService.createSample(db, sampleData, {
         isImport: true,
         batchImport: true,
         source: 'batch-import',
-        ...context,
+        ...rowContext,
+        organizationId,
       });
 
       const biomarkerPayloads = this.buildBiomarkerObservationPayloads(rawRow, patient, createdSample);
@@ -952,48 +1040,28 @@ class BatchValidationEngine {
    * e do FHIR filtram por `type` e nao podem passar a listar lotes deste
    * importador por acidente (#799 foi exatamente esse defeito).
    */
-  async quarantineRejectedRows(db, { jobId, dataType, fileName = null, rejected = [], counts = {} } = {}) {
+  async quarantineRejectedRows(db, { jobId, dataType, fileName = null, rejected = [], counts = {}, organizationId = null } = {}) {
     if (!Array.isArray(rejected) || rejected.length === 0) return null;
     if (!db) return null;
+    // #1385: the uploader's organization (#1376), stamped on the batch and
+    // on each row; getQuarantineBatch checks it against the reader's scope.
+    const batchOrganizationId = organizationId == null ? null : String(organizationId);
 
-    // #807/#814: uma linha de paciente carrega patientName/birthDate/email --
-    // identificadores civis, cifrados em repouso em todo o resto do sistema
-    // (#566). Persistir isso aqui ampliaria um problema conhecido de texto
-    // claro para o caminho mais sensivel, que e justamente o que #814 manda
-    // resolver (via #807) antes de colocar um caminho de pacientes em
-    // quarentena. Amostras sao pseudonimizadas (participantId), e por isso
-    // #787 pode coloca-las em quarentena.
-    if (dataType !== 'samples') {
-      logger.warn(
-        `[BATCH_IMPORT] ${rejected.length} linha(s) de '${dataType}' rejeitadas NAO foram para quarentena: ` +
-        'linhas de paciente carregam identificadores civis e #807 (texto claro em repouso) ainda esta aberto. Ver #814.'
-      );
-      return null;
-    }
+    // #813/#807: todo tipo de dado vai para a quarentena, inclusive
+    // pacientes. Uma linha de paciente carrega patientName/birthDate/email, e
+    // por isso `row` e selado em repouso (stagedRowCrypto), como os mesmos
+    // valores ja sao em participantIdentities (#566).
 
+    // #1295: as linhas sao gravadas ANTES do lote. Quem encontra o lote (a
+    // rota de quarentena, ou quem espera pelo jobId) encontra tambem as suas
+    // linhas; na ordem inversa havia uma janela com o lote visivel e vazio.
+    const batchId = new ObjectId();
+    let rowsWritten = false;
     try {
       const now = new Date();
 
-      const batchResult = await db.collection('import_batches').insertOne({
-        type: 'ASYNC_BATCH_IMPORT',
-        source: 'ASYNC_BATCH',
-        status: 'QUARANTINED',
-        jobId: jobId ? String(jobId) : null,
-        fileName: fileName ? String(fileName) : null,
-        dataType,
-        counts: {
-          total: counts.total ?? null,
-          success: counts.success ?? null,
-          errors: rejected.length,
-        },
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      const batchId = batchResult.insertedId;
-
       await db.collection('import_staging_records').insertMany(
-        rejected.map((rejection) => ({
+        rejected.map((rejection) => sealStagedRecord({
           batchId,
           rowNumber: rejection.rowNumber,
           // #1041: additive and .xlsx-only. rowNumber stays numeric so the
@@ -1007,10 +1075,30 @@ class BatchValidationEngine {
           // quarentena pode ser revisado mas nao corrigido e reenviado, que e
           // a razao de existir quarentena em vez de log.
           row: rejection.row ?? null,
+          organizationId: batchOrganizationId,
           createdAt: now,
           updatedAt: now,
         }))
       );
+      rowsWritten = true;
+
+      await db.collection('import_batches').insertOne({
+        _id: batchId,
+        type: 'ASYNC_BATCH_IMPORT',
+        source: 'ASYNC_BATCH',
+        status: 'QUARANTINED',
+        jobId: jobId ? String(jobId) : null,
+        fileName: fileName ? String(fileName) : null,
+        dataType,
+        organizationId: batchOrganizationId,
+        counts: {
+          total: counts.total ?? null,
+          success: counts.success ?? null,
+          errors: rejected.length,
+        },
+        createdAt: now,
+        updatedAt: now,
+      });
 
       logger.warn(
         `[BATCH_IMPORT] ${rejected.length} linha(s) rejeitada(s) colocadas em quarentena (batch ${batchId})`
@@ -1024,6 +1112,10 @@ class BatchValidationEngine {
         'Falha ao colocar linhas rejeitadas em quarentena (RNF011 AC#4):',
         stagingError.message || stagingError
       );
+      // #1295: sem o lote, as linhas gravadas nao tem quem as leia.
+      if (rowsWritten) {
+        await db.collection('import_staging_records').deleteMany({ batchId }).catch(() => {});
+      }
       return null;
     }
   }
@@ -1053,7 +1145,7 @@ class BatchValidationEngine {
    * proprios tipos e descartam (LGPD) ou nunca souberam (FHIR) de
    * `ASYNC_BATCH_IMPORT`.
    */
-  async getQuarantineBatch(db, batchIdRaw) {
+  async getQuarantineBatch(db, batchIdRaw, { organizationScope } = {}) {
     const raw = String(batchIdRaw || '').trim();
     if (!ObjectId.isValid(raw)) {
       const error = new Error('Identificador de lote de importação inválido.');
@@ -1063,17 +1155,27 @@ class BatchValidationEngine {
 
     const batchId = new ObjectId(raw);
     const batch = await this.findAsyncBatchImport(db, batchId);
+    // #1385: a reader with organization scope reaches only a batch stamped
+    // with one of its organizations; an unstamped batch (legacy, or uploaded
+    // by a global caller who named none) only global scope reaches. No scope
+    // passed means an internal caller, which is unfiltered.
+    if (organizationScope && !isRecordInOrganizationScope(batch, organizationScope, 'organizationId')) {
+      const error = new Error('Lote de quarentena fora do escopo organizacional do usuário.');
+      error.statusCode = 403;
+      throw error;
+    }
     const records = await db
       .collection('import_staging_records')
       .find({ batchId })
       .sort({ rowNumber: 1 })
       .toArray();
 
-    return { batch, records };
+    // #807: rows are sealed at rest; the reader gets them back as staged.
+    return { batch, records: records.map(revealStagedRecord) };
   }
 
   async processBatchImport(db, stagingImportId, job = null) {
-    const stagingImport = await StagingImport.findOne({ jobId: stagingImportId });
+    const stagingImport = await StagingImport.findOne({ jobId: stagingImportId }, db);
 
     if (!stagingImport) {
       throw new Error(`StagingImport não encontrado para jobId ${stagingImportId}`);
@@ -1081,6 +1183,8 @@ class BatchValidationEngine {
 
     const storagePath = stagingImport.rawData?.storagePath;
     const fileName = stagingImport.fileName;
+    // #1376: stamped at upload by createStagingImport.
+    const organizationId = stagingImport.rawData?.organizationId || null;
 
     if (!storagePath || !fs.existsSync(storagePath)) {
       throw new Error('Arquivo bruto do staging não encontrado');
@@ -1145,7 +1249,7 @@ class BatchValidationEngine {
         const rowNumber = sourceLine !== undefined ? sourceLine : absoluteIndex + rowBaseNumber;
 
         const rowResult = dataType === 'samples'
-          ? await this.persistSample(db, rawRow, rowNumber)
+          ? await this.persistSample(db, rawRow, rowNumber, { organizationId })
           : await this.persistPatient(db, rawRow, rowNumber);
 
         result.processedRows += 1;
@@ -1189,7 +1293,8 @@ class BatchValidationEngine {
           });
           await StagingImport.updateOne(
             { jobId: stagingImportId },
-            { $push: { importErrors: errorEntry } }
+            { $push: { importErrors: errorEntry } },
+            db
           );
         }
 
@@ -1216,6 +1321,7 @@ class BatchValidationEngine {
       fileName,
       rejected: rejectedRows,
       counts: { total: result.totalRows, success: result.validRows },
+      organizationId,
     });
     if (quarantineBatchId) {
       result.quarantineBatchId = String(quarantineBatchId);

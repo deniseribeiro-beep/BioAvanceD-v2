@@ -302,3 +302,5 @@ module.exports = redis;
 module.exports.getRedisInstance = getRedisInstance;
 module.exports.testRedisConnection = testRedisConnection;
 module.exports.closeRedisConnection = closeRedisConnection;
+// Returns the singleton or null; never creates a connection (#1323).
+module.exports.peekRedisInstance = () => redisInstance;

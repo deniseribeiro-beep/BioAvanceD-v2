@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { ObjectId } = require('mongodb'); // Native MongoDB driver para evitar conflitos BSON
-const env = require('../config/env');
 const logger = require('../utils/logger');
+const { GraphProjectionService } = require('./graphProjection.service');
 const { getCollection } = require('../utils/collectionResolver');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
@@ -36,9 +36,10 @@ const STANDALONE_DEPLOYMENT_TRANSACTION_ERROR =
  * RFC: ISO 20387 compliance
  */
 class StorageService {
-  constructor(db, neo4jDriver = null) {
+  // #1312: no Neo4j driver. The graph is reached only through the outbox.
+  constructor(db, options = {}) {
     this.db = db;
-    this.neo4jDriver = neo4jDriver || db?.neo4jDriver || null;
+    this.graphProjection = options?.graphProjection || new GraphProjectionService();
     this.storageRepository = new MongoStorageRepository(db);
     this.auditRepository = new MongoAuditRepository(db);
   }
@@ -157,7 +158,7 @@ class StorageService {
         // its custody row.
         await this.auditRepository.appendImmutableAudit(
           {
-            specimenId: sampleObjId.toString(),
+            specimenId: String(sampleSnapshot.specimenId || sampleObjId),
             barcode: sampleSnapshot?.barcode || null,
             eventType: 'auto_allocate',
             before: {
@@ -173,86 +174,32 @@ class StorageService {
           },
           session
         );
-      });
 
-      // #1004: rowLetter/column must be derived from assignedPosition (the
-      // transaction-committed position from the in-transaction re-scan), not
-      // from nextPosition (the pre-transaction scan). The two can diverge
-      // when a concurrent request claims the pre-scanned slot -- that is the
-      // designed retry behaviour of session.withTransaction -- and decomposing
-      // the stale nextPosition here previously fed the Neo4j MERGE below a
-      // self-contradicting coordinate/row/column (e.g. coordinate 'A2' with
-      // row 'A', column 1 derived from a different slot).
-      const canPersistGraph = this.neo4jDriver && typeof this.neo4jDriver.session === 'function';
-      if (canPersistGraph && assignedPosition) {
-        const positionMatch = assignedPosition.match(/^([A-Z])(\d+)$/);
-        const rowLetter = positionMatch?.[1] || 'A';
-        const column = Number(positionMatch?.[2] || 1);
-        const neo4jSession = this.neo4jDriver.session({ database: env.NEO4J_DATABASE || 'neo4j' });
-
-        try {
-          await neo4jSession.run(
-            `
-              MERGE (specimen:Sample:Specimen {specimenId: $specimenId})
-              ON CREATE SET specimen.createdAt = datetime(), specimen.source = 'BioAvanceD'
-              SET specimen.updatedAt = datetime(),
-                  specimen.barcode = coalesce($barcode, specimen.barcode)
-
-              MERGE (box:StorageBox:Box {mongoBoxId: $boxId})
-              ON CREATE SET box.createdAt = datetime(), box.source = 'BioAvanceD'
-              SET box.updatedAt = datetime(),
-                  box.name = coalesce($boxName, box.name)
-
-              MERGE (location:Location:StoragePosition {boxId: $boxId, coordinate: $coordinate})
-              ON CREATE SET location.createdAt = datetime()
-              SET location.updatedAt = datetime(),
-                  location.coordinate = $coordinate,
-                  location.row = $rowLetter,
-                  location.column = $column,
-                  location.capacity = $capacity
-
-              MERGE (specimen)-[:STORED_IN]->(location)
-              MERGE (location)-[:PART_OF]->(box)
-
-              RETURN specimen.specimenId AS specimenId,
-                     location.coordinate AS coordinate,
-                     box.mongoBoxId AS boxId
-            `,
-            {
-              specimenId: String(sampleObjId),
-              boxId: String(boxObjId),
-              barcode: sampleSnapshot?.barcode || null,
-              boxName: boxSnapshot?.name || null,
-              coordinate: assignedPosition,
-              rowLetter,
-              column,
-              capacity: Number(boxSnapshot?.dimension?.rows || 0) * Number(boxSnapshot?.dimension?.cols || 0)
-            }
-          );
-        } catch (neo4jError) {
-          // #994: the second `getMongo()` call site. Same fix, same reason --
-          // this compensation path was equally dead, which is why #988 part 3
-          // (what compensates the compensation) could not even be observed.
-          await this.storageRepository.withTransaction(async (rollbackSession) => {
-            await this.storageRepository.rollbackAutoAssignedPosition(
-              { specimenId: sampleObjId, boxId: boxObjId, position: assignedPosition },
-              rollbackSession
-            );
-          });
-
-          throw neo4jError;
-        } finally {
-          await neo4jSession.close();
+        // #1312 (RF023 AC8): the graph learns the placement through the
+        // outbox, never a direct Neo4j write; the projector writes the
+        // canonical Sample-[:STORED_AT]->StoragePosition. The event carries
+        // assignedPosition, the position this transaction writes, never the
+        // pre-transaction scan (#1004). #1313 (RF023 AC3): appended in the
+        // same transaction, so a failed append aborts the placement and Mongo
+        // never keeps one the projection was not told about.
+        if (assignedPosition) {
+          await this.graphProjection.appendStoragePositionEvent(this.db, {
+            specimenId: String(sampleObjId),
+            boxId: String(boxObjId),
+            position: assignedPosition,
+            sourceService: 'storage-service'
+          }, { session });
         }
-      }
+      });
 
       logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${assignedPosition}`);
 
       return {
         success: true,
-        graphPersisted: Boolean(this.neo4jDriver && typeof this.neo4jDriver.session === 'function'),
+        // The placement's projection event is recorded; the projector applies it.
+        graphPersisted: Boolean(assignedPosition),
         sampleLocation: {
-          specimenId: String(sampleObjId),
+          specimenId: String(sampleSnapshot.specimenId || sampleSnapshot._id),
           boxId: String(boxObjId),
           position: assignedPosition
         }
@@ -282,6 +229,9 @@ class StorageService {
   /**
    * Liberar amostra de uma posição
    * Remove de occupancyGrid e atualiza amostra
+   *
+   * #1374: a liberação (box, amostra e cadeia física) e a sua linha de
+   * auditoria em sample_movements commitam juntas, numa única transação.
    *
    * @param {ObjectId} specimenId - ID da amostra
    * @returns {Promise<{ success: boolean, error?: string, releasedFrom?: object }>}
@@ -322,25 +272,32 @@ class StorageService {
 
       // Liberar posição (occupancyGrid da box + storageLocation da amostra),
       // via MongoStorageRepository para não duplicar a lógica atômica de escrita.
-      await this.storageRepository.releaseSamplePosition({ specimenId: sampleObjId });
+      // #1374: the release and its custody row run in one transaction, so a
+      // release can never commit without its sample_movements row.
+      await this.storageRepository.withTransaction(async (session) => {
+        await this.storageRepository.releaseSamplePosition({ specimenId: sampleObjId }, session);
 
-      // Registrar auditoria (mesmo ledger sample_movements usado pelos use-cases)
-      await this.auditRepository.appendImmutableAudit({
-        specimenId: sampleObjId.toString(),
-        barcode: sample.barcode,
-        eventType: 'release',
-        before: {
-          storageLocation: { boxId, position },
-          quantity: sample.quantity,
-          unit: sample.unit || 'µL'
-        },
-        after: {
-          storageLocation: null
-        },
-        context: {
-          actor: { userName: 'SYSTEM' }
-        },
-        timestamp: new Date()
+        // Registrar auditoria (mesmo ledger sample_movements usado pelos use-cases)
+        await this.auditRepository.appendImmutableAudit(
+          {
+            specimenId: String(sample.specimenId || sampleObjId),
+            barcode: sample.barcode,
+            eventType: 'release',
+            before: {
+              storageLocation: { boxId, position },
+              quantity: sample.quantity,
+              unit: sample.unit || 'µL'
+            },
+            after: {
+              storageLocation: null
+            },
+            context: {
+              actor: { userName: 'SYSTEM' }
+            },
+            timestamp: new Date()
+          },
+          session
+        );
       });
 
       logger.info(`✅ Amostra ${specimenId} liberada de ${boxId}/${position}`);
@@ -348,7 +305,7 @@ class StorageService {
       return {
         success: true,
         releasedFrom: {
-          specimenId,
+          specimenId: String(sample.specimenId || sample._id),
           boxId,
           position
         }
@@ -405,21 +362,21 @@ class StorageService {
       let actualCount = 0;
 
       // Verificar cada posição ocupada
-      for (const [position, specimenId] of (box.occupancyGrid || new Map())) {
-        if (specimenId) {
+      for (const [position, sampleObjectId] of (box.occupancyGrid || new Map())) {
+        if (sampleObjectId) {
           actualCount++;
 
           // Confirmar que amostra ainda existe e está apontando para essa posição
-          const sample = await samplesCollection.findOne({ _id: specimenId });
+          const sample = await samplesCollection.findOne({ _id: sampleObjectId });
 
           if (!sample) {
-            errors.push(`Orfão: posição ${position} referencia amostra inexistente ${specimenId}`);
+            errors.push(`Orfão: posição ${position} referencia amostra inexistente ${sampleObjectId}`);
           } else if (
             sample.storageLocation?.boxId?.toString() !== boxObjId.toString() ||
             sample.storageLocation?.position !== position
           ) {
             errors.push(
-              `Inconsistência: Box referencia ${specimenId} em ${position}, ` +
+              `Inconsistência: Box referencia ${sampleObjectId} em ${position}, ` +
               `mas amostra aponta para ${sample.storageLocation?.boxId}/${sample.storageLocation?.position}`
             );
           }

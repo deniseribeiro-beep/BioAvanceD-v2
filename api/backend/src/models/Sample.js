@@ -7,28 +7,65 @@ const {
   EXTRACTION_PROTOCOL_IDS,
 } = require('../config/constants/specimen.constants');
 
-// dict-02 ELM-0123 enum plus the documented local extension `disposed`
-// (RF006 AC#4 requires it distinct from `destroyed` — see
-// canonical-data-contract-v1.md's Specimen section, point 1).
+// RF006 AC2 (v2.0.0 V2E-0544): specimenStatus holds the operational state
+// only. Quantity moved to quantityStatus, and disposition to DispositionAction.
 const SPECIMEN_STATUS_VALUES = [
   'available',
   'reserved',
   'checked_out',
-  'partial',
-  'depleted',
   'quarantined',
-  'destroyed',
   'unavailable',
-  'disposed',
+  'closed',
 ];
 
-// specimenStatus's sticky/blocked values — quantity changes must not
-// override these, and write sites treat them as non-movable.
-const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'destroyed', 'disposed', 'quarantined'];
+// The v1.3.0 values (ELM-0123) that mixed quantity and disposition into the
+// status. A stored document may still carry one until
+// src/scripts/migrateSpecimenStatusV2.js has run; no write accepts one.
+const LEGACY_SPECIMEN_STATUS_VALUES = ['partial', 'depleted', 'destroyed', 'disposed'];
+
+// The v1.3.0 -> v2 mapping (V2E-0544). The five shared values map directly.
+// partial and depleted become available: quantityStatus carries the
+// depletion, and `unavailable` would block returnSample's un-deplete flow.
+// destroyed and disposed read as unavailable: `closed` needs an executed
+// disposition the read cannot see, so only the migration, which looks for
+// one, maps them to closed.
+const LEGACY_SPECIMEN_STATUS_MAP = {
+  partial: 'available',
+  depleted: 'available',
+  destroyed: 'unavailable',
+  disposed: 'unavailable',
+};
+
+// RF006 AC3 (V2E-0437, dictionary RULE-003..005): derived from
+// initialQuantity and currentQuantity, never written by a client.
+const QUANTITY_STATUS_VALUES = ['full', 'partial', 'depleted'];
+
+// v2.0.0 ELM-0121 (code 1..1 Core), ENUM-0053..0057. See
+// docs/decisions/2026-10-13-specimen-role.md.
+const SPECIMEN_ROLE_VALUES = ['primary', 'aliquot', 'derivative', 'pool', 'control'];
+
+// The states that refuse withdrawal and return, and that no quantity change
+// moves.
+const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'quarantined', 'closed'];
+
+// RF026 AC7: closed is final; no re-evaluation, consent change or edit
+// rewrites it.
+const TERMINAL_SPECIMEN_STATUSES = ['closed'];
+// The stored values isTerminalSpecimen treats as final, for a query filter:
+// closed, plus a not-yet-migrated destroyed/disposed document.
+const TERMINAL_STORED_SPECIMEN_STATUSES = Object.freeze([...TERMINAL_SPECIMEN_STATUSES, 'destroyed', 'disposed']);
 
 const SampleSchema = new Schema({
+  // #941: `index: true` on specimenId/participantId is INERT on its own --
+  // mongoose connects with autoIndex:false and nothing calls syncIndexes().
+  // Both are BUILT natively by utils/sampleIndexes.js, reached through
+  // collectionResolver.getCollection('samples'). Kept because they are
+  // accurate; what they are not is self-executing.
   specimenId: { type: String, required: true, index: true },
   participantId: { type: String, required: true, index: true },
+  // v2.0.0 ELM-0011: the id the sample carried in the system it was
+  // imported from, kept for reconciliation. Never the specimenId.
+  sourceRecordId: { type: String, default: null },
   sampleType: { type: String, required: true },
   sampleOrigin: { type: String, required: true },
   extractionProtocol: { type: String, required: true },
@@ -59,6 +96,9 @@ const SampleSchema = new Schema({
   location: { type: Object, default: null },
   linkedProject: { type: String, required: true },
   collectionSite: { type: String, default: null },
+  // #1192: the tenancy key, separate from the collection site (ELM-0128).
+  // A local extension; see docs/decisions/2026-10-11-sample-tenancy.md.
+  organizationId: { type: String, default: null },
   sprec: { type: Schema.Types.Mixed, default: null },
   merkleRoot: { type: String, default: null },
   // #502: pins integrity verification to the RcsAssessment/SpecimenPreanalytics
@@ -84,6 +124,16 @@ const SampleSchema = new Schema({
     enum: SPECIMEN_STATUS_VALUES,
     default: 'available'
   },
+  // ELM-0121: set at creation. Null only on a document written before the
+  // field, until the backfill has run; readers use resolveSpecimenRole.
+  specimenRole: { type: String, enum: SPECIMEN_ROLE_VALUES, default: null },
+  // RF006 AC3: derived from initialQuantity/currentQuantity on every write
+  // that moves either; clients cannot set it.
+  quantityStatus: { type: String, enum: QUANTITY_STATUS_VALUES, default: null },
+  // V2E-0544 "preserve original provenance": the v1.3.0 value a migrated
+  // document held, and when the migration replaced it.
+  legacySpecimenStatus: { type: String, default: null },
+  specimenStatusMigratedAt: { type: Date, default: null },
   // dict-02 ELM-0138 (initialQuantity)/ELM-0139 (currentQuantity, "Derivada de
   // eventos; preservar ledger"). Confirmed (#401): sample.service.js's
   // withdrawSample/returnSample already write currentQuantity/totalWithdrawn/
@@ -118,9 +168,65 @@ class SampleModel {
     return SPECIMEN_STATUS_VALUES.includes(String(status || '').toLowerCase());
   }
 
+  static isLegacySpecimenStatus(status) {
+    return LEGACY_SPECIMEN_STATUS_VALUES.includes(String(status || '').trim().toLowerCase());
+  }
+
+  // A v1.3.0 value folded onto the v2 set by LEGACY_SPECIMEN_STATUS_MAP; any
+  // other value is only case-folded.
+  static foldLegacySpecimenStatus(status) {
+    const normalized = String(status || '').trim().toLowerCase();
+    return LEGACY_SPECIMEN_STATUS_MAP[normalized] || normalized;
+  }
+
+  // A document not yet migrated reads in the v2 set (legacy-read fallback).
   static resolveSpecimenStatus(sample) {
-    if (sample && sample.specimenStatus) return String(sample.specimenStatus).toLowerCase();
+    if (sample && sample.specimenStatus) return this.foldLegacySpecimenStatus(sample.specimenStatus);
     return 'available';
+  }
+
+  // Closed, or a not-yet-migrated destroyed/disposed document: its
+  // destruction may be real even though the read cannot prove it, so no
+  // automatic rewrite touches it before the migration has decided.
+  static isTerminalSpecimen(sample) {
+    const raw = String(sample?.specimenStatus || '').trim().toLowerCase();
+    return TERMINAL_STORED_SPECIMEN_STATUSES.includes(raw);
+  }
+
+  // RF006 AC3, dictionary RULE-003..005: cur=0 -> depleted,
+  // 0<cur<init -> partial, cur=init -> full. A current above the initial
+  // (a return of more than was recorded) reads full.
+  static computeQuantityStatus(initialQuantity, currentQuantity) {
+    const init = Number(initialQuantity ?? 0);
+    const curr = Number(currentQuantity ?? 0);
+    if (!(curr > 0)) return 'depleted';
+    if (init > 0 && curr < init) return 'partial';
+    return 'full';
+  }
+
+  static quantitiesOf(sample = {}) {
+    return {
+      initial: sample.initialQuantity ?? sample.quantity,
+      current: sample.currentQuantity ?? sample.quantity,
+    };
+  }
+
+  // The stored value, or one derived from the quantities when a document
+  // written before the field existed has none.
+  static resolveQuantityStatus(sample) {
+    const stored = String(sample?.quantityStatus || '').toLowerCase();
+    if (QUANTITY_STATUS_VALUES.includes(stored)) return stored;
+    const { initial, current } = this.quantitiesOf(sample || {});
+    return this.computeQuantityStatus(initial, current);
+  }
+
+  // The stored role, or the one a create would have given a document
+  // written before the field existed: derivative with parents, else primary.
+  static resolveSpecimenRole(sample) {
+    const stored = String(sample?.specimenRole || '').trim().toLowerCase();
+    if (SPECIMEN_ROLE_VALUES.includes(stored)) return stored;
+    const parents = sample?.parentSpecimenIds;
+    return Array.isArray(parents) && parents.length > 0 ? 'derivative' : 'primary';
   }
 
   // External representations (import CSVs, FHIR) still speak the legacy
@@ -128,11 +234,16 @@ class SampleModel {
   // rules in canonical-data-contract-v1.md's Specimen section, point 1:
   // REGISTERED has no dict-02 equivalent and folds into available; any
   // other unrecognized/blank value also defaults to available rather than
-  // failing the import.
+  // failing the import. v1.3.0 values fold per LEGACY_SPECIMEN_STATUS_MAP.
+  // An imported `closed` lands unavailable: RF026 AC7 closes a specimen only
+  // after a validated consumption or an executed disposition, which an
+  // import row does not carry.
   static mapLegacyLifecycleStatusToSpecimenStatus(lifecycleStatus) {
     const normalized = String(lifecycleStatus || '').trim().toLowerCase();
     if (!normalized || normalized === 'registered') return 'available';
-    return this.validateSpecimenStatus(normalized) ? normalized : 'available';
+    if (normalized === 'closed') return 'unavailable';
+    const folded = this.foldLegacySpecimenStatus(normalized);
+    return this.validateSpecimenStatus(folded) ? folded : 'available';
   }
 
   static validateSampleType(sampleType) {
@@ -165,6 +276,41 @@ class SampleModel {
     }
     if (data.specimenStatus && !this.validateSpecimenStatus(data.specimenStatus)) {
       errors.push('specimenStatus inválido');
+    } else if (String(data.specimenStatus || '').trim().toLowerCase() === 'closed') {
+      // RF026 AC7: a specimen is closed by a validated consumption or an
+      // executed disposition, never registered closed.
+      errors.push('specimenStatus closed não pode ser atribuído no cadastro');
+    }
+    if (data.quantityStatus !== undefined && data.quantityStatus !== null) {
+      // RF006 AC3: quantityStatus is derived; a manual write is refused.
+      errors.push('quantityStatus é derivado das quantidades e não pode ser informado');
+    }
+    // dict-02 ELM-0120: the specimens this one derives from, by specimenId.
+    if (data.parentSpecimenIds !== undefined) {
+      if (!Array.isArray(data.parentSpecimenIds)) {
+        errors.push('parentSpecimenIds deve ser uma lista');
+      } else {
+        for (const parentId of data.parentSpecimenIds) {
+          if (typeof parentId !== 'string' || parentId.trim() === '') {
+            errors.push('parentSpecimenIds deve conter apenas specimenIds não vazios');
+          } else if (data.specimenId && parentId.trim() === String(data.specimenId)) {
+            errors.push('parentSpecimenIds não pode conter a própria amostra');
+          }
+        }
+      }
+    }
+    // ELM-0121, REL-0175: a primary or control has no parents; an aliquot
+    // or a derivative names at least one. A pool has no parent rule here.
+    if (data.specimenRole !== undefined && data.specimenRole !== null) {
+      const role = String(data.specimenRole).trim().toLowerCase();
+      const hasParents = Array.isArray(data.parentSpecimenIds) && data.parentSpecimenIds.length > 0;
+      if (!SPECIMEN_ROLE_VALUES.includes(role)) {
+        errors.push('specimenRole inválido');
+      } else if ((role === 'primary' || role === 'control') && hasParents) {
+        errors.push(`specimenRole ${role} não pode ter parentSpecimenIds`);
+      } else if ((role === 'aliquot' || role === 'derivative') && !hasParents) {
+        errors.push(`specimenRole ${role} exige parentSpecimenIds`);
+      }
     }
     return { isValid: errors.length === 0, errors };
   }
@@ -176,14 +322,27 @@ class SampleModel {
 
     // REGISTERED has no dict-02 equivalent and was never a distinct
     // blockable state — fold it into `available` (canonical-data-contract-v1.md
-    // Specimen section, point 1).
+    // Specimen section, point 1). A v1.3.0 value folds per
+    // LEGACY_SPECIMEN_STATUS_MAP.
     const specimenStatus = data.specimenStatus
-      ? String(data.specimenStatus).toLowerCase()
+      ? this.foldLegacySpecimenStatus(data.specimenStatus)
       : 'available';
+    // RF006 AC3: derived, whatever the caller sent.
+    const quantityStatus = this.computeQuantityStatus(initialQuantity, currentQuantity);
+    const parentSpecimenIds = Array.isArray(data.parentSpecimenIds)
+      ? [...new Set(data.parentSpecimenIds
+        .filter((parentId) => typeof parentId === 'string' && parentId.trim() !== '')
+        .map((parentId) => parentId.trim()))]
+      : [];
+    // ELM-0121: the given role, else derivative with parents, else primary.
+    const specimenRole = data.specimenRole !== undefined && data.specimenRole !== null
+      ? String(data.specimenRole).trim().toLowerCase()
+      : (parentSpecimenIds.length > 0 ? 'derivative' : 'primary');
 
     return {
       specimenId: String(data.specimenId),
       participantId: String(data.participantId),
+      sourceRecordId: data.sourceRecordId ? String(data.sourceRecordId) : null,
       sampleType: data.sampleType,
       sampleOrigin: data.sampleOrigin,
       extractionProtocol: data.extractionProtocol,
@@ -213,6 +372,10 @@ class SampleModel {
       locationID: data.locationID ?? null,
       linkedProject: data.linkedProject,
       collectionSite: data.collectionSite || null,
+      // #1192: the tenancy key is never taken from a request or a file. The create
+      // paths will stamp it server-side; until then the backfill sets it from
+      // collectionSite, and readers fall back to collectionSite.
+      organizationId: null,
       sprec: data.sprec ?? null,
       merkleRoot: data.merkleRoot || null,
       sealedRcsAssessmentId: data.sealedRcsAssessmentId ?? null,
@@ -226,6 +389,7 @@ class SampleModel {
       importedAt: data.importedAt || null,
       importedBy: data.importedBy || null,
       specimenStatus,
+      quantityStatus,
       currentQuantity,
       initialQuantity,
       totalWithdrawn: data.totalWithdrawn || 0,
@@ -238,28 +402,14 @@ class SampleModel {
       studyId: data.studyId || null,
       protocolId: data.protocolId || null,
       collectionId: data.collectionId || null,
+      parentSpecimenIds,
+      specimenRole,
       linkedFiles: Array.isArray(data.linkedFiles) ? data.linkedFiles : [],
       qrCode: data.qrCode || null,
       storageLocation: data.storageLocation || null,
       createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
       updatedAt: new Date()
     };
-  }
-
-  // Computes specimenStatus (case-folded per canonical-data-contract-v1.md).
-  // Algorithm shape unchanged from the pre-#405 lifecycleStatus version —
-  // only the value vocabulary changed. Sticky/blocked statuses stop
-  // quantity from overriding them; only outside that set does quantity
-  // drive depleted/partial/available.
-  static computeStatus(initialVolume, currentVolume, currentStatus) {
-    const init = Number(initialVolume ?? 0);
-    const curr = Number(currentVolume ?? 0);
-    const current = String(currentStatus || '').toLowerCase();
-
-    if (BLOCKED_SPECIMEN_STATUSES.includes(current)) return current;
-    if (curr <= 0) return 'depleted';
-    if (init > 0 && curr < init) return 'partial';
-    return 'available';
   }
 
   static validateWithdrawalType(withdrawalType) {
@@ -271,3 +421,9 @@ module.exports = Sample;
 module.exports.SampleModel = SampleModel;
 module.exports.SPECIMEN_STATUS_VALUES = SPECIMEN_STATUS_VALUES;
 module.exports.BLOCKED_SPECIMEN_STATUSES = BLOCKED_SPECIMEN_STATUSES;
+module.exports.TERMINAL_SPECIMEN_STATUSES = TERMINAL_SPECIMEN_STATUSES;
+module.exports.TERMINAL_STORED_SPECIMEN_STATUSES = TERMINAL_STORED_SPECIMEN_STATUSES;
+module.exports.LEGACY_SPECIMEN_STATUS_VALUES = LEGACY_SPECIMEN_STATUS_VALUES;
+module.exports.LEGACY_SPECIMEN_STATUS_MAP = LEGACY_SPECIMEN_STATUS_MAP;
+module.exports.QUANTITY_STATUS_VALUES = QUANTITY_STATUS_VALUES;
+module.exports.SPECIMEN_ROLE_VALUES = SPECIMEN_ROLE_VALUES;

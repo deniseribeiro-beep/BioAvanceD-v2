@@ -4,10 +4,20 @@ const express = require('express');
 const request = require('supertest');
 const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
 const { createCursorMock } = require('../factories/cursor.factory');
+const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
+// RF009 AC1 (#1317): the temperature report reads InfluxDB through this
+// singleton; every case spies it so none reaches a real connection.
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
+
+// #1192: the sample scope follows the tenancy key, whatever its clause says.
+const ORG_1_SAMPLE_SCOPE = sampleOrganizationScopeClause({ scope: 'organization', organizationIds: ['org-1'] });
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
   rbac: require.resolve('../../src/infrastructure/middleware/rbac'),
+  // #1266: the export gate reads security_config, which these db mocks
+  // cannot answer; it is stubbed open here and tested on its own.
+  exportGate: require.resolve('../../src/infrastructure/middleware/lgpdExportGate'),
   controller: require.resolve('../../src/interface/routes/reports.routes'),
 };
 
@@ -87,6 +97,14 @@ function buildCollectionDb(collections = {}) {
           capturedQueries[`${name}.findOne`] = query;
           return docs.find((doc) => Object.entries(query).every(([key, value]) => doc[key] === value)) || null;
         },
+        // #1185: DELETE /api/reports/:id -- same equality semantics as findOne.
+        async deleteOne(query = {}) {
+          capturedQueries[`${name}.deleteOne`] = query;
+          const index = docs.findIndex((doc) => Object.entries(query).every(([key, value]) => doc[key] === value));
+          if (index === -1) return { deletedCount: 0 };
+          docs.splice(index, 1);
+          return { deletedCount: 1 };
+        },
       };
     },
   };
@@ -109,20 +127,36 @@ describe('reports.routes.js gaps', () => {
     next();
   };
   const requirePermission = () => (_req, _res, next) => next();
+  // #1186: records each registration's requireRole(...) arguments and
+  // denies when a request carries x-deny-role, so a test can tell which
+  // routes the gate is on without re-implementing the hierarchy lookup.
+  let requireRoleCalls = [];
+  let temperatureReport;
+  // #1266: open unless a request carries x-deny-export, so a test can tell
+  // which routes carry the export gate.
+  const exportGate = (req, res, next) => (req.headers['x-deny-export'] ? res.status(403).json({ gate: 'export' }) : next());
+  const requireRole = (...levels) => {
+    requireRoleCalls.push(levels);
+    return (req, res, next) => (req.headers['x-deny-role'] ? res.status(403).json({ gate: 'role' }) : next());
+  };
 
   beforeEach(() => {
+    requireRoleCalls = [];
     vi.clearAllMocks();
+    temperatureReport = vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue({ rows: [], total: 0 });
 
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
     }
 
     setCachedModule(modulePaths.auth, { authenticate });
-    setCachedModule(modulePaths.rbac, { requirePermission });
+    setCachedModule(modulePaths.rbac, { requirePermission, requireRole });
+    setCachedModule(modulePaths.exportGate, { requireDataExportAllowed: exportGate });
     delete require.cache[modulePaths.controller];
   });
 
   afterEach(() => {
+    temperatureReport.mockRestore();
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
     }
@@ -318,6 +352,20 @@ describe('reports.routes.js gaps', () => {
         expect.arrayContaining([{ specimenStatus: 'unavailable' }])
       );
     });
+
+    // RF006 AC2/AC3: exhausted and partly used are quantity, so ESGOTADA/
+    // DEPLETED and PARCIAL filter quantityStatus, never specimenStatus.
+    it.each([
+      ['esgotada', { quantityStatus: 'depleted' }],
+      ['DEPLETED', { quantityStatus: 'depleted' }],
+      ['parcial', { quantityStatus: 'partial' }],
+    ])('maps status %s onto quantityStatus', async (status, condition) => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+      const response = await request(appWithDb(db)).post('/api/reports/samples/preview').send({ filters: { status } });
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples.$and).toEqual(expect.arrayContaining([condition]));
+      expect(JSON.stringify(capturedQueries.samples)).not.toContain('specimenStatus');
+    });
   });
 
   it('paciente: retorna lista paginada de pacientes sem o agrupamento samplesbypatient', async () => {
@@ -416,35 +464,49 @@ describe('reports.routes.js gaps', () => {
     expect(response.body.data.analysis.find((item) => item.sampleID === 'SPEC-1').patientID).toBe('P1');
   });
 
-  it('temperatura: sem filtros de data nem alerta crítico usa query vazia e modo report', async () => {
-    const { db, capturedQueries } = buildCollectionDb({
-      temperature: [{ temperatureValue: '5', readingStatus: 'normal' }],
-    });
+  it('temperatura: sem filtros de data nem alerta crítico lê o InfluxDB sem janela, sem sensores e sem filtro crítico, em modo report', async () => {
+    const { db } = buildCollectionDb({});
     const testApp = appWithDb(db);
 
     const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.data.mode).toBe('report');
-    expect(capturedQueries.temperature).toEqual({});
+    expect(temperatureReport).toHaveBeenCalledWith({ start: null, stop: null, sensorIds: null, critical: null, limit: 100 });
   });
 
-  // #864: handleTemperature's criticalAlertsOnly branch used to build a
-  // 3-leg $or where two legs (readingStatus/severity matching
-  // 'critical|alert') could never match anything -- readingStatus's whole
-  // vocabulary is valid|invalid|suspicious (Temperature.js, import.service.js,
-  // iot-streaming.service.js, mqtt-telemetry.service.js all agree) and no
-  // writer of the temperature collection ever sets `severity`. The fix drops
-  // those two legs, keeps the sensorStatus faulty|maintenance leg, and adds a
-  // non-null-guarded threshold-breach leg. This file's buildCollectionDb mock
-  // doesn't apply the query to filter documents (see cursor.factory.js), so
-  // "IS matched"/"NOT matched" here is pinned on the query object handleTemperature
-  // actually builds, and on statistics.alerts -- computed in plain JS over
-  // whatever documents come back, so it exercises the real predicate logic
-  // even though the mock can't evaluate $expr.
-  describe('criticalAlertsOnly: predicado de threshold/sensorStatus (#864)', () => {
-    it('constrói o $or sem os legs impossíveis de readingStatus/severity, com sensorStatus e limiares com guarda not-null', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ temperature: [] });
+  // RF009 AC1 (#1317): the report reads InfluxDB, whose points carry neither
+  // thresholds nor a sensor status. Thresholds come from the sensor's
+  // temperature policy (sensorMetadata.temperaturePolicy, as TelemetryMonitor
+  // joins them) and the flag from the registered sensor's maintenanceStatus
+  // (maintenance|error). criticalAlertsOnly hands both to the repository,
+  // which filters in Flux; statistics.alerts mirrors that predicate in JS
+  // over the rows returned, comparing in Celsius.
+  describe('criticalAlertsOnly: limiares da política do sensor e sensores sinalizados, em Celsius (#1317)', () => {
+    const reading = (sensorId, temperatureValue, temperatureUnit, temperatureCelsius) => ({
+      logId: `R-${sensorId}-${temperatureValue}`,
+      telemetryReadingId: `R-${sensorId}-${temperatureValue}`,
+      timestamp: new Date('2026-10-01T10:00:00Z'),
+      sensorId,
+      measurement: 'freezer_temperature',
+      temperatureValue,
+      temperatureUnit,
+      temperatureCelsius,
+    });
+    const POLICY_S1 = {
+      sensorMetadata: [{ sensorId: 'S1', temperaturePolicy: 'pol-1' }, { sensorId: 'S4', temperaturePolicy: null }],
+      temperaturePolicies: [{ _id: 'pol-1', minTemp: 2, maxTemp: 8 }],
+    };
+
+    it('criticalAlertsOnly passa os limiares da política e os sensores error/maintenance; um sensor operational não é sinalizado', async () => {
+      const { db } = buildCollectionDb({
+        ...POLICY_S1,
+        sensors: [
+          { sensorId: 'S2', maintenanceStatus: 'error' },
+          { sensorId: 'S3', maintenanceStatus: 'maintenance' },
+          { sensorId: 'S5', maintenanceStatus: 'operational' },
+        ],
+      });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -452,23 +514,52 @@ describe('reports.routes.js gaps', () => {
         .send({ filters: { criticalAlertsOnly: 'true' } });
 
       expect(response.status).toBe(200);
-      expect(capturedQueries.temperature.$and).toEqual([
-        {
-          $or: [
-            { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
-            { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
-            { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
-          ],
-        },
-      ]);
+      const { critical } = temperatureReport.mock.calls[0][0];
+      expect(critical.boundsBySensor).toEqual(new Map([['S1', { min: 2, max: 8 }]]));
+      expect(critical.flaggedSensorIds).toEqual(['S2', 'S3']);
     });
 
-    it('statistics.alerts conta leitura com limiar excedido (minThreshold/maxThreshold definidos e valor fora da faixa)', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 12, minThreshold: 2, maxThreshold: 8 },
-        ],
-      });
+    it('sem criticalAlertsOnly, critical é null', async () => {
+      const { db } = buildCollectionDb({ ...POLICY_S1, sensors: [{ sensorId: 'S2', maintenanceStatus: 'error' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(temperatureReport.mock.calls[0][0].critical).toBeNull();
+    });
+
+    it('statistics.alerts conta uma leitura °F 50 (10 °C) contra limiares 2..8 e não uma °F 41 (5 °C)', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S1', 50, '°F', 10), reading('S1', 41, '°F', 5)], total: 2 });
+      const { db } = buildCollectionDb(POLICY_S1);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics.alerts).toBe(1);
+      expect(response.body.data.temperatures[0]).toMatchObject({ sensorId: 'S1', minThreshold: 2, maxThreshold: 8 });
+    });
+
+    it('statistics.alerts NÃO conta leitura de sensor sem política, qualquer que seja o valor', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S4', 999, '°C', 999)], total: 1 });
+      const { db } = buildCollectionDb(POLICY_S1);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics.alerts).toBe(0);
+      expect(response.body.data.temperatures[0]).toMatchObject({ minThreshold: null, maxThreshold: null });
+    });
+
+    it('statistics.alerts conta leitura de um sensor sinalizado (maintenanceStatus error)', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S2', 5, '°C', 5)], total: 1 });
+      const { db } = buildCollectionDb({ ...POLICY_S1, sensors: [{ sensorId: 'S2', maintenanceStatus: 'error' }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -479,11 +570,20 @@ describe('reports.routes.js gaps', () => {
       expect(response.body.data.statistics.alerts).toBe(1);
     });
 
-    it('statistics.alerts NÃO conta leitura com limiares nulos, qualquer que seja o valor', async () => {
+    // #1392: the bounds come from the policy of the temperature datastream
+    // valid now; SensorMetadata is the fallback.
+    it('os limiares vêm da política do TelemetryDatastream válido agora, e SensorMetadata vale para um sensor sem datastream (#1392)', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S-DS', -70, '°C', -70), reading('S1', 5, '°C', 5)], total: 2 });
       const { db } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 999, minThreshold: null, maxThreshold: null },
-        ],
+        sensorMetadata: [{ sensorId: 'S-DS', temperaturePolicy: 'pol-1' }, { sensorId: 'S1', temperaturePolicy: 'pol-1' }],
+        temperaturePolicies: [{ _id: 'pol-1', minTemp: 2, maxTemp: 8 }, { _id: 'pol-ultra', minTemp: -90, maxTemp: -60 }],
+        telemetryDatastreams: [{
+          sensorId: 'S-DS',
+          observedProperty: 'temperature',
+          thresholdProfileId: 'pol-ultra',
+          storageLocationId: 'loc-1',
+          validityPeriod: { start: new Date(Date.now() - 60 * 60 * 1000), end: null },
+        }],
       });
       const testApp = appWithDb(db);
 
@@ -492,39 +592,20 @@ describe('reports.routes.js gaps', () => {
         .send({ filters: { criticalAlertsOnly: 'true' } });
 
       expect(response.status).toBe(200);
+      expect(response.body.data.temperatures[0]).toMatchObject({ sensorId: 'S-DS', minThreshold: -90, maxThreshold: -60 });
+      expect(response.body.data.temperatures[1]).toMatchObject({ sensorId: 'S1', minThreshold: 2, maxThreshold: 8 });
       expect(response.body.data.statistics.alerts).toBe(0);
     });
 
-    it('statistics.alerts conta leitura com sensorStatus faulty', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 5, sensorStatus: 'faulty', minThreshold: null, maxThreshold: null },
-        ],
-      });
+    it('statistics average, min e max são em Celsius', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S1', 41, '°F', 5), reading('S1', 283.15, 'K', 10)], total: 2 });
+      const { db } = buildCollectionDb(POLICY_S1);
       const testApp = appWithDb(db);
 
-      const response = await request(testApp)
-        .post('/api/reports/temperature/preview')
-        .send({ filters: { criticalAlertsOnly: 'true' } });
+      const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(response.body.data.statistics.alerts).toBe(1);
-    });
-
-    it('statistics.alerts NÃO conta readingStatus "critical" sozinho (leg morto removido)', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 5, readingStatus: 'invalid', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
-        ],
-      });
-      const testApp = appWithDb(db);
-
-      const response = await request(testApp)
-        .post('/api/reports/temperature/preview')
-        .send({ filters: { criticalAlertsOnly: 'true' } });
-
-      expect(response.status).toBe(200);
-      expect(response.body.data.statistics.alerts).toBe(0);
+      expect(response.body.data.statistics).toMatchObject({ average: 7.5, min: 5, max: 10 });
     });
   });
 
@@ -710,7 +791,7 @@ describe('reports.routes.js gaps', () => {
       // The status options must be the vocabulary normalizeReleaseStatus
       // actually accepts (#531), not the old 'Ativo'/'Inativo' pair.
       const status = response.body.filters.find((entry) => entry.name === 'status');
-      expect(status.options).toEqual(['AVAILABLE', 'QUARANTINE', 'BLOCKED']);
+      expect(status.options).toEqual(['AVAILABLE', 'QUARANTINE', 'BLOCKED', 'PARTIAL', 'DEPLETED']);
 
       // Selects must carry the real MIABIS id vocabularies.
       const sampleType = response.body.filters.find((entry) => entry.name === 'sampleType');
@@ -1012,12 +1093,13 @@ describe('reports.routes.js gaps', () => {
     expect(p1.sampleCount).toBe(1);
   });
 
-  it('logs/audit: aplica intervalo de datas na query', async () => {
+  // #733: `access_logs` reads `logs`; `audit` reads audit_events (reports.api.test.js).
+  it('logs/access_logs: aplica intervalo de datas na query', async () => {
     const { db, capturedQueries } = buildCollectionDb({ logs: [{ dateTime: new Date('2026-01-05') }] });
     const testApp = appWithDb(db);
 
     const response = await request(testApp)
-      .post('/api/reports/audit/preview')
+      .post('/api/reports/access_logs/preview')
       .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
 
     expect(response.status).toBe(200);
@@ -1121,6 +1203,7 @@ describe('reports.routes.js gaps', () => {
       ['sampleanalysis', '/api/reports/sample_analysis/preview'],
       ['tissueoriginhistory', '/api/reports/tissue_origin_history/preview'],
       ['resultado', '/api/reports/results/preview'],
+      ['withdrawalhistory', '/api/reports/withdrawal_history/preview'],
       ['sensor', '/api/reports/sensors/preview'],
       ['equipamento', '/api/reports/equipment/preview'],
       ['temperatura', '/api/reports/temperature/preview'],
@@ -1134,13 +1217,13 @@ describe('reports.routes.js gaps', () => {
     });
 
     // #636: every entity-rooted report type this repo currently scopes
-    // (sample/patient-rooted, Result, Sensor, Equipment, Temperature) is
-    // now covered by the it.each above -- no "deliberately unscoped"
-    // types remain in this file's own coverage (access-log/withdrawal-
-    // history are unscoped by design but tested separately elsewhere,
-    // see the #620 describe block below).
+    // (sample/patient-rooted, Result, withdrawal history (#1410), Sensor,
+    // Equipment, Temperature) is now covered by the it.each above -- no
+    // "deliberately unscoped" types remain in this file's own coverage
+    // (access-log types are unscoped by design but tested separately
+    // elsewhere).
 
-    it('amostra: filtra a query por collectionSite para um usuário organization-scoped', async () => {
+    it('amostra: filtra a query pela chave de tenancy para um usuário organization-scoped', async () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', collectionSite: 'org-1' }] });
       const testApp = appWithDb(db);
 
@@ -1148,7 +1231,7 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples.$and).toEqual(
-        expect.arrayContaining([{ collectionSite: { $in: ['org-1'] } }])
+        expect.arrayContaining([ORG_1_SAMPLE_SCOPE])
       );
     });
 
@@ -1172,14 +1255,30 @@ describe('reports.routes.js gaps', () => {
       expect(capturedQueries.equipment).toEqual({ organizationId: { $in: ['org-1'] } });
     });
 
-    it('temperatura: filtra a query por organizationId para um usuário organization-scoped', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, temperature: [{ sensorId: 'S1', organizationId: 'org-1' }] });
+    // RF009 AC1 (#1317): a point carries no organizationId, so the scope
+    // reaches the readings through their sensors (a sensor is its
+    // organization's, #634).
+    it('temperatura: restringe a leitura aos sensores das organizações de um usuário organization-scoped', async () => {
+      const { db } = buildCollectionDb({
+        ...ORG_SCOPED_RBAC,
+        sensors: [{ sensorId: 'S1', organizationId: 'org-1' }, { sensorId: 'S2', organizationId: 'org-2' }],
+      });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(capturedQueries.temperature).toEqual({ $and: [{ organizationId: { $in: ['org-1'] } }] });
+      expect(temperatureReport.mock.calls[0][0].sensorIds).toEqual(['S1']);
+    });
+
+    it('temperatura: an organization-scoped caller whose organizations hold no sensor gets sensorIds []', async () => {
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, sensors: [{ sensorId: 'S2', organizationId: 'org-2' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(temperatureReport.mock.calls[0][0].sensorIds).toEqual([]);
     });
 
     it('paciente: filtra diretamente por clinicalUnitId mesmo sem keyword/orphaCode/matchingPatientIds', async () => {
@@ -1194,7 +1293,7 @@ describe('reports.routes.js gaps', () => {
       );
     });
 
-    it('tissueoriginhistory: combina o filtro de origem com collectionSite via $and', async () => {
+    it('tissueoriginhistory: combina o filtro de origem com a chave de tenancy via $and', async () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', sampleOrigin: 'Fígado', collectionSite: 'org-1' }] });
       const testApp = appWithDb(db);
 
@@ -1202,11 +1301,11 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples.$and).toEqual(
-        expect.arrayContaining([{ collectionSite: { $in: ['org-1'] } }])
+        expect.arrayContaining([ORG_1_SAMPLE_SCOPE])
       );
     });
 
-    it('amostra: Administrador (scope global) não recebe filtro de collectionSite', async () => {
+    it('amostra: Administrador (scope global) não recebe filtro de tenancy', async () => {
       const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
       const testApp = appWithDb(db);
 
@@ -1217,7 +1316,7 @@ describe('reports.routes.js gaps', () => {
     });
 
     // #621: Result has no organization reference of its own — scope is
-    // derived by joining through its linked Sample's collectionSite.
+    // derived by joining through its linked Sample's tenancy key (#1192).
     // #628: Result.specimenId is now the sole canonical shape (every
     // write path writes it, existing documents backfilled), so the join
     // matches on specimenId alone — not the dual _id/specimenId check
@@ -1232,7 +1331,7 @@ describe('reports.routes.js gaps', () => {
       const response = await request(testApp).post('/api/reports/results/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(capturedQueries.samples).toEqual({ collectionSite: { $in: ['org-1'] } });
+      expect(capturedQueries.samples).toEqual(ORG_1_SAMPLE_SCOPE);
       expect(capturedQueries.results).toEqual({ specimenId: { $in: ['SPX-1'] } });
     });
 
@@ -1244,6 +1343,33 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.results).toEqual({});
+    });
+
+    // #1410: a withdrawal movement has no organization of its own -- it is
+    // scoped through its sample's tenancy key, the same join as Result.
+    it('withdrawalhistory: filtra por amostras da organização via join specimenId -> Sample.specimenId', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        ...ORG_SCOPED_RBAC,
+        samples: [{ specimenId: 'SPX-1', collectionSite: 'org-1' }],
+        sample_movements: [{ type: 'withdraw', specimenId: 'SPX-1', createdAt: new Date('2026-01-05') }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples).toEqual(ORG_1_SAMPLE_SCOPE);
+      expect(capturedQueries.sample_movements).toEqual({ type: 'withdraw', specimenId: { $in: ['SPX-1'] } });
+    });
+
+    it('withdrawalhistory: Administrador (scope global) não recebe filtro de specimenId', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', specimenId: 'SPX-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.sample_movements).toEqual({ type: 'withdraw' });
     });
   });
 
@@ -1281,11 +1407,12 @@ describe('reports.routes.js gaps', () => {
       const { db } = buildCollectionDb(ORG_SCOPED_RBAC);
       const testApp = appWithDb(db);
 
-      // #1056: `withdrawal_history` rather than `audit`. Both are absent from
-      // SCOPED_HANDLER_KEYS, which is the property this case actually needs --
-      // but the accessLogs handler is now admin-or-auditor only and this caller
-      // is a plain Coordenador. Swapping the type keeps the fixture honest
-      // instead of granting it a role it was never meant to have.
+      // #1056: `withdrawal_history` rather than `audit`. This case needs a
+      // type a plain Coordenador may build, and the accessLogs handler is
+      // admin-or-auditor only. Swapping the type keeps the fixture honest
+      // instead of granting it a role it was never meant to have; the
+      // caller's usable org scope passes the scope gate withdrawal_history
+      // has carried since #1410.
       const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'withdrawal_history' });
 
       expect(response.status).toBe(201);
@@ -1296,7 +1423,8 @@ describe('reports.routes.js gaps', () => {
       const { db } = buildCollectionDb(MULTI_ORG_SCOPED_RBAC);
       const testApp = appWithDb(db);
 
-      // #1056: same swap, same reason as the case above.
+      // #1056: same swap, same reason as the case above; this caller's
+      // two-organization scope is usable too, so the #1410 gate passes.
       const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'withdrawal_history' });
 
       expect(response.status).toBe(201);
@@ -1377,6 +1505,90 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.reportID).toBe(1);
+    });
+
+    // #1185: DELETE had neither the scope resolution nor the record check
+    // its GET sibling above runs, so any viewReports holder could delete
+    // any organization's report.
+    it('DELETE /api/reports/:id: 403 quando o relatório pertence a outra organização, e nada é removido', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-9'] }];
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(403);
+      expect(capturedQueries['reports.deleteOne']).toBeUndefined();
+      expect(reports).toHaveLength(1);
+    });
+
+    it('DELETE /api/reports/:id: 403 quando o usuário não tem nenhuma organização atribuída', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...NO_ASSIGNMENT_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(403);
+      expect(reports).toHaveLength(1);
+    });
+
+    // #1186: viewReports is UsuarioExterno's whole permission set, and
+    // RF008's actor is the Coordenador -- the external actor only consults
+    // (diagrams-index). Deleting a saved report is Coordenador-and-up.
+    it('DELETE /api/reports/:id is gated on requireRole(3, 4), and nothing else in the file is', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const denied = await request(testApp).delete('/api/reports/1').set('x-deny-role', '1');
+
+      expect(requireRoleCalls).toEqual([[3, 4]]);
+      expect(denied.status).toBe(403);
+      expect(denied.body.gate).toBe('role');
+      expect(reports).toHaveLength(1);
+    });
+
+    // #1266: lgpd.allowDataExport gates the two export routes, and only them.
+    it('#1266: GET /:type/export and /:type/export/pdf are behind the export gate', async () => {
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports: [] });
+      const testApp = appWithDb(db);
+
+      for (const path of ['/api/reports/patient/export', '/api/reports/patient/export/pdf']) {
+        const denied = await request(testApp).get(path).set('x-deny-export', '1');
+        expect(denied.status, path).toBe(403);
+        expect(denied.body.gate, path).toBe('export');
+      }
+    });
+
+    it('#1266 CONTROL: the report preview is not behind the export gate', async () => {
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports: [] });
+      const testApp = appWithDb(db);
+
+      const res = await request(testApp).post('/api/reports/patient/preview').send({}).set('x-deny-export', '1');
+
+      expect(res.body.gate).not.toBe('export');
+    });
+
+    it('CONTROL: GET /api/reports/:id is not behind the role gate', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const res = await request(testApp).get('/api/reports/1').set('x-deny-role', '1');
+
+      expect(res.status).toBe(200);
+    });
+
+    it('CONTROL: DELETE /api/reports/:id remove um relatório no escopo do usuário', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(200);
+      expect(reports).toHaveLength(0);
     });
   });
 

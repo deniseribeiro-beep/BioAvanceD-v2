@@ -3,13 +3,10 @@ const { Queue } = require('bullmq');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { withRequestId } = require('../utils/requestContext');
 const { connectDB } = require('../database/mongo');
+const participantIdentityService = require('./participantIdentity.service');
 const { initRedis } = require('../config/queue');
-const {
-  connectInfluxDB,
-  getInfluxQueryApi,
-  getInfluxConfig
-} = require('../infrastructure/database/influxdb/connection');
 
 const CONSENT_TOKEN_TTL_DAYS = 7;
 
@@ -23,6 +20,12 @@ function isLoopbackHostname(hostname) {
   const normalized = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
 }
+
+// #1169: the only patientData field a queued consent job carries. #1166
+// slice 2 took the name and the contact out too: they are identity data, and
+// processConsentNotificationJob resolves them from the participant's
+// identity record at send time, so none of it is persisted in Redis.
+const CONSENT_JOB_PATIENT_FIELDS = ['participantId'];
 
 class NotificationService {
   constructor() {
@@ -496,7 +499,7 @@ class NotificationService {
   async sendConsentSmsFallback(patientData, consentLink) {
     const phone = this.resolvePatientPhone(patientData);
     if (!phone) {
-      logger.warn('Consentimento: telefone ausente para SMS', { patientID: patientData.patientID });
+      logger.warn('Consentimento: telefone ausente para SMS', { participantId: patientData.participantId || null });
       return { channel: 'sms', success: false, reason: 'missing_phone' };
     }
 
@@ -513,8 +516,10 @@ class NotificationService {
       text: `Destino SMS: ${phone}\n\n${message}`,
       html: `<p><strong>Destino SMS:</strong> ${phone}</p><p>${message}</p>`,
       notificationType: 'RF_CONSENT_SMS_FALLBACK',
+      // The callers pass `participantId`, as for the email path (#796); the
+      // old `patientID` key recorded null on every fallback.
       metadata: {
-        patientID: patientData.patientID || null,
+        participantId: patientData.participantId || null,
         phone
       }
     });
@@ -530,7 +535,7 @@ class NotificationService {
   async sendConsentWhatsappFallback(patientData, consentLink) {
     const phone = this.resolvePatientPhone(patientData);
     if (!phone) {
-      logger.warn('Consentimento: telefone ausente para WhatsApp', { patientID: patientData.patientID });
+      logger.warn('Consentimento: telefone ausente para WhatsApp', { participantId: patientData.participantId || null });
       return { channel: 'whatsapp', success: false, reason: 'missing_phone' };
     }
 
@@ -563,16 +568,43 @@ class NotificationService {
       return this.notifyPatientConsent(patientData, consentLink);
     }
 
-    await queue.add('consent-notification', {
-      patientData,
+    // #1169: the job body is persisted in Redis (24h, 7 days on failure), so
+    // it carries only the participantId. Callers hand over the whole request
+    // payload -- civil identity, contact, the consent token -- and the worker
+    // looks the name and contact up itself (#1166).
+    const queuedPatientData = {};
+    for (const field of CONSENT_JOB_PATIENT_FIELDS) {
+      if (patientData?.[field] !== undefined) queuedPatientData[field] = patientData[field];
+    }
+
+    await queue.add('consent-notification', withRequestId({
+      patientData: queuedPatientData,
       consentLink
-    });
+    }));
 
     return [{ channel: 'queue', success: true, provider: 'bullmq' }];
   }
 
-  async processConsentNotificationJob(jobData) {
-    return this.notifyPatientConsent(jobData.patientData, jobData.consentLink);
+  async processConsentNotificationJob(jobData, db = null) {
+    const patientData = await this.resolveConsentRecipient(jobData.patientData, db);
+    return this.notifyPatientConsent(patientData, jobData.consentLink);
+  }
+
+  // #1166 slice 2: a queued job carries only the participantId, so the name
+  // and contact come from the decrypted ParticipantIdentity record at send
+  // time. Since slice 4 that record is the contact's only home, so `patients`
+  // is not read at all.
+  async resolveConsentRecipient(patientData = {}, db = null) {
+    const participantId = patientData?.participantId;
+    if (!participantId) return patientData;
+
+    const database = db || await connectDB();
+    const rawIdentity = await database.collection('participantIdentities').findOne({ participantId });
+    const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
+
+    const resolved = participantIdentityService.withIdentityContact(patientData, identity);
+    if (identity?.patientName) resolved.patientName = identity.patientName;
+    return resolved;
   }
 
   initSocketIO(serverOrIo) {
@@ -762,10 +794,19 @@ class NotificationService {
     });
   }
 
-  async sendPasswordReset(email, link) {
+  // #1203: the expiry line follows the caller's token. It used to read a
+  // fixed "30 minutos", which matched neither the unauthenticated path's
+  // 1 h token nor user-security's 1-24 h one.
+  async sendPasswordReset(email, link, { expiresInMinutes } = {}) {
     if (!email || !link) {
       throw new Error('email e link são obrigatórios para recuperação de conta');
     }
+    const minutes = Number(expiresInMinutes);
+    const expiryText = Number.isFinite(minutes) && minutes > 0
+      ? (minutes % 60 === 0
+        ? `Este link expira em ${minutes / 60} hora${minutes === 60 ? '' : 's'}.`
+        : `Este link expira em ${minutes} minutos.`)
+      : 'Este link expira em breve.';
 
     const html = `
       <div style="font-family: Arial, sans-serif; background:#f4f7fb; padding:24px; color:#1d3557;">
@@ -777,14 +818,14 @@ class NotificationService {
           <p style="margin:24px 0;">
             <a href="${link}" style="display:inline-block; padding:12px 20px; background:#1d4ed8; color:#ffffff; text-decoration:none; border-radius:8px; font-weight:bold;">Redefinir senha</a>
           </p>
-          <p style="font-size:13px; color:#6b7280; line-height:1.5;">Se você não solicitou esta recuperação, ignore este e-mail. Este link expira em 30 minutos.</p>
+          <p style="font-size:13px; color:#6b7280; line-height:1.5;">Se você não solicitou esta recuperação, ignore este e-mail. ${expiryText}</p>
           <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;" />
           <p style="font-size:12px; color:#94a3b8; margin:0;">© ${new Date().getFullYear()} BioAvanceD · <a href="https://bioadvanced.dev" style="color:#1d4ed8; text-decoration:none;">bioadvanced.dev</a></p>
         </div>
       </div>
     `;
 
-    const text = `BioAvanceD - Recuperação de senha\n\nAcesse: ${link}\n\nSe você não solicitou, ignore este e-mail.`;
+    const text = `BioAvanceD - Recuperação de senha\n\nAcesse: ${link}\n${expiryText}\n\nSe você não solicitou, ignore este e-mail.`;
 
     return this.sendEmail({
       to: email,
@@ -862,11 +903,6 @@ class NotificationService {
     };
   }
 
-  async sendRecoveryEmail(email, token) {
-    const appDomain = process.env.APP_DOMAIN || 'http://localhost:5173';
-    const link = `${appDomain.replace(/\/$/, '')}/recover-password?token=${encodeURIComponent(token)}`;
-    return this.sendPasswordReset(email, link);
-  }
 
   async sendCriticalTempAlert(sampleId, temp, options = {}) {
     const minTemp = Number(options.minTemp ?? process.env.TELEMETRY_MIN_TEMP_ALERT ?? -196);
@@ -897,37 +933,6 @@ class NotificationService {
       sms: smsSimulation,
       email: emailResult
     };
-  }
-
-  async sendCriticalTempAlertFromInflux(sampleId, options = {}) {
-    await connectInfluxDB();
-    const queryApi = getInfluxQueryApi();
-    const influx = getInfluxConfig();
-
-    const locationFilter = options.locationId
-      ? `|> filter(fn: (r) => r.locationId == "${String(options.locationId)}")`
-      : '';
-
-    const flux = `
-      from(bucket: "${influx.bucket}")
-        |> range(start: -${Number(options.lookbackHours || 1)}h)
-        |> filter(fn: (r) => r._measurement == "freezer_temperature")
-        |> filter(fn: (r) => r._field == "temperatureValue")
-        ${locationFilter}
-        |> sort(columns: ["_time"], desc: true)
-        |> limit(n: 1)
-    `;
-
-    const rows = await queryApi.collectRows(flux);
-    if (!rows.length) {
-      return {
-        triggered: false,
-        reason: 'Sem dados recentes no InfluxDB para simulação'
-      };
-    }
-
-    const latestTemp = Number(rows[0]._value);
-    return this.sendCriticalTempAlert(sampleId, latestTemp, options);
   }
 }
 

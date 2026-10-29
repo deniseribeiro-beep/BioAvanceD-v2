@@ -1,3 +1,4 @@
+const cron = require('node-cron');
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const env = require('../config/env');
@@ -54,8 +55,13 @@ class BackupPolicyService {
   validatePolicy(policy) {
     const errors = [];
 
-    if (policy.cronExpression !== undefined && !CRON_FIELD_PATTERN.test(String(policy.cronExpression || ''))) {
-      errors.push('cronExpression deve ser uma expressão cron de 5 campos');
+    // #1325: it must be a string node-cron also accepts, since updatePolicy
+    // stores the raw value and the scheduler could not apply anything else.
+    if (policy.cronExpression !== undefined) {
+      const cronExpression = policy.cronExpression;
+      if (typeof cronExpression !== 'string' || !CRON_FIELD_PATTERN.test(cronExpression) || !cron.validate(cronExpression)) {
+        errors.push('cronExpression deve ser uma expressão cron de 5 campos');
+      }
     }
 
     if (policy.retentionDays !== undefined) {

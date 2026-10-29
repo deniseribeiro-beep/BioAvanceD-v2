@@ -1,8 +1,10 @@
 const logger = require('./logger');
+const { buildLookupIndex } = require('./lookupIndex');
+const { dropLegacyIndex } = require('./legacyIndex');
 
 /**
- * #941: unique indexes on `storageContainers.containerID` and
- * `sensorMetadata.sensorId`.
+ * #941: unique indexes on `storageContainers.containerID`,
+ * `sensorMetadata.sensorId` and `sensorMetadata.macAddress`.
  *
  * `StorageContainer.js` and `SensorMetadata.schema.js` have declared these
  * constraints all along (`containerID: { unique: true, sparse: true }` and
@@ -15,19 +17,33 @@ const logger = require('./logger');
  * equivalent, wired at the write path -- see `utils/sampleIndexes.js` for
  * the precedent this copies.
  *
- * ## Why `storageContainers.containerID` needs `$type: 'string'`
+ * ## Why `storageContainers.containerID` needs `$exists: true`
  *
- * `findOrCreateFreezer` in `location-storage-backfill.service.js` writes a
- * real `containerID`, but the SHELF/RACK/DRAWER path in `findOrCreateContainer`
- * in the same file never sets the field at all. A plain unique index would
- * collide on the second container created without one. `$type: 'string'`
- * indexes only the rows that carry a real `containerID`, the same shape
- * `sampleIndexes.js` uses on `samples.barcode` and for the same reason.
+ * A FREEZER carries a real `containerID` (`findOrCreateFreezer` in
+ * `location-storage-backfill.service.js`, and the topology authoring API),
+ * but SHELF/RACK/DRAWER rows never set the field at all. A plain unique index
+ * would collide on the second container created without one, so the index is
+ * partial. The filter must admit NUMBERS: `containerID` is a Number (#757),
+ * which is why `$type: 'string'` (v1) and `$gt: ''` (v2) were both wrong
+ * (#1209); see the comment at the build site for the measured choice.
  *
  * ## Why `sensorMetadata.sensorId` needs no partial filter
  *
  * `sensorId` is `required: true` on `SensorMetadata.schema.js` -- every row
- * has one, so a plain unique index is correct.
+ * has one, so a plain unique index is correct. It is also the upsert FILTER
+ * key in `linkSensorMetadata`, so it structurally cannot be absent.
+ *
+ * ## Why `sensorMetadata.macAddress` DOES need one
+ *
+ * `macAddress` is `required: true` on the schema too, but that is a mongoose
+ * validator and every write to this collection goes through the NATIVE
+ * driver (`updateOne` on the raw collection), which never runs it. Unlike
+ * `sensorId` it is not the upsert filter key either -- it reaches the
+ * document only through `$set`, behind an `if (sensor.macAddress)` guard
+ * that lives in the CALLER (`createSensor`), not in `linkSensorMetadata`'s
+ * own contract. So a row without one is a shape the schema forbids and the
+ * database permits, and a plain unique index would reject the second such
+ * row. `$type: 'string'` constrains exactly the rows carrying a real value.
  *
  * ## Failure posture
  *
@@ -46,13 +62,25 @@ const logger = require('./logger');
  * resolver -- see the module-level doc comment on this file's caller side),
  * each function here latches itself, keyed by `collection.collectionName`
  * (the resolved name, mirroring `collectionResolver.js`'s `samplesIndexed`
- * Set), so both call sites stay a single, un-awaited line.
+ * Set), so every call site stays a single, un-awaited line.
+ *
+ * ## Where each is wired (#1163)
+ *
+ * The storageContainers and storageBoxes helpers are called at the
+ * backfill's write path AND at every reader of the lookups they build
+ * (`MongoStorageTopologyReadRepository`, `TelemetryMonitor`,
+ * `equipment-sensor-quarantine.service`), per the rule in `lookupIndex.js`.
  */
 // #941: collection names whose indexes have already been ensured this
 // process, one Set per collection kind so a storageContainers name and a
 // sensorMetadata name never shadow one another.
 const storageContainersIndexed = new Set();
 const sensorMetadataIndexed = new Set();
+const storageBoxesIndexed = new Set();
+
+// #941: `buildLookupIndex` moved to utils/lookupIndex.js when
+// facilityIndexes.js needed the same builder -- one copy, because the
+// failure MESSAGE is the part that matters and a second copy would drift.
 
 async function ensureStorageContainerIndexes(collection) {
   if (!collection || typeof collection.createIndex !== 'function') return;
@@ -61,23 +89,83 @@ async function ensureStorageContainerIndexes(collection) {
   if (storageContainersIndexed.has(name)) return;
   storageContainersIndexed.add(name);
 
+  // #1164 replaced v1's `$type: 'string'` with `$gt: ''` so the planner
+  // could serve an equality lookup. #1209: both admit STRINGS only
+  // (comparisons are type-bracketed), and containerID is a Number
+  // (StorageContainer.js; #757 made it the Equipment's plain-number
+  // equipmentID), so v2 enforced nothing on a real freezer -- two numeric
+  // duplicates were both accepted on the test stack.
+  //
+  // `$exists: true` keeps the SHELF/RACK/DRAWER rows, which carry no
+  // containerID, out of the constraint, and covers every value type. Measured
+  // on mongo:7 against three alternatives (an `$or` of the two ranges, two
+  // partial indexes, a `$type` array): it is the only one that also serves
+  // the `{ containerID: { $in: variants } }` lookup every consumer issues;
+  // the others, and v2, COLLSCAN it. Its one cost: two rows with an EXPLICIT
+  // `containerID: null` collide, and no writer writes one.
+  //
+  // The new name is built FIRST, then both superseded ones dropped, so the
+  // constraint never has a gap.
   try {
     await collection.createIndex(
       { containerID: 1 },
       {
-        name: 'storage_containers_containerid_unique_v1',
+        name: 'storage_containers_containerid_unique_v3',
         unique: true,
-        partialFilterExpression: { containerID: { $type: 'string' } }
+        partialFilterExpression: { containerID: { $exists: true } }
       }
     );
+    // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'storage_containers_containerid_unique_v2', 'STORAGE');
+    await dropLegacyIndex(collection, 'storage_containers_containerid_unique_v1', 'STORAGE');
   } catch (error) {
     logger.warn(
-      '[STORAGE][INDEX] Não foi possível criar storage_containers_containerid_unique_v1 (#941). '
+      '[STORAGE][INDEX] Não foi possível criar storage_containers_containerid_unique_v3 (#941, #1209). '
         + 'Um E11000 aqui significa containerID duplicados já gravados -- '
         + 'a unicidade segue apenas em nível de aplicação até que sejam corrigidos: '
         + (error?.message || error)
     );
   }
+
+  // #941: BUILD, taken from the planner. `listOperationalFreezers` issues
+  // find({containerType:'FREEZER',status:'OPERATIONAL'}) verbatim.
+  await buildLookupIndex(
+    collection, { containerType: 1, status: 1 },
+    'storage_containers_type_status_idx_v1', 'STORAGE'
+  );
+
+  // #941: BUILD. The shelf/rack tree walk -- MongoStorageTopologyReadRepository,
+  // TelemetryMonitor and equipment-sensor-quarantine.service all issue
+  // find({parent_id, containerType}), the second of them per reading.
+  await buildLookupIndex(
+    collection, { parent_id: 1, containerType: 1 },
+    'storage_containers_parent_type_idx_v1', 'STORAGE'
+  );
+}
+
+/**
+ * #941: the storageBoxes lookup index.
+ *
+ * No unique constraint here -- `StorageBox.js` declares none at HEAD (its
+ * former boxID unique+sparse line is gone). This exists for the one lookup
+ * the planner measurably uses, so the helper is deliberately not modelled on
+ * the unique ones above.
+ */
+async function ensureStorageBoxIndexes(collection) {
+  if (!collection || typeof collection.createIndex !== 'function') return;
+
+  const name = collection.collectionName;
+  if (storageBoxesIndexed.has(name)) return;
+  storageBoxesIndexed.add(name);
+
+  // #941: BUILD. Winning plan for BOTH storageBoxes shapes in src/ --
+  // the topology walk's find({parent_id}).sort({name:1}) and
+  // TelemetryMonitor's find({parent_id:{$in:rackIds}}). A compound index
+  // serves its own prefix, so the status suffix costs those nothing.
+  await buildLookupIndex(
+    collection, { parent_id: 1, status: 1 },
+    'storage_boxes_parent_status_idx_v1', 'STORAGE'
+  );
 }
 
 async function ensureSensorMetadataIndexes(collection) {
@@ -103,9 +191,41 @@ async function ensureSensorMetadataIndexes(collection) {
         + (error?.message || error)
     );
   }
+
+  // #941: macAddress carries its OWN try/catch rather than sharing the one
+  // above. A single catch around both builds would let a failure on the
+  // first index skip the second silently -- the exact shape #1027 corrected
+  // in create-db.js, where one throw cost 46 index builds.
+  // #1164: `$gt: ''`, not `$type: 'string'`. Both keep missing/null rows
+  // out (comparisons are type-bracketed, so `$gt: ''` means "a non-empty
+  // string"), but the planner cannot prove a plain equality implies a
+  // `$type` filter, so the `$type` version enforced uniqueness while never
+  // serving a single lookup. The new name is built FIRST, then the
+  // superseded one dropped, so the constraint never has a gap.
+  try {
+    await collection.createIndex(
+      { macAddress: 1 },
+      {
+        name: 'sensor_metadata_macaddress_unique_v2',
+        unique: true,
+        partialFilterExpression: { macAddress: { $gt: '' } }
+      }
+    );
+    // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'sensor_metadata_macaddress_unique_v1', 'SENSOR_METADATA');
+  } catch (error) {
+    logger.warn(
+      '[SENSOR_METADATA][INDEX] Não foi possível criar sensor_metadata_macaddress_unique_v2 (#941). '
+        + 'Um E11000 aqui significa macAddress duplicados já gravados -- '
+        + 'o erro "macAddress duplicado" que sensor.service.js documenta segue '
+        + 'impossível de produzir até que sejam corrigidos: '
+        + (error?.message || error)
+    );
+  }
 }
 
 module.exports = {
   ensureStorageContainerIndexes,
+  ensureStorageBoxIndexes,
   ensureSensorMetadataIndexes
 };

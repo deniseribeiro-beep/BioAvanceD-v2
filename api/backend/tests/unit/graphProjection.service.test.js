@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { GraphProjectionService, stableHash } = require('../../src/services/graphProjection.service');
+const { GraphProjectionService, insertSampleWithProjection, recordLineageProjection, recordSpecimenProjection, stableHash } = require('../../src/services/graphProjection.service');
+const logger = require('../../src/utils/logger');
 
 function createFakeOutbox() {
   return { appendEvent: vi.fn().mockResolvedValue({ ok: true }) };
@@ -82,7 +83,18 @@ describe('graphProjection.service', () => {
           status: 'ACTIVE',
           signedAt: '2026-01-01T00:00:00Z',
         }),
-      }));
+      }), {});
+    });
+
+    // #1313 (RF023 AC3): the caller's transaction reaches the outbox append.
+    it('forwards the caller session to the outbox append', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'session-1' };
+
+      await service.appendConsentEvent({}, { ethicalConsentId: 'ec-9' }, { session });
+
+      expect(outbox.appendEvent.mock.calls[0][2]).toEqual({ session });
     });
 
     it('emits CONSENT_REVOKED when status is REVOKED', async () => {
@@ -120,6 +132,79 @@ describe('graphProjection.service', () => {
     });
   });
 
+  describe('appendSpecimenEvent (#1225)', () => {
+    it('emits SPECIMEN_UPSERTED carrying the specimen key and its donor', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendSpecimenEvent({}, { specimenId: 'mongo-1', participantId: 'P-1', sourceService: 'sample.service' });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.eventType).toBe('SPECIMEN_UPSERTED');
+      expect(call.aggregateType).toBe('Sample');
+      expect(call.aggregateId).toBe('mongo-1');
+      expect(call.payload).toEqual({ specimenId: 'mongo-1', participantId: 'P-1' });
+      expect(call.sourceService).toBe('sample.service');
+    });
+
+    it('recordSpecimenProjection logs and returns null when the append fails, rather than failing the committed insert', async () => {
+      const service = { appendSpecimenEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+      await expect(recordSpecimenProjection({}, { specimenId: 'mongo-1', participantId: 'P-1' }, service)).resolves.toBeNull();
+      expect(service.appendSpecimenEvent).toHaveBeenCalledWith({}, { specimenId: 'mongo-1', participantId: 'P-1', sourceService: undefined });
+    });
+
+    // #1313 (RF023 AC3): on a replica set the sample and its event share a
+    // transaction, and a failed append fails the insert with it.
+    describe('insertSampleWithProjection', () => {
+      const sample = { specimenId: 'S-1', participantId: 'P-1' };
+      const replicaSetDb = (session) => ({
+        client: {
+          db: () => ({ command: async () => ({ setName: 'rs0' }) }),
+          startSession: () => session,
+        },
+      });
+
+      it('inserts and appends with the same session on a replica set', async () => {
+        const session = { withTransaction: vi.fn(async (fn) => { await fn(); }), endSession: vi.fn(async () => {}) };
+        const db = replicaSetDb(session);
+        const samples = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mongo-1' }) };
+        const service = { appendSpecimenEvent: vi.fn().mockResolvedValue({ eventId: 'e-1' }) };
+
+        const result = await insertSampleWithProjection(db, samples, sample, { sourceService: 'import.service' }, service);
+
+        expect(result.insertedId).toBe('mongo-1');
+        expect(samples.insertOne).toHaveBeenCalledWith(sample, { session });
+        expect(service.appendSpecimenEvent).toHaveBeenCalledWith(db, { specimenId: 'mongo-1', participantId: 'P-1', sourceService: 'import.service' }, { session });
+      });
+
+      it('fails the insert when the append fails inside the transaction', async () => {
+        const session = { withTransaction: vi.fn(async (fn) => { await fn(); }), endSession: vi.fn(async () => {}) };
+        const samples = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mongo-1' }) };
+        const service = { appendSpecimenEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+
+        await expect(insertSampleWithProjection(replicaSetDb(session), samples, sample, { sourceService: 'import.service' }, service))
+          .rejects.toThrow('outbox down');
+      });
+
+      it('without a transaction inserts, then appends as recordSpecimenProjection does', async () => {
+        const samples = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mongo-2' }) };
+        const service = { appendSpecimenEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+
+        const result = await insertSampleWithProjection({}, samples, sample, { sourceService: 'import.service' }, service);
+
+        expect(result.insertedId).toBe('mongo-2');
+        expect(samples.insertOne).toHaveBeenCalledWith(sample);
+        expect(service.appendSpecimenEvent).toHaveBeenCalledWith({}, { specimenId: 'mongo-2', participantId: 'P-1', sourceService: 'import.service' });
+      });
+    });
+
+    it('recordSpecimenProjection appends nothing without a specimen id', async () => {
+      const service = { appendSpecimenEvent: vi.fn() };
+      await expect(recordSpecimenProjection({}, { specimenId: '', participantId: 'P-1' }, service)).resolves.toBeNull();
+      expect(service.appendSpecimenEvent).not.toHaveBeenCalled();
+    });
+  });
+
   describe('appendLineageEvent', () => {
     it('uses specimenId for aggregateId and payload when present', async () => {
       const outbox = createFakeOutbox();
@@ -153,6 +238,88 @@ describe('graphProjection.service', () => {
       call = outbox.appendEvent.mock.calls[2][1];
       expect(call.aggregateId).toBe('');
       expect(call.payload.parentSpecimenId).toBeNull();
+    });
+
+    it('stringifies the child and parent ids, as appendSpecimenEvent does', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const objectId = (hex) => ({ toString: () => hex });
+
+      await service.appendLineageEvent({}, { specimenId: objectId('c-1'), parentSpecimenId: objectId('p-1') });
+
+      expect(outbox.appendEvent.mock.calls[0][1].payload).toEqual({ specimenId: 'c-1', parentSpecimenId: 'p-1' });
+    });
+  });
+
+  // #1368: a derived sample's edges, one LINEAGE_REGISTERED per parent.
+  describe('appendLineageEvents and recordLineageProjection (#1368)', () => {
+    it('appends one LINEAGE_REGISTERED per parent, in order, inside the caller session', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'session-1' };
+
+      const results = await service.appendLineageEvents({}, { specimenId: 'c-1', parentSpecimenIds: ['p-1', 'p-2', 'p-3'], sourceService: 'sample.service' }, { session });
+
+      expect(results).toHaveLength(3);
+      expect(outbox.appendEvent).toHaveBeenCalledTimes(3);
+      outbox.appendEvent.mock.calls.forEach(([, event, options], index) => {
+        expect(event.eventType).toBe('LINEAGE_REGISTERED');
+        expect(event.aggregateId).toBe('c-1');
+        expect(event.payload).toEqual({ specimenId: 'c-1', parentSpecimenId: `p-${index + 1}` });
+        expect(event.sourceService).toBe('sample.service');
+        expect(options).toEqual({ session });
+      });
+    });
+
+    it.each([
+      ['an empty array', []],
+      ['no array', undefined],
+    ])('appendLineageEvents appends nothing for %s', async (_label, parentSpecimenIds) => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await expect(service.appendLineageEvents({}, { specimenId: 'c-1', parentSpecimenIds })).resolves.toEqual([]);
+      expect(outbox.appendEvent).not.toHaveBeenCalled();
+    });
+
+    it('appendLineageEvents rejects when an append fails, so the caller transaction aborts', async () => {
+      const outbox = { appendEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+      const service = new GraphProjectionService({ outbox });
+
+      await expect(service.appendLineageEvents({}, { specimenId: 'c-1', parentSpecimenIds: ['p-1'] }, { session: {} }))
+        .rejects.toThrow('outbox down');
+    });
+
+    it.each([
+      ['an empty array', {}, []],
+      ['no array', {}, undefined],
+      ['no db', null, ['p-1']],
+    ])('recordLineageProjection appends nothing for %s', async (_label, db, parentSpecimenIds) => {
+      const service = { appendLineageEvent: vi.fn() };
+      await recordLineageProjection(db, { specimenId: 'c-1', parentSpecimenIds }, service);
+      expect(service.appendLineageEvent).not.toHaveBeenCalled();
+    });
+
+    it('recordLineageProjection logs a failed parent and still appends the others, without a session', async () => {
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const service = {
+        appendLineageEvent: vi.fn()
+          .mockResolvedValueOnce({ ok: true })
+          .mockRejectedValueOnce(new Error('outbox down'))
+          .mockResolvedValueOnce({ ok: true }),
+      };
+
+      await expect(recordLineageProjection({}, { specimenId: 'c-1', parentSpecimenIds: ['p-1', 'p-2', 'p-3'], sourceService: 'sample.service' }, service))
+        .resolves.toBeUndefined();
+
+      expect(service.appendLineageEvent.mock.calls).toEqual([
+        [{}, { specimenId: 'c-1', parentSpecimenId: 'p-1', sourceService: 'sample.service' }],
+        [{}, { specimenId: 'c-1', parentSpecimenId: 'p-2', sourceService: 'sample.service' }],
+        [{}, { specimenId: 'c-1', parentSpecimenId: 'p-3', sourceService: 'sample.service' }],
+      ]);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toContain('[NEO4J_OUTBOX] LINEAGE_REGISTERED nao registrado para c-1 <- p-2: outbox down');
+      errorSpy.mockRestore();
     });
   });
 
@@ -203,6 +370,89 @@ describe('graphProjection.service', () => {
 
       const call = outbox.appendEvent.mock.calls[0][1];
       expect(call.payload.score).toBe(0);
+    });
+  });
+
+  // #1312: the two writers that used to MERGE into Neo4j directly.
+  describe('appendStoragePositionEvent', () => {
+    it('emits STORAGE_POSITION_ASSIGNED keyed by the sample, with box and position as strings', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendStoragePositionEvent({}, { specimenId: { toString: () => 's-9' }, boxId: 'box-1', position: 'B2', sourceService: 'storage-service' });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.eventType).toBe('STORAGE_POSITION_ASSIGNED');
+      expect(call.aggregateType).toBe('Sample');
+      expect(call.aggregateId).toBe('s-9');
+      expect(call.sourceService).toBe('storage-service');
+      expect(call.payload).toEqual({ specimenId: 's-9', boxId: 'box-1', position: 'B2' });
+    });
+  });
+
+  describe('appendCustodyEvent', () => {
+    it('emits CUSTODY_EVENT_RECORDED keyed by the sample, inside the caller session', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'mongo-session' };
+
+      await service.appendCustodyEvent({}, {
+        specimenId: { toString: () => 's-1' },
+        barcode: 'BC-1',
+        eventType: 'move',
+        happenedAt: new Date('2026-01-02T03:04:05.000Z'),
+        actorId: 'u-1',
+        reason: 'reorg',
+        from: { boxId: 'b1', position: 'a1' },
+        to: { boxId: 'b2', position: 'B2' },
+        sourceService: 'lineage-repository',
+      }, { session });
+
+      const [, call, options] = outbox.appendEvent.mock.calls[0];
+      expect(options).toEqual({ session });
+      expect(call.eventType).toBe('CUSTODY_EVENT_RECORDED');
+      expect(call.aggregateType).toBe('Sample');
+      expect(call.aggregateId).toBe('s-1');
+      expect(call.sourceService).toBe('lineage-repository');
+      expect(call.payload).toEqual({
+        specimenId: 's-1',
+        barcode: 'BC-1',
+        custodyEventType: 'move',
+        happenedAt: '2026-01-02T03:04:05.000Z',
+        actorId: 'u-1',
+        reason: 'reorg',
+        from: { boxId: 'b1', position: 'A1' },
+        to: { boxId: 'b2', position: 'B2' },
+      });
+    });
+
+    it('accepts a happenedAt string (a step replayed from the retry queue) and nulls a missing location', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendCustodyEvent({}, { specimenId: 's-1', eventType: 'register', happenedAt: '2026-01-02T03:04:05.000Z' });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.payload).toMatchObject({ happenedAt: '2026-01-02T03:04:05.000Z', from: null, to: null, actorId: null, reason: null });
+    });
+  });
+
+  describe('appendSpecimenCompromiseEvent', () => {
+    it('emits SPECIMEN_COMPROMISED with the excursion and drops any temperature field', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendSpecimenCompromiseEvent({}, {
+        specimenId: 's-1',
+        freezerKey: 'freezer-A',
+        breachedSince: '2026-01-01T00:00:00.000Z',
+        maxObservedTemp: -50,
+      });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.eventType).toBe('SPECIMEN_COMPROMISED');
+      expect(call.aggregateId).toBe('s-1');
+      expect(call.payload).toEqual({ specimenId: 's-1', freezerKey: 'freezer-A', breachedSince: '2026-01-01T00:00:00.000Z' });
     });
   });
 

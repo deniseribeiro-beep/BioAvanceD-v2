@@ -1,14 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { recordAction, getActionsForSpecimen, releaseActiveAction, markPendingReview } = require('../../../src/services/quarantine-action.service');
+const { recordAction, getActionsForSpecimen, releaseActiveAction, markPendingReview, auditDecision, canonicalSpecimenId } = require('../../../src/services/quarantine-action.service');
 
 /**
  * Real query-matching fake — a scalar filter value against an array field
  * matches array-containment (Mongo's actual semantics for
  * `{ specimenIds: 'X' }` against `specimenIds: ['X', 'Y']`), not a stub
- * that returns canned data regardless of query, per build-loop's
+ * that returns canned data regardless of query, per this repo's
  * native-only "real backend" proof bar.
  */
 function createFakeCollection() {
@@ -17,6 +17,10 @@ function createFakeCollection() {
     Object.keys(filter).every((key) => {
       const docValue = doc[key];
       const filterValue = filter[key];
+      // #1219: { $in } matches when any listed value would.
+      if (filterValue && typeof filterValue === 'object' && Array.isArray(filterValue.$in)) {
+        return filterValue.$in.some((value) => (Array.isArray(docValue) ? docValue.includes(value) : docValue === value));
+      }
       if (Array.isArray(docValue)) return docValue.includes(filterValue);
       return docValue === filterValue;
     });
@@ -196,5 +200,95 @@ describe('quarantine-action.service', () => {
       const { calls } = db.collections.quarantineActions;
       expect(calls.insertOne[0]).toBeUndefined();
     });
+  });
+  // #1219: every writer used to record the sample's Mongo _id, while
+  // GET /api/samples/:id/quarantine-actions read by the canonical
+  // specimenId, so it never found an action. New actions carry the
+  // specimenId, and a lookup handed the sample matches both forms.
+  describe('#1219: one sample, its legacy _id-keyed and its canonical actions', () => {
+    const sample = { _id: '507f1f77bcf86cd799439011', specimenId: '3116768' };
+
+    it('canonicalSpecimenId prefers the specimenId, and falls back to the _id', () => {
+      expect(canonicalSpecimenId(sample)).toBe('3116768');
+      expect(canonicalSpecimenId({ _id: '507f1f77bcf86cd799439011' })).toBe('507f1f77bcf86cd799439011');
+    });
+
+    it('getActionsForSpecimen handed the sample finds both a legacy and a canonical action', async () => {
+      const db = createFakeDb();
+      await recordAction(db, { specimenIds: [sample._id], reasonCodes: [{ code: 'LEGACY' }] });
+      await recordAction(db, { specimenIds: [canonicalSpecimenId(sample)], reasonCodes: [{ code: 'CANONICAL' }] });
+      await recordAction(db, { specimenIds: ['someone-else'], reasonCodes: [{ code: 'OTHER' }] });
+
+      const actions = await getActionsForSpecimen(db, sample);
+
+      expect(actions.map((a) => a.reasonCodes[0].code).sort()).toEqual(['CANONICAL', 'LEGACY']);
+    });
+
+    it('getActionsForSpecimen handed a bare id matches that id only', async () => {
+      const db = createFakeDb();
+      await recordAction(db, { specimenIds: [sample._id], reasonCodes: [{ code: 'LEGACY' }] });
+
+      expect(await getActionsForSpecimen(db, sample.specimenId)).toHaveLength(0);
+      expect(await getActionsForSpecimen(db, sample._id)).toHaveLength(1);
+    });
+
+    it('releaseActiveAction handed the sample releases an action recorded under its legacy _id', async () => {
+      const db = createFakeDb();
+      await recordAction(db, { specimenIds: [sample._id], reasonCodes: [{ code: 'LEGACY' }] });
+
+      const released = await releaseActiveAction(db, sample, 'user-1');
+
+      expect(released?.actionStatus).toBe('released');
+      expect(db.collections.quarantineActions.docs[0].actionStatus).toBe('released');
+    });
+  });
+});
+
+describe("auditDecision (RF019 AC#6)", () => {
+  const auditLogger = require("../../../src/utils/auditLogger");
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("audits an applied quarantine under the action id, with its specimens and reasons", async () => {
+    const db = createFakeDb();
+    const log = vi.spyOn(auditLogger, "log").mockResolvedValue(undefined);
+    const action = await recordAction(db, { specimenIds: ["SPC-1"], reasonCodes: ["CONSENT_REVOKED"] });
+    const req = { path: "/api/e-consent/update" };
+
+    await auditDecision(db, { decision: "applied", action, req });
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0]).toMatchObject({
+      action: "QUARANTINE_APPLIED",
+      resourceType: "QuarantineAction",
+      resourceId: action.quarantineActionId,
+      req,
+      payload: { specimenIds: ["SPC-1"], reasonCodes: ["CONSENT_REVOKED"], actionStatus: "active" },
+    });
+  });
+
+  it("audits a release as QUARANTINE_RELEASED with the releasing actor", async () => {
+    const db = createFakeDb();
+    const log = vi.spyOn(auditLogger, "log").mockResolvedValue(undefined);
+    await recordAction(db, { specimenIds: ["SPC-2"], reasonCodes: ["INTAKE_GOVERNANCE"] });
+    const released = await releaseActiveAction(db, "SPC-2", "user-7");
+
+    await auditDecision(db, { decision: "released", action: released });
+
+    expect(log.mock.calls[0][0]).toMatchObject({
+      action: "QUARANTINE_RELEASED",
+      resourceId: released.quarantineActionId,
+      payload: { actionStatus: "released", authorizedBy: "user-7" },
+    });
+  });
+
+  it("audits nothing when no action was recorded or released", async () => {
+    const log = vi.spyOn(auditLogger, "log").mockResolvedValue(undefined);
+
+    await auditDecision(createFakeDb(), { decision: "released", action: null });
+
+    expect(log).not.toHaveBeenCalled();
   });
 });

@@ -54,9 +54,6 @@ function makeDeps({
       ),
       recordCustodyEvent: vi.fn(
         lineageImpl.recordCustodyEvent || (async () => ({ eventId: 'evt-1' }))
-      ),
-      compensateCustodyEvent: vi.fn(
-        lineageImpl.compensateCustodyEvent || (async () => undefined)
       )
     };
   }
@@ -140,6 +137,122 @@ describe('AllocateSampleUseCase', () => {
     expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(1);
   });
 
+  // #1312 (RF023 AC3/AC8): the custody event is an outbox append in the
+  // allocation's own transaction, after the position and audit writes.
+  it('#1312: appends the allocate custody event inside the transaction, with its session', async () => {
+    const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps({ withLineageRepo: true });
+
+    await useCase.execute(baseCommand());
+
+    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(1);
+    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledWith(
+      {
+        specimenId: 'sample-1',
+        barcode: 'BC-1',
+        eventType: 'allocate',
+        from: { boxId: 'box-old', position: 'A1' },
+        to: { boxId: 'box-new', position: 'B2' },
+        actorId: 'user-1',
+        reason: 'allocate'
+      },
+      { session: 'session-token' }
+    );
+    const appendOrder = lineageRepository.recordCustodyEvent.mock.invocationCallOrder[0];
+    expect(appendOrder).toBeGreaterThan(storageRepository.withTransaction.mock.invocationCallOrder[0]);
+    expect(appendOrder).toBeGreaterThan(storageRepository.allocateSamplePosition.mock.invocationCallOrder[0]);
+    expect(appendOrder).toBeGreaterThan(auditRepository.appendImmutableAudit.mock.invocationCallOrder[0]);
+  });
+
+  // #1220: the custody ledger row is keyed by the canonical specimenId, as the
+  // create path writes it, and the response echoes it; the storage and graph
+  // calls keep the _id.
+  it('#1220: the audit row and the response carry the canonical specimenId while storage and lineage get the _id', async () => {
+    const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps({
+      sample: makeSample({ specimenId: 'SP-1' }),
+      withLineageRepo: true
+    });
+
+    const result = await useCase.execute(baseCommand());
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('SP-1');
+    expect(storageRepository.allocateSamplePosition.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(lineageRepository.recordCustodyEvent.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(result.sampleLocation.specimenId).toBe('SP-1');
+  });
+
+  it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {
+    const { useCase, auditRepository } = makeDeps();
+
+    await useCase.execute(baseCommand());
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('sample-1');
+  });
+
+  // RF023 AC3: a sample create allocating the sample it just inserted passes
+  // its own session; the allocation joins it instead of opening a second
+  // transaction, and reads the uncommitted sample through it.
+  it('#1367: an outer session is used for every read and write, and no transaction of its own is opened', async () => {
+    const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps({ withLineageRepo: true });
+
+    const result = await useCase.execute(baseCommand(), { session: 'outer-session' });
+
+    expect(result.lineageEventId).toBe('evt-1');
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+    expect(storageRepository.findSampleById.mock.calls).toEqual([
+      ['sample-1', 'outer-session'],
+      ['sample-1', 'outer-session']
+    ]);
+    expect(storageRepository.allocateSamplePosition).toHaveBeenCalledWith(
+      { specimenId: 'sample-1', boxId: 'box-new', position: 'B2' },
+      'outer-session'
+    );
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][1]).toBe('outer-session');
+    expect(lineageRepository.recordCustodyEvent.mock.calls[0][1]).toEqual({ session: 'outer-session' });
+  });
+
+  it('#1367: a failed custody append under an outer session propagates, so the caller\'s transaction aborts', async () => {
+    const { useCase, storageRepository } = makeDeps({
+      withLineageRepo: true,
+      lineageImpl: { recordCustodyEvent: async () => { throw new Error('outbox down'); } }
+    });
+
+    await expect(useCase.execute(baseCommand(), { session: 'outer-session' })).rejects.toThrow('outbox down');
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('#1367: without an outer session the first lookup takes no session argument, as before', async () => {
+    const { useCase, storageRepository } = makeDeps();
+
+    await useCase.execute(baseCommand());
+
+    expect(storageRepository.findSampleById.mock.calls[0]).toEqual(['sample-1']);
+    expect(storageRepository.withTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('#1312: the pre-Mongo validation carries no consent flag; it reads nothing', async () => {
+    const { useCase, lineageRepository } = makeDeps({ withLineageRepo: true });
+
+    await useCase.execute(baseCommand());
+
+    const validated = lineageRepository.validateBeforePersistence.mock.calls[0][0];
+    expect(validated).toMatchObject({ specimenId: 'sample-1', eventType: 'allocate' });
+    expect(validated).not.toHaveProperty('requireEthicalConsent');
+  });
+
+  it.each(['fail-closed', 'fail-open'])('#1312: a failed append aborts the transaction and refuses the allocation (%s)', async (mode) => {
+    env.LINEAGE_MODE = mode;
+    const { useCase } = makeDeps({
+      withLineageRepo: true,
+      lineageImpl: {
+        recordCustodyEvent: async () => {
+          throw new Error('outbox append failed');
+        }
+      }
+    });
+
+    await expect(useCase.execute(baseCommand())).rejects.toThrow('outbox append failed');
+  });
+
   it('throws "Amostra não encontrada" when sample is not found on the first lookup, before any transaction attempt', async () => {
     const { useCase, storageRepository } = makeDeps({ sample: null });
 
@@ -202,28 +315,20 @@ describe('AllocateSampleUseCase', () => {
     expect(storageRepository.withTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it('transaction throws: compensateLineageIfNeeded is invoked with correct args and the original mongoError is re-thrown', async () => {
+  it('#1312: a transaction that fails before the append records no custody event and rethrows the Mongo error', async () => {
     const mongoError = new Error('mongo write conflict');
     const { useCase, lineageRepository } = makeDeps({
       withLineageRepo: true,
-      lineageImpl: {
-        recordCustodyEvent: async () => ({ eventId: 'evt-compensate' })
-      },
       transactionImpl: async () => {
         throw mongoError;
       }
     });
 
     await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledWith({
-      eventId: 'evt-compensate',
-      specimenId: 'sample-1',
-      reason: 'mongo_transaction_failed'
-    });
+    expect(lineageRepository.recordCustodyEvent).not.toHaveBeenCalled();
   });
 
-  it('transaction throws but lineage was never persisted (fail-open, no lineageRepository): compensateCustodyEvent not called, original error still thrown', async () => {
+  it('transaction throws with no lineageRepository (fail-open): original error still thrown', async () => {
     const mongoError = new Error('mongo write conflict 2');
     const { useCase } = makeDeps({
       transactionImpl: async () => {
@@ -233,25 +338,6 @@ describe('AllocateSampleUseCase', () => {
 
     await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict 2');
     // no lineageRepository at all, so there is nothing to call - the rethrow itself is the assertion
-  });
-
-  it('a failing compensateCustodyEvent call does not mask/replace the original mongoError', async () => {
-    const mongoError = new Error('mongo write conflict 3');
-    const { useCase, lineageRepository } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        recordCustodyEvent: async () => ({ eventId: 'evt-compensate-fail' }),
-        compensateCustodyEvent: async () => {
-          throw new Error('compensation also failed');
-        }
-      },
-      transactionImpl: async () => {
-        throw mongoError;
-      }
-    });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict 3');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
   });
 
   it('sample with no prior storageAssignment and no barcode, actor with no userId: null-fallback branches all taken', async () => {
@@ -311,24 +397,5 @@ describe('AllocateSampleUseCase', () => {
     const result = await useCase.execute(baseCommand());
 
     expect(result.lineageValidated).toBe(false);
-  });
-
-  it('compensateCustodyEvent rejects with a non-Error (no .message): logger.error still falls back to the raw value', async () => {
-    const mongoError = new Error('mongo write conflict 4');
-    const { useCase, lineageRepository } = makeDeps({
-      withLineageRepo: true,
-      lineageImpl: {
-        recordCustodyEvent: async () => ({ eventId: 'evt-compensate-fail-2' }),
-        compensateCustodyEvent: async () => {
-          throw 'compensation failed (string)';
-        }
-      },
-      transactionImpl: async () => {
-        throw mongoError;
-      }
-    });
-
-    await expect(useCase.execute(baseCommand())).rejects.toThrow('mongo write conflict 4');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
   });
 });

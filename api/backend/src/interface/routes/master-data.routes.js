@@ -2,12 +2,46 @@ const express = require('express');
 const { randomUUID } = require('crypto');
 const { ObjectId } = require('mongodb');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requireRole } = require('../../infrastructure/middleware/rbac');
+const { requireRole, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
+const {
+  applyOrganizationScopeFilter,
+  isRecordInOrganizationScope,
+  resolveOrganizationIdForCreate,
+  assertOrganizationFieldNotReparented,
+} = require('../../services/rbac-assignment.service');
 
-function createMasterDataRouter({ collectionName, idField, model, validateReferences, generateId = randomUUID }) {
+// #1182: `scopeField` opts ONE mount into organization scoping, on the named
+// field of its own records. Most of the 14 entities this factory serves are
+// shared vocabularies with no organization field in dict-02, so scoping is
+// per mount rather than on by default. Assay passes 'laboratoryId' (dict-02
+// ELM-0293), the field #644 already scopes its files on.
+// `immutableFields`: once set, never changed by PUT. An update naming one
+// with a different value answers 422 rather than rewriting it (RF020 AC4: a
+// collection's governanceRegime changes only through a governed event). A
+// record stored before the field existed may receive its first value.
+function createMasterDataRouter({ collectionName, idField, model, validateReferences, generateId = randomUUID, scopeField = null, immutableFields = [] }) {
   const router = express.Router();
 
   router.use(authenticate);
+  if (scopeField) {
+    router.use(requireOrganizationScope);
+  }
+
+  // #1182: fetch-then-check for the by-id routes, the #340/#623 shape. A
+  // post-fetch test rather than a scope-filtered query, so a record in
+  // another organization answers 403, not a 404 that hides it.
+  async function findScopedRecord(req, res, query) {
+    const item = await req.app.locals.db.collection(collectionName).findOne(query);
+    if (!item) {
+      res.status(404).json({ success: false, error: 'Registro não encontrado' });
+      return null;
+    }
+    if (scopeField && !isRecordInOrganizationScope(item, req.organizationScope, scopeField)) {
+      res.status(403).json({ success: false, error: 'Acesso negado', message: 'Este registro pertence a outra organização' });
+      return null;
+    }
+    return item;
+  }
 
   // #881: seeded rows carry a string business key on `id` (e.g. "PLASMA"),
   // separate from the collection's own `idField` (e.g. "sampleTypeID").
@@ -41,13 +75,20 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
   // allowlist without needing a separate filter -- deliberate
   // immutable-identity treatment, not an oversight.
   //
-  // Three of the fourteen mounted models throw on an empty
-  // `model.create({})` probe because their create() spreads/maps a
-  // required array field with no fallback when it's absent
+  // Six mounted models throw on an empty `model.create({})` probe. Three
+  // spread/map a required array field with no fallback when it's absent
   // (Assay.js:105 specimenIds, Dataset.js:56 creators,
-  // OmicsQualification.js:52 qcMetrics). For those three the allowlist
-  // falls back to a hand-enumerated list, derived by reading that model's
-  // own create() return keys, keyed by collectionName.
+  // OmicsQualification.js:52 qcMetrics), and IdentifierNamespaceRegistry,
+  // InteroperabilityMappingRelease and FHIRProfileRegistry refuse any row
+  // missing a required field. For those six the allowlist falls back to a
+  // hand-enumerated list, derived by reading that model's own create()
+  // return keys, keyed by collectionName. The namespace list leaves out
+  // namespaceKey and systemUri: RULE-036 keeps the URI stable, so a new
+  // version is a new row (#1322). The release list leaves out mappingVersion,
+  // since a new mapping version is a new row naming the old one in
+  // supersedesReleaseId, and the profile list leaves out canonicalUrl and
+  // profileVersion, the key the FHIR validator matches meta.profile on
+  // (RF011 AC2, #1322).
   const HAND_ENUMERATED_UPDATE_FIELDS = {
     assays: [
       'studyId', 'specimenIds', 'assayType', 'omicsDomain', 'protocolId',
@@ -62,6 +103,25 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       'targetAssay', 'qcRuleSetVersion', 'qcMetrics', 'qualificationDecision',
       'limitations',
     ],
+    identifierNamespaceRegistries: [
+      'authorityDomain', 'targetTypes', 'semanticVersion', 'status',
+      'effectivePeriod', 'configurationReleaseId',
+    ],
+    interoperabilityMappingReleases: [
+      'standard', 'profile', 'mappingUri', 'checksum', 'authorId', 'status',
+      'roundTripLossReportUri', 'canonicalModelReleaseId', 'fhirVersion',
+      'implementationGuideCanonical', 'implementationGuideVersion',
+      'jurisdiction', 'profileRegistryIds', 'resourceTypes',
+      'identifierNamespaceRegistryIds', 'terminologyReleaseIds',
+      'mappingDefinitionUri', 'mappingDefinitionHash',
+      'conformanceTestReportUri', 'coverageNumerator', 'coverageDenominator',
+      'coverageRatio', 'roundTripLossesPresent', 'approvedBy', 'approvedAt',
+      'effectivePeriod', 'supersedesReleaseId',
+    ],
+    fhirProfileRegistries: [
+      'fhirVersion', 'identifierSystems', 'capabilityStatementUri',
+      'mappingReleaseId', 'status',
+    ],
   };
 
   const allowedUpdateFields = HAND_ENUMERATED_UPDATE_FIELDS[collectionName]
@@ -73,7 +133,8 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
     try {
       const db = req.app.locals.db;
 
-      const items = await db.collection(collectionName).find({}).sort({ createdAt: -1, _id: -1 }).toArray();
+      const listQuery = scopeField ? applyOrganizationScopeFilter({}, req.organizationScope, scopeField) : {};
+      const items = await db.collection(collectionName).find(listQuery).sort({ createdAt: -1, _id: -1 }).toArray();
       return res.status(200).json({ success: true, data: items });
     } catch (error) {
       return res.status(500).json({ success: false, error: 'Erro ao listar dados mestre', message: error.message });
@@ -87,10 +148,8 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const rawId = String(req.params.id);
       const query = buildIdQuery(rawId);
 
-      const item = await db.collection(collectionName).findOne(query);
-      if (!item) {
-        return res.status(404).json({ success: false, error: 'Registro não encontrado' });
-      }
+      const item = await findScopedRecord(req, res, query);
+      if (!item) return undefined;
 
       return res.status(200).json({ success: true, data: item });
     } catch (error) {
@@ -123,6 +182,11 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
         // list route sorts on createdAt/_id).
         [idField]: req.body?.[idField] ?? generateId(),
       };
+      // #1182: an organization-scoped caller creates in its own organization,
+      // whatever the body names (#1071's rule for every other scoped create).
+      if (scopeField) {
+        payload[scopeField] = resolveOrganizationIdForCreate(req.organizationScope, req.body?.[scopeField]);
+      }
       const validation = model.validate(payload);
       if (!validation.isValid) {
         return res.status(422).json({ success: false, error: 'Payload inválido', details: validation.errors });
@@ -139,6 +203,8 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const result = await db.collection(collectionName).insertOne(document);
       return res.status(201).json({ success: true, data: { _id: result.insertedId, ...document } });
     } catch (error) {
+      // #1402: a unique index on a master-data collection refuses the insert with E11000; that is a conflict, not a server error.
+      if (error?.code === 11000) return res.status(409).json({ success: false, error: 'Registro duplicado', message: `${idField} já existe` });
       if (error.statusCode) {
         return res.status(error.statusCode).json({ success: false, error: error.message, message: error.message });
       }
@@ -153,11 +219,54 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const rawId = String(req.params.id);
       const query = buildIdQuery(rawId);
       const body = req.body || {};
+
+      // #1400: the stored row is read for every mount, since the edit is
+      // validated merged into it below. The scope check runs only when the
+      // mount sets scopeField.
+      const existing = await findScopedRecord(req, res, query);
+      if (!existing) return undefined;
+      if (scopeField) {
+        // #1182: the check above is the SOURCE; this is the destination.
+        assertOrganizationFieldNotReparented(req.organizationScope, existing[scopeField], body[scopeField], scopeField);
+      }
+
+      const changedImmutable = immutableFields.filter((key) => Object.prototype.hasOwnProperty.call(body, key));
+      if (changedImmutable.length > 0) {
+        const refused = changedImmutable.filter(
+          (key) => existing[key] !== undefined && existing[key] !== null && existing[key] !== body[key]
+        );
+        if (refused.length > 0) {
+          const message = `${refused.join(', ')} não pode ser alterado por edição`;
+          return res.status(422).json({
+            success: false,
+            error: 'Campo imutável',
+            message,
+            details: [message],
+          });
+        }
+      }
+
       const update = { updatedAt: new Date() };
       for (const key of allowedUpdateFields) {
         if (Object.prototype.hasOwnProperty.call(body, key)) {
           update[key] = body[key];
         }
+      }
+
+      // #1400: an edit must not store a record the model refuses at create,
+      // so the stored row merged with this update is validated as POST
+      // validates its payload. Only `update` is written; the merge is never $set.
+      const merged = { ...existing, ...update };
+      const mergedValidation = model.validate(merged);
+      if (!mergedValidation.isValid) {
+        return res.status(422).json({ success: false, error: 'Payload inválido', details: mergedValidation.errors });
+      }
+
+      // #1221: the create path's #664 reference check, over the keys this
+      // update carries. Without it an edit could point a record at a
+      // specimen, protocol, operator or lot that does not exist.
+      if (validateReferences) {
+        await validateReferences(db, update);
       }
 
       const result = await db.collection(collectionName).findOneAndUpdate(
@@ -172,6 +281,14 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
 
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
+      // #1182: a refused re-parent throws statusCode:403.
+      if (error.statusCode === 403) {
+        return res.status(403).json({ success: false, error: 'Acesso negado', message: error.message });
+      }
+      // #1221: an unresolved reference throws statusCode:404, as on create.
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ success: false, error: error.message, message: error.message });
+      }
       return res.status(500).json({ success: false, error: 'Erro ao atualizar dado mestre', message: error.message });
     }
   });
@@ -182,6 +299,8 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
 
       const rawId = String(req.params.id);
       const query = buildIdQuery(rawId);
+
+      if (scopeField && !(await findScopedRecord(req, res, query))) return undefined;
 
       const result = await db.collection(collectionName).deleteOne(query);
       if (result.deletedCount === 0) {

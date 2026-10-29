@@ -40,10 +40,11 @@ class NotificationRuleController {
       });
     } catch (error) {
       logger.error('Erro ao criar regra de notificação:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar regra de notificação',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -86,10 +87,11 @@ class NotificationRuleController {
       });
     } catch (error) {
       logger.error('Erro ao atualizar regra de notificação:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao atualizar regra de notificação',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }

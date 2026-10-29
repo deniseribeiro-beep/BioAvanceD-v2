@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 const { ingestRecord } = require('../../../src/ingestion/ingestionGateway');
 const { createFakeDb } = require('./testHelpers');
 
@@ -48,6 +48,41 @@ describe('ingestion/ingestionGateway (RF029 slice 1/6, #669)', () => {
     expect(outcome.violations.some((v) => v.code === 'PROVENANCE_FIELD_MISSING')).toBe(true);
     expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(1);
     expect(db.collections.ingestionQuarantineRecords.docs[0]).toMatchObject({ entityType: 'Specimen', resolutionStatus: 'open' });
+  });
+
+  // RF029 AC7 (#1318): the quarantine record keeps the client's declaration.
+  it('quarantines with the missingDataReasons it was given, stored on the record', async () => {
+    const db = createFakeDb({ ingestionQuarantineRecords: [] });
+    const missingDataReasons = [{ fieldPath: 'doi', reasonCode: 'withheld' }];
+
+    const outcome = await ingestRecord({ db, entityType: 'Specimen', payload: { specimenId: 'S-1' }, provenance: {}, missingDataReasons });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(db.collections.ingestionQuarantineRecords.docs[0].missingDataReasons).toEqual([{ fieldPath: 'doi', reasonCode: 'withheld' }]);
+  });
+
+  it('quarantines without missingDataReasons, storing null on the record', async () => {
+    const db = createFakeDb({ ingestionQuarantineRecords: [] });
+
+    const outcome = await ingestRecord({ db, entityType: 'Specimen', payload: { specimenId: 'S-1' }, provenance: {} });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(db.collections.ingestionQuarantineRecords.docs[0].missingDataReasons).toBeNull();
+  });
+
+  // #1318: an entity type's own model check, appended to the gateway's.
+  it('quarantines on an entityValidator violation, passing it the payload', async () => {
+    const db = createFakeDb({ ingestionQuarantineRecords: [] });
+    const violation = { code: 'ENTITY_VALIDATION_FAILED', field: null, message: 'startedAt é obrigatório' };
+    const entityValidator = vi.fn(() => [violation]);
+    const payload = { specimenId: 'S-1' };
+
+    const outcome = await ingestRecord({ db, entityType: 'Specimen', payload, provenance: validProvenance(), entityValidator });
+
+    expect(entityValidator).toHaveBeenCalledWith(payload);
+    expect(outcome.status).toBe('quarantined');
+    expect(outcome.violations).toEqual([violation]);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(1);
   });
 
   it('quarantines on a nonexistent reference', async () => {

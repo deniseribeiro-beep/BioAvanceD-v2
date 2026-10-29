@@ -1,6 +1,10 @@
 const express = require('express');
 const Terminology = require('../../models/Terminology');
-const { syncFromOrphadata, isExternalTerminologySyncEnabled, ensureTerminologyIndexes } = require('../../services/terminologySync.service');
+const {
+  isExternalTerminologySyncEnabled,
+  ensureTerminologyIndexes,
+  ensureTerminologyLookupIndexes,
+} = require('../../services/terminologySync.service');
 const logger = require('../../utils/logger');
 
 const router = express.Router();
@@ -160,11 +164,10 @@ async function bulkUpsertTerminologies(collection, records = []) {
   }
 
   // #941: this is the second of the two racing writers the unique index was
-  // added for, and the one the original fix did not wire. `upsertTerminology`
-  // is reachable only via `syncFromOrphadata`, which returns early unless
-  // ALLOW_EXTERNAL_TERMINOLOGY_SYNC is set -- so in the default offline
-  // configuration this path was the only live writer AND the only one not
-  // building the index. Latched per collection name, so this costs one
+  // added for, and the one the original fix did not wire. The service's
+  // `upsertTerminology` db path has had no caller in `src/` since #115
+  // retired the Orphadata bulk sync, so this path is the only live writer
+  // here, and it was the only one not building the index. Latched per collection name, so this costs one
   // createIndex per process, not one per bulk write.
   await ensureTerminologyIndexes(collection, 'terminologies');
 
@@ -487,6 +490,8 @@ router.get('/', async (req, res) => {
     }
 
     const terminologiesCollection = db.collection('terminologies');
+    // #1163: un-awaited and best-effort, like the facility/room list routes.
+    ensureTerminologyLookupIndexes(terminologiesCollection);
     let [items, total] = await Promise.all([
       terminologiesCollection.find(filter).sort({ sistema: 1, codigo: 1 }).limit(limit).toArray(),
       terminologiesCollection.countDocuments(filter),
@@ -526,20 +531,6 @@ router.get('/', async (req, res) => {
   } catch (error) {
     logger.error(`Erro ao listar terminologias: ${error.message}`);
     res.status(500).json({ success: false, error: 'Erro ao listar terminologias' });
-  }
-});
-
-router.post('/sync', async (req, res) => {
-  try {
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({ success: false, error: 'Banco de dados não disponível para sincronização' });
-    }
-    const result = await syncFromOrphadata(db);
-    res.json({ success: true, ...result });
-  } catch (error) {
-    logger.error(`Erro ao sincronizar terminologias: ${error.message}`);
-    res.status(500).json({ success: false, error: 'Erro ao sincronizar terminologias' });
   }
 });
 

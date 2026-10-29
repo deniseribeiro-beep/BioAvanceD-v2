@@ -29,9 +29,12 @@ vi.mock('../../src/services/SampleGraphValidator', () => ({
 vi.mock('../../src/services/MerkleService', () => ({ generateSampleHash: vi.fn(() => 'hash-1') }));
 
 const service = require('../../src/services/import-lgpd.service');
+const { revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 const patientIdentityService = require('../../src/services/PatientIdentityService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const DrugService = require('../../src/services/DrugService');
+const { createMatchingCollection } = require('../factories/filter.factory');
+const env = require('../../src/config/env');
 
 const MATCHED_PATIENT = {
   patient: { _id: 'patient-obj-1', participantId: '12345678', patientName: 'Maria Silva' },
@@ -110,7 +113,8 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
   const sampleOriginsCollection = { findOne: vi.fn().mockResolvedValue(sampleOriginFound ? { id: 'VENOUS_BLOOD', description: 'Sangue Venoso Periferico' } : null) };
   const extractionProtocolsCollection = { findOne: vi.fn().mockResolvedValue(protocolFound ? { id: 'TUBE_EDTA', description: 'Tubo EDTA (Tampa Roxa)' } : null) };
   // AllocateSampleUseCase's audit trail (MongoAuditRepository) and
-  // storagePaths hierarchy lookup (MongoStorageRepository.openStorageAssignment).
+  // storagePaths hierarchy lookup (MongoStorageRepository.checkLocationBlocked
+  // and findStorageHierarchyForBox).
   const sampleMovementsCollection = {
     insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-1' }),
     find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [], next: async () => null }) }) })),
@@ -174,7 +178,34 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     insertMany: vi.fn().mockResolvedValue({ insertedCount: 1 }),
   };
 
+  // #1312: the allocation appends its custody event to the graph outbox (the
+  // event collection and its per-aggregate version counter) in its own
+  // transaction, so a row only imports when that append lands.
+  const graphOutboxCollection = {
+    createIndex: vi.fn().mockResolvedValue(true),
+    updateOne: vi.fn().mockResolvedValue({ acknowledged: true }),
+  };
+  const graphOutboxVersionsCollection = {
+    findOneAndUpdate: vi.fn().mockResolvedValue({ version: 1 }),
+  };
+
+  // #1374, #1378: the allocation places a specimen on the physical chain,
+  // and every imported row is issued a LabelIdentifier on its container:
+  // the one the allocation loaded, else one created and loaded at the issue,
+  // after the legacy placement (storageAssignments) it would adopt is read.
+  const physicalChain = {
+    containers: createMatchingCollection([], { collectionName: 'containers' }),
+    specimenContainerAssignments: createMatchingCollection([], { collectionName: 'specimenContainerAssignments' }),
+    containerPositionAssignments: createMatchingCollection([], { collectionName: 'containerPositionAssignments' }),
+    rackLocationAssignments: createMatchingCollection([], { collectionName: 'rackLocationAssignments' }),
+    labelIdentifiers: createMatchingCollection([], { collectionName: 'labelIdentifiers' }),
+    storageAssignments: createMatchingCollection([], { collectionName: 'storageAssignments' }),
+  };
+
   const collections = {
+    ...physicalChain,
+    graph_projection_outbox: graphOutboxCollection,
+    graph_projection_outbox_aggregate_versions: graphOutboxVersionsCollection,
     import_batches: importBatchesCollection,
     import_staging_records: importStagingRecordsCollection,
     samples: samplesCollection,
@@ -202,7 +233,7 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     },
   };
 
-  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection, importBatchesCollection, importStagingRecordsCollection };
+  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection, importBatchesCollection, importStagingRecordsCollection, physicalChain };
 }
 
 describe('ImportLGPDService.importSamples', () => {
@@ -464,6 +495,56 @@ describe('ImportLGPDService.importSamples', () => {
     expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
   });
 
+  // #1353, #1192: the resolved organization is the tenancy key, stamped as
+  // organizationId. parseSampleRow maps a collectionSite column (ELM-0128,
+  // #1376), but VALID_ROW leaves it out, so the unnamed site is filled with
+  // the organization, as before.
+  it('stores the stamped organizationId on an imported row and fills its unnamed collectionSite with it (#1353, #1192)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].organizationId).toBe('ORG-OWN');
+    expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBe('ORG-OWN');
+    // A participant the row creates is stamped the same way.
+    expect(patientIdentityService.matchOrUpsertParticipant.mock.calls[0][1]).toMatchObject({ clinicalUnitId: 'ORG-OWN' });
+  });
+
+  it('passes the importer\'s organization scope to the participant match (#1356)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const organizationScope = { scope: 'organization', organizationIds: ['ORG-OWN'] };
+
+    await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN', organizationScope });
+
+    expect(patientIdentityService.matchOrUpsertParticipant.mock.calls[0][2]).toEqual({ organizationScope });
+    // An in-scope match is the importer's own participant, so it is updated.
+    expect(patientsCollection.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('links a row to a participant matched outside the importer\'s scope but writes nothing on that participant (#1356)', async () => {
+    patientIdentityService.matchOrUpsertParticipant.mockResolvedValue({ ...MATCHED_PATIENT, outOfScope: true });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const organizationScope = { scope: 'organization', organizationIds: ['ORG-OWN'] };
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN', organizationScope });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].participantId).toBe('12345678');
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('leaves collectionSite unset when no organizationId was resolved, a global caller naming none (#1353)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBeNull();
+    expect(samplesCollection.insertOne.mock.calls[0][0].organizationId).toBeNull();
+  });
+
   it('persists externalQualityAssessment (camelCase) on the inserted document when rcsScore/scoreBasedGrade columns are present (#226)', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([
       { ...VALID_ROW, rcsScore: '100', scoreBasedGrade: 'A' },
@@ -485,7 +566,7 @@ describe('ImportLGPDService.importSamples', () => {
   // #499: import-lgpd's own RCS-computing CSV parse logic never called
   // rcsAssessmentService.recordAssessment — the canonical, referenced
   // RcsAssessment snapshot import.service.js's CSV/XLSX branch already
-  // writes. Real-enough proof per the build-loop overlay's backend-internal
+  // writes. Real-enough proof per this repo's backend-internal
   // proof bar: an in-memory collection mock, asserting the actual
   // specimenId/certificationResult shape passed through, not a stub.
   it('records a referenced RcsAssessment snapshot alongside the embedded copy (#499)', async () => {
@@ -783,6 +864,9 @@ describe('ImportLGPDService.importSamples', () => {
         // mockOperationalStorage fix in #510/#513.
         findOne: vi.fn().mockResolvedValue(null),
       };
+      // #1374: the allocation places each specimen on the physical chain
+      // (makeDb's), and the placement reader reads it there first.
+      const { physicalChain } = base;
       base.db.collection = vi.fn((name) => {
         if (name === 'storageContainers') return storageContainersCollection;
         if (name === 'storageBoxes') return storageBoxesCollection;
@@ -797,7 +881,7 @@ describe('ImportLGPDService.importSamples', () => {
 
     it('assigns the next available box when autoIncrement is on and the row has no boxId', async () => {
       const chain = makeStorageChain(2);
-      const { db, samplesCollection, storageAssignments } = makeDbWithStorageChain(chain);
+      const { db, samplesCollection, storageAssignments, physicalChain } = makeDbWithStorageChain(chain);
       vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
       const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
@@ -810,7 +894,73 @@ describe('ImportLGPDService.importSamples', () => {
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
       expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[0]._id));
       expect(inserted.storageLocation.position).toBe('A1');
-      expect(storageAssignments).toHaveLength(1);
+      // #1374: one chain placement per imported sample, keyed by its
+      // business specimenId; no StorageAssignment row.
+      expect(physicalChain.containers.docs).toHaveLength(1);
+      expect(physicalChain.specimenContainerAssignments.docs).toEqual([
+        expect.objectContaining({ specimenId: inserted.specimenId, containerId: physicalChain.containers.docs[0].containerId }),
+      ]);
+      expect(physicalChain.containerPositionAssignments.docs).toEqual([
+        expect.objectContaining({
+          containerId: physicalChain.containers.docs[0].containerId,
+          storagePositionId: `${chain.boxes[0]._id}:A01`,
+        }),
+      ]);
+      expect(storageAssignments).toHaveLength(0);
+    });
+
+    // #1378: a placed row's code is issued on the container the allocation
+    // loaded; no second container is created.
+    it('issues a placed row one LabelIdentifier on the container its allocation loaded (#1378)', async () => {
+      const chain = makeStorageChain(1);
+      const { db, samplesCollection, physicalChain } = makeDbWithStorageChain(chain);
+      vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, barcode: 'BC-PLACED-1' }]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        startBoxId: String(chain.boxes[0]._id),
+      });
+
+      expect(result.success).toBe(1);
+      const inserted = samplesCollection.insertOne.mock.calls[0][0];
+      expect(physicalChain.containers.docs).toHaveLength(1);
+      const { containerId } = physicalChain.containers.docs[0];
+      expect(physicalChain.specimenContainerAssignments.docs).toEqual([
+        expect.objectContaining({ specimenId: inserted.specimenId, containerId }),
+      ]);
+      expect(physicalChain.labelIdentifiers.docs).toEqual([
+        expect.objectContaining({
+          encodedValue: 'BC-PLACED-1',
+          targetType: 'container',
+          targetId: containerId,
+          identifierOrigin: 'institution_applied',
+          status: 'active',
+          printBatchId: null,
+        }),
+      ]);
+    });
+
+    // #817: the per-row work moved into processSampleRow, and the loop now
+    // hands it the allocation cursor as `slotIndex`. The cursor is the count
+    // of rows imported so far, so a rejected row does not advance it.
+    it('passes the success count as the slot cursor, not advanced by a rejected row (#817)', async () => {
+      const chain = makeStorageChain(3);
+      const { db } = makeDbWithStorageChain(chain);
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        VALID_ROW,
+        { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+        { ...VALID_ROW },
+      ]);
+      const slotSpy = vi.spyOn(service, 'getNextAvailableStorageSlot');
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        autoIncrement: true,
+        startBoxId: String(chain.boxes[0]._id),
+      });
+
+      expect(result.success).toBe(2);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toMatchObject({ index: 1 });
+      expect(slotSpy.mock.calls.map((call) => call[2])).toEqual([0, 1]);
     });
 
     it('records a per-row error when autoIncrement is on but no more boxes are available', async () => {
@@ -968,7 +1118,7 @@ describe('ImportLGPDService.importSamples', () => {
       const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
       expect(staged).toHaveLength(1);
       expect(staged[0]).toMatchObject({
-        batchId: 'batch-1',
+        batchId: importBatchesCollection.insertOne.mock.calls[0][0]._id,
         rowNumber: 3,
         status: 'ERROR',
       });
@@ -984,7 +1134,7 @@ describe('ImportLGPDService.importSamples', () => {
 
       // "sem correção silenciosa" cuts both ways: the rows have to be kept,
       // and the caller has to be told where they went.
-      expect(result.stagingBatchId).toBe('batch-1');
+      expect(result.stagingBatchId).toBe(importBatchesCollection.insertOne.mock.calls[0][0]._id);
     });
 
     it('preserves the rejected row data, not just the error message', async () => {
@@ -994,7 +1144,8 @@ describe('ImportLGPDService.importSamples', () => {
 
       await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
-      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
+      // #807: sealed at rest, so read it back the way the batch reader does.
+      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0].map(revealStagedRecord);
       // The whole point of quarantine over a log line: the row can be
       // corrected and re-submitted, which needs the original values.
       expect(staged[0].row).toBeDefined();
@@ -1029,6 +1180,150 @@ describe('ImportLGPDService.importSamples', () => {
       expect(result.success).toBe(1);
       expect(result.errors).toHaveLength(1);
       expect(result.stagingBatchId).toBeNull();
+    });
+  });
+});
+
+// #817: processSampleRow is the one implementation of a sample row, called
+// by importSamples' loop and meant for a resubmit of one quarantined row
+// (#794). It reports the row's outcome and holds no batch state of its own.
+describe('ImportLGPDService.processSampleRow (#817)', () => {
+  let db;
+  let samplesCollection;
+  let patientsCollection;
+  let physicalChain;
+
+  function rowContext(overrides = {}) {
+    return {
+      samplesCollection,
+      patientsCollection,
+      validator: { validateSampleCompliance: vi.fn().mockResolvedValue({ ok: true }) },
+      drugService: new DrugService(db),
+      allocateUseCase: { execute: vi.fn() },
+      groupFields: {},
+      autoIncrement: false,
+      startBoxId: null,
+      actor: {},
+      slotIndex: 0,
+      rowNumber: 2,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    ({ db, samplesCollection, patientsCollection, physicalChain } = makeDb());
+    vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns ok with the inserted id for a valid row', async () => {
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+  });
+
+  // #1378: a row with no placement has its container created and loaded at
+  // the label's issue, under a specimen-label-issuance source event.
+  it('issues an unplaced row one LabelIdentifier on a container loaded at the issue (#1378)', async () => {
+
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, barcode: 'BC-UNPLACED-1' }, rowContext());
+
+    expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(physicalChain.containers.docs).toHaveLength(1);
+    const { containerId } = physicalChain.containers.docs[0];
+    expect(physicalChain.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({
+        specimenId: inserted.specimenId,
+        containerId,
+        sourceEventId: expect.stringMatching(/^specimen-label-issuance:sample-id-1:/),
+      }),
+    ]);
+    expect(physicalChain.containerPositionAssignments.docs).toHaveLength(0);
+    expect(physicalChain.labelIdentifiers.docs).toEqual([
+      expect.objectContaining({
+        encodedValue: 'BC-UNPLACED-1',
+        targetType: 'container',
+        targetId: containerId,
+        identifierOrigin: 'institution_applied',
+        status: 'active',
+        printBatchId: null,
+      }),
+    ]);
+  });
+
+  // #1378: this import has no duplicate-barcode check of its own, so a code
+  // already active as a label fails the row after its insert.
+  it('fails a row whose code is already an active label, reporting the inserted id (#1378)', async () => {
+    physicalChain.labelIdentifiers.insertOne = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, barcode: 'BC-TAKEN-1' }, rowContext());
+
+    expect(outcome).toMatchObject({ ok: false, sampleId: 'sample-id-1' });
+    expect(outcome.errors[0]).toMatch(/BC-TAKEN-1 já ativo/);
+  });
+
+  // #1378 (ELM-0116): once the migration window is closed, the row's code is
+  // issued only as the label; the inserted sample carries no Sample.barcode.
+  it('with the barcode window closed, inserts no barcode and issues the label with the code (#1378)', async () => {
+    const saved = env.SAMPLE_BARCODE_WINDOW_CLOSED;
+    env.SAMPLE_BARCODE_WINDOW_CLOSED = true;
+    let outcome;
+    try {
+      outcome = await service.processSampleRow(db, { ...VALID_ROW, barcode: 'BC-CLOSED-1' }, rowContext());
+    } finally {
+      env.SAMPLE_BARCODE_WINDOW_CLOSED = saved;
+    }
+
+    expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0]).not.toHaveProperty('barcode');
+    expect(physicalChain.labelIdentifiers.docs).toEqual([expect.objectContaining({ encodedValue: 'BC-CLOSED-1', status: 'active' })]);
+  });
+
+  it('returns the rejection without inserting, for the caller to record', async () => {
+    const outcome = await service.processSampleRow(
+      db,
+      { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+      rowContext()
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.errors[0]).toMatch(/atcCode inválido/);
+    expect(outcome.data).toEqual({ participantId: '12345678' });
+    expect(outcome.sampleId).toBeUndefined();
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('flags a duplicate barcode as a duplicate rejection', async () => {
+    ({ db, samplesCollection, patientsCollection } = makeDb({ existingBarcode: { _id: 'other' } }));
+
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, barcode: 'BC-1' }, rowContext());
+
+    expect(outcome).toMatchObject({ ok: false, duplicate: true });
+    expect(outcome.errors[0]).toMatch(/código de barras BC-1/);
+  });
+
+  it('reports the inserted id with the error when a step after the insert throws', async () => {
+    patientsCollection.updateOne = vi.fn().mockRejectedValue(new Error('patients down'));
+
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome).toEqual({
+      ok: false,
+      errors: ['patients down'],
+      data: { participantId: '12345678' },
+      sampleId: 'sample-id-1',
     });
   });
 });
@@ -1299,5 +1594,65 @@ describe('ImportLGPDService.importSamples reference-data lookups (#702)', () => 
 
     expect(result.success).toBe(0);
     expect(result.errors[0].errors[0]).toMatch(/não encontrado no banco de dados/);
+  });
+});
+
+// ELM-0128 (#1376): a named collectionSite column is kept when it names a
+// registered Organization, and the row is rejected before any participant
+// write when it does not. A row naming none still gets the stamped one.
+describe('ImportLGPDService.importSamples collectionSite (#1376)', () => {
+  let db;
+  let samplesCollection;
+  let patientsCollection;
+  let organizationsCollection;
+
+  beforeEach(() => {
+    ({ db, samplesCollection, patientsCollection } = makeDb());
+    organizationsCollection = createMatchingCollection([{ organizationId: 'org-b' }], { collectionName: 'organizations' });
+    const collection = db.collection;
+    db.collection = vi.fn((name) => (name === 'organizations' ? organizationsCollection : collection(name)));
+
+    vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a named site that is a registered Organization, with the stamped organizationId', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, collectionSite: 'org-b' }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'org-a' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0]).toMatchObject({ collectionSite: 'org-b', organizationId: 'org-a' });
+  });
+
+  it('rejects a row naming an unregistered site before any participant write', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, collectionSite: 'org-x' }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'org-a' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toEqual(['collectionSite org-x não encontrado']);
+    expect(patientIdentityService.matchOrUpsertParticipant).not.toHaveBeenCalled();
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('fills a row naming no site with the stamped organization, as before', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'org-a' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBe('org-a');
+    expect(organizationsCollection.findOne).not.toHaveBeenCalled();
   });
 });

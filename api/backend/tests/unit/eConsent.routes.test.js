@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
@@ -136,6 +139,39 @@ describe('eConsent.routes POST /generate-link', () => {
     sendConsentEmailSpy.mockRestore();
   });
 
+  // #1166 slice 2: the email check compares against the identity record,
+  // decrypted, because dict-02 places the contact there and nowhere else.
+  // The Patient row here carries no email, as it will after slice 4.
+  it('#1166: checks the email against the decrypted identity record, not the Patient document', async () => {
+    const router = loadAuthenticatedRouter();
+    const notificationService = require('../../src/services/notification.service');
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const sendConsentEmailSpy = vi
+      .spyOn(notificationService, 'sendConsentEmail')
+      .mockResolvedValue({ channel: 'email', success: true, provider: 'resend' });
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      email: 'a@b.com',
+    });
+    const byCollection = {
+      patients: { findOne: vi.fn().mockResolvedValue({ participantId: '12345678' }) },
+      participantIdentities: { findOne: vi.fn().mockResolvedValue({ ...encrypted, email: null }) },
+    };
+    const db = { collection: vi.fn((name) => byCollection[name]) };
+    const app = buildApp(router, db);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ participantId: '12345678', email: 'a@b.com' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(byCollection.participantIdentities.findOne).toHaveBeenCalledWith({ participantId: '12345678' });
+    expect(sendConsentEmailSpy).toHaveBeenCalledWith(
+      { participantId: '12345678', email: 'a@b.com' },
+      res.body.link
+    );
+  });
+
   // #829: the handler had no try/catch, so a throw from sendConsentEmail was
   // an unhandled promise rejection and Node *exited the process*. Observed on
   // the test stack: backend-app-test went Up (healthy) -> Exited (1) on a
@@ -266,7 +302,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const db = buildPatientDb({ patient, identity });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
     const currentConsent = { _id: 'consent-1', status: 'ACTIVE', responses: { general: true } };
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(currentConsent);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -295,7 +331,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const ciphertextOnlyIdentity = { ...encrypted, patientName: null, birthDate: null, identityDocument: null };
     const db = buildPatientDb({ patient, identity: ciphertextOnlyIdentity });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [] };
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -305,14 +341,15 @@ describe('eConsent.routes GET /validate/:token', () => {
     expect(res.status).toBe(200);
     expect(res.body.patient.patientName).toBe('Jane Doe');
     expect(res.body.patient.identityDocument).toBe('11144477735');
-    expect(new Date(res.body.patient.birthDate).toISOString()).toBe(new Date('1990-01-20').toISOString());
+    // #1412: stored as noon UTC of the day.
+    expect(new Date(res.body.patient.birthDate).toISOString()).toBe('1990-01-20T12:00:00.000Z');
   });
 
   it('returns the raw patient unchanged when no ParticipantIdentity record exists yet', async () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
     const db = buildPatientDb({ patient, identity: null });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [] };
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -327,7 +364,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
     const db = buildPatientDb({ patient });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -341,7 +378,7 @@ describe('eConsent.routes GET /validate/:token', () => {
   it('returns a null template when no ConsentTemplate is active', async () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
     const db = buildPatientDb({ patient });
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(null);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -374,24 +411,29 @@ describe('eConsent.routes POST /update', () => {
   // a legitimate full revocation). Quarantine/release side effects
   // (#409-era specimenStatus + QuarantineAction) stay driven off the raw
   // `consents` payload, unchanged from before #384.
-  function buildMockDb({ samples = [] } = {}) {
+  function buildMockDb({ samples = [], quarantineActions = [] } = {}) {
     const samplesCollection = {
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(samples) }),
       updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
     };
     const quarantineActionsCollection = {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'action-1' }),
-      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(quarantineActions) }) }),
       updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+    };
+    const operationalStateDecisionsCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'decision-1' }),
     };
     const db = {
       collection: vi.fn((name) => {
         if (name === 'samples') return samplesCollection;
         if (name === 'quarantineActions') return quarantineActionsCollection;
+        if (name === 'operationalStateDecisions') return operationalStateDecisionsCollection;
         throw new Error(`unexpected collection: ${name}`);
       }),
       samplesCollection,
       quarantineActionsCollection,
+      operationalStateDecisionsCollection,
     };
     return db;
   }
@@ -399,7 +441,7 @@ describe('eConsent.routes POST /update', () => {
   const activeTemplate = { _id: 'tmpl-1', title: 'TCLE v1' };
 
   beforeEach(() => {
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(activeTemplate);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ _id: 'consent-1', consentId: 'uuid-1' });
     vi.spyOn(consentService, 'revokeConsent').mockResolvedValue({ _id: 'consent-1', status: 'REVOKED' });
@@ -430,11 +472,13 @@ describe('eConsent.routes POST /update', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
+    // #1181: the term is the active one of this participant's own lineage.
+    expect(consentService.getActiveTemplateForParticipant).toHaveBeenCalledWith(db, '12345678');
     expect(consentService.createPatientConsent).toHaveBeenCalledWith(db, expect.objectContaining({
       participantId: '12345678',
       consentTemplateId: 'tmpl-1',
       responses: { general: true },
-    }));
+    }), { channel: 'electronic_link', signerRole: 'participant', authenticationLevel: 'token' });
     expect(consentService.revokeConsent).not.toHaveBeenCalled();
   });
 
@@ -449,7 +493,7 @@ describe('eConsent.routes POST /update', () => {
       .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
 
     expect(res.status).toBe(200);
-    expect(consentService.revokeConsent).toHaveBeenCalledWith(db, 'consent-1');
+    expect(consentService.revokeConsent).toHaveBeenCalledWith(db, 'consent-1', {}, { channel: 'electronic_link', signerRole: 'participant', authenticationLevel: 'token' });
     expect(consentService.createPatientConsent).not.toHaveBeenCalled();
   });
 
@@ -470,7 +514,7 @@ describe('eConsent.routes POST /update', () => {
 
   it('returns 409 when no ConsentTemplate is active and at least one permission is accepted', async () => {
     const db = buildMockDb();
-    consentService.getActiveTemplate.mockResolvedValue(null);
+    consentService.getActiveTemplateForParticipant.mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
 
@@ -501,6 +545,7 @@ describe('eConsent.routes POST /update', () => {
   it('quarantines samples and records one QuarantineAction per newly-quarantined sample when any consent is REVOKED', async () => {
     const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'available' };
     const db = buildMockDb({ samples: [sample] });
+    const auditSpy = vi.spyOn(quarantineActionService, 'auditDecision').mockResolvedValue(undefined);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
     const emit = vi.fn();
@@ -535,8 +580,76 @@ describe('eConsent.routes POST /update', () => {
       expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'] }),
       undefined
     );
+    // RF019 AC#6: the quarantine decision is audited, naming the action just recorded.
+    const recorded = db.quarantineActionsCollection.insertOne.mock.calls[0][0];
+    expect(auditSpy).toHaveBeenCalledTimes(1);
+    expect(auditSpy).toHaveBeenCalledWith(db, expect.objectContaining({ decision: 'applied', action: recorded }));
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-quarantined', { participantId: '12345678' });
+    // RF006 AC7 (#1315): the change is a decision triggered by that action.
+    expect(db.operationalStateDecisionsCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(db.operationalStateDecisionsCollection.insertOne.mock.calls[0][0]).toMatchObject({
+      specimenId: 'sample-1',
+      previousStatus: 'available',
+      newStatus: 'quarantined',
+      triggerEventId: recorded.quarantineActionId,
+      rulesApplied: ['consent_revocation_quarantine'],
+      reasonCodes: ['CONSENT_REVOKED'],
+    });
+  });
+
+  it('#1315: leaves a destroyed or disposed specimen as it is when consent is revoked', async () => {
+    const samples = [
+      { _id: 'sample-d', participantId: '12345678', specimenStatus: 'destroyed' },
+      { _id: 'sample-x', participantId: '12345678', specimenStatus: 'disposed' },
+    ];
+    const db = buildMockDb({ samples });
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
+
+    expect(res.status).toBe(200);
+    expect(db.samplesCollection.updateOne).not.toHaveBeenCalled();
+    expect(db.quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+    expect(db.operationalStateDecisionsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1315: a restored consent leaves a specimen quarantined by another source (RF019 AC5)', async () => {
+    const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'quarantined' };
+    const quarantineActions = [
+      { quarantineActionId: 'qa-consent', specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'], actionStatus: 'active' },
+      { quarantineActionId: 'qa-cold', specimenIds: ['sample-1'], reasonCodes: ['COLD_CHAIN_INCIDENT'], actionStatus: 'active' },
+    ];
+    const db = buildMockDb({ samples: [sample], quarantineActions });
+    const releaseSpy = vi.spyOn(quarantineActionService, 'releaseActiveAction');
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'ACTIVE' }] });
+
+    expect(res.status).toBe(200);
+    expect(releaseSpy).not.toHaveBeenCalled();
+    expect(db.samplesCollection.updateOne).not.toHaveBeenCalled();
+    expect(db.operationalStateDecisionsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1315: a restored consent leaves a quarantined specimen with no active action quarantined', async () => {
+    const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'quarantined' };
+    const db = buildMockDb({ samples: [sample], quarantineActions: [] });
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'ACTIVE' }] });
+
+    expect(res.status).toBe(200);
+    expect(db.samplesCollection.updateOne).not.toHaveBeenCalled();
   });
 
   it('does not record a duplicate QuarantineAction for a sample already quarantined', async () => {
@@ -557,8 +670,11 @@ describe('eConsent.routes POST /update', () => {
 
   it('releases quarantined samples and calls releaseActiveAction when every consent is ACTIVE or GRANTED', async () => {
     const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'quarantined' };
-    const db = buildMockDb({ samples: [sample] });
-    const releaseSpy = vi.spyOn(quarantineActionService, 'releaseActiveAction').mockResolvedValue(null);
+    const activeAction = { quarantineActionId: 'qa-1', specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'], actionStatus: 'active' };
+    const db = buildMockDb({ samples: [sample], quarantineActions: [activeAction] });
+    const releasedAction = { ...activeAction, actionStatus: 'released' };
+    const releaseSpy = vi.spyOn(quarantineActionService, 'releaseActiveAction').mockResolvedValue(releasedAction);
+    const auditSpy = vi.spyOn(quarantineActionService, 'auditDecision').mockResolvedValue(undefined);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
     const emit = vi.fn();
@@ -589,9 +705,18 @@ describe('eConsent.routes POST /update', () => {
       }
     );
     expect(db.samplesCollection.updateOne.mock.calls[0][1].$set.status).toBeUndefined();
-    expect(releaseSpy).toHaveBeenCalledWith(db, 'sample-1', 'SYSTEM');
+    // #1219: handed the sample, so the release matches its specimenId and its _id.
+    expect(releaseSpy).toHaveBeenCalledWith(db, expect.objectContaining({ _id: 'sample-1' }), 'SYSTEM');
+    expect(auditSpy).toHaveBeenCalledWith(db, expect.objectContaining({ decision: 'released', action: releasedAction }));
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-released', { participantId: '12345678' });
+    expect(db.operationalStateDecisionsCollection.insertOne.mock.calls[0][0]).toMatchObject({
+      specimenId: 'sample-1',
+      previousStatus: 'quarantined',
+      newStatus: 'available',
+      triggerEventId: 'qa-1',
+      rulesApplied: ['consent_revocation_quarantine'],
+    });
   });
 
   it('neither quarantines nor releases when consents are a mix of other statuses', async () => {
@@ -662,6 +787,18 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
     return require(routePath);
   }
 
+  // The first request that reaches the handler loads its lazy graph (audit
+  // logger, alerts) cold: about 260 ms alone, and past the 5000 ms case
+  // timeout under a parallel run's contention. Warm it once here, under its
+  // own timeout, as #1297 did; no case's timeout is raised.
+  beforeAll(async () => {
+    vi.spyOn(consentService, 'revokeConsent').mockResolvedValue({ _id: 'consent-1', status: 'REVOKED' });
+    const app = buildApp(loadRouterAsRole(3), { collection: () => ({}) });
+    await request(app).post('/e-consent/consents/consent-1/revoke').send({});
+    vi.restoreAllMocks();
+    clearRouteCache();
+  }, 30_000);
+
   it('refuses a Usuario Externo (level 1) instead of revoking', async () => {
     const revokeSpy = vi
       .spyOn(consentService, 'revokeConsent')
@@ -698,7 +835,94 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
     const res = await request(app).post('/e-consent/consents/consent-1/revoke').send({});
 
     expect(res.status).not.toBe(403);
-    expect(revokeSpy).toHaveBeenCalledWith(expect.anything(), 'consent-1');
+    // RF010 AC6: staff revoke on the participant's behalf, under their session.
+    expect(revokeSpy).toHaveBeenCalledWith(expect.anything(), 'consent-1', expect.any(Object), expect.objectContaining({
+      channel: 'staff_portal', signerRole: 'staff_on_behalf', signerId: 'user-1', authenticationLevel: 'session',
+    }));
+  });
+});
+
+// #1150: POST /consents carried `authenticate` and nothing else, while the
+// revoke sibling four lines below it gates on requireRole(3, 4) -- so any
+// authenticated principal of any role, UsuarioExterno included, could record
+// a consent for any participant. createPatientConsent (consent.controller.js
+// :496-548) performs no role and no ownership check: it spreads req.body
+// wholesale and uses req.user only to write the audit row, which it labels
+// action: SIGN. So the trail recorded the fabricated consent as a signature.
+//
+// #684 settled the identical question for the revoke sibling and its
+// reasoning transfers verbatim, including why ownership is not the
+// alternative it looks like: req.user carries a userID into `users`, never a
+// participantId, so there is nothing on this route to compare against the
+// consent's owner. Creating is the stronger case than revoking -- revocation
+// destroys a permission the biobank holds, creation manufactures one, and
+// the Consent record is the legal artifact the whole eConsent flow exists to
+// produce.
+//
+// Gating at 3, not a new permission code: verified before choosing it that no
+// caller below accessType 3 exists. `git grep -n -I "createPatientConsent" --
+// frontend/src` returns only the api.ts definition and two comments -- the
+// client method has no caller at all -- and every e2e caller
+// (pipeline-continuity, study-protocol-collection-crud, interop-monitoring)
+// authenticates as admin via realLogin().
+describe('eConsent.routes POST /consents (#1150)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRouteCache();
+  });
+
+  function loadRouterAsRole(hierarchyLevel) {
+    clearRouteCache();
+    const authModule = require(authPath);
+    authModule.authenticate = (req, res, next) => {
+      req.user = { userID: 'user-1', id: 'user-1' };
+      next();
+    };
+    const assignmentService = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(assignmentService, 'resolveUserHierarchyLevel').mockResolvedValue(hierarchyLevel);
+    return require(routePath);
+  }
+
+  function stubCreate() {
+    return vi
+      .spyOn(consentService, 'createPatientConsent')
+      .mockResolvedValue({ _id: 'consent-1', participantId: 'p-1', consentTemplateId: 't-1', status: 'ACTIVE' });
+  }
+
+  it('refuses a Usuario Externo (level 1) instead of recording a consent', async () => {
+    const createSpy = stubCreate();
+
+    const app = buildApp(loadRouterAsRole(1), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents').send({ participantId: 'p-1' });
+
+    expect(res.status).toBe(403);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Tecnico (level 2) instead of recording a consent', async () => {
+    const createSpy = stubCreate();
+
+    const app = buildApp(loadRouterAsRole(2), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents').send({ participantId: 'p-1' });
+
+    expect(res.status).toBe(403);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  // CONTROL: green before and after the gate lands. A Coordenador could
+  // record a consent before #1150 and must still be able to afterwards --
+  // this is the case that catches a gate set one tier too high.
+  it('lets a Coordenador (level 3) through to the handler', async () => {
+    const createSpy = stubCreate();
+
+    const app = buildApp(loadRouterAsRole(3), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents').send({ participantId: 'p-1' });
+
+    expect(res.status).not.toBe(403);
+    expect(createSpy).toHaveBeenCalled();
   });
 });
 
@@ -712,12 +936,12 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
 // full and confirmed against source before use): a factory stub records its
 // own `...args` into a `recordedCalls` array the test then asserts against.
 //
-// #888: POST /generate-link's requirePermission('createPatient') is a
-// Patient-domain permission code gating a Consent-domain route (confirmed
-// against eConsent.js:19). This suite pins that argument exactly as the
-// route declares it today; whether 'createPatient' is the *right* code is
-// #888's question, not this one's -- pinning only makes a future change to
-// it visible in a test.
+// #929: POST /generate-link used to carry requirePermission('createPatient') --
+// a Patient-domain permission code gating a Consent-domain route (confirmed
+// against eConsent.js:73). It now carries 'requestConsent', the Consent-domain
+// code #888 said it needed and #929 added. Seeded to Coordenador +
+// Administrador, the same tier createPatient already resolved to, so the swap
+// is a no-op for every real caller -- which is exactly why it needs pinning.
 //
 // requireOrganizationScope: eConsent.js destructures only
 // `{ requireRole, requirePermission }` from rbac (eConsent.js:7) and never
@@ -790,24 +1014,29 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     return require(routePath);
   }
 
-  // One entry per requireRole-gated registration -- 10 of the file's 11
+  // One entry per requireRole-gated registration -- 11 of the file's 12
   // gated sites (re-derived via `git grep -n -I -E
   // "requirePermission[(]|requireRole[(]|requireOrganizationScope" --
-  // api/backend/src/routes/eConsent.js`: 12 matching lines, one of which,
-  // eConsent.js:265, is a comment referencing requireRole(3, 4) in prose,
-  // not a call site -- 11 real sites). The 11th, the single
+  // api/backend/src/routes/eConsent.js`: 13 matching lines, one of which,
+  // eConsent.js:333, is a comment referencing requireRole(3, 4) in prose,
+  // not a call site -- 12 real sites). The 12th, the single
   // requirePermission call, is pinned separately below.
   const ROLE_CASES = [
     { label: 'GET /consent-policies/:id/pending-patients', method: 'get', path: '/consent-policies/cp1/pending-patients', expectedArgs: [3, 4] },
-    { label: 'POST /consent-templates', method: 'post', path: '/consent-templates', expectedArgs: [4] },
+    { label: 'POST /consent-templates', method: 'post', path: '/consent-templates', expectedArgs: [3, 4] },
     { label: 'GET /consent-templates', method: 'get', path: '/consent-templates', expectedArgs: [3, 4] },
-    { label: 'GET /consent-templates/:id', method: 'get', path: '/consent-templates/tmpl-1', expectedArgs: [4] },
-    { label: 'PUT /consent-templates/:id', method: 'put', path: '/consent-templates/tmpl-1', expectedArgs: [4] },
+    { label: 'GET /consent-templates/:id', method: 'get', path: '/consent-templates/tmpl-1', expectedArgs: [3, 4] },
+    { label: 'PUT /consent-templates/:id', method: 'put', path: '/consent-templates/tmpl-1', expectedArgs: [3, 4] },
     { label: 'POST /consent-policies', method: 'post', path: '/consent-policies', expectedArgs: [3, 4] },
     { label: 'PUT /consent-policies/:id', method: 'put', path: '/consent-policies/cp1', expectedArgs: [3, 4] },
     { label: 'GET /consent-policies/history', method: 'get', path: '/consent-policies/history', expectedArgs: [3, 4] },
     { label: 'GET /consent-policies', method: 'get', path: '/consent-policies', expectedArgs: [3, 4] },
+    // #1150: POST /consents was authenticate-only while its revoke sibling
+    // one line below gated on requireRole(3, 4). Now gated the same way, and
+    // pinned here so the argument cannot drift back.
+    { label: 'POST /consents', method: 'post', path: '/consents', expectedArgs: [3, 4] },
     { label: 'POST /consents/:id/revoke', method: 'post', path: '/consents/consent-1/revoke', expectedArgs: [3, 4] },
+    { label: 'GET /consents/:id/history', method: 'get', path: '/consents/consent-1/history', expectedArgs: [3, 4] },
   ];
 
   for (const { label, method, path, expectedArgs } of ROLE_CASES) {
@@ -827,7 +1056,7 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     });
   }
 
-  it("pins requirePermission('createPatient') for POST /generate-link (#888: a Patient-domain code on a Consent-domain route)", async () => {
+  it("pins requirePermission('requestConsent') for POST /generate-link (#929: the Consent-domain code that replaced the borrowed createPatient)", async () => {
     const requirePermissionImpl = denyingRequirePermission();
     const router = loadRouterWithGate({ requirePermissionImpl });
     const app = buildApp(router);
@@ -838,6 +1067,65 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.gate).toBe('permission');
-    expect(requirePermissionImpl.recordedCalls).toEqual([['createPatient']]);
+    expect(requirePermissionImpl.recordedCalls).toEqual([['requestConsent']]);
+  });
+});
+
+// #1325: App.tsx admitted the Coordenador to the TCLE builder while three of
+// the e-consent routes the builder calls were requireRole(4), so its save and
+// edit answered 403. RF002 AC5 makes the backend the authority; this sweep
+// fails when a role a /admin/tcle route admits is refused by one of them.
+describe('eConsent.routes: the TCLE builder\'s calls admit every role the frontend admits to /admin/tcle (#1325)', () => {
+  it('every e-consent route the TCLE builder calls admits every role App.tsx admits to /admin/tcle', () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+    const appSource = fs.readFileSync(path.join(repoRoot, 'frontend', 'src', 'App.tsx'), 'utf8');
+
+    // The seed's hierarchyLevel per role name (rbac.js's header comment).
+    const LEVEL_BY_ROLE = { 'Usuário Externo': 1, 'Técnico': 2, 'Coordenador': 3, 'Administrador': 4 };
+
+    // The calls TcleBuilderPage.tsx makes, through the consentService URLs
+    // in frontend/src/services/api.ts, relative to the /api/e-consent mount.
+    const BUILDER_CALLS = [
+      { method: 'GET', path: '/purpose-codes' },
+      { method: 'GET', path: '/consent-templates' },
+      { method: 'GET', path: '/consent-templates/:id' },
+      { method: 'POST', path: '/consent-templates' },
+      { method: 'PUT', path: '/consent-templates/:id' },
+    ];
+
+    const tcleRoutes = Array.from(appSource.matchAll(/<Route\b[\s\S]*?\/>/g))
+      .map((match) => match[0])
+      .map((block) => ({ block, routePath: (block.match(/path="([^"]+)"/) || [])[1] }))
+      .filter(({ routePath }) => routePath && routePath.startsWith('/admin/tcle'));
+
+    // Guards the regex: a refactor of the <Route> shape must not make this
+    // case vacuously green.
+    expect(tcleRoutes.map(({ routePath }) => routePath).sort()).toEqual(['/admin/tcle/edit/:templateId', '/admin/tcle/new']);
+
+    const { pins } = require('../rbac-pins/eConsent.pins.js');
+    const disagreements = [];
+    for (const { block, routePath } of tcleRoutes) {
+      const roleList = (block.match(/requiredRole=\{\[([^\]]*)\]\}/) || [])[1] || '';
+      const roleNames = Array.from(roleList.matchAll(/'([^']+)'|"([^"]+)"/g)).map((match) => match[1] || match[2]);
+      expect(roleNames, `requiredRole of ${routePath}`).not.toEqual([]);
+
+      for (const roleName of roleNames) {
+        const level = LEVEL_BY_ROLE[roleName];
+        if (level === undefined) {
+          disagreements.push(`unmapped role ${roleName} (admitted on ${routePath})`);
+          continue;
+        }
+        for (const call of BUILDER_CALLS) {
+          const pin = pins.find((row) => row.method === call.method && row.path === call.path);
+          if (!pin) {
+            disagreements.push(`no pin for ${call.method} ${call.path}`);
+          } else if (!(pin.roles || []).includes(level)) {
+            disagreements.push(`${level} refused ${call.method} ${call.path} (admitted on ${routePath})`);
+          }
+        }
+      }
+    }
+
+    expect(disagreements).toEqual([]);
   });
 });

@@ -6,27 +6,29 @@ const multer = require('multer');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
-const { applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
+const { isSampleInOrganizationScope, applySampleOrganizationScope } = require('../../services/sampleTenancy.service');
 const { enforceCommercialConsent } = require('../../infrastructure/middleware/consent.enforcement');
 const logger = require('../../utils/logger');
+const { getCollection } = require('../../utils/collectionResolver');
 const ResultModel = require('../../models/Result');
 const { STORAGE_BASE } = require('../../config/uploadConfig');
 
 // #910: Result carries no organization field of its own (see models/Result.js
 // create()), so scope is reached through the join Result.specimenId ->
-// amostras.collectionSite -- the same field sample.routes.js and
-// sample-file.controller.js already scope on.
+// the sample's tenancy key (#1192: organizationId, falling back to
+// collectionSite; see services/sampleTenancy.service.js) -- the same key
+// sample-file.controller.js scopes on.
 //
 // Fails CLOSED: a result whose specimenId resolves to no sample is out of
-// scope for anyone who is not 'global', matching isRecordInOrganizationScope's
-// own treatment of a record with no value in the scoped field. An orphaned
+// scope for anyone who is not 'global', matching isSampleInOrganizationScope's
+// own treatment of a sample with no tenancy key. An orphaned
 // result is exactly the case an attacker would reach for otherwise.
 const isResultInOrganizationScope = async (db, result, scope) => {
   if (!scope || scope.scope === 'global') return true;
   if (!result || !result.specimenId) return false;
-  const sample = await db.collection('amostras').findOne({ specimenId: result.specimenId });
+  const sample = await getCollection(db, 'samples').findOne({ specimenId: result.specimenId });
   if (!sample) return false;
-  return isRecordInOrganizationScope(sample, scope, 'collectionSite');
+  return isSampleInOrganizationScope(sample, scope);
 };
 
 const denyOutOfScope = (res) => res.status(403).json({
@@ -105,8 +107,8 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
     // sample is in the caller's organization scope; 'global' is left unfiltered,
     // the same bypass every other RBAC gate gives Administrador.
     if (req.organizationScope && req.organizationScope.scope !== 'global') {
-      const inScopeSpecimenIds = await db.collection('amostras')
-        .distinct('specimenId', applyOrganizationScopeFilter({}, req.organizationScope, 'collectionSite'));
+      const inScopeSpecimenIds = await getCollection(db, 'samples')
+        .distinct('specimenId', applySampleOrganizationScope({}, req.organizationScope));
       query.specimenId = { $in: inScopeSpecimenIds };
     }
 
@@ -161,10 +163,9 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
     // #628: resolve the referenced Sample first, then store its own
     // specimenId (business identifier) on the Result -- never the
     // caller-supplied identifier verbatim, whatever shape it's in.
-    // Tries _id, then the canonical specimenId, then the legacy numeric
-    // sampleID -- same three-tier resolution consent.validator.js's
-    // validateAccess already uses for the same kind of caller-supplied id.
-    const samplesCollection = db.collection('amostras');
+    // Tries _id, then the canonical specimenId. The legacy numeric sampleID
+    // tier is gone: nothing writes that key to the samples collection.
+    const samplesCollection = getCollection(db, 'samples');
     const { ObjectId } = require('mongodb');
     let sample = null;
     if (ObjectId.isValid(String(specimenId))) {
@@ -172,9 +173,6 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(specimenId) });
-    }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(specimenId) });
     }
 
     if (!sample) {
@@ -191,7 +189,7 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
     // upload is a way to plant a result inside another organization. Placed
     // with the other post-resolution guards so it owes the same temp-file
     // cleanup they do.
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
       if (fs.existsSync(file.path)) {
         fs.unlinkSync(file.path);
       }
@@ -243,7 +241,8 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 
@@ -439,16 +438,13 @@ router.post('/', authenticate, requirePermission('createResult'), requireOrganiz
     // resolution POST /upload uses -- never trust the caller-supplied
     // specimenId verbatim, whatever shape it's in.
     const { ObjectId } = require('mongodb');
-    const samplesCollection = db.collection('amostras');
+    const samplesCollection = getCollection(db, 'samples');
     let sample = null;
     if (ObjectId.isValid(String(req.body?.specimenId))) {
       sample = await samplesCollection.findOne({ _id: new ObjectId(req.body.specimenId) });
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(req.body?.specimenId || '') });
-    }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(req.body?.specimenId) });
     }
     if (!sample) {
       return res.status(404).json({
@@ -460,7 +456,7 @@ router.post('/', authenticate, requirePermission('createResult'), requireOrganiz
     // #1082: the destination sample must be in the caller's scope. The
     // handler forces specimenId from the resolved sample, so the body cannot
     // itself re-parent -- this gates which sample may be named at all.
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
       return denyOutOfScope(res);
     }
 
@@ -471,7 +467,8 @@ router.post('/', authenticate, requirePermission('createResult'), requireOrganiz
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 
@@ -640,16 +637,13 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), re
     // #628: resolve the referenced Sample first, same three-tier
     // resolution the create paths use -- never trust the caller-supplied
     // specimenId verbatim, whatever shape it's in.
-    const samplesCollection = db.collection('amostras');
+    const samplesCollection = getCollection(db, 'samples');
     let sample = null;
     if (ObjectId.isValid(String(specimenId))) {
       sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(specimenId) });
-    }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(specimenId) });
     }
     if (!sample) {
       return res.status(404).json({
@@ -660,9 +654,9 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), re
 
     // #1082: DESTINATION check -- rewriting specimenId IS the re-parent,
     // since a Result's organization identity is entirely the
-    // specimenId -> amostras.collectionSite join. Without this, a caller can
+    // specimenId -> sample tenancy key join (#1192). Without this, a caller can
     // push their own result into another organization.
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
       return denyOutOfScope(res);
     }
 

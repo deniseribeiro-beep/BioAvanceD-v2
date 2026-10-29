@@ -5,7 +5,8 @@ const temperatureService = require('../../src/services/temperature.service');
 const auditLogger = require('../../src/utils/auditLogger');
 
 function buildRes() {
-  const res = {};
+  // Express always supplies res.locals; #1120's audit reason is written there.
+  const res = { locals: {} };
   res.status = vi.fn().mockReturnValue(res);
   res.json = vi.fn().mockReturnValue(res);
   return res;
@@ -27,7 +28,7 @@ describe('temperature.controller.createReading', () => {
   });
 
   it('creates a reading and returns 201, without auditing when req.user is absent', async () => {
-    const fakeReading = { _id: { toString: () => 'r1' }, temperatureValue: 4.2, temperatureUnit: 'C' };
+    const fakeReading = { telemetryReadingId: 'r1', temperatureValue: 4.2, temperatureUnit: 'C' };
     vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
     const req = { app: { locals: { db: {} } }, body: { value: 4.2 } };
     const res = buildRes();
@@ -40,6 +41,34 @@ describe('temperature.controller.createReading', () => {
       message: 'Leitura de temperatura registrada',
       data: fakeReading,
     });
+  });
+
+  // #1317 (RF009 AC7): a replayed idempotencyKey wrote nothing.
+  it('answers 200 with the stored reading for a replayed idempotencyKey, and records no CREATE', async () => {
+    const stored = { telemetryReadingId: 'r0', temperatureValue: 4.2, replayed: true };
+    vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(stored);
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = { app: { locals: { db: {} } }, body: { idempotencyKey: 'k-1' }, organizationScope: { scope: 'global' } };
+    const res = buildRes();
+
+    await temperatureController.createReading(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: stored }));
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  // #1317 (RF009 AC1): InfluxDB did not confirm the write, nothing was stored.
+  it('answers 503 with the code when InfluxDB did not persist the reading', async () => {
+    vi.spyOn(temperatureService, 'createTemperatureReading')
+      .mockRejectedValue(Object.assign(new Error('Leitura não persistida no InfluxDB: down'), { statusCode: 503, code: 'TELEMETRY_NOT_PERSISTED' }));
+    const req = { app: { locals: { db: {} } }, body: {}, organizationScope: { scope: 'global' } };
+    const res = buildRes();
+
+    await temperatureController.createReading(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, code: 'TELEMETRY_NOT_PERSISTED' }));
   });
 
   it('returns 400 with the error message when the service throws', async () => {
@@ -78,7 +107,7 @@ describe('temperature.controller.createReading', () => {
   // The organization is now derived from the sensor instead, which is where the
   // dictionary hangs organizational custody (TelemetryReading.sensorId, 1..1).
   function machineIngestSetup(sensorDoc, body) {
-    const fakeReading = { _id: { toString: () => 'r1' }, temperatureValue: 4.2, temperatureUnit: 'C' };
+    const fakeReading = { telemetryReadingId: 'r1', temperatureValue: 4.2, temperatureUnit: 'C' };
     const create = vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
     const findOne = vi.fn().mockResolvedValue(sensorDoc);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
@@ -138,13 +167,16 @@ describe('temperature.controller.createReading', () => {
     const entry = logSpy.mock.calls[0][0];
     expect(entry.action).toBe('CREATE');
     expect(entry.resourceType).toBe('Temperature');
+    // #1391: the reading's id, since no Mongo copy carries an _id.
+    expect(entry.resourceId).toBe('r1');
+    expect(res.status).toHaveBeenCalledWith(201);
   });
 
   // CONTROL: the authenticated path behaves identically before and after
   // #1080, so a red here in the pre-fix run means the setup is wrong rather
   // than the bug being present.
   it('CONTROL: the authenticated path stamps from the caller scope and looks up no sensor', async () => {
-    const fakeReading = { _id: { toString: () => 'r1' }, temperatureValue: 4.2, temperatureUnit: 'C' };
+    const fakeReading = { telemetryReadingId: 'r1', temperatureValue: 4.2, temperatureUnit: 'C' };
     const create = vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
     const db = { collection: vi.fn() };
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -316,9 +348,18 @@ describe('temperature.controller.getAll', () => {
   });
 });
 
+// #1391 (RF009 AC1): the reading is read from InfluxDB by its
+// telemetryReadingId (a uuid), through temperatureService.getReadingById.
 describe('temperature.controller.getById', () => {
+  const READING_ID = '0b6f7e2c-4a1d-4c3e-9f0a-1b2c3d4e5f60';
+  const ORG_SCOPE = { scope: 'organization', organizationIds: ['org-1'] };
+
+  function buildReq(id = READING_ID) {
+    return { app: { locals: { db: {} } }, params: { id }, organizationScope: ORG_SCOPE };
+  }
+
   it('returns 503 when req.app.locals.db is falsy', async () => {
-    const req = { app: { locals: { db: null } }, params: { id: '507f1f77bcf86cd799439011' } };
+    const req = { app: { locals: { db: null } }, params: { id: READING_ID } };
     const res = buildRes();
 
     await temperatureController.getById(req, res);
@@ -326,78 +367,71 @@ describe('temperature.controller.getById', () => {
     expect(res.status).toHaveBeenCalledWith(503);
   });
 
-  it('returns 404 when no reading is found', async () => {
-    const findOne = vi.fn().mockResolvedValue(null);
-    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
-    const req = { app: { locals: { db } }, params: { id: '507f1f77bcf86cd799439011' } };
+  // An old Mongo ObjectId, or a shadowed `control`, is no reading id.
+  it.each(['507f1f77bcf86cd799439011', 'control', 'not-a-uuid'])('returns 404 for the non-uuid id %s without a read', async (id) => {
+    const byId = vi.spyOn(temperatureService, 'getReadingById');
     const res = buildRes();
 
-    await temperatureController.getById(req, res);
+    await temperatureController.getById(buildReq(id), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Leitura não encontrada' });
+    expect(byId).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when no reading has that id', async () => {
+    vi.spyOn(temperatureService, 'getReadingById').mockResolvedValue(null);
+    const res = buildRes();
+
+    await temperatureController.getById(buildReq(), res);
 
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Leitura não encontrada' });
   });
 
-  it('returns 200 with the reading when found', async () => {
-    const fakeReading = { _id: '507f1f77bcf86cd799439011', temperatureValue: 4.2 };
-    const findOne = vi.fn().mockResolvedValue(fakeReading);
-    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
-    const req = { app: { locals: { db } }, params: { id: '507f1f77bcf86cd799439011' } };
+  it('returns 200 with the reading when it is within the caller organizationScope', async () => {
+    const reading = { telemetryReadingId: READING_ID, sensorId: 'S-org1', temperatureValue: 4.2 };
+    const byId = vi.spyOn(temperatureService, 'getReadingById').mockResolvedValue({ reading, inScope: true });
+    const req = buildReq();
     const res = buildRes();
 
     await temperatureController.getById(req, res);
 
+    expect(byId).toHaveBeenCalledWith(req.app.locals.db, READING_ID, ORG_SCOPE);
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: fakeReading });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: reading });
   });
 
-  it('returns 500 with the error message when the lookup throws (e.g. invalid ObjectId)', async () => {
-    const db = { collection: vi.fn().mockReturnValue({ findOne: vi.fn() }) };
-    const req = { app: { locals: { db } }, params: { id: 'not-a-valid-object-id' } };
+  // #636 (F3-G09): mirrors sensor.controller.js's own out-of-scope 403
+  // pattern -- an org-scoped caller fetching a reading of a sensor outside
+  // their organizations gets 403, not the reading's data.
+  it('returns 403 when the reading is outside the caller organizationScope', async () => {
+    vi.spyOn(temperatureService, 'getReadingById').mockResolvedValue({
+      reading: { telemetryReadingId: READING_ID, sensorId: 'S-org2' },
+      inScope: false,
+    });
     const res = buildRes();
 
-    await temperatureController.getById(req, res);
+    await temperatureController.getById(buildReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Acesso negado',
+      message: 'Esta leitura pertence a outra organização'
+    });
+  });
+
+  it('returns 500 with the error message when the read throws', async () => {
+    vi.spyOn(temperatureService, 'getReadingById').mockRejectedValue(new Error('influx down'));
+    const res = buildRes();
+
+    await temperatureController.getById(buildReq(), res);
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json.mock.calls[0][0].success).toBe(false);
     expect(res.json.mock.calls[0][0].error).toBe('Erro ao buscar leitura');
-  });
-
-  // #636 (F3-G09): mirrors sensor.controller.js's own out-of-scope 403
-  // pattern -- an org-scoped caller fetching a reading outside their
-  // scoped organizations (including organizationId:null, unscoped/
-  // legacy) gets 403, not the reading's data.
-  it('returns 403 when the reading is outside the caller organizationScope', async () => {
-    const fakeReading = { _id: '507f1f77bcf86cd799439011', organizationId: 'org-other' };
-    const findOne = vi.fn().mockResolvedValue(fakeReading);
-    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
-    const req = {
-      app: { locals: { db } },
-      params: { id: '507f1f77bcf86cd799439011' },
-      organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
-    };
-    const res = buildRes();
-
-    await temperatureController.getById(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(403);
-  });
-
-  it('returns the reading when it is within the caller organizationScope', async () => {
-    const fakeReading = { _id: '507f1f77bcf86cd799439011', organizationId: 'org-1' };
-    const findOne = vi.fn().mockResolvedValue(fakeReading);
-    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
-    const req = {
-      app: { locals: { db } },
-      params: { id: '507f1f77bcf86cd799439011' },
-      organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
-    };
-    const res = buildRes();
-
-    await temperatureController.getById(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: fakeReading });
+    expect(res.json.mock.calls[0][0].message).toBe('influx down');
   });
 });
 

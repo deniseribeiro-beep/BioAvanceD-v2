@@ -3,6 +3,7 @@ const { Server } = require("socket.io");
 const app = require("./app");
 const logger = require("./src/utils/logger");
 const { connectDB } = require("./src/database/mongo");
+const { connectMongoDB } = require("./src/infrastructure/database/mongodb/connection");
 const { connectNeo4j } = require("./src/infrastructure/database/neo4j/connection");
 const LineageRepository = require("./src/infrastructure/database/neo4j/LineageRepository");
 const TopologicalQuarantine = require("./src/infrastructure/queue/TopologicalQuarantine");
@@ -14,7 +15,10 @@ const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
 const { seedReportTemplates } = require("./src/services/report-template-seed.service");
 const { seedRolesAndPermissions } = require("./src/services/rbac-catalog-seed.service");
-const { validateEncryptionAndHalt } = require("./src/config/validateEnv");
+const { assertReadiness } = require("./src/foundation/readiness");
+const { ensurePhysicalChainIndexes } = require("./src/services/physicalChain.service");
+const { ensureLocationIndexes } = require("./src/services/storageLocation.service");
+const { validateEncryptionAndHalt, validateAuditSigningAndWarn } = require("./src/config/validateEnv");
 
 // #1040: Model.createIndexes() index-build errors (and unhandled rejections
 // generally) reach `Model.emit('error')` on a Mongoose Model with no default
@@ -89,6 +93,19 @@ async function startServer() {
     // texto claro em silêncio.
     validateEncryptionAndHalt();
 
+    // #1154: mesma posição, severidade deliberadamente diferente -- avisa e
+    // segue, em qualquer ambiente. O backend não sela raízes (quem sela é o
+    // job noturno no worker), mas os dois containers compartilham o mesmo
+    // arquivo de ambiente, então uma configuração quebrada fica visível aqui
+    // horas antes de o worker chegar às 02:30 UTC.
+    // NÃO aguardado de propósito: a checagem é um diagnóstico, não um portão.
+    // Aguardá-la atrasaria httpServer.listen() por duas leituras de arquivo sem
+    // nada depender do resultado -- a direção 1 de #1154 promete nenhuma mudança
+    // de comportamento, e isso inclui a ordem do boot. O catch é defensivo: uma
+    // rejeição não tratada aqui cairia no handler de #1040 e derrubaria o
+    // processo, invertendo a postura desta função.
+    validateAuditSigningAndWarn().catch(() => {});
+
     const PORT = parseInt(process.env.PORT || "3000");
     const actualPort = await portManager.getAvailablePort(PORT);
 
@@ -97,6 +114,29 @@ async function startServer() {
     // Conecta banco
     const db = await connectDB();
     app.locals.db = db;
+
+    // RF022 AC4/AC9, RNF014 C7: where the stack runs the Foundation job
+    // first, the API starts only on its `ready` ReadinessReport. A refusal
+    // throws into the catch below, which exits 1.
+    if (env.FOUNDATION_READINESS_REQUIRED) {
+      const report = await assertReadiness(db, { environment: env.NODE_ENV });
+      logger.info(`[RF022] ReadinessReport ${report.readinessReportId} ready (${report.canonicalModelReleaseId})`);
+    }
+
+    // #1374: a chain write inside a caller's session builds no index, so the
+    // API builds the physical chain's and StorageLocation's indexes before it
+    // serves, whether or not a Foundation run built them first. Both latch
+    // per db and log a failed build instead of throwing.
+    await ensurePhysicalChainIndexes(db);
+    await ensureLocationIndexes(db);
+
+    // #830/#826: modelos Mongoose ainda são consultados pela API (p.ex.
+    // Sample.findById em miabisValidator, e os modelos de hierarquia de
+    // armazenamento). Sem conexão o Mongoose enfileira a operação e a rejeita
+    // após 10s, em silêncio. A conexão existia só como efeito colateral de
+    // rotas como o upload de lote -- que #830 levou para o driver nativo --,
+    // então passa a ser aberta aqui, explicitamente, no boot.
+    await connectMongoDB();
 
     // Conecta Neo4j para validação e trilha de cadeia de custódia
     try {
@@ -119,6 +159,24 @@ async function startServer() {
     await initializeSecuritySystem(app, db);
     logger.info("✅ Sistema de segurança ativado com sucesso");
 
+    // #1260: the logger's minimum level follows security_config's
+    // logging.level. Read once now, then polled, so a level saved through
+    // another replica reaches this process within a minute. syncLogLevel
+    // never throws; unref() keeps the poll from holding the process open.
+    const securityService = require("./src/services/security.service");
+    await securityService.syncLogLevel(db);
+    setInterval(() => securityService.syncLogLevel(db), 60 * 1000).unref();
+
+    // #1254: before any sign-in reads session.allowMultipleSessions, a stored
+    // false no administrator chose becomes true, once. Non-fatal: on a failure
+    // the next boot tries again, and the stored value stays as it was.
+    try {
+      const { status } = await securityService.reconcileAllowMultipleSessions(db);
+      logger.info(`#1254: session.allowMultipleSessions: ${status}`);
+    } catch (reconcileError) {
+      logger.error("#1254: falha ao reconciliar session.allowMultipleSessions:", reconcileError.message);
+    }
+
     // #916: the RBAC catalog reached a live database ONLY at first-admin
     // bootstrap -- createFirstAdmin early-returns on `users_exist`, and the
     // two standalone scripts have no npm entry and no compose service. So a
@@ -135,33 +193,42 @@ async function startServer() {
     //
     // Safe to run every boot: upsertPermission inserts a missing
     // permissionCode and RECONCILES an already-seeded one's catalog-owned
-    // fields rather than skipping it (#1075), and upsertRole MERGES freshly
-    // computed permissionIds into an existing role rather than skipping it
-    // (#646) -- both test-pinned. The latter is exactly the "new permission
-    // granted to an existing role" case. Permitted on the boot
+    // fields rather than skipping it (#1075), and upsertRole SETS an existing
+    // role's permissionIds to the catalog's list rather than skipping it
+    // (#646, #1341) -- both test-pinned. The latter covers a permission
+    // granted to or withdrawn from an existing role. Permitted on the boot
     // path -- seed-boundary.arch.test.js fences off seed-essential-reference-
     // data specifically, not this. Non-fatal, same shape as the seed below.
-    try {
-      const { roles, permissions } = await seedRolesAndPermissions(db);
-      logger.info(`🔑 Catálogo RBAC garantido: ${roles.length} papéis, ${permissions.length} permissões`);
-    } catch (rbacSeedError) {
-      logger.error("Erro ao semear catálogo RBAC:", rbacSeedError.message);
-    }
+    //
+    // RF022 AC4: where the Foundation job runs first
+    // (FOUNDATION_READINESS_REQUIRED), it seeds this catalog and the report
+    // templates below as its configuration step, and the ready report checked
+    // above proves it did, so the API's startup leaves both to it.
+    if (env.FOUNDATION_READINESS_REQUIRED) {
+      logger.info("🔑 Catálogo RBAC e modelos de relatório preparados pelo Foundation Data Pipeline");
+    } else {
+      try {
+        const { roles, permissions } = await seedRolesAndPermissions(db);
+        logger.info(`🔑 Catálogo RBAC garantido: ${roles.length} papéis, ${permissions.length} permissões`);
+      } catch (rbacSeedError) {
+        logger.error("Erro ao semear catálogo RBAC:", rbacSeedError.message);
+      }
 
-    // #737: reports.routes.js's buildPreviewData (#726) dispatches only via a
-    // ReportTemplate lookup by code -- with the system rows missing, every
-    // report type returns the no-preview fallback and CSV export is empty.
-    // Guaranteed at boot (idempotent by code; a later hand-edit to a seeded
-    // row survives) instead of a script a human has to remember -- the same
-    // self-sufficiency #437 gave the RBAC catalog. Not the essential
-    // reference-data seed (seed-boundary.arch.test.js keeps that off the
-    // boot path by contract): 14 config rows, no manifest, no data files.
-    // Non-fatal: a seed failure is logged and the server still starts.
-    try {
-      const { templates } = await seedReportTemplates(db);
-      logger.info(`📄 Modelos de relatório do sistema garantidos: ${templates.length}`);
-    } catch (seedError) {
-      logger.error("Erro ao semear modelos de relatório:", seedError.message);
+      // #737: reports.routes.js's buildPreviewData (#726) dispatches only via a
+      // ReportTemplate lookup by code -- with the system rows missing, every
+      // report type returns the no-preview fallback and CSV export is empty.
+      // Guaranteed at boot (idempotent by code; a later hand-edit to a seeded
+      // row survives) instead of a script a human has to remember -- the same
+      // self-sufficiency #437 gave the RBAC catalog. Not the essential
+      // reference-data seed (seed-boundary.arch.test.js keeps that off the
+      // boot path by contract): 14 config rows, no manifest, no data files.
+      // Non-fatal: a seed failure is logged and the server still starts.
+      try {
+        const { templates } = await seedReportTemplates(db);
+        logger.info(`📄 Modelos de relatório do sistema garantidos: ${templates.length}`);
+      } catch (seedError) {
+        logger.error("Erro ao semear modelos de relatório:", seedError.message);
+      }
     }
 
     // Iniciar scheduler (backup + monitoramento + sync de consentimento)
@@ -174,19 +241,9 @@ async function startServer() {
     // Fila de quarentena topológica (Redis + self-healing)
     try {
       const topologicalQuarantine = new TopologicalQuarantine({
-        getLineageRepository: async () => {
-          if (!app.locals.neo4jDriver) {
-            try {
-              app.locals.neo4jDriver = await connectNeo4j();
-              logger.info('[ISO20387][NEO4J] Driver recuperado para reprocessamento da quarentena');
-            } catch (error) {
-              logger.warn('[ISO20387][NEO4J] Ainda indisponível para worker de quarentena');
-              return null;
-            }
-          }
-
-          return new LineageRepository(app.locals.neo4jDriver);
-        }
+        // #1312: the retry appends to the graph outbox in MongoDB; it needs
+        // no Neo4j driver.
+        getLineageRepository: async () => new LineageRepository(db)
       });
 
       await topologicalQuarantine.startWorker();
@@ -196,24 +253,10 @@ async function startServer() {
       app.locals.topologicalQuarantine = null;
     }
 
-    // Monitor de telemetria com invalidação em cascata no Neo4j
+    // Monitor de telemetria: a invalidação em cascata chega ao Neo4j pelo
+    // outbox (#1312), então o monitor não abre conexão com o grafo.
     try {
-      const telemetryMonitor = new TelemetryMonitor({
-        db,
-        getNeo4jDriver: async () => {
-          if (app.locals.neo4jDriver) {
-            return app.locals.neo4jDriver;
-          }
-
-          try {
-            app.locals.neo4jDriver = await connectNeo4j();
-            return app.locals.neo4jDriver;
-          } catch (error) {
-            logger.warn('[ISO20387][TELEMETRY] Neo4j indisponível para ciclo de monitoramento');
-            return null;
-          }
-        }
-      });
+      const telemetryMonitor = new TelemetryMonitor({ db });
 
       telemetryMonitor.start();
       app.locals.telemetryMonitor = telemetryMonitor;
@@ -259,11 +302,11 @@ async function startServer() {
     // getQueue() retries on demand. Hence the catch below logs and falls
     // through to listen(), leaving the container healthy.
     //
-    // The worker process makes the OPPOSITE choice (src/workers/worker.js,
-    // process.exit(1)) over exactly the same three checks -- validateRedisOnly,
-    // initRedis and testRedisConnection. The divergence is intentional, not an
-    // oversight: read #977 before changing either end, and change both or
-    // neither.
+    // The worker process (src/workers/worker.js) also survives a connectivity
+    // loss: a failed testRedisConnection is retried with backoff (#979). It
+    // differs only on a configuration fault -- validateRedisOnly, initRedis or
+    // a permanent client error -- which is fatal there (process.exit(1)) and
+    // logged here. Read #977 and #979 before changing either end.
     // Iniciar fila (Redis)
     try {
       const { initQueue, testConnection } = require("./src/config/queue");

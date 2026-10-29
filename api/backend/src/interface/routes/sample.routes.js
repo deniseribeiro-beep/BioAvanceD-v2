@@ -4,10 +4,17 @@ const router = express.Router();
 const { validateMiabisCompliance } = require('../../services/miabisValidator.service');
 const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
-const { isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
+const { requireOrganizationScope, requireRole } = require('../../infrastructure/middleware/rbac');
+const quarantineReleaseService = require('../../services/quarantine-release.service');
+// #1266: lgpd.allowDataExport switches the HL7/FHIR/CDA file exports off.
+const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
+const { assertOrganizationFieldNotReparented } = require('../../services/rbac-assignment.service');
+const { resolveCallerCreateOrganization } = require('../../services/callerCreateOrganization.service');
+// #1192: a sample is scoped by organizationId, falling back to collectionSite.
+const { isSampleInOrganizationScope, applySampleOrganizationScope } = require('../../services/sampleTenancy.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
+const { qualificationContextErrors } = require('../../services/quality-domain.service');
 
 // GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
 router.get('/:id/miabis-compliance', authenticate, requireOrganizationScope, async (req, res) => {
@@ -25,7 +32,7 @@ router.get('/:id/miabis-compliance', authenticate, requireOrganizationScope, asy
     // getSample call purely for the scope check, since validateMiabisCompliance
     // doesn't expose the raw sample document.
     const sampleForScope = await sampleService.getSample(db, sampleId);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -58,7 +65,7 @@ router.get('/:id/compliance-graph', authenticate, requireOrganizationScope, asyn
     // getSample call purely for the scope check, since
     // SampleGraphValidator doesn't expose the raw sample document.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -97,6 +104,7 @@ const {
   EXTRACTION_PROTOCOL_IDS,
   MIABIS_QUALITY_IDS,
 } = require('../../config/constants/specimen.constants');
+const { SPECIMEN_ROLE_VALUES } = require('../../models/Sample');
 
 // #789: the prohibited pre-rename vocabulary, in ONE place. It was inlined
 // in validateCreateSamplePayload only, so `GET /` had no way to reject the
@@ -110,6 +118,9 @@ const NON_CANONICAL_SAMPLE_ALIASES = Object.freeze([
   'registrationDate',
   'currentStatus',
   'merkle_root',
+  // dict-02 ELM-0120 names the plural parentSpecimenIds (#1368).
+  'parentSampleId',
+  'parentSpecimenId',
 ]);
 
 // #789: the query keys `GET /` actually applies. listSamples reads exactly
@@ -141,7 +152,8 @@ function validateCreateSamplePayload(req, res, next) {
     return res.status(422).json({
       success: false,
       error: 'NON_CANONICAL_FIELD',
-      fields: [...new Set(aliasFields)]
+      fields: [...new Set(aliasFields)],
+      details: [...new Set(aliasFields)].map((field) => `${field}: campo não canônico`)
     });
   }
 
@@ -201,6 +213,28 @@ function validateCreateSamplePayload(req, res, next) {
   if (!payload.registeredAt) {
     errors.push('registeredAt é obrigatório');
   }
+
+  // dict-02 ELM-0120 (#1368): a derivative names its parents by specimenId.
+  if (payload.parentSpecimenIds !== undefined) {
+    if (!Array.isArray(payload.parentSpecimenIds)) {
+      errors.push('parentSpecimenIds deve ser uma lista de specimenIds');
+    } else if (payload.parentSpecimenIds.some((parentId) => typeof parentId !== 'string' || parentId.trim() === '')) {
+      errors.push('parentSpecimenIds deve conter apenas specimenIds não vazios');
+    } else if (new Set(payload.parentSpecimenIds.map((parentId) => parentId.trim())).size !== payload.parentSpecimenIds.length) {
+      errors.push('parentSpecimenIds não pode repetir um specimenId');
+    }
+  }
+
+  // ELM-0121 (#1201): the model checks the role against the parents.
+  if (payload.specimenRole !== undefined
+    && (typeof payload.specimenRole !== 'string'
+      || !SPECIMEN_ROLE_VALUES.includes(payload.specimenRole.trim().toLowerCase()))) {
+    errors.push('specimenRole deve ser primary, aliquot, derivative, pool ou control');
+  }
+
+  // RF018 AC2 (#1320): a use context that is sent names all five fields,
+  // never a partial one stored with silent nulls. An absent one stays null.
+  errors.push(...qualificationContextErrors(payload.qualificationContext));
 
   if (errors.length > 0) {
     return res.status(422).json({
@@ -329,6 +363,7 @@ async function recordLabelGeneration(db, { sample, formats, req }) {
 router.post('/',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   validateCreateSamplePayload,
   async (req, res) => {
     try {
@@ -341,10 +376,7 @@ router.post('/',
       }
 
       const sampleRepository = {
-        create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, {
-          ...options,
-          neo4jDriver: req.app.locals.neo4jDriver || null
-        }),
+        create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, options),
         deleteById: async (sampleId) => {
           const samplesCollection = await getCollection(db, 'samples');
           const filter = ObjectId.isValid(sampleId)
@@ -356,12 +388,36 @@ router.post('/',
 
       const registerSampleUseCase = new RegisterSampleUseCase({
         sampleRepository,
-        lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null),
+        lineageRepository: new LineageRepository(db),
         quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
       });
 
+      // #1185, #1192, #1376: #1071's create rule decides the organization the
+      // sample belongs to -- a single-organization caller's own, a
+      // multi-organization caller's pick among its own, a global caller's
+      // pick of any existing organization, or none -- named in the body's own
+      // organizationId field, and createSample stamps it as
+      // Sample.organizationId. The body's organizationId is never passed on.
+      // The collection site the body names (ELM-0128) is data and is kept; a
+      // body naming none gets the stamped organization, as before.
+      const requestedOrganizationId = typeof req.body?.organizationId === 'string' && req.body.organizationId.trim() !== ''
+        ? req.body.organizationId.trim()
+        : undefined;
+      const { organizationId } = await resolveCallerCreateOrganization(db, {
+        organizationScope: req.organizationScope,
+        requested: requestedOrganizationId
+      });
+      const { organizationId: _bodyOrganizationId, ...body } = req.body || {};
+      const namesCollectionSite = body.collectionSite !== undefined
+        && body.collectionSite !== null
+        && body.collectionSite !== '';
+      const sampleData = namesCollectionSite || !organizationId
+        ? body
+        : { ...body, collectionSite: organizationId };
+
       const result = await registerSampleUseCase.execute({
-        sampleData: req.body,
+        sampleData,
+        options: { organizationId },
         actor: {
           userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
           userName: req.user?.name || req.user?.username || null,
@@ -393,7 +449,7 @@ router.post('/',
           // so an audit row written wrong stays wrong.
           message: `Amostra criada - Participante ID: ${sample.participantId}`, // Apenas ID, sem dados sensíveis
           payload: {
-            sampleID: sample._id.toString(),
+            specimenId: sample.specimenId || null,
             participantId: sample.participantId, // Apenas ID anonimizado
             sampleType: sample.sampleType,
             barcode: sample.barcode,
@@ -411,7 +467,11 @@ router.post('/',
           ? (req.t('samples.createSuccess') || 'Amostra criada com sucesso') + ' (integração topológica em quarentena)'
           : req.t('samples.createSuccess') || 'Amostra criada com sucesso',
         data: {
-          sampleID: sample._id.toString(),
+          // #1216: the canonical business id every report, ledger row and
+          // export carries, and every id-taking sample, file and storage
+          // route resolves. The Mongo _id left the response under its
+          // prohibited legacy name, sampleID.
+          specimenId: sample.specimenId || null,
           // #795: canonical name on the way out, matching the way in --
           // validateCreateSamplePayload already 422s a request carrying
           // `patientID` (NON_CANONICAL_FIELD), and the field is on
@@ -453,7 +513,8 @@ router.post('/',
         return res.status(error.status || error.statusCode).json({
           success: false,
           error: req.t?.('samples.createError') || 'Erro ao criar amostra',
-          message: errorMessage
+          message: errorMessage,
+          details: error.details
         });
       }
 
@@ -516,7 +577,8 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
       return res.status(422).json({
         success: false,
         error: 'NON_CANONICAL_FIELD',
-        fields: [...new Set(queryAliases)]
+        fields: [...new Set(queryAliases)],
+        details: [...new Set(queryAliases)].map((field) => `${field}: campo não canônico`)
       });
     }
 
@@ -700,7 +762,7 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
     // #619: mirrors #340's GET /:id out-of-scope 403 — a sub-resource
     // route for an existing sample outside the caller's organization scope
     // must not leak the label either.
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -708,7 +770,9 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
       });
     }
 
-    const sampleIdentifier = escapeXml(String(sample.sampleID || sample._id || req.params.id));
+    // The canonical specimenId, which SampleModel writes; sampleID is the
+    // retired name, kept as a fallback for rows written before the rename.
+    const sampleIdentifier = escapeXml(String(sample.specimenId || sample.sampleID || sample._id || req.params.id));
     const barcode = escapeXml(String(sample.barcode || sampleIdentifier));
     const title = escapeXml(String(sample.sampleType || 'AMOSTRA').slice(0, 32));
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="378" height="189" viewBox="0 0 378 189">
@@ -774,7 +838,7 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       });
     }
 
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -789,7 +853,8 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       });
     }
 
-    const sampleIdentifier = String(sample.sampleID ?? sample._id);
+    // specimenId first, as the SVG label route above.
+    const sampleIdentifier = String(sample.specimenId ?? sample.sampleID ?? sample._id);
     const location = buildLocationLineFromSample(sample);
     const zpl = buildZplPrintJob({ sampleId: sampleIdentifier, barcode: sample.barcode, location });
 
@@ -865,7 +930,7 @@ router.post('/labels/batch', authenticate, requireOrganizationScope, async (req,
           return { specimenId: id, success: false, error: 'Amostra não encontrada' };
         }
 
-        if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
           return { specimenId: id, success: false, error: 'Acesso negado', status: 403 };
         }
 
@@ -923,14 +988,13 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const sample = await sampleService.getSample(db, new ObjectId(req.params.id));
+    const sample = await sampleService.getSample(db, req.params.id);
 
     // #340: an existing sample outside the caller's organization scope
     // 403s rather than 404s, matching sample-file.controller.js's
     // out-of-scope precedent — direct access, not a discoverability leak
     // via a different error code, but not a silent pass-through either.
-    if (sample && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (sample && !isSampleInOrganizationScope(sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1004,7 +1068,7 @@ router.post('/:id/withdraw',
       // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
       // check runs before the mutation, not just before a read.
       const sampleForScope = await sampleService.getSample(db, req.params.id);
-      if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: 'Acesso negado',
@@ -1018,7 +1082,6 @@ router.post('/:id/withdraw',
         req.body?.requiredScope || req.body?.consentScope || null
       );
 
-      const { ObjectId } = require('mongodb');
       
       // Preparar informações de auditoria
       const auditInfo = {
@@ -1029,7 +1092,7 @@ router.post('/:id/withdraw',
         userAgent: req.headers['user-agent']
       };
       
-      const result = await sampleService.withdrawSample(db, new ObjectId(req.params.id), req.body, auditInfo);
+      const result = await sampleService.withdrawSample(db, req.params.id, req.body, auditInfo);
 
       // Registra log de alta severidade (RF006)
       if (req.user) {
@@ -1040,7 +1103,7 @@ router.post('/:id/withdraw',
           resourceType: 'Sample',
           resourceId: req.params.id,
           status: 'success',
-          severity: 'high',
+          severity: 'warning',
           message: `Amostra retirada - Tipo: ${req.body.withdrawalType}, Responsável: ${req.body.withdrawalResponsible}, Qtd: ${result.withdrawnQuantity}`,
           payload: {
             withdrawalType: req.body.withdrawalType,
@@ -1086,7 +1149,7 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
     // check runs before the mutation, not just before a read.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1094,8 +1157,30 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const result = await sampleService.updateSample(db, new ObjectId(req.params.id), req.body);
+    // #1053: the check above proves the sample is CURRENTLY the caller's.
+    // updateSample's allowlist contains collectionSite, so without a
+    // destination check an in-scope caller could push their own sample into
+    // another organization. #1192: that holds only while the sample has no
+    // organizationId, when collectionSite is still its tenancy key; once the
+    // key is stamped, editing collectionSite is editing data.
+    const sampleOrganizationId = sampleForScope?.organizationId;
+    if (sampleForScope
+      && (sampleOrganizationId === undefined || sampleOrganizationId === null || sampleOrganizationId === '')) {
+      assertOrganizationFieldNotReparented(req.organizationScope, sampleForScope.collectionSite, req.body?.collectionSite, 'collectionSite');
+    }
+
+    // RF019 AC5 (#1315): leaving quarantine is an evidenced release with its
+    // own route, never an edit of the status field.
+    if (sampleForScope?.specimenStatus === 'quarantined'
+      && String(req.body?.specimenStatus || '').toLowerCase() === 'available') {
+      return res.status(409).json({
+        success: false,
+        error: 'QUARANTINE_RELEASE_REQUIRED',
+        message: 'Uma amostra em quarentena é liberada por POST /api/samples/:id/quarantine/release, com evidência',
+      });
+    }
+
+    const result = await sampleService.updateSample(db, req.params.id, req.body);
 
     if (!result) {
       return res.status(404).json({
@@ -1147,6 +1232,35 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     });
   } catch (error) {
     logger.error('Erro ao atualizar amostra:', error.message);
+    // #1053: a refused re-parent throws statusCode:403. Mapped explicitly
+    // rather than honouring any error.statusCode, which would change the
+    // status of updateSample's own validation errors.
+    if (error.statusCode === 403) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: error.message
+      });
+    }
+    // RF006 AC3 / RF026 AC7: a refused status write (quantityStatus,
+    // `closed`, a v1.3.0 value, a change out of closed) answers 422.
+    if (error.code === 'SPECIMEN_STATUS_WRITE_REFUSED') {
+      return res.status(422).json({
+        success: false,
+        error: 'SPECIMEN_STATUS_WRITE_REFUSED',
+        message: error.message,
+        details: [error.message]
+      });
+    }
+    // #1378 (ELM-0116): a barcode write after the migration window answers 422.
+    if (error.code === 'LEGACY_BARCODE_WRITE_REFUSED') {
+      return res.status(422).json({
+        success: false,
+        error: 'LEGACY_BARCODE_WRITE_REFUSED',
+        message: error.message,
+        details: [error.message]
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'Erro ao atualizar amostra',
@@ -1169,7 +1283,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
     // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
     // check runs before the mutation, not just before a read.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1177,8 +1291,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const result = await sampleService.deleteSample(db, new ObjectId(req.params.id));
+    const result = await sampleService.deleteSample(db, req.params.id);
 
     if (!result) {
       return res.status(404).json({
@@ -1217,7 +1330,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
 });
 
 // Buscar amostras por termo (barcode ou ID) - para autocomplete
-router.get('/search/by-term', authenticate, async (req, res) => {
+router.get('/search/by-term', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1249,6 +1362,8 @@ router.get('/search/by-term', authenticate, async (req, res) => {
       ],
       withdrawnAt: null
     };
+    // #1187: scoped like GET / -- this search carried only `authenticate`.
+    applySampleOrganizationScope(query, req.organizationScope);
 
     const samples = await samplesCollection
       .find(query)
@@ -1278,7 +1393,7 @@ router.get('/search/by-term', authenticate, async (req, res) => {
 });
 
 // Buscar amostra por código de barras
-router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
+router.get('/by-barcode/:barcode', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1312,6 +1427,16 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
       });
     }
 
+    // #1187: GET /:id's #340 check. This lookup returned the sample and its
+    // patient's name to any authenticated caller.
+    if (!isSampleInOrganizationScope(result.sample, req.organizationScope)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
+
     // Registra log de busca por código de barras
     const auditLogger = require('../../utils/auditLogger');
     auditLogger.init(db);
@@ -1341,7 +1466,7 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
   }
 });
 
-// #655/#653: this route had no requireOrganizationScope/isRecordInOrganizationScope
+// #655/#653: this route had no requireOrganizationScope/organization-scope
 // check at all, unlike every other sample sub-resource route in this file --
 // filed as #653 when this was still an unreached backend capability;
 // SampleLabelPage.tsx now depends on it directly, so the gap is fixed
@@ -1365,7 +1490,7 @@ router.get('/by-barcode/:barcode/symbology-assets', authenticate, requireOrganiz
       });
     }
 
-    if (!isRecordInOrganizationScope(lookup.sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(lookup.sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1418,7 +1543,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1426,8 +1551,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const results = await sampleService.getSampleResults(db, new ObjectId(req.params.id));
+    const results = await sampleService.getSampleResults(db, req.params.id);
 
     // Registra log de consulta de arquivos de analise da amostra
     const auditLogger = require('../../utils/auditLogger');
@@ -1439,7 +1563,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
       status: 'success',
       severity: 'info',
       message: `Arquivos de analise da amostra consultados - ${results.length || 0} registros`,
-      payload: { sampleID: req.params.id, resultsCount: results.length || 0 },
+      payload: { specimenId: sampleForScope?.specimenId || req.params.id, resultsCount: results.length || 0 },
       req: req,
       module: 'Amostras'
     });
@@ -1472,7 +1596,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
     // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
     // check runs before the mutation, not just before a read.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1480,7 +1604,6 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
       });
     }
 
-    const { ObjectId } = require('mongodb');
 
     // Preparar informações de auditoria
     const auditInfo = {
@@ -1491,7 +1614,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
       userAgent: req.headers['user-agent']
     };
     
-    const result = await sampleService.returnSample(db, new ObjectId(req.params.id), req.body, auditInfo);
+    const result = await sampleService.returnSample(db, req.params.id, req.body, auditInfo);
 
     // Registra log (anonimizado via auditLogger)
     if (req.user) {
@@ -1502,7 +1625,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
         resourceType: 'Sample',
         resourceId: req.params.id,
         status: 'success',
-        severity: 'high',
+        severity: 'warning',
         message: `Amostra devolvida - Qtd: ${result.returnedQuantity}, Condição: ${result.condition}`,
         payload: {
           returnedQuantity: result.returnedQuantity,
@@ -1544,7 +1667,7 @@ router.get('/:id/movements', authenticate, requireOrganizationScope, async (req,
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1583,7 +1706,7 @@ router.get('/:id/rcs-assessments', authenticate, requireOrganizationScope, async
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1623,7 +1746,7 @@ router.get('/:id/sprec-profiles', authenticate, requireOrganizationScope, async 
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1651,6 +1774,118 @@ router.get('/:id/sprec-profiles', authenticate, requireOrganizationScope, async 
 // referenciada por specimenIds (não duplicada em Sample). Histórico
 // versionado, mais recente primeiro — mirrors #383's RcsAssessment/
 // GET /:id/rcs-assessments pattern.
+// RF019 AC5/AC6 (#1315): an authorized actor (Coordenador or Administrador)
+// releases a quarantined specimen with evidence, once the rule behind each
+// open quarantine is satisfied (quarantine-release.service.js).
+router.post('/:id/quarantine/release', authenticate, requireRole(3, 4), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+    const sample = await sampleService.getSample(db, req.params.id);
+    if (!sample) {
+      return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
+    }
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
+      return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Esta amostra pertence a outra organização' });
+    }
+    const released = await quarantineReleaseService.releaseQuarantine(db, sample, {
+      actorId: req.user?.userID || req.user?.id || null,
+      evidenceIds: req.body?.evidenceIds,
+      reason: req.body?.reason || null,
+      req,
+    });
+    // RF019 AC6: the release itself is audited on the specimen, with its
+    // evidence, whether or not it closed a QuarantineAction.
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'sample_release',
+      resourceType: 'Sample',
+      resourceId: req.params.id,
+      status: 'success',
+      severity: 'warning',
+      message: 'Quarentena liberada com evidência',
+      payload: {
+        evidenceIds: released.evidenceIds,
+        reason: req.body?.reason || null,
+        releasedActionIds: released.releasedActions.map((action) => action.quarantineActionId),
+      },
+      req,
+    });
+    return res.status(200).json({ success: true, data: released });
+  } catch (error) {
+    if (error instanceof quarantineReleaseService.QuarantineReleaseError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: error.code,
+        message: error.message,
+        ...(error.unsatisfied ? { unsatisfied: error.unsatisfied } : {}),
+      });
+    }
+    logger.error('Erro ao liberar quarentena:', error.message);
+    return res.status(500).json({ success: false, error: 'Erro ao liberar quarentena' });
+  }
+});
+
+// RF026 AC7 (dictionary RULE-006): closes a fully consumed specimen
+// (quantityStatus depleted), recorded as an OperationalStateDecision and
+// audited. A specimen still holding material is refused (409), as is one
+// already closed. The other closing path is an executed destroy or transfer
+// DispositionAction. Same permission as the edit route: no narrower one
+// exists for this change. editSample allows only UPDATE, and a POST maps to
+// CREATE, so the action is passed explicitly, as on POST /:id/return.
+router.post('/:id/close', authenticate, requirePermission('editSample', 'UPDATE'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (!sampleForScope) {
+      return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
+    }
+    if (!isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
+      return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Esta amostra pertence a outra organização' });
+    }
+
+    const closed = await sampleService.closeSpecimen(db, req.params.id, {
+      actorId: req.user?.userID || req.user?.id || null,
+    });
+    if (!closed) {
+      return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
+    }
+
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      resourceType: 'Sample',
+      resourceId: req.params.id,
+      status: 'success',
+      severity: 'critical',
+      message: 'Amostra encerrada (closed) após consumo total validado',
+      payload: {
+        previousStatus: closed.previousStatus,
+        specimenStatus: closed.specimenStatus,
+        quantityStatus: closed.quantityStatus,
+        operationalStateDecisionId: closed.operationalStateDecisionId,
+        rulesApplied: ['rf026_ac7_validated_consumption'],
+      },
+      req,
+    });
+
+    return res.status(200).json({ success: true, data: closed });
+  } catch (error) {
+    if (error.statusCode === 409) {
+      return res.status(409).json({ success: false, error: 'SPECIMEN_CLOSE_REFUSED', message: error.message });
+    }
+    logger.error('Erro ao encerrar amostra:', error.message);
+    return res.status(500).json({ success: false, error: 'Erro ao encerrar amostra' });
+  }
+});
+
 router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
@@ -1663,7 +1898,7 @@ router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, as
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1682,6 +1917,49 @@ router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, as
     return res.status(500).json({
       success: false,
       error: 'Erro ao buscar ações de quarentena',
+      message: error.message
+    });
+  }
+});
+
+// RF006 AC7: the append-only OperationalStateDecisions of a specimen, one
+// per specimenStatus change, oldest first.
+router.get('/:id/state-decisions', authenticate, requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
+
+    const decisions = await sampleService.getStateDecisions(db, req.params.id);
+    if (!decisions) {
+      return res.status(404).json({
+        success: false,
+        error: 'Amostra não encontrada'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: decisions
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar decisões de estado:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao buscar decisões de estado',
       message: error.message
     });
   }
@@ -1743,6 +2021,7 @@ router.put('/:specimenId/files/:fileID/replace',
 router.get('/:specimenId/files/:fileID/export/hl7',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportHL7v2.bind(sampleFileController)
 );
@@ -1751,6 +2030,7 @@ router.get('/:specimenId/files/:fileID/export/hl7',
 router.get('/:specimenId/files/:fileID/export/fhir',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportFHIR.bind(sampleFileController)
 );
@@ -1759,6 +2039,7 @@ router.get('/:specimenId/files/:fileID/export/fhir',
 router.get('/:specimenId/files/:fileID/export/cda',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportCDA.bind(sampleFileController)
 );

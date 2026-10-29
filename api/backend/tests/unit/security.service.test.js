@@ -67,57 +67,8 @@ describe('SecurityService', () => {
     const csv = await securityService.exportLogs(db, { severity: 'warning' }, 'csv');
 
     expect(csv).toContain('timestamp,userID,action,entity,severity,module,message');
-    expect(csv).toContain('"admin-1"');
-  });
-
-  it('deve atualizar permissões e auditar mudanças', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const db = {
-      collection: vi.fn((name) => {
-        if (name === 'security_permissions') {
-          return { updateOne };
-        }
-
-        if (name === 'logs') {
-          return {
-            insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-1' }),
-          };
-        }
-
-        return {
-          updateOne: vi.fn(),
-          insertOne: vi.fn().mockResolvedValue({ insertedId: 'generic-1' }),
-        };
-      }),
-    };
-
-    const currentPermissions = {
-      '4': { manageSecurity: true, viewReports: true },
-    };
-
-    const newPermissions = {
-      '4': { manageSecurity: false, viewReports: true },
-    };
-
-    const req = {
-      user: { userID: 'admin-1' },
-      headers: {
-        'x-forwarded-for': '127.0.0.1',
-        'user-agent': 'vitest',
-      },
-      ip: '127.0.0.1',
-      connection: { remoteAddress: '127.0.0.1' },
-      t: (key) => key,
-    };
-    const result = await securityService.updatePermissions(db, newPermissions, currentPermissions, req);
-
-    expect(result['4'].manageSecurity).toBe(false);
-    expect(updateOne).toHaveBeenCalled();
-  });
-
-  it('deve rejeitar permissões com perfil inválido', () => {
-    expect(() => securityService.validatePermissions({
-      '9': { viewReports: true },
-    })).toThrow(/Perfil inválido/);
+    // #1267: the export carries the pseudonym, never the raw user id.
+    expect(csv).not.toContain('admin-1');
+    expect(csv).toMatch(/"USR-[^"]+"/);
   });
 });

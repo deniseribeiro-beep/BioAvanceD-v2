@@ -71,7 +71,9 @@ describe('Sample.validate - specimenStatus branch', () => {
 describe('Sample.validate - specimenStatus branch (#405)', () => {
   it('accepts a valid specimenStatus, case-insensitively', () => {
     expect(Sample.validate({ ...validData, specimenStatus: 'available' }).isValid).toBe(true);
-    expect(Sample.validate({ ...validData, specimenStatus: 'DISPOSED' }).isValid).toBe(true);
+    expect(Sample.validate({ ...validData, specimenStatus: 'QUARANTINED' }).isValid).toBe(true);
+    // RF006 AC2: a v1.3.0 value is not an operational state.
+    expect(Sample.validate({ ...validData, specimenStatus: 'DISPOSED' }).isValid).toBe(false);
   });
 
   it('rejects an invalid specimenStatus', () => {
@@ -218,5 +220,17 @@ describe('SampleModel.create - field normalization', () => {
     const sample = Sample.create({ ...validData });
     expect(sample.totalWithdrawn).toBe(0);
     expect(sample.totalReturned).toBe(0);
+  });
+});
+
+describe('Sample.create - sourceRecordId (v2.0.0 ELM-0011)', () => {
+  it('keeps the source system id apart from the internal specimenId', () => {
+    const created = Sample.create({ ...validData, sourceRecordId: 'LIMS-0042' });
+    expect(created.sourceRecordId).toBe('LIMS-0042');
+    expect(created.specimenId).toBe('SPEC-001');
+  });
+
+  it('defaults sourceRecordId to null when none was imported', () => {
+    expect(Sample.create(validData).sourceRecordId).toBeNull();
   });
 });

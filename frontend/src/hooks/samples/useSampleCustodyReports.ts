@@ -26,7 +26,7 @@ export interface SampleMovementState {
 type SampleRecord = SampleCustodyRow;
 
 export function resolveSampleId(sample: SampleRecord): string {
-  return String(sample?.sampleID || sample?.id || sample?._id || '—');
+  return String(sample?.specimenId || sample?.id || sample?._id || '—');
 }
 
 export function resolveParticipantId(sample: SampleRecord): string {

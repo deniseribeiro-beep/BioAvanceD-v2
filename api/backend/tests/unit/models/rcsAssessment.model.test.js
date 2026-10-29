@@ -81,3 +81,229 @@ describe('RcsAssessmentModel', () => {
     });
   });
 });
+
+// RF018 AC2 and AC3 (#1320): the assessment's own id, its use context and
+// the references to the RCSInputSnapshot it was computed from.
+describe('RcsAssessmentModel v4 references', () => {
+  it('emits rcsAssessmentId, qualificationContext and the three snapshot refs, defaulting to null', () => {
+    const doc = RcsAssessmentModel.create({ specimenId: 'SPEC-1' });
+    expect(doc.rcsAssessmentId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(doc).toMatchObject({
+      qualificationContext: null, inputSnapshotId: null, inputSnapshotUri: null, inputSnapshotHash: null,
+    });
+  });
+
+  it('fromCertificationResult maps qualification_context and spreads the refs', () => {
+    const refs = {
+      rcsAssessmentId: 'rcs-assessment-001',
+      inputSnapshotId: 'rcs-input-snapshot-001',
+      inputSnapshotUri: `urn:bioavanced:rcs-input-snapshot:rcs-input-snapshot-001#sha256=${'b'.repeat(64)}`,
+      inputSnapshotHash: `sha256:${'b'.repeat(64)}`,
+    };
+    const context = { intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: null, workflowProtocolId: null, workflowProtocolVersion: null };
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-2', { rcs_score: 90, qualification_context: context }, refs);
+    expect(doc).toMatchObject({ ...refs, qualificationContext: context, specimenId: 'SPEC-2', rcsScore: 90 });
+  });
+});
+
+// RF018 AC6 and AC8 (#1320): each axis's resolution and the route's reasons.
+describe('RcsAssessmentModel axis results and route reasons', () => {
+  it('keeps the given arrays', () => {
+    const rcsAxisResults = [{ axisCode: 'P_pre', resolutionStatus: 'unknown', weightedPenalty: null }];
+    const routeReasons = ['governance failure', 'Unknown SPREC code'];
+    const fields = RcsAssessmentModel.fieldsOf({ rcsAxisResults, routeReasons });
+    expect(fields.rcsAxisResults).toBe(rcsAxisResults);
+    expect(fields.routeReasons).toBe(routeReasons);
+  });
+
+  it('defaults both to an empty array', () => {
+    expect(RcsAssessmentModel.fieldsOf({})).toMatchObject({ rcsAxisResults: [], routeReasons: [] });
+  });
+
+  it('turns a non-array into an empty array', () => {
+    const fields = RcsAssessmentModel.fieldsOf({ rcsAxisResults: { axisCode: 'P_pre' }, routeReasons: 'governance failure' });
+    expect(fields).toMatchObject({ rcsAxisResults: [], routeReasons: [] });
+  });
+});
+
+// RF018 AC10 and AC11 (#1320): the rule package, the execution environment
+// and the justifications.
+describe('RcsAssessmentModel rule package, environment and justifications', () => {
+  it('defaults the package and environment to null and the justifications to an empty array', () => {
+    expect(RcsAssessmentModel.fieldsOf({})).toMatchObject({
+      rulePackageVersion: null, rulePackageChecksum: null, executionEnvironment: null, justifications: [],
+    });
+  });
+
+  it('keeps the given values and turns non-array justifications into an empty array', () => {
+    const executionEnvironment = { runtime: 'node', packageVersion: 'RCS-GOV-1.0' };
+    const fields = RcsAssessmentModel.fieldsOf({
+      rulePackageVersion: 'RCS-GOV-1.0', rulePackageChecksum: 'sha256:abc', executionEnvironment, justifications: ['x'],
+    });
+    expect(fields).toMatchObject({ rulePackageVersion: 'RCS-GOV-1.0', rulePackageChecksum: 'sha256:abc', justifications: ['x'] });
+    expect(fields.executionEnvironment).toBe(executionEnvironment);
+    expect(RcsAssessmentModel.fieldsOf({ justifications: 'x' }).justifications).toEqual([]);
+  });
+});
+
+// RF018 AC1 (#1320): the SPREC version the result was computed with.
+describe('RcsAssessmentModel sprecVersion (V2E-0448)', () => {
+  it('defaults to null and keeps a given value', () => {
+    expect(RcsAssessmentModel.fieldsOf({}).sprecVersion).toBeNull();
+    expect(RcsAssessmentModel.fieldsOf({ sprecVersion: 'SPREC-2.0' }).sprecVersion).toBe('SPREC-2.0');
+  });
+
+  it('fromCertificationResult takes the version the trace names', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { calculation_trace: { sprec_version: 'SPREC-2.0' } });
+    expect(doc.sprecVersion).toBe('SPREC-2.0');
+  });
+
+  it('is null for a result with no trace or a trace with no version', () => {
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', {}).sprecVersion).toBeNull();
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', { calculation_trace: { model_code: 'RCS-GOV-1.0' } }).sprecVersion).toBeNull();
+  });
+
+  it('takes the trace over a refs.sprecVersion, as the other result-derived keys do', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult(
+      'SPEC-1', { calculation_trace: { sprec_version: 'SPREC-2.0' } }, { sprecVersion: 'SPREC-9.9' },
+    );
+    expect(doc.sprecVersion).toBe('SPREC-2.0');
+  });
+});
+
+// RF018 AC2 (#1320): the context's assay family and workflow protocol, top-level beside qualificationContext.
+describe('RcsAssessmentModel assayFamily, workflowProtocolId and workflowProtocolVersion (V2E-0442..0444)', () => {
+  const none = { assayFamily: null, workflowProtocolId: null, workflowProtocolVersion: null };
+
+  it('defaults the three fields to null and keeps given values', () => {
+    expect(RcsAssessmentModel.fieldsOf({})).toMatchObject(none);
+    const given = { assayFamily: 'sequencing', workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' };
+    expect(RcsAssessmentModel.fieldsOf(given)).toMatchObject(given);
+  });
+
+  it('fromCertificationResult takes the three fields from the result qualification_context', () => {
+    const context = {
+      intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+      workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+    };
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: context });
+    expect(doc).toMatchObject({ assayFamily: 'sequencing', workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' });
+    expect(doc.qualificationContext).toBe(context);
+
+    const assayFamily = { coding: [{ code: 'NGS' }] };
+    const coded = RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: { ...context, assayFamily } });
+    expect(coded.assayFamily).toBe(assayFamily);
+    expect(coded.assayFamily).toBe(coded.qualificationContext.assayFamily);
+  });
+
+  it('fromCertificationResult gives null with no context or a null field', () => {
+    for (const result of [{}, { qualification_context: null }]) {
+      expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', result)).toMatchObject(none);
+    }
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', {
+      qualification_context: { intendedUseCode: 'x', targetAnalyte: 'y', assayFamily: null, workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' },
+    });
+    expect(doc.assayFamily).toBeNull();
+    expect(doc.workflowProtocolId).toBe('p1');
+  });
+
+  it('takes the context over refs, as the other result-derived keys do', () => {
+    const refs = { assayFamily: 'refs-family', workflowProtocolId: 'refs-p', workflowProtocolVersion: '9.9' };
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', {}, refs)).toMatchObject(none);
+    const context = { assayFamily: 'sequencing', workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' };
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: context }, refs)).toMatchObject(context);
+  });
+});
+
+// RF018 AC2 (#1320): the context's intended use and target analyte, top-level beside qualificationContext.
+describe('RcsAssessmentModel intendedUseCode and targetAnalyte (V2E-0440, V2E-0441)', () => {
+  const none = { intendedUseCode: null, targetAnalyte: null };
+
+  it('defaults the two fields to null and keeps given values', () => {
+    expect(RcsAssessmentModel.fieldsOf({})).toMatchObject(none);
+    const given = { intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA' };
+    expect(RcsAssessmentModel.fieldsOf(given)).toMatchObject(given);
+  });
+
+  it('fromCertificationResult takes the two fields from the result qualification_context', () => {
+    const context = {
+      intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+      workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+    };
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: context });
+    expect(doc.intendedUseCode).toBe(context.intendedUseCode);
+    expect(doc.targetAnalyte).toBe(context.targetAnalyte);
+    expect(doc.qualificationContext).toBe(context);
+
+    const intendedUseCode = { coding: [{ code: 'RESEARCH' }] };
+    const targetAnalyte = { coding: [{ code: 'cfDNA' }] };
+    const coded = RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: { ...context, intendedUseCode, targetAnalyte } });
+    expect(coded.intendedUseCode).toBe(intendedUseCode);
+    expect(coded.intendedUseCode).toBe(coded.qualificationContext.intendedUseCode);
+    expect(coded.targetAnalyte).toBe(targetAnalyte);
+    expect(coded.targetAnalyte).toBe(coded.qualificationContext.targetAnalyte);
+  });
+
+  it('fromCertificationResult gives null with no context or a null field', () => {
+    for (const result of [{}, { qualification_context: null }]) {
+      expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', result)).toMatchObject(none);
+    }
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', {
+      qualification_context: { intendedUseCode: 'x', targetAnalyte: null, assayFamily: 'sequencing', workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' },
+    });
+    expect(doc.targetAnalyte).toBeNull();
+    expect(doc.intendedUseCode).toBe('x');
+  });
+
+  it('takes the intended use and target analyte from the context over refs', () => {
+    const refs = { intendedUseCode: 'refs-use', targetAnalyte: 'refs-analyte' };
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', {}, refs)).toMatchObject(none);
+    const context = { intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA' };
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: context }, refs)).toMatchObject(context);
+  });
+});
+
+// RF018 (#1320): the result's own P_bio and score, never computed here.
+describe('RcsAssessmentModel preanalyticalPenalty and score (V2E-0539, V2E-0540)', () => {
+  it('default to null and keep given values', () => {
+    const empty = RcsAssessmentModel.fieldsOf({});
+    expect(empty.preanalyticalPenalty).toBeNull();
+    expect(empty.score).toBeNull();
+    const fields = RcsAssessmentModel.fieldsOf({ preanalyticalPenalty: 12.5, score: 87.5 });
+    expect(fields.preanalyticalPenalty).toBe(12.5);
+    expect(fields.score).toBe(87.5);
+  });
+
+  it('fromCertificationResult takes the result p_bio and rcs_score', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { p_bio: 10, rcs_score: 90 });
+    expect(doc.preanalyticalPenalty).toBe(10);
+    expect(doc.score).toBe(90);
+  });
+
+  it('keeps a penalty of 0 and a score of 100 (0 is not null)', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { p_bio: 0, rcs_score: 100 });
+    expect(doc.preanalyticalPenalty).toBe(0);
+    expect(doc.score).toBe(100);
+  });
+
+  it('is null for a governance failure and for a result with neither key', () => {
+    for (const result of [{ p_bio: null, rcs_score: null, axis_penalties: [], calculation_trace: {} }, {}]) {
+      const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', result);
+      expect(doc.preanalyticalPenalty).toBeNull();
+      expect(doc.score).toBeNull();
+    }
+  });
+
+  it('takes the result over refs.preanalyticalPenalty and refs.score', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult(
+      'SPEC-1', { p_bio: 10, rcs_score: 90 }, { preanalyticalPenalty: 55, score: 45 },
+    );
+    expect(doc.preanalyticalPenalty).toBe(10);
+    expect(doc.score).toBe(90);
+  });
+
+  it('score is the same value as rcsScore', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { p_bio: 10, rcs_score: 90 });
+    expect(doc.score).toBe(doc.rcsScore);
+  });
+});

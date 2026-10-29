@@ -3,7 +3,7 @@
  *
  * Extracted from ImportLGPDPage per the repo's frontend test convention:
  * unit tests target exported pure functions, not rendered components
- * (see bioavanced-v2-conventions, "Repo layout").
+ * (see the project's repo layout conventions).
  */
 
 export type ImportType = 'patients' | 'samples';

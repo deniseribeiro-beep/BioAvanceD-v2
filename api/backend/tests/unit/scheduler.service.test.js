@@ -17,6 +17,8 @@ const env = require('../../src/config/env');
 const backupService = require('../../src/services/backup.service');
 const retentionSweepService = require('../../src/services/retentionSweep.service');
 const backupPolicyService = require('../../src/services/backup-policy.service');
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
+const platformAlertService = require('../../src/services/platformAlert.service');
 const scheduler = require('../../src/services/scheduler.service');
 
 function makeCollection(overrides = {}) {
@@ -29,24 +31,16 @@ function makeCollection(overrides = {}) {
   };
 }
 
-function makeFindChain(result) {
-  return {
-    sort: vi.fn().mockReturnThis(),
-    limit: vi.fn().mockReturnThis(),
-    next: vi.fn().mockResolvedValue(result)
-  };
-}
+// RF009 AC1 (#1317): the last reading comes from InfluxDB, not from a Mongo
+// `temperatures` copy, so `db` fakes only sensors and alerts. Each case's
+// `lastReadingBySensor` feeds the repository spy in beforeEach below.
+let currentLastReadingBySensor = {};
 
 function makeDb({ sensors = [], lastReadingBySensor = {}, existingAlert = null }) {
+  currentLastReadingBySensor = lastReadingBySensor;
+
   const sensorsCollection = makeCollection({
     find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(sensors) })
-  });
-
-  // #917: the query used to be `$or: [{ sensorId }, { sensorID: sensorId }]`.
-  // The second branch matched nothing -- TemperatureModel.create has never
-  // written a capitalised `sensorID` -- so it is now a plain `{ sensorId }`.
-  const temperaturesCollection = makeCollection({
-    find: vi.fn((query) => makeFindChain(lastReadingBySensor[query.sensorId] ?? null))
   });
 
   const alertsCollection = makeCollection({
@@ -55,7 +49,7 @@ function makeDb({ sensors = [], lastReadingBySensor = {}, existingAlert = null }
     updateMany: vi.fn().mockResolvedValue({})
   });
 
-  const collections = { sensors: sensorsCollection, temperatures: temperaturesCollection, alerts: alertsCollection };
+  const collections = { sensors: sensorsCollection, alerts: alertsCollection };
 
   return {
     collection: vi.fn((name) => collections[name]),
@@ -63,7 +57,33 @@ function makeDb({ sensors = [], lastReadingBySensor = {}, existingAlert = null }
   };
 }
 
+// #1388: every successful run closes the store-wide telemetry_store_unavailable
+// episodes once, before the per-sensor loop.
+const STORE_UNAVAILABLE_RESOLVE = { type: 'telemetry_store_unavailable', status: 'active' };
+
+function expectStoreUnavailableResolved(updateMany) {
+  expect(updateMany).toHaveBeenCalledWith(
+    STORE_UNAVAILABLE_RESOLVE,
+    expect.objectContaining({ $set: expect.objectContaining({ status: 'resolved' }) })
+  );
+}
+
 describe('scheduler.service - checkStaleTemperatureReadings', () => {
+  let lastReadingAtBySensorSpy;
+
+  beforeEach(() => {
+    currentLastReadingBySensor = {};
+    lastReadingAtBySensorSpy = vi
+      .spyOn(influxTelemetryReadRepository, 'lastReadingAtBySensor')
+      .mockImplementation(async () => new Map(
+        Object.entries(currentLastReadingBySensor).map(([sensorId, reading]) => [sensorId, reading.timestamp])
+      ));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('returns zero counts when there are no sensors', async () => {
     const db = makeDb({ sensors: [] });
 
@@ -161,7 +181,8 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
       // 25 minutes old with a 30 minute threshold => not stale, resolves any prior alerts.
       expect(result).toEqual({ sensors: 1, alerts: 0 });
       expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-      expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(2);
+      expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(3);
+      expectStoreUnavailableResolved(db.__collections.alerts.updateMany);
     } finally {
       env.TEMP_STALE_MINUTES = originalStaleMinutes;
     }
@@ -178,7 +199,8 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
 
     expect(result).toEqual({ sensors: 1, alerts: 0 });
     expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-    expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(2);
+    expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(3);
+    expectStoreUnavailableResolved(db.__collections.alerts.updateMany);
     expect(db.__collections.alerts.updateMany).toHaveBeenCalledWith(
       { sensorId: 'S1', type: 'stale_reading', status: 'active' },
       expect.objectContaining({ $set: expect.objectContaining({ status: 'resolved' }) })
@@ -199,7 +221,9 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
 
     expect(result).toEqual({ sensors: 1, alerts: 0 });
     expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-    expect(db.__collections.alerts.updateMany).not.toHaveBeenCalled();
+    // Only the store-wide resolve: no per-sensor stale/missing resolve.
+    expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(1);
+    expectStoreUnavailableResolved(db.__collections.alerts.updateMany);
   });
 
   it('falls back to sensorID field when sensorId is absent', async () => {
@@ -225,7 +249,87 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
 
     expect(result).toEqual({ sensors: 1, alerts: 0 });
     expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-    expect(db.__collections.alerts.updateMany).not.toHaveBeenCalled();
+    // Only the store-wide resolve: no per-sensor stale/missing resolve.
+    expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(1);
+    expectStoreUnavailableResolved(db.__collections.alerts.updateMany);
+  });
+
+  it('reads no Mongo temperatures collection', async () => {
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1' }, { sensorID: 'S2' }],
+      lastReadingBySensor: { S1: { timestamp: new Date() } }
+    });
+
+    await scheduler.checkStaleTemperatureReadings(db);
+
+    expect(db.collection).not.toHaveBeenCalledWith('temperatures');
+  });
+
+  it('queries InfluxDB once per run, not per sensor', async () => {
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1' }, { sensorId: 'S2' }, { sensorId: 'S3' }],
+      lastReadingBySensor: { S1: { timestamp: new Date() } }
+    });
+
+    await scheduler.checkStaleTemperatureReadings(db);
+
+    expect(lastReadingAtBySensorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // #1388: an InfluxDB outage must not silence the check. It raises
+  // telemetry_store_unavailable per sensor, org-scoped like every alert
+  // (#1062), and still neither raises missing_reading nor resolves open
+  // episodes; the failure is rethrown so the cron callback logs it.
+  it('an InfluxDB query failure raises telemetry_store_unavailable per sensor and rejects', async () => {
+    lastReadingAtBySensorSpy.mockRejectedValue(new Error('influx down'));
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1', organizationId: 'org-a' }, { sensorID: 'S2' }, { name: 'no-id' }]
+    });
+
+    await expect(scheduler.checkStaleTemperatureReadings(db)).rejects.toThrow('influx down');
+
+    const { insertOne, updateMany } = db.__collections.alerts;
+    expect(insertOne).toHaveBeenCalledTimes(2);
+    expect(insertOne.mock.calls[0][0]).toMatchObject({
+      sensorId: 'S1',
+      organizationId: 'org-a',
+      type: 'telemetry_store_unavailable',
+      status: 'active'
+    });
+    expect(insertOne.mock.calls[1][0]).toMatchObject({
+      sensorId: 'S2',
+      organizationId: null,
+      type: 'telemetry_store_unavailable',
+      status: 'active'
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('an InfluxDB query failure does not duplicate an active telemetry_store_unavailable alert', async () => {
+    lastReadingAtBySensorSpy.mockRejectedValue(new Error('influx down'));
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1', organizationId: 'org-a' }],
+      existingAlert: { _id: 'open-id', sensorId: 'S1', type: 'telemetry_store_unavailable', status: 'active' }
+    });
+
+    await expect(scheduler.checkStaleTemperatureReadings(db)).rejects.toThrow('influx down');
+
+    expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('a successful run resolves telemetry_store_unavailable episodes once', async () => {
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1' }, { sensorId: 'S2' }],
+      lastReadingBySensor: { S1: { timestamp: new Date() } }
+    });
+
+    await scheduler.checkStaleTemperatureReadings(db);
+
+    const storeWideCalls = db.__collections.alerts.updateMany.mock.calls
+      .filter(([filter]) => filter.type === 'telemetry_store_unavailable');
+    expect(storeWideCalls).toHaveLength(1);
+    expect(storeWideCalls[0][0]).toEqual(STORE_UNAVAILABLE_RESOLVE);
+    expect(storeWideCalls[0][1].$set.status).toBe('resolved');
   });
 });
 
@@ -242,7 +346,8 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     TEMP_MONITOR_CRON: env.TEMP_MONITOR_CRON,
     BACKUP_CRON: env.BACKUP_CRON,
     RETENTION_SWEEP_CRON: env.RETENTION_SWEEP_CRON,
-    RESTORE_TEST_CRON: env.RESTORE_TEST_CRON
+    RESTORE_TEST_CRON: env.RESTORE_TEST_CRON,
+    PLATFORM_ALERT_CRON: env.PLATFORM_ALERT_CRON
   };
 
   beforeEach(() => {
@@ -262,6 +367,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.BACKUP_CRON = undefined;
     env.RETENTION_SWEEP_CRON = undefined;
     env.RESTORE_TEST_CRON = undefined;
+    env.PLATFORM_ALERT_CRON = undefined;
   });
 
   afterEach(() => {
@@ -271,18 +377,20 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.BACKUP_CRON = originalEnv.BACKUP_CRON;
     env.RETENTION_SWEEP_CRON = originalEnv.RETENTION_SWEEP_CRON;
     env.RESTORE_TEST_CRON = originalEnv.RESTORE_TEST_CRON;
+    env.PLATFORM_ALERT_CRON = originalEnv.PLATFORM_ALERT_CRON;
   });
 
-  it('schedules the temperature monitor, backup, retention sweep and restore-test jobs; legacy consent sync is a no-op', () => {
+  it('schedules the temperature monitor, backup, retention sweep, restore-test and platform alert jobs; legacy consent sync is a no-op', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    // temperature monitor + backup + retention sweep + restore test (#731);
-    // startConsentSyncSchedule is a logged no-op stub.
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+    // temperature monitor + backup + retention sweep + restore test (#731)
+    // + platform alerts (#1323); startConsentSyncSchedule is a logged no-op stub.
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/10 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 3 * * *');
     expect(cronScheduleSpy.mock.calls[2][0]).toBe('0 4 * * *');
     expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 5 * * 0');
+    expect(cronScheduleSpy.mock.calls[4][0]).toBe('*/5 * * * *');
     expect(loggerInfoSpy).toHaveBeenCalledWith(
       expect.stringContaining('Sincronização legada de consentimento removida')
     );
@@ -293,22 +401,63 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.BACKUP_CRON = '0 1 * * *';
     env.RETENTION_SWEEP_CRON = '0 2 * * *';
     env.RESTORE_TEST_CRON = '30 6 * * 1';
+    env.PLATFORM_ALERT_CRON = '*/2 * * * *';
 
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/5 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 1 * * *');
     expect(cronScheduleSpy.mock.calls[2][0]).toBe('0 2 * * *');
     expect(cronScheduleSpy.mock.calls[3][0]).toBe('30 6 * * 1');
+    expect(cronScheduleSpy.mock.calls[4][0]).toBe('*/2 * * * *');
   });
 
   it('stopScheduler stops all previously scheduled tasks', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
     scheduler.stopScheduler();
 
-    expect(scheduledTasks).toHaveLength(4);
+    expect(scheduledTasks).toHaveLength(5);
     scheduledTasks.forEach((task) => expect(task.stop).toHaveBeenCalledTimes(1));
+  });
+
+  // RNF015 C2 (#1323): the platform alert task, scheduled last.
+  describe('platform alert monitor', () => {
+    it('schedules with noOverlap, so a tick that outlasts the cadence never runs twice at once', () => {
+      scheduler.initScheduler({ db: {}, neo4jDriver: {} });
+
+      expect(cronScheduleSpy.mock.calls[4][2]).toMatchObject({ noOverlap: true });
+    });
+
+    it('skips the check when there is no db', async () => {
+      const runSpy = vi.spyOn(platformAlertService, 'runPlatformAlertCheck').mockResolvedValue([]);
+      scheduler.initScheduler({ db: null, neo4jDriver: null });
+
+      await cronScheduleSpy.mock.calls[4][1]();
+
+      expect(runSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs a rejected check and does not throw', async () => {
+      vi.spyOn(platformAlertService, 'runPlatformAlertCheck').mockRejectedValue(new Error('mongo down'));
+      scheduler.initScheduler({ db: {}, neo4jDriver: {} });
+
+      await expect(cronScheduleSpy.mock.calls[4][1]()).resolves.toBeUndefined();
+
+      expect(loggerErrorSpy).toHaveBeenCalledWith('Erro na verificação de alertas da plataforma:', 'mongo down');
+    });
+
+    it('logs the rule and firing counts of a run', async () => {
+      const db = {};
+      const runSpy = vi.spyOn(platformAlertService, 'runPlatformAlertCheck')
+        .mockResolvedValue([{ state: 'firing' }, { state: 'ok' }, { state: 'unknown' }]);
+      scheduler.initScheduler({ db, neo4jDriver: {} });
+
+      await cronScheduleSpy.mock.calls[4][1]();
+
+      expect(runSpy).toHaveBeenCalledWith(db);
+      expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('regras=3 disparadas=1'));
+    });
   });
 
   // #731 (RF013 AC#4 / RNF010 AC#5 "Testes de restauração são executados
@@ -369,17 +518,25 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       );
     });
 
-    // A restore test that completes but fails checksum verification is the
-    // exact condition RNF010 AC#5 exists to detect -- it must not be logged
-    // as a routine success.
-    it('warns when the restore completed but the checksum did not verify', async () => {
+    // A restore test that fails checksum verification is the exact condition
+    // RNF010 AC#5 exists to detect -- since #1325 it fails the run, which is
+    // logged as an error and never as a routine success.
+    it('logs an error and no success line when the restore test fails', async () => {
       vi.spyOn(backupService, 'getLatestBackupPath').mockReturnValue('/backups/x');
-      vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({ success: true, checksumVerified: false });
+      vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({
+        success: false,
+        checksumVerified: false,
+        error: 'Checksum do backup não confere'
+      });
 
       scheduler.initScheduler({ db: {}, neo4jDriver: null });
       await scheduledTasks[3].fn();
 
-      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('checksum'));
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Teste de restauração periódico falhou'),
+        'Checksum do backup não confere'
+      );
+      expect(loggerInfoSpy).not.toHaveBeenCalledWith(expect.stringContaining('Teste de restauração executado'));
     });
   });
 
@@ -488,8 +645,8 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       await scheduler.reloadBackupSchedule({});
 
       expect(originalBackupTask.stop).toHaveBeenCalledTimes(1);
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(5); // 4 from initScheduler + this reload
-      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 5 * * *');
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(6); // 5 from initScheduler + this reload
+      expect(cronScheduleSpy.mock.calls[5][0]).toBe('0 5 * * *');
       expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('Backup diário reagendado (0 5 * * *)'));
     });
 
@@ -499,20 +656,117 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
 
       await scheduler.reloadBackupSchedule({});
 
-      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 3 * * *');
+      expect(cronScheduleSpy.mock.calls[5][0]).toBe('0 3 * * *');
     });
 
-    it('falls back to env.BACKUP_CRON and logs an error when the policy lookup rejects', async () => {
+    // #1325: a failed lookup keeps the running task instead of replacing it
+    // with the BACKUP_CRON one, as the log line says.
+    it('keeps the running backup task and logs an error when the policy lookup rejects', async () => {
       scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      const originalBackupTask = scheduledTasks[1];
       vi.spyOn(backupPolicyService, 'getPolicy').mockRejectedValue(new Error('policy lookup failed'));
 
       await scheduler.reloadBackupSchedule({});
 
-      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 3 * * *');
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
+      expect(originalBackupTask.stop).not.toHaveBeenCalled();
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         'Erro ao recarregar política de backup, mantendo agendamento anterior:',
         'policy lookup failed'
       );
+    });
+  });
+
+  // #1325 (RF013 AC6): boot applies the stored BackupPolicy through
+  // reloadBackupSchedule, after scheduling env.BACKUP_CRON synchronously.
+  describe('boot applies the stored backup policy (#1325)', () => {
+    function deferred() {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      return { promise, resolve };
+    }
+
+    it('boot re-schedules the backup task with the stored policy cronExpression', async () => {
+      vi.spyOn(backupPolicyService, 'getPolicy').mockResolvedValue({ cronExpression: '0 1 * * *' });
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await backupPolicyApplied;
+
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(6);
+      expect(cronScheduleSpy.mock.calls[5][0]).toBe('0 1 * * *');
+      expect(scheduledTasks[1].stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('boot keeps the BACKUP_CRON task when the policy lookup rejects', async () => {
+      vi.spyOn(backupPolicyService, 'getPolicy').mockRejectedValue(new Error('policy lookup failed'));
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await backupPolicyApplied;
+
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
+      expect(scheduledTasks[1].stop).not.toHaveBeenCalled();
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'Erro ao recarregar política de backup, mantendo agendamento anterior:',
+        'policy lookup failed'
+      );
+    });
+
+    it('boot with no db reads no policy', async () => {
+      const getPolicySpy = vi.spyOn(backupPolicyService, 'getPolicy').mockResolvedValue({ cronExpression: '0 1 * * *' });
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: null, neo4jDriver: null });
+      await backupPolicyApplied;
+
+      expect(getPolicySpy).not.toHaveBeenCalled();
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
+    });
+
+    it('boot keeps the BACKUP_CRON task when the stored expression is one node-cron refuses', async () => {
+      cronScheduleSpy.mockImplementation((expr, fn, opts) => {
+        if (!cron.validate(expr)) throw new Error(`${expr} is a invalid expression`);
+        const task = { stop: vi.fn(), expr, fn, opts };
+        scheduledTasks.push(task);
+        return task;
+      });
+      vi.spyOn(backupPolicyService, 'getPolicy').mockResolvedValue({ cronExpression: '99 99 * * *' });
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await expect(backupPolicyApplied).resolves.toBeUndefined();
+
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
+      expect(scheduledTasks[1].stop).not.toHaveBeenCalled();
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'Expressão cron inválida na política de backup, mantendo agendamento anterior:',
+        '99 99 * * *'
+      );
+    });
+
+    it('a boot lookup superseded by a newer reload schedules nothing', async () => {
+      const first = deferred();
+      vi.spyOn(backupPolicyService, 'getPolicy')
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValueOnce({ cronExpression: '0 2 * * *' });
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await scheduler.reloadBackupSchedule({});
+      first.resolve({ cronExpression: '0 1 * * *' });
+      await backupPolicyApplied;
+
+      const scheduledExprs = cronScheduleSpy.mock.calls.map((call) => call[0]);
+      expect(scheduledExprs[scheduledExprs.length - 1]).toBe('0 2 * * *');
+      expect(scheduledExprs).not.toContain('0 1 * * *');
+    });
+
+    it('a boot lookup still in flight when the scheduler stops schedules nothing', async () => {
+      const first = deferred();
+      vi.spyOn(backupPolicyService, 'getPolicy').mockReturnValueOnce(first.promise);
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      scheduler.stopScheduler();
+      first.resolve({ cronExpression: '0 1 * * *' });
+      await backupPolicyApplied;
+
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
     });
   });
 });

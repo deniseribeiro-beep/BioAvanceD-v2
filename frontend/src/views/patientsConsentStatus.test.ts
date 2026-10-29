@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeConsentStatus } from './patientsConsentStatus';
+import { hasConsentRecord, normalizeConsentStatus } from './patientsConsentStatus';
 
 // #1044: the RF010 accept-consent path writes status: 'ACTIVE', which used
 // to fall through to a hard-coded 'EXPIRED' in the patients-directory
@@ -25,6 +25,21 @@ describe('normalizeConsentStatus', () => {
 
   it('maps REVOKED to REVOKED', () => {
     expect(normalizeConsentStatus('REVOKED')).toBe('REVOKED');
+  });
+
+  // #1383: the derived consent states RF010 AC5 sends as consentStatus.
+  it('maps partially_revoked to PARTIALLY_REVOKED', () => {
+    expect(normalizeConsentStatus('partially_revoked')).toBe('PARTIALLY_REVOKED');
+    expect(normalizeConsentStatus('PARTIALLY_REVOKED')).toBe('PARTIALLY_REVOKED');
+  });
+
+  it('maps superseded to SUPERSEDED', () => {
+    expect(normalizeConsentStatus('superseded')).toBe('SUPERSEDED');
+  });
+
+  it('maps the derived active and revoked to GRANTED and REVOKED', () => {
+    expect(normalizeConsentStatus('active')).toBe('GRANTED');
+    expect(normalizeConsentStatus('revoked')).toBe('REVOKED');
   });
 
   it('maps PENDING to PENDING', () => {
@@ -61,5 +76,18 @@ describe('normalizeConsentStatus', () => {
   it('is whitespace-insensitive', () => {
     expect(normalizeConsentStatus('  ACTIVE  ')).toBe('GRANTED');
     expect(normalizeConsentStatus('  pending_consent \n')).toBe('PENDING');
+  });
+});
+
+// #1375: the patients directory offers a consent's history only when a
+// consent stands behind the status.
+describe('hasConsentRecord', () => {
+  it('is true for every consent state and false for pending, empty and a patient-only status', () => {
+    for (const value of ['active', 'ACTIVE', 'partially_revoked', 'superseded', 'revoked', 'REVOKED']) {
+      expect(hasConsentRecord(value)).toBe(true);
+    }
+    for (const value of ['PENDING', 'PENDING_CONSENT', '', undefined, 'INACTIVE']) {
+      expect(hasConsentRecord(value)).toBe(false);
+    }
   });
 });

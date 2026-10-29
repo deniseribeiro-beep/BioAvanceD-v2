@@ -7,15 +7,16 @@ import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, Radio, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X } from 'lucide-react';
+import { Plus, Edit, Trash2, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X } from 'lucide-react';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { Equipment, Temperature, Sensor, Policy } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
 import { useTemperature } from '../hooks/useTemperature';
+import { useTemperatureReadings, TemperatureReading } from '../hooks/useTemperatureReadings';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
 import { useOrganizations } from '../hooks/useOrganizations';
-import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
+import { validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import { storageApi } from '../services/storageApi';
 import { MAINTENANCE_STATUS_OPTIONS, getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
@@ -30,22 +31,10 @@ type HistoryLogEntry = {
   sensorName: string;
   temperature: number;
   status: string;
-  validationHash: string;
+  readingId: string;
 };
 
 const ALERT_TRIGGER_THRESHOLD = -70;
-
-function createIncidentId() {
-  return globalThis.crypto?.randomUUID?.() || `incident-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-async function buildValidationHash(payload: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', encoder.encode(payload));
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-}
 
 export default function FacilityManagementPage() {
   const { t } = useLanguage();
@@ -54,73 +43,12 @@ export default function FacilityManagementPage() {
   const validTabs: TabType[] = ['equipment', 'temperature', 'history', 'sensors', 'policies', 'incidents'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'equipment';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
-  const [sensorSnapshot, setSensorSnapshot] = useState({
-    sensor1: -80.2,
-    sensor2: -79.6,
-    sensor3: -81.1,
-  });
-  const [telemetryData, setTelemetryData] = useState([
-    { time: '10:00', temp: -80.1 },
-    { time: '10:05', temp: -79.5 },
-    { time: '10:10', temp: -80.4 },
-    { time: '10:15', temp: -79.8 },
-    { time: '10:20', temp: -80.7 },
-  ]);
-  const [historyLog, setHistoryLog] = useState<HistoryLogEntry[]>([]);
 
   useEffect(() => {
     if (tabParam && validTabs.includes(tabParam)) {
       setActiveTab(tabParam);
     }
   }, [tabParam]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      void (async () => {
-        const nextSensor1 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
-        const nextSensor2 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
-        const nextSensor3 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
-        const nextAverage = Number(((nextSensor1 + nextSensor2 + nextSensor3) / 3).toFixed(1));
-        const chartTime = new Date().toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit' });
-        const timestamp = new Date().toISOString();
-        const timestampMs = Date.now();
-
-        const sensorReadings = [
-          { sensorKey: 'sensor1', sensorName: 'Sensor 1', temperature: nextSensor1 },
-          { sensorKey: 'sensor2', sensorName: 'Sensor 2', temperature: nextSensor2 },
-          { sensorKey: 'sensor3', sensorName: 'Sensor 3', temperature: nextSensor3 },
-        ];
-
-        const logs = await Promise.all(sensorReadings.map(async (entry) => {
-          const validationHash = await buildValidationHash(
-            `${entry.sensorName}|${timestamp}|${entry.temperature.toFixed(1)}|${entry.temperature > ALERT_TRIGGER_THRESHOLD ? 'Alerta' : 'Normal'}`
-          );
-
-          return {
-            id: globalThis.crypto?.randomUUID?.() || `${entry.sensorName}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            timestamp,
-            sensorName: entry.sensorName,
-            temperature: entry.temperature,
-            status: entry.temperature > ALERT_TRIGGER_THRESHOLD ? 'Alerta' : 'Normal',
-            validationHash,
-          };
-        }));
-
-        setSensorSnapshot({
-          sensor1: nextSensor1,
-          sensor2: nextSensor2,
-          sensor3: nextSensor3,
-        });
-
-        setTelemetryData((current) => [...current.slice(-19), { time: chartTime, temp: nextAverage }]);
-        setHistoryLog((prev) => [...logs, ...prev].slice(0, 100));
-      })().catch((error) => {
-        console.error('Falha ao gerar hash de validação da leitura:', error);
-      });
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   const tabs = [
     { id: 'equipment' as TabType, label: t('facility.tabs.equipment', 'Equipamentos'), icon: Box },
@@ -162,15 +90,8 @@ export default function FacilityManagementPage() {
 
       <div className="facility-tab-content flex-1 min-w-0 overflow-hidden">
         {activeTab === 'equipment' && <EquipmentSection />}
-        {activeTab === 'temperature' && (
-          <TemperatureSection
-            sensorSnapshot={sensorSnapshot}
-            telemetryData={telemetryData}
-          />
-        )}
-        {activeTab === 'history' && (
-          <HistorySection historyLog={historyLog} />
-        )}
+        {activeTab === 'temperature' && <TemperatureSection />}
+        {activeTab === 'history' && <HistorySection />}
         {activeTab === 'incidents' && <IncidentManagementPage />}
         {activeTab === 'sensors' && <SensorsSection />}
         {activeTab === 'policies' && <PoliciesSection />}
@@ -531,17 +452,10 @@ function getEquipmentTypeDescription(equipmentType: number | undefined): string 
 }
 
 // Seção de Controle de Temperatura
-function TemperatureSection({
-  sensorSnapshot,
-  telemetryData,
-}: {
-  sensorSnapshot: {
-    sensor1: number;
-    sensor2: number;
-    sensor3: number;
-  };
-  telemetryData: Array<{ time: string; temp: number }>;
-}) {
+// #1397 (RF009 AC7): the cards and the chart show the readings persisted in
+// InfluxDB, and an empty or failed read as such, never a generated value.
+function TemperatureSection() {
+  const { readings, loading, error, reload } = useTemperatureReadings();
 
   const getTemperatureTone = (temperature: number) => {
     if (temperature <= -78 && temperature >= -82) {
@@ -576,39 +490,67 @@ function TemperatureSection({
     };
   };
 
-  const sensorCards = [
-    { id: 'sensor1', label: 'Sensor 1', temperature: sensorSnapshot.sensor1 },
-    { id: 'sensor2', label: 'Sensor 2', temperature: sensorSnapshot.sensor2 },
-    { id: 'sensor3', label: 'Sensor 3', temperature: sensorSnapshot.sensor3 },
-  ];
+  if (error) {
+    return (
+      <div role="alert" data-testid="temperature-readings-error" style={{ color: 'var(--danger)' }}>
+        Falha ao carregar as leituras de temperatura: {error}
+      </div>
+    );
+  }
+
+  if (loading && readings.length === 0) {
+    return <div data-testid="temperature-readings-loading">Carregando leituras de temperatura…</div>;
+  }
+
+  if (readings.length === 0) {
+    return <div data-testid="temperature-readings-empty">Nenhuma leitura de temperatura registrada.</div>;
+  }
+
+  // Readings come newest first, so a sensor's first reading is its newest.
+  const sensorCards: TemperatureReading[] = [];
+  const seenSensors = new Set<string>();
+  readings.forEach((reading) => {
+    if (reading.sensorId === null || seenSensors.has(reading.sensorId)) return;
+    seenSensors.add(reading.sensorId);
+    sensorCards.push(reading);
+  });
+
+  const chartSensorId = readings[0].sensorId;
+  const telemetryData = readings
+    .filter((reading) => reading.sensorId === chartSensorId)
+    .slice(0, 20)
+    .reverse();
 
   const chartWidth = 920;
   const chartHeight = 300;
   const chartPadding = 28;
-  const chartMin = -90;
-  const chartMax = -60;
+  const chartValues = telemetryData.map((point) => point.temperatureCelsius);
+  const chartMin = Math.min(-90, Math.floor(Math.min(...chartValues)) - 2);
+  const chartMax = Math.max(-60, Math.ceil(Math.max(...chartValues)) + 2);
   const chartRange = chartMax - chartMin;
   const chartPoints = telemetryData.map((point, index) => {
     const x = telemetryData.length > 1
       ? chartPadding + ((chartWidth - chartPadding * 2) * index) / (telemetryData.length - 1)
       : chartWidth / 2;
-    const normalized = (point.temp - chartMin) / chartRange;
+    const normalized = (point.temperatureCelsius - chartMin) / chartRange;
     const y = chartHeight - chartPadding - normalized * (chartHeight - chartPadding * 2);
-    return { ...point, x, y };
+    return { key: point.telemetryReadingId ?? `${point.timestamp}-${index}`, x, y };
   });
   const chartLinePath = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+  const chartTitle = `Histórico recente de temperatura — ${chartSensorId ?? '—'}`;
 
   return (
     <>
       <div className="temperature-monitor-grid">
         <div className="temperature-status-grid">
           {sensorCards.map((sensor) => {
-            const tone = getTemperatureTone(sensor.temperature);
+            const tone = getTemperatureTone(sensor.temperatureCelsius);
             const TrendIcon = tone.trend;
 
             return (
               <Card
-                key={sensor.id}
+                key={sensor.sensorId}
+                data-testid={`temperature-sensor-card-${sensor.sensorId}`}
                 className="temperature-status-card"
                 style={{
                   border: `1px solid ${tone.border}33`,
@@ -617,7 +559,7 @@ function TemperatureSection({
                 }}
               >
                 <div className="temperature-status-card__header" style={{ color: '#64748b' }}>
-                  <span className="temperature-status-card__label">{sensor.label}</span>
+                  <span className="temperature-status-card__label">{sensor.sensorId}</span>
                   <span
                     className="temperature-status-card__icon"
                     style={{ backgroundColor: `${tone.icon}14`, color: tone.icon }}
@@ -626,7 +568,10 @@ function TemperatureSection({
                   </span>
                 </div>
                 <div className="temperature-status-card__value" style={{ color: tone.border }}>
-                  {sensor.temperature.toFixed(1)}°C
+                  {sensor.temperatureCelsius.toFixed(1)}°C
+                </div>
+                <div className="temperature-status-card__timestamp" style={{ color: '#64748b', fontSize: '0.75rem' }}>
+                  {new Date(sensor.timestamp).toLocaleString('pt-BR')}
                 </div>
                 <div className="temperature-status-card__footer">
                   <span
@@ -645,14 +590,16 @@ function TemperatureSection({
         <Card className="temperature-monitor-chart-card">
           <div className="temperature-monitor-chart-card__header">
             <div>
-              <p className="temperature-monitor-chart-card__eyebrow">Monitoramento em tempo real</p>
-              <h3 className="temperature-monitor-chart-card__title">Histórico recente de temperatura</h3>
+              <p className="temperature-monitor-chart-card__eyebrow">Leituras persistidas</p>
+              <h3 className="temperature-monitor-chart-card__title">{chartTitle}</h3>
             </div>
-            <span className="temperature-monitor-chart-card__badge">Atualiza a cada 2s</span>
+            <Button variant="secondary" data-testid="temperature-readings-refresh" onClick={() => void reload()}>
+              Atualizar
+            </Button>
           </div>
 
           <div className="temperature-monitor-chart-card__chart">
-            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="temperature-monitor-chart-card__svg" role="img" aria-label="Histórico recente de temperatura">
+            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="temperature-monitor-chart-card__svg" role="img" aria-label={chartTitle}>
               <defs>
                 <linearGradient id="temperatureLineGradient" x1="0" x2="0" y1="0" y2="1">
                   <stop offset="0%" stopColor="#2563eb" stopOpacity="0.95" />
@@ -673,7 +620,7 @@ function TemperatureSection({
               <path d={chartLinePath} className="temperature-monitor-chart-card__line" stroke="url(#temperatureLineGradient)" />
 
               {chartPoints.map((point) => (
-                <circle key={`${point.time}-${point.x}`} cx={point.x} cy={point.y} r="4.5" className="temperature-monitor-chart-card__point" />
+                <circle key={point.key} cx={point.x} cy={point.y} r="4.5" className="temperature-monitor-chart-card__point" />
               ))}
             </svg>
           </div>
@@ -684,11 +631,18 @@ function TemperatureSection({
   );
 }
 
-function HistorySection({
-  historyLog,
-}: {
-  historyLog: HistoryLogEntry[];
-}) {
+// #1397 (RF009 AC7): the rows are the readings persisted in InfluxDB, and an
+// empty or failed read shows as such.
+function HistorySection() {
+  const { readings, loading, error, reload } = useTemperatureReadings();
+  const historyLog = useMemo<HistoryLogEntry[]>(() => readings.map((reading) => ({
+    id: reading.telemetryReadingId ?? `${reading.sensorId}-${reading.timestamp}`,
+    timestamp: reading.timestamp,
+    sensorName: reading.sensorId ?? '—',
+    temperature: reading.temperatureCelsius,
+    status: reading.temperatureCelsius > ALERT_TRIGGER_THRESHOLD ? 'Alerta' : 'Normal',
+    readingId: reading.telemetryReadingId ?? '—',
+  })), [readings]);
   const [currentPage, setCurrentPage] = useState(1);
   const [sensorFilter, setSensorFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -727,11 +681,11 @@ function HistorySection({
       entry.sensorName,
       `${entry.temperature.toFixed(1)}°C`,
       entry.status,
-      entry.validationHash,
+      entry.readingId,
     ]);
 
     const csvLines = [
-      ['Timestamp', 'Sensor', 'Temperatura', 'Status', 'Validation Hash'],
+      ['Timestamp', 'Sensor', 'Temperatura', 'Status', 'ID da leitura'],
       ...rows,
     ].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(';'));
 
@@ -754,11 +708,14 @@ function HistorySection({
     <Card className="temperature-history-card">
       <div className="temperature-history-card__header">
         <div>
-          <p className="temperature-history-card__eyebrow">Leituras em tempo real</p>
+          <p className="temperature-history-card__eyebrow">Leituras persistidas</p>
           <h3 className="temperature-history-card__title">Histórico de Leituras</h3>
         </div>
         <div className="temperature-history-card__actions">
           <span className="temperature-history-card__badge">Últimos 100 registros</span>
+          <Button variant="secondary" data-testid="history-readings-refresh" onClick={() => void reload()}>
+            Atualizar
+          </Button>
           <Button variant="secondary" onClick={handleExportCsv} disabled={filteredHistory.length === 0}>
             <Download size={16} />
             Exportar CSV
@@ -798,22 +755,34 @@ function HistorySection({
         </Button>
       </div>
 
-      <Table headers={['Timestamp', 'Sensor', 'Temperatura', 'Status', 'Validation Hash']}>
-        {filteredHistory.length === 0 ? (
+      <Table headers={['Timestamp', 'Sensor', 'Temperatura', 'Status', 'ID da leitura']}>
+        {error ? (
           <tr>
-            <td colSpan={5} className="table-empty-state-cell">
+            <td colSpan={5}>
+              <div role="alert" data-testid="history-readings-error" style={{ color: 'var(--danger)' }}>
+                Falha ao carregar as leituras de temperatura: {error}
+              </div>
+            </td>
+          </tr>
+        ) : loading && readings.length === 0 ? (
+          <tr>
+            <td colSpan={5} data-testid="history-readings-loading">Carregando leituras de temperatura…</td>
+          </tr>
+        ) : filteredHistory.length === 0 ? (
+          <tr>
+            <td colSpan={5} className="table-empty-state-cell" data-testid="history-readings-empty">
               <div className="table-empty-state">
                 <span className="table-empty-state__icon">
                   <Thermometer size={34} />
                 </span>
                 <h3 className="table-empty-state__title">Nenhuma leitura encontrada</h3>
-                <p className="table-empty-state__text">Ajuste os filtros ou aguarde a próxima leitura da simulação para preencher o histórico.</p>
+                <p className="table-empty-state__text">Nenhuma leitura persistida corresponde aos filtros.</p>
               </div>
             </td>
           </tr>
         ) : (
           paginatedHistory.map((entry) => (
-            <tr key={entry.id}>
+            <tr key={entry.id} data-testid={`history-row-${entry.id}`}>
               <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.timestamp}</td>
               <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.sensorName}</td>
               <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.temperature.toFixed(1)}°C</td>
@@ -821,14 +790,14 @@ function HistorySection({
                 <span className={`status-badge status-${entry.status.toLowerCase()}`}>{entry.status}</span>
               </td>
               <td className="history-hash-cell break-all whitespace-normal overflow-x-auto max-w-xs">
-                <code>{entry.validationHash}</code>
+                <code>{entry.readingId}</code>
               </td>
             </tr>
           ))
         )}
       </Table>
 
-      {filteredHistory.length > 0 && (
+      {!error && filteredHistory.length > 0 && (
         <div className="history-pagination">
           <div className="history-pagination__summary">
             Mostrando {Math.min((currentPage - 1) * pageSize + 1, filteredHistory.length)}-
@@ -862,30 +831,11 @@ function HistorySection({
 
 // Seção de Sensores
 function SensorsSection() {
-  const { sensors, loading, error, collectReading, createSensor, updateSensor, deleteSensor } = useSensors();
+  const { sensors, loading, error, createSensor, updateSensor, deleteSensor } = useSensors();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSensor, setEditingSensor] = useState<Sensor | null>(null);
-  const [isReading, setIsReading] = useState(false);
 
   const sensorRows = useMemo(() => (Array.isArray(sensors) ? sensors : []), [sensors]);
-
-  async function handleManualReading(sensorId: string | number) {
-    if (isReading) {
-      return;
-    }
-
-    setIsReading(true);
-
-    try {
-      const reading = await collectReading(String(sensorId));
-      const temperature = (reading as any)?.temperatureValue ?? (reading as any)?.temperature ?? 'N/A';
-      alert(`Leitura manual do sensor ${sensorId} realizada com sucesso: ${temperature}°C`);
-    } catch (err: any) {
-      alert(err.message || 'Erro ao coletar leitura do sensor');
-    } finally {
-      setIsReading(false);
-    }
-  }
 
   return (
     <>
@@ -938,15 +888,7 @@ function SensorsSection() {
                 <div className="table-actions">
                   <button
                     className="action-button"
-                    onClick={() => handleManualReading(sensorId)}
-                    title="Coletar Leitura"
-                    disabled={isReading}
-                    style={{ opacity: isReading ? 0.5 : 1, cursor: isReading ? 'not-allowed' : 'pointer' }}
-                  >
-                    <Radio size={16} />
-                  </button>
-                  <button
-                    className="action-button"
+                    data-testid={`sensor-edit-${sensor.sensorId}`}
                     onClick={() => {
                       setEditingSensor(sensor);
                       setIsModalOpen(true);
@@ -1056,7 +998,7 @@ function SensorForm({
       nextCalibration: null,
       calibrationCertificate: '',
       locationID: undefined,
-      policyID: undefined,
+      temperaturePolicy: undefined,
       macAddress: '',
       storageContainer: undefined,
       organizationId: null,
@@ -1180,21 +1122,32 @@ function SensorForm({
         </div>
         <div className="form-grid-full">
           <label className="input-label" htmlFor="sensorPolicySelect">Política de Temperatura</label>
+          {/* #1145: binds SensorMetadata.temperaturePolicy, the field the
+              telemetry path resolves thresholds from, by the policy's _id.
+              It used to send a numeric policyID onto Sensor.policyId, which
+              nothing read. The binding lives on SensorMetadata, which only
+              exists when a MAC address is given, so it needs one. On edit it
+              rebinds that row (#1179), pre-filled from the list. The freezer
+              select below lives on the same row and has the same rule. */}
           <select
             id="sensorPolicySelect"
+            data-testid="sensor-policy-select"
             className="input"
-            value={formData.policyID || ''}
+            value={formData.temperaturePolicy || ''}
+            disabled={!formData.macAddress}
             onChange={(e) =>
               setFormData({
                 ...formData,
-                policyID: e.target.value ? parseInt(e.target.value) : undefined,
+                temperaturePolicy: e.target.value || undefined,
               })
             }
           >
-            <option value="">Selecione uma política</option>
-            {policies.map((policy) => (
-              <option key={policy.policyID} value={policy.policyID}>
-                Política #{policy.policyID} - {policy.targetTemperature}{policy.temperatureUnit} (Limites: {policy.minThreshold} - {policy.maxThreshold})
+            <option value="">
+              {formData.macAddress ? 'Selecione uma política' : 'Informe o MAC Address para vincular uma política'}
+            </option>
+            {policies.filter((policy) => policy && policy._id).map((policy) => (
+              <option key={policy._id} value={policy._id}>
+                {policy.name || 'Política'} (Limites: {policy.minTemp} - {policy.maxTemp}{policy.temperatureUnit})
               </option>
             ))}
           </select>
@@ -1205,7 +1158,14 @@ function SensorForm({
           placeholder="AA:BB:CC:DD:EE:FF"
           value={formData.macAddress || ''}
           onChange={(e) =>
-            setFormData({ ...formData, macAddress: e.target.value })
+            // #1145: without a MAC there is no SensorMetadata to bind a policy
+            // to, so clearing it clears the choice rather than submitting one
+            // the backend would refuse.
+            setFormData({
+              ...formData,
+              macAddress: e.target.value,
+              ...(e.target.value ? {} : { temperaturePolicy: undefined, storageContainer: undefined }),
+            })
           }
         />
         <div className="form-grid-full">
@@ -1215,6 +1175,7 @@ function SensorForm({
             data-testid="sensor-storage-container-select"
             className="input"
             value={formData.storageContainer || ''}
+            disabled={!formData.macAddress}
             onChange={(e) =>
               setFormData({
                 ...formData,
@@ -1222,7 +1183,7 @@ function SensorForm({
               })
             }
           >
-            <option value="">Selecione um freezer</option>
+            <option value="">{formData.macAddress ? 'Selecione um freezer' : 'Informe o MAC Address para vincular um freezer'}</option>
             {freezers.map((freezer) => (
               <option key={freezer._id} value={freezer._id}>
                 {freezer.name}
@@ -1268,18 +1229,19 @@ function PoliciesSection() {
   const { policies, loading, error, getActiveLimit, createPolicy, updatePolicy, deletePolicy } = usePolicies();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
-  const [activeLimits, setActiveLimits] = useState<Record<number, number>>({});
+  // #1178: keyed by _id, the only id the policy API returns.
+  const [activeLimits, setActiveLimits] = useState<Record<string, number>>({});
 
   const policyRows = useMemo(() => (Array.isArray(policies) ? policies : []), [policies]);
 
   useEffect(() => {
-    const validPolicies = policyRows.filter((p) => p && p.policyID);
+    const validPolicies = policyRows.filter((p) => p && p._id);
     validPolicies.forEach(async (policy) => {
       try {
-        const limit = await getActiveLimit(policy.policyID, true);
-        setActiveLimits((prev) => ({ ...prev, [policy.policyID]: limit.limit }));
+        const limit = await getActiveLimit(String(policy._id), true);
+        setActiveLimits((prev) => ({ ...prev, [String(policy._id)]: limit.limit }));
       } catch (err) {
-        console.error(`Erro ao obter limite para política ${policy.policyID}:`, err);
+        console.error(`Erro ao obter limite para política ${policy._id}:`, err);
       }
     });
   }, [policyRows, getActiveLimit]);
@@ -1300,7 +1262,6 @@ function PoliciesSection() {
         <Table
           headers={[
             'Política',
-            'Temperatura Alvo',
             'Limite Mínimo',
             'Limite Máximo',
             'Histerese',
@@ -1309,7 +1270,7 @@ function PoliciesSection() {
             'Ações',
           ]}
         >
-          {policyRows.filter((policy) => policy && policy.policyID).length === 0 ? (
+          {policyRows.filter((policy) => policy && policy._id).length === 0 ? (
             <tr>
               <td colSpan={8} className="table-empty-state-cell">
                 <div className="table-empty-state">
@@ -1323,30 +1284,28 @@ function PoliciesSection() {
             </tr>
           ) : (
             policyRows
-              .filter((policy) => policy && policy.policyID)
+              .filter((policy) => policy && policy._id)
               .map((policy) => (
-              <tr key={`policy-${policy.policyID}`}>
-                <td>{policy.policyName}</td>
+              <tr key={`policy-${policy._id}`} data-testid={`policy-row-${policy._id}`}>
+                <td>{policy.name}</td>
                 <td>
-                  {policy.targetTemperature}°C
+                  {policy.minTemp}°C
                 </td>
                 <td>
-                  {policy.minThreshold}°C
-                </td>
-                <td>
-                  {policy.maxThreshold}°C
+                  {policy.maxTemp}°C
                   <br />
                   <small style={{ color: 'var(--text-light)' }}>
-                    Limite ativo: {activeLimits[policy.policyID]?.toFixed(1) || 'N/A'}°C
+                    Limite ativo: {activeLimits[String(policy._id)]?.toFixed(1) || 'N/A'}°C
                   </small>
                 </td>
                 <td>{policy.hysteresis}°C</td>
-                <td>{new Date(policy.validFrom).toLocaleDateString('pt-BR')}</td>
-                <td>{new Date(policy.validTo).toLocaleDateString('pt-BR')}</td>
+                <td>{new Date(policy.effectivePeriod?.start).toLocaleDateString('pt-BR')}</td>
+                <td>{policy.effectivePeriod?.end ? new Date(policy.effectivePeriod.end).toLocaleDateString('pt-BR') : '—'}</td>
                 <td>
                   <div className="table-actions">
                     <button
                       className="action-button"
+                      data-testid={`policy-edit-${policy._id}`}
                       onClick={() => {
                         setEditingPolicy(policy);
                         setIsModalOpen(true);
@@ -1357,10 +1316,11 @@ function PoliciesSection() {
                     </button>
                     <button
                       className="action-button danger"
+                      data-testid={`policy-delete-${policy._id}`}
                       onClick={async () => {
                         if (confirm('Tem certeza que deseja excluir esta política?')) {
                           try {
-                            await deletePolicy(policy.policyID);
+                            await deletePolicy(String(policy._id));
                           } catch (err: any) {
                             alert(err.message);
                           }
@@ -1398,7 +1358,7 @@ function PoliciesSection() {
 
             try {
               if (editingPolicy) {
-                await updatePolicy(editingPolicy.policyID, data);
+                await updatePolicy(String(editingPolicy._id), data);
               } else {
                 await createPolicy(data);
               }
@@ -1429,16 +1389,29 @@ function PolicyForm({
 }) {
   const [formData, setFormData] = useState<Partial<Policy>>(
     policy || {
-      minThreshold: -85,
-      maxThreshold: -75,
-      targetTemperature: -80,
+      // #1089: required by the API as of the temperaturePolicies cutover.
+      name: '',
+      minTemp: -85,
+      maxTemp: -75,
       hysteresis: 2,
-      alertDelayMin: 5,
+      // #1196: 30 min, past a -80 °C freezer's recovery to -75 °C after a
+      // routine door opening, so a retrieval does not compromise the samples.
+      minimumDuration: 30,
       temperatureUnit: '°C',
-      validFrom: new Date(),
-      validTo: new Date(),
+      effectivePeriod: { start: new Date(), end: new Date() },
     }
   );
+  // #1139: the API takes effectivePeriod whole, so each date input edits
+  // one bound and keeps the other.
+  const setPeriodBound = (bound: 'start' | 'end', value: string) =>
+    setFormData({
+      ...formData,
+      effectivePeriod: {
+        start: formData.effectivePeriod?.start ?? new Date(),
+        end: formData.effectivePeriod?.end ?? null,
+        [bound]: new Date(value),
+      },
+    });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1448,29 +1421,31 @@ function PolicyForm({
   return (
     <form onSubmit={handleSubmit} className="form">
       <div className="form-grid">
+        {/* #1089: sources dict-02 P1X-0106 profileName, which the canonical
+            store requires. Also the first thing to populate the policy
+            table's existing name column, which was blank until now. */}
         <Input
-          label="Temperatura Alvo"
-          type="number"
-          step="0.1"
-          value={formData.targetTemperature || ''}
+          label="Nome da Política"
+          type="text"
+          value={formData.name || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              targetTemperature: parseFloat(e.target.value),
+              name: e.target.value,
             })
           }
-          helperText="Temperatura ideal que deve ser mantida. Deve estar entre o limite mínimo e máximo."
+          helperText="Identifica a política na listagem e nos alertas. Ex.: Freezer -80."
           required
         />
         <Input
           label="Limite Mínimo"
           type="number"
           step="0.1"
-          value={formData.minThreshold || ''}
+          value={formData.minTemp || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              minThreshold: parseFloat(e.target.value),
+              minTemp: parseFloat(e.target.value),
             })
           }
           helperText="Temperatura mínima permitida. Deve ser menor que a temperatura alvo."
@@ -1480,11 +1455,11 @@ function PolicyForm({
           label="Limite Máximo"
           type="number"
           step="0.1"
-          value={formData.maxThreshold || ''}
+          value={formData.maxTemp || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              maxThreshold: parseFloat(e.target.value),
+              maxTemp: parseFloat(e.target.value),
             })
           }
           helperText="Temperatura máxima permitida. Deve ser maior que a temperatura alvo."
@@ -1501,49 +1476,35 @@ function PolicyForm({
           helperText="Margem de tolerância para evitar alertas frequentes. Valor recomendado: 1-5 unidades."
         />
         <Input
-          label="Atraso de Alerta (minutos)"
+          label="Duração Mínima da Excursão (minutos)"
           type="number"
-          value={formData.alertDelayMin || ''}
+          value={formData.minimumDuration || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              alertDelayMin: parseInt(e.target.value),
+              minimumDuration: parseInt(e.target.value),
             })
           }
-          helperText="Tempo em minutos que a temperatura deve estar fora dos limites antes de gerar um alerta."
+          helperText="Tempo em minutos que a temperatura deve permanecer fora dos limites antes de as amostras serem marcadas como comprometidas."
         />
+        {/* #1198: fixed, not selectable. Alert enforcement compares readings
+            against these limits in Celsius, so a policy entered in another
+            unit was misapplied (°F) or rejected by the API (K). */}
         <div className="form-grid-full">
-          <label className="input-label" htmlFor="temperatureUnitSelect">Unidade de Temperatura *</label>
-          <select
-            id="temperatureUnitSelect"
-            className="input"
-            value={formData.temperatureUnit || '°C'}
-            onChange={(e) =>
-              setFormData({ ...formData, temperatureUnit: e.target.value })
-            }
-          >
-            <option value="°C">Celsius (°C)</option>
-            <option value="°F">Fahrenheit (°F)</option>
-            <option value="K">Kelvin (K)</option>
-          </select>
-          <p className="form-help-text" style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-light)' }}>
-            Selecione a unidade de medida para todas as temperaturas desta política.
+          <p className="input-label">Unidade de Temperatura</p>
+          <p className="form-help-text" data-testid="policy-temperature-unit" style={{ fontSize: '0.875rem', color: 'var(--text-light)' }}>
+            Celsius (°C). Todas as temperaturas desta política são em °C.
           </p>
         </div>
         <Input
           label="Válido De"
           type="date"
           value={
-            formData.validFrom
-              ? new Date(formData.validFrom).toISOString().split('T')[0]
+            formData.effectivePeriod?.start
+              ? new Date(formData.effectivePeriod.start).toISOString().split('T')[0]
               : ''
           }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              validFrom: new Date(e.target.value),
-            })
-          }
+          onChange={(e) => setPeriodBound('start', e.target.value)}
           helperText="Data de início da vigência desta política. Deve ser anterior à data de término."
           required
         />
@@ -1551,16 +1512,11 @@ function PolicyForm({
           label="Válido Até"
           type="date"
           value={
-            formData.validTo
-              ? new Date(formData.validTo).toISOString().split('T')[0]
+            formData.effectivePeriod?.end
+              ? new Date(formData.effectivePeriod.end).toISOString().split('T')[0]
               : ''
           }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              validTo: new Date(e.target.value),
-            })
-          }
+          onChange={(e) => setPeriodBound('end', e.target.value)}
           helperText="Data de término da vigência desta política. Deve ser posterior à data de início."
           required
         />

@@ -49,13 +49,13 @@ describe('equipment.routes quarantine flow', () => {
     const equipmentCollection = { findOne, updateOne };
     const sessionsCollection = {
       findOne: vi.fn(async () => ({
-        sessionID: 'session-1',
-        tokenHash: 'mock-token-hash',
+        sessionId: 'session-1',
+        accessTokenHash: 'mock-token-hash',
         refreshTokenHash: 'mock-refresh-hash',
-        lastActivity: new Date(),
+        lastActivityAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
         refreshExpiresAt: new Date(Date.now() + 60_000),
-        inactiveTimeout: 60_000,
+        inactivityTimeoutMs: 60_000,
         isActive: true,
         isRevoked: false
       })),
@@ -120,13 +120,13 @@ describe('equipment.routes quarantine flow', () => {
     const equipmentCollection = { findOne, updateOne };
     const sessionsCollection = {
       findOne: vi.fn(async () => ({
-        sessionID: 'session-2',
-        tokenHash: 'mock-token-hash',
+        sessionId: 'session-2',
+        accessTokenHash: 'mock-token-hash',
         refreshTokenHash: 'mock-refresh-hash',
-        lastActivity: new Date(),
+        lastActivityAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
         refreshExpiresAt: new Date(Date.now() + 60_000),
-        inactiveTimeout: 60_000,
+        inactivityTimeoutMs: 60_000,
         isActive: true,
         isRevoked: false
       })),
@@ -226,13 +226,13 @@ describe('equipment.routes quarantine flow', () => {
     const equipmentCollection = { findOne, updateOne };
     const sessionsCollection = {
       findOne: vi.fn(async () => ({
-        sessionID: 'session-3',
-        tokenHash: 'mock-token-hash',
+        sessionId: 'session-3',
+        accessTokenHash: 'mock-token-hash',
         refreshTokenHash: 'mock-refresh-hash',
-        lastActivity: new Date(),
+        lastActivityAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
         refreshExpiresAt: new Date(Date.now() + 60_000),
-        inactiveTimeout: 60_000,
+        inactivityTimeoutMs: 60_000,
         isActive: true,
         isRevoked: false
       })),

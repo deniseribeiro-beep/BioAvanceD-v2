@@ -184,6 +184,8 @@ module.exports = {
   initRedis,
   initQueue,
   getQueue,
+  // Returns the import queue or null; never initialises it (#1323).
+  peekQueue: () => importQueue,
   getQueueEvents,
   closeConnections,
   testConnection,

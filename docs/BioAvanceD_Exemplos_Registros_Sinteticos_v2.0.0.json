@@ -1,0 +1,1127 @@
+{
+  "notice": "Synthetic examples only; no real personal or clinical data.",
+  "biobankExample": {
+    "canonicalModelReleaseId": "release-2.0.0",
+    "participant": {
+      "participantId": "participant-synthetic-001",
+      "identityReference": "identity-boundary:participant-synthetic-001"
+    },
+    "collection": {
+      "collectionId": "collection-biobank-synthetic-001",
+      "governanceRegime": "biobank",
+      "governanceContext": {
+        "biobankGovernanceContextId": "biobank-context-001",
+        "broadPurpose": {
+          "code": "health-research"
+        },
+        "governancePolicyId": "policy-synthetic-001",
+        "accessCommitteeId": "committee-synthetic-001",
+        "institutionalCustodianId": "org-synthetic-001",
+        "futureUseConditions": [
+          "compatible_consent",
+          "ethics_review_when_required"
+        ]
+      }
+    },
+    "consent": {
+      "consentId": "consent-synthetic-001",
+      "consentModel": "broad",
+      "templateVersionId": "consent-template-001",
+      "currentStateDerived": "active",
+      "effectivePeriod": {
+        "start": "2026-09-07"
+      },
+      "permissions": [
+        {
+          "permissionCode": "commercial_use",
+          "purpose": {
+            "code": "commercial-research"
+          },
+          "decision": "deny",
+          "policyVersion": "1.0.0"
+        }
+      ]
+    },
+    "specimen": {
+      "specimenId": "specimen-synthetic-001",
+      "accessionIdentifier": {
+        "system": "https://bioadvanced.dev/fhir/NamingSystem/accession-identifier",
+        "value": "SYN-000001"
+      },
+      "participantId": "participant-synthetic-001",
+      "collectionId": "collection-biobank-synthetic-001",
+      "specimenRole": "primary",
+      "materialType": {
+        "code": "synthetic-plasma"
+      },
+      "specimenStatus": "available",
+      "initialQuantity": {
+        "value": 2.0,
+        "unit": "mL",
+        "system": "http://unitsofmeasure.org",
+        "code": "mL"
+      },
+      "currentQuantity": {
+        "value": 1.5,
+        "unit": "mL",
+        "system": "http://unitsofmeasure.org",
+        "code": "mL"
+      },
+      "quantityStatus": "partial",
+      "parentSpecimenIds": []
+    },
+    "custodianship": {
+      "custodianshipAssignmentId": "custody-assignment-001",
+      "custodianOrganizationId": "org-synthetic-001",
+      "effectivePeriod": {
+        "start": "2026-09-07"
+      },
+      "assignmentStatus": "active"
+    },
+    "container": {
+      "containerId": "container-cryovial-synthetic-001",
+      "containerType": "cryogenic_vial",
+      "status": "occupied"
+    },
+    "storageRack": {
+      "storageRackId": "rack-synthetic-001",
+      "rackType": "cryovial_rack",
+      "rowCount": 8,
+      "columnCount": 12,
+      "capacity": 96
+    },
+    "storagePosition": {
+      "storagePositionId": "position-synthetic-A01",
+      "storageRackId": "rack-synthetic-001",
+      "positionCode": "A01",
+      "rowIndex": 1,
+      "columnIndex": 1
+    },
+    "containerPositionAssignment": {
+      "containerPositionAssignmentId": "container-position-001",
+      "containerId": "container-cryovial-synthetic-001",
+      "storagePositionId": "position-synthetic-A01",
+      "placedAt": "2026-09-07T00:00:00Z",
+      "removedAt": null
+    },
+    "specimenContainerAssignment": {
+      "specimenContainerAssignmentId": "specimen-container-001",
+      "specimenId": "specimen-synthetic-001",
+      "containerId": "container-cryovial-synthetic-001",
+      "assignedAt": "2026-09-07T00:00:00Z",
+      "releasedAt": null
+    },
+    "physicalIdentification": {
+      "labelIdentifierId": "label-id-001",
+      "encodedValue": "BVA2:SYN:8K3M",
+      "symbology": "data_matrix",
+      "targetType": "container",
+      "targetId": "container-cryovial-synthetic-001",
+      "identifierOrigin": "manufacturer_applied",
+      "carrierPlacement": "container_base",
+      "status": "active",
+      "immutableAtSource": true
+    },
+    "rcsAssessments": [
+      {
+        "rcsAssessmentId": "rcs-assessment-synthetic-001",
+        "specimenId": "specimen-synthetic-001",
+        "qualificationContext": {
+          "intendedUseCode": "research-sequencing",
+          "targetAnalyte": "cfDNA",
+          "assayFamily": "sequencing",
+          "workflowProtocolId": "protocol-synthetic-001",
+          "workflowProtocolVersion": "1.0"
+        },
+        "sprecVersion": "2.0",
+        "rulePackageVersion": "1.0.0",
+        "rulePackageChecksum": "sha256:synthetic-rcs",
+        "inputSnapshotId": "rcs-input-snapshot-001",
+        "inputSnapshotUri": "object://synthetic/rcs-input-snapshot-001.json",
+        "inputSnapshotHash": "sha256:synthetic-rcs-input",
+        "inputSnapshot": {
+          "rcsInputSnapshotId": "rcs-input-snapshot-001",
+          "schemaVersion": "2.0.0",
+          "immutable": true,
+          "matrix": "fluid",
+          "materialTypeCode": {
+            "code": "synthetic-plasma"
+          },
+          "matrixMappingReleaseId": "sprec-map-001",
+          "sprecVersion": "2.0",
+          "sprecMappingReleaseId": "sprec-map-001",
+          "capturedAt": "2026-09-07T00:00:00Z",
+          "sourceEventIds": [
+            "processing-event-001",
+            "storage-event-001"
+          ],
+          "preanalyticalAxes": {
+            "P_pre": {
+              "sprecCode": "A",
+              "severity": 0.0,
+              "maximumWeight": 30,
+              "weightedPenalty": 0.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "evidenceIds": [
+                "collection-event-001"
+              ]
+            },
+            "P_cent1": {
+              "sprecCode": "A",
+              "severity": 0.0,
+              "maximumWeight": 15,
+              "weightedPenalty": 0.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "evidenceIds": [
+                "centrifugation-event-001"
+              ]
+            },
+            "P_cent2": {
+              "sprecCode": "N",
+              "severity": 1.0,
+              "maximumWeight": 10,
+              "weightedPenalty": 10.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "applicabilityContext": {
+                "workflow": "cell-free DNA",
+                "secondCentrifugationRequired": true
+              },
+              "evidenceIds": [
+                "centrifugation-event-002"
+              ]
+            },
+            "P_post": {
+              "sprecCode": "A",
+              "severity": 0.0,
+              "maximumWeight": 20,
+              "weightedPenalty": 0.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "evidenceIds": [
+                "processing-event-001"
+              ]
+            },
+            "P_store": {
+              "sprecCode": "C",
+              "severity": 0.0,
+              "maximumWeight": 25,
+              "weightedPenalty": 0.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "evidenceIds": [
+                "storage-event-001",
+                "telemetry-summary-001"
+              ]
+            }
+          },
+          "governanceEvidence": {
+            "metadataComplete": true,
+            "terminologyValid": true,
+            "traceabilityOk": true,
+            "monitoringOk": true,
+            "documentationOk": true,
+            "semanticCompatible": true,
+            "evidenceRefs": [
+              "custody-event-001",
+              "sop-version-001",
+              "telemetry-summary-001"
+            ],
+            "validationRuleSetVersion": "1.0.0",
+            "validationRuleSetChecksum": "sha256:synthetic-governance-gate",
+            "evaluatedAt": "2026-09-07T00:00:00Z",
+            "gateResult": "pass",
+            "failureReasons": []
+          }
+        },
+        "governanceGateResult": "pass",
+        "result": {
+          "preanalyticalPenalty": 10.0,
+          "score": 90.0,
+          "scoreBasedGrade": "A",
+          "finalGrade": "A",
+          "gradeRoute": "score_based_certification",
+          "routeReasons": [
+            "governance gate passed",
+            "RCS >= 90"
+          ]
+        },
+        "justifications": [
+          "All six governance evidences passed",
+          "P_bio = 10 from the five fluid axes",
+          "RCS = 100 - P_bio = 90"
+        ],
+        "calculatedAt": "2026-09-07T00:00:00Z",
+        "executionEnvironment": {
+          "runtime": "validated-package",
+          "packageVersion": "1.0.0"
+        }
+      }
+    ],
+    "provenance": {
+      "sourceSystem": "synthetic-demo",
+      "sourceRecordId": "demo-001",
+      "configurationReleaseId": "cfg-release-001",
+      "correlationId": "corr-synthetic-001"
+    }
+  },
+  "biorepositoryExample": {
+    "canonicalModelReleaseId": "release-2.0.0",
+    "participant": {
+      "participantId": "participant-synthetic-001",
+      "identityReference": "identity-boundary:participant-synthetic-001"
+    },
+    "collection": {
+      "collectionId": "collection-biorepository-synthetic-001",
+      "governanceRegime": "biorepository",
+      "governanceContext": {
+        "biorepositoryContextId": "biorep-context-001",
+        "studyId": "study-synthetic-001",
+        "protocolId": "protocol-synthetic-001",
+        "protocolVersion": "1.0",
+        "caae": "00000000.0.0000.0000",
+        "responsibleOrganizationId": "org-synthetic-001",
+        "responsibleInvestigatorId": "actor-synthetic-001",
+        "ethicsApprovalId": "approval-synthetic-001",
+        "validityPeriod": {
+          "start": "2026-01-01",
+          "end": "2028-12-31"
+        },
+        "plannedEndDate": "2028-12-31"
+      }
+    },
+    "consent": {
+      "consentId": "consent-synthetic-001",
+      "consentModel": "specific",
+      "templateVersionId": "consent-template-001",
+      "currentStateDerived": "active",
+      "effectivePeriod": {
+        "start": "2026-09-07"
+      },
+      "permissions": [
+        {
+          "permissionCode": "commercial_use",
+          "purpose": {
+            "code": "commercial-research"
+          },
+          "decision": "deny",
+          "policyVersion": "1.0.0"
+        }
+      ]
+    },
+    "specimen": {
+      "specimenId": "specimen-synthetic-001",
+      "accessionIdentifier": {
+        "system": "https://bioadvanced.dev/fhir/NamingSystem/accession-identifier",
+        "value": "SYN-000001"
+      },
+      "participantId": "participant-synthetic-001",
+      "collectionId": "collection-biorepository-synthetic-001",
+      "specimenRole": "primary",
+      "materialType": {
+        "code": "synthetic-plasma"
+      },
+      "specimenStatus": "available",
+      "initialQuantity": {
+        "value": 2.0,
+        "unit": "mL",
+        "system": "http://unitsofmeasure.org",
+        "code": "mL"
+      },
+      "currentQuantity": {
+        "value": 1.5,
+        "unit": "mL",
+        "system": "http://unitsofmeasure.org",
+        "code": "mL"
+      },
+      "quantityStatus": "partial",
+      "parentSpecimenIds": []
+    },
+    "custodianship": {
+      "custodianshipAssignmentId": "custody-assignment-001",
+      "custodianOrganizationId": "org-synthetic-001",
+      "effectivePeriod": {
+        "start": "2026-09-07"
+      },
+      "assignmentStatus": "active"
+    },
+    "container": {
+      "containerId": "container-cryovial-synthetic-001",
+      "containerType": "cryogenic_vial",
+      "status": "occupied"
+    },
+    "storageRack": {
+      "storageRackId": "rack-synthetic-001",
+      "rackType": "cryovial_rack",
+      "rowCount": 8,
+      "columnCount": 12,
+      "capacity": 96
+    },
+    "storagePosition": {
+      "storagePositionId": "position-synthetic-A01",
+      "storageRackId": "rack-synthetic-001",
+      "positionCode": "A01",
+      "rowIndex": 1,
+      "columnIndex": 1
+    },
+    "containerPositionAssignment": {
+      "containerPositionAssignmentId": "container-position-001",
+      "containerId": "container-cryovial-synthetic-001",
+      "storagePositionId": "position-synthetic-A01",
+      "placedAt": "2026-09-07T00:00:00Z",
+      "removedAt": null
+    },
+    "specimenContainerAssignment": {
+      "specimenContainerAssignmentId": "specimen-container-001",
+      "specimenId": "specimen-synthetic-001",
+      "containerId": "container-cryovial-synthetic-001",
+      "assignedAt": "2026-09-07T00:00:00Z",
+      "releasedAt": null
+    },
+    "physicalIdentification": {
+      "labelIdentifierId": "label-id-001",
+      "encodedValue": "BVA2:SYN:8K3M",
+      "symbology": "data_matrix",
+      "targetType": "container",
+      "targetId": "container-cryovial-synthetic-001",
+      "identifierOrigin": "manufacturer_applied",
+      "carrierPlacement": "container_base",
+      "status": "active",
+      "immutableAtSource": true
+    },
+    "rcsAssessments": [
+      {
+        "rcsAssessmentId": "rcs-assessment-synthetic-001",
+        "specimenId": "specimen-synthetic-001",
+        "qualificationContext": {
+          "intendedUseCode": "research-sequencing",
+          "targetAnalyte": "cfDNA",
+          "assayFamily": "sequencing",
+          "workflowProtocolId": "protocol-synthetic-001",
+          "workflowProtocolVersion": "1.0"
+        },
+        "sprecVersion": "2.0",
+        "rulePackageVersion": "1.0.0",
+        "rulePackageChecksum": "sha256:synthetic-rcs",
+        "inputSnapshotId": "rcs-input-snapshot-001",
+        "inputSnapshotUri": "object://synthetic/rcs-input-snapshot-001.json",
+        "inputSnapshotHash": "sha256:synthetic-rcs-input",
+        "inputSnapshot": {
+          "rcsInputSnapshotId": "rcs-input-snapshot-001",
+          "schemaVersion": "2.0.0",
+          "immutable": true,
+          "matrix": "fluid",
+          "materialTypeCode": {
+            "code": "synthetic-plasma"
+          },
+          "matrixMappingReleaseId": "sprec-map-001",
+          "sprecVersion": "2.0",
+          "sprecMappingReleaseId": "sprec-map-001",
+          "capturedAt": "2026-09-07T00:00:00Z",
+          "sourceEventIds": [
+            "processing-event-001",
+            "storage-event-001"
+          ],
+          "preanalyticalAxes": {
+            "P_pre": {
+              "sprecCode": "A",
+              "severity": 0.0,
+              "maximumWeight": 30,
+              "weightedPenalty": 0.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "evidenceIds": [
+                "collection-event-001"
+              ]
+            },
+            "P_cent1": {
+              "sprecCode": "A",
+              "severity": 0.0,
+              "maximumWeight": 15,
+              "weightedPenalty": 0.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "evidenceIds": [
+                "centrifugation-event-001"
+              ]
+            },
+            "P_cent2": {
+              "sprecCode": "N",
+              "severity": 1.0,
+              "maximumWeight": 10,
+              "weightedPenalty": 10.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "applicabilityContext": {
+                "workflow": "cell-free DNA",
+                "secondCentrifugationRequired": true
+              },
+              "evidenceIds": [
+                "centrifugation-event-002"
+              ]
+            },
+            "P_post": {
+              "sprecCode": "A",
+              "severity": 0.0,
+              "maximumWeight": 20,
+              "weightedPenalty": 0.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "evidenceIds": [
+                "processing-event-001"
+              ]
+            },
+            "P_store": {
+              "sprecCode": "C",
+              "severity": 0.0,
+              "maximumWeight": 25,
+              "weightedPenalty": 0.0,
+              "resolutionStatus": "resolved",
+              "severityMappingReleaseId": "sprec-map-001",
+              "evidenceIds": [
+                "storage-event-001",
+                "telemetry-summary-001"
+              ]
+            }
+          },
+          "governanceEvidence": {
+            "metadataComplete": true,
+            "terminologyValid": true,
+            "traceabilityOk": true,
+            "monitoringOk": true,
+            "documentationOk": true,
+            "semanticCompatible": true,
+            "evidenceRefs": [
+              "custody-event-001",
+              "sop-version-001",
+              "telemetry-summary-001"
+            ],
+            "validationRuleSetVersion": "1.0.0",
+            "validationRuleSetChecksum": "sha256:synthetic-governance-gate",
+            "evaluatedAt": "2026-09-07T00:00:00Z",
+            "gateResult": "pass",
+            "failureReasons": []
+          }
+        },
+        "governanceGateResult": "pass",
+        "result": {
+          "preanalyticalPenalty": 10.0,
+          "score": 90.0,
+          "scoreBasedGrade": "A",
+          "finalGrade": "A",
+          "gradeRoute": "score_based_certification",
+          "routeReasons": [
+            "governance gate passed",
+            "RCS >= 90"
+          ]
+        },
+        "justifications": [
+          "All six governance evidences passed",
+          "P_bio = 10 from the five fluid axes",
+          "RCS = 100 - P_bio = 90"
+        ],
+        "calculatedAt": "2026-09-07T00:00:00Z",
+        "executionEnvironment": {
+          "runtime": "validated-package",
+          "packageVersion": "1.0.0"
+        }
+      }
+    ],
+    "provenance": {
+      "sourceSystem": "synthetic-demo",
+      "sourceRecordId": "demo-001",
+      "configurationReleaseId": "cfg-release-001",
+      "correlationId": "corr-synthetic-001"
+    }
+  },
+  "telemetryGraphInteroperabilityExample": {
+    "physicalAssignmentPath": {
+      "specimenContainerAssignment": {
+        "specimenContainerAssignmentId": "specimen-container-001",
+        "specimenId": "specimen-synthetic-001",
+        "containerId": "container-cryovial-synthetic-001",
+        "loadedAt": "2026-09-07T00:00:00Z",
+        "unloadedAt": null
+      },
+      "containerPositionAssignment": {
+        "containerPositionAssignmentId": "container-position-001",
+        "containerId": "container-cryovial-synthetic-001",
+        "storagePositionId": "position-synthetic-A01",
+        "placedAt": "2026-09-07T00:00:00Z",
+        "removedAt": null
+      },
+      "rackLocationAssignment": {
+        "rackLocationAssignmentId": "rack-location-001",
+        "storageRackId": "rack-synthetic-001",
+        "storageLocationId": "storage-location-freezer-001",
+        "placedAt": "2026-09-01T00:00:00Z",
+        "removedAt": null
+      }
+    },
+    "telemetryReading": {
+      "telemetryReadingId": "telemetry-reading-001",
+      "datastreamId": "datastream-temperature-001",
+      "sensorId": "sensor-001",
+      "equipmentId": "freezer-001",
+      "storageLocationId": "storage-location-freezer-001",
+      "observedAt": "2026-09-09T12:00:00Z",
+      "receivedAt": "2026-09-09T12:00:02Z",
+      "persistedAt": "2026-09-09T12:00:03Z",
+      "observedProperty": "temperature",
+      "value": -79.8,
+      "unit": {
+        "system": "http://unitsofmeasure.org",
+        "code": "Cel"
+      },
+      "sourceEventId": "evt-device-000123",
+      "idempotencyKey": "sensor-001:evt-device-000123",
+      "payloadHash": "sha256:synthetic-telemetry",
+      "clockStatus": "synchronized",
+      "schemaVersion": "2.0.0",
+      "canonicalModelReleaseId": "release-2.0.0",
+      "traceId": "trace-telemetry-001"
+    },
+    "telemetryExposureSummary": {
+      "telemetryExposureSummaryId": "telemetry-summary-001",
+      "specimenId": "specimen-synthetic-001",
+      "specimenContainerAssignmentId": "specimen-container-001",
+      "containerPositionAssignmentId": "container-position-001",
+      "rackLocationAssignmentId": "rack-location-001",
+      "exposurePathHash": "sha256:synthetic-exposure-path",
+      "datastreamIds": [
+        "datastream-temperature-001"
+      ],
+      "windowStart": "2026-09-01T00:00:00Z",
+      "windowEnd": "2026-09-09T00:00:00Z",
+      "observationCount": 11520,
+      "minimumValue": -81.2,
+      "maximumValue": -77.5,
+      "meanValue": -79.8,
+      "timeOutsideThresholdSeconds": 120,
+      "excursionCount": 1,
+      "coverageRatio": 0.998,
+      "sourceQueryHash": "sha256:synthetic-query",
+      "sourceReadingSetHash": "sha256:synthetic-readings",
+      "calculationVersion": "1.0.0",
+      "calculatedAt": "2026-09-09T00:01:00Z"
+    },
+    "graphProjection": {
+      "eventId": "outbox-001",
+      "aggregateType": "PhysicalAssignmentPath",
+      "aggregateId": "specimen-container-001",
+      "aggregateVersion": 4,
+      "projectionSchemaVersion": "2.0.0",
+      "operation": "upsert_temporal_relationships",
+      "relationships": [
+        {
+          "type": "CONTAINED_IN",
+          "from": {
+            "label": "Specimen",
+            "id": "specimen-synthetic-001"
+          },
+          "to": {
+            "label": "Container",
+            "id": "container-cryovial-synthetic-001"
+          },
+          "validTime": {
+            "from": "2026-09-07T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        },
+        {
+          "type": "POSITIONED_AT",
+          "from": {
+            "label": "Container",
+            "id": "container-cryovial-synthetic-001"
+          },
+          "to": {
+            "label": "StoragePosition",
+            "id": "position-synthetic-A01"
+          },
+          "validTime": {
+            "from": "2026-09-07T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        },
+        {
+          "type": "PART_OF",
+          "from": {
+            "label": "StoragePosition",
+            "id": "position-synthetic-A01"
+          },
+          "to": {
+            "label": "StorageRack",
+            "id": "rack-synthetic-001"
+          },
+          "validTime": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        },
+        {
+          "type": "STORED_AT",
+          "from": {
+            "label": "StorageRack",
+            "id": "rack-synthetic-001"
+          },
+          "to": {
+            "label": "StorageLocation",
+            "id": "storage-location-freezer-001"
+          },
+          "validTime": {
+            "from": "2026-09-01T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        },
+        {
+          "type": "MONITORED_BY",
+          "from": {
+            "label": "StorageLocation",
+            "id": "storage-location-freezer-001"
+          },
+          "to": {
+            "label": "Device",
+            "id": "sensor-001"
+          },
+          "validTime": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        }
+      ],
+      "payloadHash": "sha256:synthetic-graph-event",
+      "idempotencyKey": "PhysicalAssignmentPath:specimen-container-001:4"
+    },
+    "identifierNamespaceRegistry": {
+      "registryId": "namespace-registry-001",
+      "authorityDomain": "bioadvanced.dev",
+      "systemUri": "https://bioadvanced.dev/fhir/NamingSystem/specimen-id",
+      "status": "approved",
+      "version": "1.0.0",
+      "effectivePeriod": {
+        "start": "2026-09-12"
+      }
+    },
+    "interoperabilityMappingRelease": {
+      "interoperabilityMappingReleaseId": "interop-map-001",
+      "canonicalModelReleaseId": "release-2.0.0",
+      "standard": "HL7 FHIR",
+      "fhirVersion": "4.0.1",
+      "implementationGuideCanonical": "https://bioadvanced.dev/fhir/ImplementationGuide/bioadvanced",
+      "implementationGuideVersion": "1.0.0-candidate",
+      "jurisdiction": "BR",
+      "profileRegistryIds": [
+        "profile-registry-specimen-001"
+      ],
+      "resourceTypes": [
+        "Patient",
+        "Specimen",
+        "Consent",
+        "Observation",
+        "DiagnosticReport",
+        "Provenance",
+        "AuditEvent",
+        "DocumentReference",
+        "ResearchStudy"
+      ],
+      "identifierNamespaceRegistryIds": [
+        "namespace-registry-001"
+      ],
+      "terminologyReleaseIds": [
+        "terminology-release-001"
+      ],
+      "mappingDefinitionUri": "object://synthetic/interoperability/mapping.json",
+      "mappingDefinitionHash": "sha256:synthetic-mapping",
+      "conformanceTestReportUri": "object://synthetic/interoperability/conformance-report.json",
+      "coverageNumerator": 9,
+      "coverageDenominator": 9,
+      "coverageRatio": 1.0,
+      "roundTripLossesPresent": true,
+      "roundTripLossReportUri": "object://synthetic/interoperability/round-trip-losses.json",
+      "status": "approved",
+      "approvedBy": [
+        "governance-actor-synthetic-001"
+      ],
+      "approvedAt": "2026-09-12T00:00:00Z",
+      "effectivePeriod": {
+        "start": "2026-09-12"
+      }
+    }
+  },
+  "polyglotPersistenceExamples": {
+    "01_participant_mongodb.json": {
+      "participantId": "participant-synthetic-001",
+      "identityReference": "identity-boundary:participant-synthetic-001"
+    },
+    "02_consent_governance_mongodb.json": {
+      "collection": {
+        "collectionId": "collection-biobank-synthetic-001",
+        "governanceRegime": "biobank",
+        "governanceContext": {
+          "biobankGovernanceContextId": "biobank-context-001",
+          "broadPurpose": {
+            "code": "health-research"
+          },
+          "governancePolicyId": "policy-synthetic-001",
+          "accessCommitteeId": "committee-synthetic-001",
+          "institutionalCustodianId": "org-synthetic-001",
+          "futureUseConditions": [
+            "compatible_consent",
+            "ethics_review_when_required"
+          ]
+        }
+      },
+      "consent": {
+        "consentId": "consent-synthetic-001",
+        "consentModel": "broad",
+        "templateVersionId": "consent-template-001",
+        "currentStateDerived": "active",
+        "effectivePeriod": {
+          "start": "2026-09-07"
+        },
+        "permissions": [
+          {
+            "permissionCode": "commercial_use",
+            "purpose": {
+              "code": "commercial-research"
+            },
+            "decision": "deny",
+            "policyVersion": "1.0.0"
+          }
+        ]
+      },
+      "custodianship": {
+        "custodianshipAssignmentId": "custody-assignment-001",
+        "custodianOrganizationId": "org-synthetic-001",
+        "effectivePeriod": {
+          "start": "2026-09-07"
+        },
+        "assignmentStatus": "active"
+      }
+    },
+    "03_specimen_mongodb.json": {
+      "specimenId": "specimen-synthetic-001",
+      "accessionIdentifier": {
+        "system": "https://bioadvanced.dev/fhir/NamingSystem/accession-identifier",
+        "value": "SYN-000001"
+      },
+      "participantId": "participant-synthetic-001",
+      "collectionId": "collection-biobank-synthetic-001",
+      "specimenRole": "primary",
+      "materialType": {
+        "code": "synthetic-plasma"
+      },
+      "specimenStatus": "available",
+      "initialQuantity": {
+        "value": 2.0,
+        "unit": "mL",
+        "system": "http://unitsofmeasure.org",
+        "code": "mL"
+      },
+      "currentQuantity": {
+        "value": 1.5,
+        "unit": "mL",
+        "system": "http://unitsofmeasure.org",
+        "code": "mL"
+      },
+      "quantityStatus": "partial",
+      "parentSpecimenIds": []
+    },
+    "04_container_rack_position_mongodb.json": {
+      "container": {
+        "containerId": "container-cryovial-synthetic-001",
+        "containerType": "cryogenic_vial",
+        "status": "occupied"
+      },
+      "storageRack": {
+        "storageRackId": "rack-synthetic-001",
+        "rackType": "cryovial_rack",
+        "rowCount": 8,
+        "columnCount": 12,
+        "capacity": 96
+      },
+      "storagePosition": {
+        "storagePositionId": "position-synthetic-A01",
+        "storageRackId": "rack-synthetic-001",
+        "positionCode": "A01",
+        "rowIndex": 1,
+        "columnIndex": 1
+      },
+      "labelIdentifier": {
+        "labelIdentifierId": "label-id-001",
+        "encodedValue": "BVA2:SYN:8K3M",
+        "symbology": "data_matrix",
+        "targetType": "container",
+        "targetId": "container-cryovial-synthetic-001",
+        "identifierOrigin": "manufacturer_applied",
+        "carrierPlacement": "container_base",
+        "status": "active",
+        "immutableAtSource": true
+      },
+      "rackLocationAssignment": {
+        "rackLocationAssignmentId": "rack-location-001",
+        "storageRackId": "rack-synthetic-001",
+        "storageLocationId": "storage-location-freezer-001",
+        "placedAt": "2026-09-01T00:00:00Z",
+        "removedAt": null
+      }
+    },
+    "05_temporal_occupancy_mongodb.json": {
+      "specimenContainerAssignment": {
+        "specimenContainerAssignmentId": "specimen-container-001",
+        "specimenId": "specimen-synthetic-001",
+        "containerId": "container-cryovial-synthetic-001",
+        "assignedAt": "2026-09-07T00:00:00Z",
+        "releasedAt": null
+      },
+      "containerPositionAssignment": {
+        "containerPositionAssignmentId": "container-position-001",
+        "containerId": "container-cryovial-synthetic-001",
+        "storagePositionId": "position-synthetic-A01",
+        "placedAt": "2026-09-07T00:00:00Z",
+        "removedAt": null
+      },
+      "rackLocationAssignment": {
+        "rackLocationAssignmentId": "rack-location-001",
+        "storageRackId": "rack-synthetic-001",
+        "storageLocationId": "storage-location-freezer-001",
+        "placedAt": "2026-09-01T00:00:00Z",
+        "removedAt": null
+      }
+    },
+    "06_custody_append_only_mongodb.json": {
+      "custodyEventId": "custody-event-001",
+      "specimenId": "specimen-synthetic-001",
+      "eventType": "stored",
+      "occurredAt": "2026-09-07T00:00:00Z",
+      "fromCustodianId": "org-synthetic-001",
+      "toCustodianId": "org-synthetic-001",
+      "sourceEventId": "source-event-001",
+      "previousEventHash": "sha256:synthetic-previous",
+      "canonicalEventHash": "sha256:synthetic-custody",
+      "appendOnly": true
+    },
+    "07_telemetry_ingestion_payload_influxdb.json": {
+      "telemetryReadingId": "telemetry-reading-001",
+      "datastreamId": "datastream-temperature-001",
+      "sensorId": "sensor-001",
+      "equipmentId": "freezer-001",
+      "storageLocationId": "storage-location-freezer-001",
+      "observedAt": "2026-09-09T12:00:00Z",
+      "receivedAt": "2026-09-09T12:00:02Z",
+      "persistedAt": "2026-09-09T12:00:03Z",
+      "observedProperty": "temperature",
+      "value": -79.8,
+      "unit": {
+        "system": "http://unitsofmeasure.org",
+        "code": "Cel"
+      },
+      "sourceEventId": "evt-device-000123",
+      "idempotencyKey": "sensor-001:evt-device-000123",
+      "payloadHash": "sha256:synthetic-telemetry",
+      "clockStatus": "synchronized",
+      "schemaVersion": "2.0.0",
+      "canonicalModelReleaseId": "release-2.0.0",
+      "traceId": "trace-telemetry-001"
+    },
+    "08_exposure_summary_mongodb.json": {
+      "telemetryExposureSummaryId": "telemetry-summary-001",
+      "specimenId": "specimen-synthetic-001",
+      "specimenContainerAssignmentId": "specimen-container-001",
+      "containerPositionAssignmentId": "container-position-001",
+      "rackLocationAssignmentId": "rack-location-001",
+      "exposurePathHash": "sha256:synthetic-exposure-path",
+      "datastreamIds": [
+        "datastream-temperature-001"
+      ],
+      "windowStart": "2026-09-01T00:00:00Z",
+      "windowEnd": "2026-09-09T00:00:00Z",
+      "observationCount": 11520,
+      "minimumValue": -81.2,
+      "maximumValue": -77.5,
+      "meanValue": -79.8,
+      "timeOutsideThresholdSeconds": 120,
+      "excursionCount": 1,
+      "coverageRatio": 0.998,
+      "sourceQueryHash": "sha256:synthetic-query",
+      "sourceReadingSetHash": "sha256:synthetic-readings",
+      "calculationVersion": "1.0.0",
+      "calculatedAt": "2026-09-09T00:01:00Z"
+    },
+    "09_object_storage_metadata_mongodb.json": {
+      "dataFileVersionId": "file-version-001",
+      "objectUri": "object://evidence/synthetic-scan-001.png",
+      "sha256": "sha256:synthetic-object",
+      "sizeBytes": 12345,
+      "mediaType": "image/png",
+      "versionId": "object-version-001",
+      "evidenceType": "scan_evidence",
+      "createdAt": "2026-09-12T20:00:00Z",
+      "binaryAuthoritativeStore": "Object Storage"
+    },
+    "10_graph_projection_outbox_mongodb.json": {
+      "eventId": "outbox-001",
+      "aggregateType": "PhysicalAssignmentPath",
+      "aggregateId": "specimen-container-001",
+      "aggregateVersion": 4,
+      "projectionSchemaVersion": "2.0.0",
+      "operation": "upsert_temporal_relationships",
+      "relationships": [
+        {
+          "type": "CONTAINED_IN",
+          "from": {
+            "label": "Specimen",
+            "id": "specimen-synthetic-001"
+          },
+          "to": {
+            "label": "Container",
+            "id": "container-cryovial-synthetic-001"
+          },
+          "validTime": {
+            "from": "2026-09-07T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        },
+        {
+          "type": "POSITIONED_AT",
+          "from": {
+            "label": "Container",
+            "id": "container-cryovial-synthetic-001"
+          },
+          "to": {
+            "label": "StoragePosition",
+            "id": "position-synthetic-A01"
+          },
+          "validTime": {
+            "from": "2026-09-07T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        },
+        {
+          "type": "PART_OF",
+          "from": {
+            "label": "StoragePosition",
+            "id": "position-synthetic-A01"
+          },
+          "to": {
+            "label": "StorageRack",
+            "id": "rack-synthetic-001"
+          },
+          "validTime": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        },
+        {
+          "type": "STORED_AT",
+          "from": {
+            "label": "StorageRack",
+            "id": "rack-synthetic-001"
+          },
+          "to": {
+            "label": "StorageLocation",
+            "id": "storage-location-freezer-001"
+          },
+          "validTime": {
+            "from": "2026-09-01T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        },
+        {
+          "type": "MONITORED_BY",
+          "from": {
+            "label": "StorageLocation",
+            "id": "storage-location-freezer-001"
+          },
+          "to": {
+            "label": "Device",
+            "id": "sensor-001"
+          },
+          "validTime": {
+            "from": "2026-01-01T00:00:00Z",
+            "to": null
+          },
+          "transactionTime": {
+            "from": "2026-09-09T12:00:04Z",
+            "to": null
+          }
+        }
+      ],
+      "payloadHash": "sha256:synthetic-graph-event",
+      "idempotencyKey": "PhysicalAssignmentPath:specimen-container-001:4"
+    },
+    "11_fhir_exchange_bundle.json": {
+      "resourceType": "Bundle",
+      "type": "collection",
+      "meta": {
+        "source": "https://bioadvanced.dev/fhir/ImplementationGuide/bioadvanced"
+      },
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Specimen",
+            "id": "specimen-synthetic-001",
+            "identifier": [
+              {
+                "system": "https://bioadvanced.dev/fhir/NamingSystem/specimen-id",
+                "value": "specimen-synthetic-001"
+              }
+            ],
+            "subject": {
+              "reference": "Patient/participant-synthetic-001"
+            }
+          }
+        }
+      ],
+      "persistenceNotice": "Exchange representation only; not an operational store."
+    },
+    "12_redis_transient_example.json": {
+      "key": "lock:container-position:position-synthetic-A01",
+      "value": {
+        "ownerToken": "opaque-synthetic-token",
+        "correlationId": "corr-synthetic-001"
+      },
+      "ttlSeconds": 30,
+      "canonical": false,
+      "containsPII": false
+    }
+  }
+}

@@ -23,14 +23,20 @@ class FakeQueryApi {
     if (FakeQueryApi.collectRowsBehavior) return FakeQueryApi.collectRowsBehavior(query);
     return [];
   }
+
+  with(options) {
+    this.withOptions = options;
+    return this;
+  }
 }
 FakeQueryApi.collectRowsBehavior = null;
 
 class FakeWriteApi {
-  constructor(org, bucket, precision) {
+  constructor(org, bucket, precision, writeOptions) {
     this.org = org;
     this.bucket = bucket;
     this.precision = precision;
+    this.writeOptions = writeOptions;
   }
 }
 
@@ -46,8 +52,8 @@ class FakeInfluxDB {
     return api;
   }
 
-  getWriteApi(org, bucket, precision) {
-    const api = new FakeWriteApi(org, bucket, precision);
+  getWriteApi(org, bucket, precision, writeOptions) {
+    const api = new FakeWriteApi(org, bucket, precision, writeOptions);
     FakeInfluxDB.writeApis.push(api);
     return api;
   }
@@ -271,6 +277,35 @@ describe('infrastructure/database/influxdb/connection.js', () => {
 
       expect(() => connectionMod.getInfluxQueryApi()).toThrow(/Cliente indisponível/);
       expect(() => connectionMod.getInfluxWriteApi()).toThrow(/Cliente indisponível/);
+    });
+
+    // #1323: RNF015 C1 -- an InfluxDB call made for a request sends its id.
+    it('#1323 a query API built inside a request sends its X-Request-Id header', async () => {
+      setEnv(FULL_ENV);
+      const { connectionMod } = freshConnection();
+      const { runWithRequestId } = require('../../src/utils/requestContext');
+
+      await connectionMod.connectInfluxDB();
+      const inside = runWithRequestId('req-influx-0001', () => connectionMod.getInfluxQueryApi());
+      const outside = connectionMod.getInfluxQueryApi();
+
+      expect(inside.withOptions).toEqual({ headers: { 'X-Request-Id': 'req-influx-0001' } });
+      expect(outside.withOptions).toBeUndefined();
+    });
+
+    it('#1323 only a request-scoped write API sends the X-Request-Id header', async () => {
+      setEnv(FULL_ENV);
+      const { connectionMod } = freshConnection();
+      const { runWithRequestId } = require('../../src/utils/requestContext');
+
+      await connectionMod.connectInfluxDB();
+      const [scoped, shared] = runWithRequestId('req-influx-0001', () => [
+        connectionMod.getInfluxWriteApi({ requestScoped: true }),
+        connectionMod.getInfluxWriteApi(),
+      ]);
+
+      expect(scoped.writeOptions).toEqual({ headers: { 'X-Request-Id': 'req-influx-0001' } });
+      expect(shared.writeOptions).toBeUndefined();
     });
   });
 

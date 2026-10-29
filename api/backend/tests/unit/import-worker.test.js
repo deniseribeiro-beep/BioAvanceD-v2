@@ -449,6 +449,34 @@ describe('workers/import-worker', () => {
       expect(result).toEqual(makeWorkerResult());
     });
 
+    // #1323: RNF015 C1 -- the job runs under the request id it was enqueued with.
+    it('runs the job under the request id carried in its data', async () => {
+      const { currentRequestId } = require('../../src/utils/requestContext');
+      let seen;
+      fakePatientWorker.process.mockImplementation(async () => {
+        seen = currentRequestId();
+        return makeWorkerResult();
+      });
+      const processor = await getProcessor();
+      const job = {
+        id: 'j-req',
+        name: 'import',
+        data: {
+          jobID: 'j-req',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+          requestId: 'req-job-0002',
+        },
+      };
+
+      await processor(job);
+
+      expect(fakePatientWorker.process).toHaveBeenCalled();
+      expect(seen).toBe('req-job-0002');
+    });
+
     it('routes "samples" to the sample worker with userID and a connected Neo4j driver threaded through options (#483)', async () => {
       const processor = await getProcessor();
       const job = {
@@ -1179,10 +1207,12 @@ describe('workers/import-worker', () => {
       const job = { name: 'consent-notification', data: { userId: 'u1', patientId: 'p1' } };
       await notificationProcessor(job);
 
+      // #1166: with the worker's own connection, which the job needs to
+      // resolve the participant's name and contact.
       expect(fakeNotificationService.processConsentNotificationJob).toHaveBeenCalledWith({
         userId: 'u1',
         patientId: 'p1',
-      });
+      }, fakeDb);
     });
 
     it('returns null (without calling the notification service) for an unknown job name', async () => {

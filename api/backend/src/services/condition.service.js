@@ -1,6 +1,8 @@
 const { getCollection } = require('../utils/collectionResolver');
 const ConditionModel = require('../models/Condition');
 const { validateActiveCodes } = require('../ingestion/activeCodeValidator');
+const { assertReferencesExist } = require('../ingestion/canonicalGateway');
+const { diagnosticReportReferenceChecks } = require('./diagnostic-report.service');
 
 /**
  * Persists one Condition (dict-02 ELM-0200..0210, #690) referenced by
@@ -46,6 +48,9 @@ async function createCondition(db, data) {
   // version, and leave the field absent (not null) if the validator
   // couldn't resolve one for that entry. codeCheck.results is built in the
   // same order as condition.conditionCoding above, so index-aligning is safe.
+  // Cutoff (#879): codings written before 1d6d10b2 (2026-08-28) carry no
+  // version and are deliberately not back-filled, so an absent version on an
+  // older row means "written before the cutoff", not "unversioned".
   condition.conditionCoding.forEach((coding, index) => {
     if (!coding.version) {
       const resolvedVersion = codeCheck.results[index]?.concept?.version;
@@ -54,6 +59,14 @@ async function createCondition(db, data) {
       }
     }
   });
+
+  // ELM-0209: only an entry typed `DiagnosticReport/<id>` must resolve to a
+  // real DiagnosticReport (#695); an untyped entry is stored unchecked.
+  const evidenceCheck = diagnosticReportReferenceChecks(condition.diagnosisEvidence, 'diagnosisEvidence', { typedOnly: true });
+  const evidenceReferences = await assertReferencesExist(db, evidenceCheck.references);
+  if (evidenceCheck.malformed.length || !evidenceReferences.valid) {
+    throw new Error([...evidenceCheck.malformed, ...evidenceReferences.violations.map((v) => v.message)].join(', '));
+  }
 
   const collection = await getCollection(db, 'conditions');
   await collection.insertOne(condition);

@@ -1,0 +1,484 @@
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { ObjectId } = require('mongodb');
+const logger = require('../../../src/utils/logger');
+const bridge = require('../../../src/services/legacyPlacementChain.service');
+
+// #1314: a query-matching fake. Equality (Dates by instant, ObjectIds by
+// hex), `null` as missing-or-null, `$in` and `$or`, the way Mongo matches. Every
+// write and index build is recorded with the options it was given.
+function same(a, b) {
+  if (a === b) return true;
+  if (a instanceof Date || b instanceof Date) return a != null && b != null && new Date(a).getTime() === new Date(b).getTime();
+  if (a && b && typeof a === 'object' && typeof b === 'object') return String(a) === String(b);
+  return false;
+}
+
+function matches(doc, filter) {
+  return Object.entries(filter).every(([key, value]) => {
+    if (key === '$or') return value.some((branch) => matches(doc, branch));
+    if (value === null) return doc[key] === null || doc[key] === undefined;
+    if (value && typeof value === 'object' && Array.isArray(value.$in)) return value.$in.some((option) => same(doc[key], option));
+    return same(doc[key], value);
+  });
+}
+
+function createFakeCollection(name, writes) {
+  const docs = [];
+  return {
+    docs,
+    async createIndex(keys, options) { writes.push({ collection: name, op: 'createIndex', options }); },
+    async insertOne(doc, options) {
+      writes.push({ collection: name, op: 'insertOne', options });
+      docs.push({ ...doc });
+      return { insertedId: docs.length };
+    },
+    async updateOne(filter, update, options) {
+      writes.push({ collection: name, op: 'updateOne', options });
+      const doc = docs.find((row) => matches(row, filter));
+      if (doc) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0 };
+    },
+    async findOne(filter) { return docs.find((doc) => matches(doc, filter)) || null; },
+    find(filter = {}) { return { toArray: async () => docs.filter((doc) => matches(doc, filter)) }; },
+  };
+}
+
+function createFakeDb(seed = {}) {
+  const collections = {};
+  const writes = [];
+  const db = {
+    collections,
+    writes,
+    collection(name) {
+      collections[name] = collections[name] || createFakeCollection(name, writes);
+      return collections[name];
+    },
+  };
+  for (const [name, docs] of Object.entries(seed)) db.collection(name).docs.push(...docs);
+  return db;
+}
+
+// FREEZER -> SHELF -> RACK -> two boxes. The freezer's Equipment names org-1.
+const BOX_1 = { _id: new ObjectId('64b000000000000000000001'), name: 'Caixa 1', parent_id: 'R1' };
+const BOX_2 = { _id: new ObjectId('64b000000000000000000002'), name: 'Caixa 2', parent_id: 'R1' };
+
+function topology({ organizationId = 'org-1', organizations = [{ organizationId: 'org-1' }] } = {}) {
+  return {
+    organizations,
+    equipment: [{ equipmentID: 4201, organizationId, deletedAt: null }],
+    storageContainers: [
+      { _id: 'F1', containerType: 'FREEZER', containerID: 4201, name: 'Freezer 1', parent_id: null },
+      { _id: 'S1', containerType: 'SHELF', name: 'Prateleira 1', parent_id: 'F1' },
+      { _id: 'R1', containerType: 'RACK', name: 'Rack 1', parent_id: 'S1' },
+    ],
+    storageBoxes: [BOX_1, BOX_2],
+  };
+}
+
+const SAMPLE = {
+  _id: new ObjectId('64a000000000000000000001'),
+  specimenId: 'SPC-2026-0001',
+  primaryContainer: 'cryogenic_vial',
+  storageLocation: { position: 'A1' },
+};
+const T = (day) => new Date(`2026-10-0${day}T00:00:00.000Z`);
+const SESSION = { id: 'caller-session' };
+
+afterEach(() => vi.restoreAllMocks());
+
+describe('legacyPlacementChain.service (#1314)', () => {
+  it('converts position codes both ways, and names a position by its box', () => {
+    expect(bridge.chainPositionCode('A1')).toBe('A01');
+    expect(bridge.chainPositionCode('h12')).toBe('H12');
+    expect(bridge.chainPositionCode('A01')).toBe('A01');
+    expect(bridge.legacyPositionCode('A01')).toBe('A1');
+    expect(bridge.legacyPositionCode('H12')).toBe('H12');
+    expect(bridge.legacyPositionCode('A1')).toBe('A1');
+    expect(bridge.rackIdForBox(BOX_1)).toBe('64b000000000000000000001');
+    expect(bridge.storagePositionIdFor(BOX_1, 'B3')).toBe('64b000000000000000000001:B03');
+  });
+
+  it('places, moves and releases: one container kept loaded, one position at a time, the box located in its mirrored tree', async () => {
+    const db = createFakeDb(topology());
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+    await bridge.moveSpecimen(db, { sample: SAMPLE, toBox: BOX_2, toPosition: 'B2', at: T(2), sourceEventId: 'evt-move' }, SESSION);
+    await bridge.releaseSpecimen(db, { sample: SAMPLE, at: T(3), sourceEventId: 'evt-release' }, SESSION);
+
+    const [container] = db.collections.containers.docs;
+    expect(db.collections.containers.docs).toHaveLength(1);
+    expect(container).toMatchObject({ containerType: 'cryogenic_vial', emptyStatus: 'occupied' });
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: 'SPC-2026-0001', containerId: container.containerId, loadedAt: T(1), unloadedAt: null, assignmentStatus: 'active', sourceEventId: 'evt-place' }),
+    ]);
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ storagePositionId: '64b000000000000000000001:A01', placedAt: T(1), removedAt: T(2), assignmentStatus: 'ended' }),
+      expect.objectContaining({ storagePositionId: '64b000000000000000000002:B02', placedAt: T(2), removedAt: T(3), assignmentStatus: 'ended' }),
+    ]);
+
+    const locations = db.collections.storageLocations.docs;
+    expect(locations.map(({ code, locationType, organizationId }) => ({ code, locationType, organizationId }))).toEqual([
+      { code: 'legacy-storage-container:F1', locationType: 'freezer', organizationId: 'org-1' },
+      { code: 'legacy-storage-container:S1', locationType: 'shelf', organizationId: 'org-1' },
+      { code: 'legacy-storage-container:R1', locationType: 'rack', organizationId: 'org-1' },
+    ]);
+    expect(locations[0].parentLocationId).toBeNull();
+    expect(locations[1].parentLocationId).toBe(locations[0].storageLocationId);
+    expect(locations[2].parentLocationId).toBe(locations[1].storageLocationId);
+    expect(db.collections.rackLocationAssignments.docs).toEqual([
+      expect.objectContaining({ storageRackId: '64b000000000000000000001', storageLocationId: locations[2].storageLocationId, placedAt: T(1), sourceEventId: 'evt-place', assignmentStatus: 'active' }),
+      expect.objectContaining({ storageRackId: '64b000000000000000000002', storageLocationId: locations[2].storageLocationId, placedAt: T(2), sourceEventId: 'evt-move', assignmentStatus: 'active' }),
+    ]);
+    expect(db.collections.storageAssignments).toBeUndefined();
+  });
+
+  it('runs every write in the caller\'s session, and builds no index', async () => {
+    const db = createFakeDb(topology());
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+    await bridge.moveSpecimen(db, { sample: SAMPLE, toBox: BOX_2, toPosition: 'B2', at: T(2), sourceEventId: 'evt-move' }, SESSION);
+    await bridge.releaseSpecimen(db, { sample: SAMPLE, at: T(3), sourceEventId: 'evt-release' }, SESSION);
+
+    expect(db.writes.length).toBeGreaterThan(0);
+    expect(db.writes.filter((write) => write.options?.session !== SESSION)).toEqual([]);
+  });
+
+  it('a specimen with no primaryContainer gets the container-not-identified type', async () => {
+    const db = createFakeDb(topology());
+    const sample = { ...SAMPLE, primaryContainer: undefined };
+    await bridge.placeSpecimen(db, { sample, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+    expect(db.collections.containers.docs[0].containerType).toBe('unidentified_container');
+    expect(bridge.UNIDENTIFIED_CONTAINER_TYPE).toBe('unidentified_container');
+  });
+
+  it.each([
+    ['the Equipment names no organization', { organizationId: null }],
+    ['the Equipment names an organization that is not stored', { organizations: [] }],
+  ])('without a resolvable organization (%s) the chain ends at the rack, with a log line', async (_case, options) => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const db = createFakeDb(topology(options));
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    expect(db.collections.containerPositionAssignments.docs).toHaveLength(1);
+    expect(db.collections.storageLocations).toBeUndefined();
+    expect(db.collections.rackLocationAssignments.docs).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('64b000000000000000000001'));
+  });
+
+  it('currentPlacement reads the chain first, the open legacy row as a fallback, and null with neither', async () => {
+    const legacyRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [legacyRow] });
+
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toEqual({
+      boxId: String(BOX_2._id), positionCode: 'C4', containerId: null, storagePositionId: null, storageRackId: null, storageLocationId: null,
+      placedAt: T(1), source: 'legacy_storage_assignment',
+    });
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(2), sourceEventId: 'evt-place' }, SESSION);
+    const rackLocation = db.collections.rackLocationAssignments.docs[0];
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toEqual({
+      boxId: String(BOX_1._id), positionCode: 'A1', containerId: db.collections.containers.docs[0].containerId,
+      storagePositionId: '64b000000000000000000001:A01', storageRackId: '64b000000000000000000001', storageLocationId: rackLocation.storageLocationId,
+      placedAt: T(2), source: 'physical_chain',
+    });
+
+    await bridge.releaseSpecimen(db, { sample: SAMPLE, at: T(3) }, SESSION);
+    legacyRow.removedAt = T(3);
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toBeNull();
+  });
+
+  it('currentPlacement reads a loaded, released specimen as not placed, whatever its open legacy row says (#1374)', async () => {
+    const legacyRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [legacyRow] });
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(2), sourceEventId: 'evt-place' }, SESSION);
+    await bridge.releaseSpecimen(db, { sample: SAMPLE, at: T(3) }, SESSION);
+
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toBeNull();
+    expect(legacyRow.removedAt).toBeNull();
+  });
+
+  it('releaseSpecimen adopts a legacy-only specimen first, then closes its position (#1374)', async () => {
+    const legacyRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'B2', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [legacyRow] });
+
+    expect(await bridge.releaseSpecimen(db, { sample: SAMPLE, at: T(3) }, SESSION)).not.toBeNull();
+
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: 'SPC-2026-0001', loadedAt: T(1), assignmentStatus: 'active', sourceEventId: 'legacy-storage-assignment:sa-1' }),
+    ]);
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ storagePositionId: '64b000000000000000000002:B02', placedAt: T(1), removedAt: T(3), assignmentStatus: 'ended' }),
+    ]);
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toBeNull();
+    expect(db.writes.filter((write) => write.collection === 'storageAssignments')).toEqual([]);
+    expect(db.writes.filter((write) => write.options?.session !== SESSION)).toEqual([]);
+  });
+
+  it('releaseSpecimen returns null when nothing is placed, after adoption too', async () => {
+    const closedRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'B2', placedAt: T(1), removedAt: T(2) };
+    expect(await bridge.releaseSpecimen(createFakeDb(topology()), { sample: SAMPLE, at: T(3) }, SESSION)).toBeNull();
+    expect(await bridge.releaseSpecimen(createFakeDb({ ...topology(), storageAssignments: [closedRow] }), { sample: SAMPLE, at: T(3) }, SESSION)).toBeNull();
+  });
+
+  it('moveSpecimen adopts a legacy-only specimen first, then moves its one container (#1374)', async () => {
+    const legacyRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [legacyRow] });
+
+    await bridge.moveSpecimen(db, { sample: SAMPLE, toBox: BOX_2, toPosition: 'B2', at: T(2), sourceEventId: 'evt-move' }, SESSION);
+
+    const [container] = db.collections.containers.docs;
+    expect(db.collections.containers.docs).toHaveLength(1);
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: 'SPC-2026-0001', containerId: container.containerId, loadedAt: T(1), assignmentStatus: 'active', sourceEventId: 'legacy-storage-assignment:sa-1' }),
+    ]);
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ containerId: container.containerId, storagePositionId: '64b000000000000000000001:A01', placedAt: T(1), removedAt: T(2), assignmentStatus: 'ended' }),
+      expect.objectContaining({ containerId: container.containerId, storagePositionId: '64b000000000000000000002:B02', placedAt: T(2), removedAt: null, assignmentStatus: 'active' }),
+    ]);
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toMatchObject({ boxId: String(BOX_2._id), positionCode: 'B2', source: 'physical_chain' });
+    expect(db.writes.filter((write) => write.collection === 'storageAssignments')).toEqual([]);
+    expect(db.writes.filter((write) => write.options?.session !== SESSION)).toEqual([]);
+  });
+
+  it.each([
+    ['an object', { code: 'x' }, 'unidentified_container'],
+    ['a blank string', '  ', 'unidentified_container'],
+    ['a number', 42, 'unidentified_container'],
+    ['a plain code', 'cryogenic_vial', 'cryogenic_vial'],
+  ])('primaryContainer given as %s reaches containerType as a plain code or the not-identified type (#1374)', async (_case, primaryContainer, containerType) => {
+    const db = createFakeDb(topology());
+    await bridge.placeSpecimen(db, { sample: { ...SAMPLE, primaryContainer }, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+    expect(db.collections.containers.docs[0].containerType).toBe(containerType);
+  });
+
+  // #1374: a legacy sample with no specimenId is keyed by its _id, as the
+  // custody ledger keys it; the placement and its read use the same key.
+  it('places a sample with no specimenId under String(_id), and currentPlacement reads it back (#1374)', async () => {
+    const db = createFakeDb(topology());
+    const sample = { ...SAMPLE, specimenId: undefined };
+
+    await bridge.placeSpecimen(db, { sample, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    const [container] = db.collections.containers.docs;
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: String(SAMPLE._id), containerId: container.containerId, assignmentStatus: 'active' }),
+    ]);
+    expect(await bridge.currentPlacement(db, sample, SESSION)).toMatchObject({
+      boxId: String(BOX_1._id), positionCode: 'A1', containerId: container.containerId,
+      storagePositionId: '64b000000000000000000001:A01', source: 'physical_chain',
+    });
+  });
+
+  it('legacyWriteEventId names a legacy write by its operation, sample and instant (V2E-0683, V2E-0690)', () => {
+    expect(bridge.legacyWriteEventId('allocate', SAMPLE, T(1))).toBe('legacy-storage-allocate:64a000000000000000000001:2026-10-01T00:00:00.000Z');
+    expect(bridge.legacyWriteEventId('auto-assign', SAMPLE, '2026-10-02T03:04:05.000Z')).toBe('legacy-storage-auto-assign:64a000000000000000000001:2026-10-02T03:04:05.000Z');
+    expect(bridge.legacyWriteEventId('move', { _id: 'smp-1' }, T(3))).toBe('legacy-storage-move:smp-1:2026-10-03T00:00:00.000Z');
+  });
+
+  it('adoptLegacyPlacement decomposes the legacy rows once, and a second run writes nothing', async () => {
+    const rows = [
+      { storageAssignmentId: 'sa-2', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'B2', placedAt: T(3), removedAt: null },
+      { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: T(3) },
+    ];
+    const db = createFakeDb({ ...topology(), storageAssignments: rows });
+
+    expect(await bridge.adoptLegacyPlacement(db, SAMPLE, SESSION)).toMatchObject({ positionAssignments: 2, rackLocations: 2 });
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: 'SPC-2026-0001', loadedAt: T(1), assignmentStatus: 'active', sourceEventId: 'legacy-storage-assignment:sa-1' }),
+    ]);
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ storagePositionId: '64b000000000000000000001:A01', placedAt: T(1), removedAt: T(3), assignmentStatus: 'ended' }),
+      expect.objectContaining({ storagePositionId: '64b000000000000000000002:B02', placedAt: T(3), removedAt: null, assignmentStatus: 'active' }),
+    ]);
+    expect(db.collections.rackLocationAssignments.docs.map(({ storageRackId, sourceEventId }) => ({ storageRackId, sourceEventId }))).toEqual([
+      { storageRackId: '64b000000000000000000001', sourceEventId: 'legacy-storage-assignment:sa-1' },
+      { storageRackId: '64b000000000000000000002', sourceEventId: 'legacy-storage-assignment:sa-2' },
+    ]);
+    expect(db.writes.filter((write) => write.collection === 'storageAssignments')).toEqual([]);
+    expect(db.writes.filter((write) => write.options?.session !== SESSION)).toEqual([]);
+
+    const writesAfterFirst = db.writes.length;
+    expect(await bridge.adoptLegacyPlacement(db, SAMPLE, SESSION)).toMatchObject({ positionAssignments: 0, rackLocations: 0 });
+    expect(db.writes).toHaveLength(writesAfterFirst);
+  });
+
+  // #1374: some legacy rows are keyed by the canonical specimenId (#1220).
+  it('legacyRowKeys names the canonical specimenId first, then String(_id), each once', () => {
+    expect(bridge.legacyRowKeys(SAMPLE)).toEqual(['SPC-2026-0001', '64a000000000000000000001']);
+    expect(bridge.legacyRowKeys({ _id: SAMPLE._id })).toEqual(['64a000000000000000000001']);
+    expect(bridge.legacyRowKeys({ _id: 'smp-1', specimenId: 'smp-1' })).toEqual(['smp-1']);
+  });
+
+  it('adoptLegacyPlacement adopts a row keyed by the canonical specimenId with the _id-keyed rows (#1374)', async () => {
+    const rows = [
+      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0001', boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: T(2) },
+      { storageAssignmentId: 'sa-2', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'B2', placedAt: T(2), removedAt: null },
+    ];
+    const db = createFakeDb({ ...topology(), storageAssignments: rows });
+
+    expect(await bridge.adoptLegacyPlacement(db, SAMPLE, SESSION)).toMatchObject({ positionAssignments: 2, rackLocations: 2 });
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: 'SPC-2026-0001', loadedAt: T(1), sourceEventId: 'legacy-storage-assignment:sc-1' }),
+    ]);
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ storagePositionId: '64b000000000000000000001:A01', placedAt: T(1), removedAt: T(2) }),
+      expect.objectContaining({ storagePositionId: '64b000000000000000000002:B02', placedAt: T(2), removedAt: null }),
+    ]);
+  });
+
+  it('adoptLegacyPlacement places once a placement recorded under both keys (#1374)', async () => {
+    const placement = { boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [
+      { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), ...placement },
+      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0001', ...placement, positionCode: 'A01' },
+    ] });
+
+    expect(await bridge.adoptLegacyPlacement(db, SAMPLE, SESSION)).toMatchObject({ positionAssignments: 1 });
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ storagePositionId: '64b000000000000000000001:A01', placedAt: T(1), removedAt: null }),
+    ]);
+  });
+
+  it('currentPlacement with no chain load reads an open row keyed by the canonical specimenId (#1374)', async () => {
+    const db = createFakeDb({ ...topology(), storageAssignments: [
+      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0001', boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(1), removedAt: null },
+    ] });
+
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toMatchObject({
+      boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(1), source: 'legacy_storage_assignment',
+    });
+  });
+
+  it('currentPlacement prefers the canonical-keyed open row over an _id-keyed one (#1374)', async () => {
+    const db = createFakeDb({ ...topology(), storageAssignments: [
+      { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: null },
+      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0001', boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(2), removedAt: null },
+    ] });
+
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toMatchObject({
+      boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(2), source: 'legacy_storage_assignment',
+    });
+  });
+});
+
+// #1379: a freezer's mirrored location sits under its room's location.
+describe('legacyPlacementChain.service: a freezer under its room (#1379)', () => {
+  const ROOM_ID = new ObjectId('64d000000000000000000001');
+  const FREEZER_CODE = 'legacy-storage-container:F1';
+  const FREEZER = { _id: 'F1', containerType: 'FREEZER', containerID: 4201, name: 'Freezer 1', parent_id: null, roomId: ROOM_ID };
+  const BOTH_ORGANIZATIONS = [{ organizationId: 'org-1' }, { organizationId: 'org-2' }];
+
+  function roomLocation({ storageLocationId = 'loc-room-1', organizationId = 'org-1', locationType = 'room', code = `legacy-room:${ROOM_ID}` } = {}) {
+    return { storageLocationId, locationType, name: 'Sala 1', code, parentLocationId: null, organizationId, locationStatus: 'active' };
+  }
+
+  function freezerLocation(parentLocationId) {
+    return { storageLocationId: 'loc-f1', locationType: 'freezer', name: 'Freezer 1', code: FREEZER_CODE, parentLocationId, organizationId: 'org-1', locationStatus: 'active' };
+  }
+
+  // topology(), its freezer in ROOM_ID.
+  function roomTopology({ storageLocations = [roomLocation()], organizations } = {}) {
+    const base = topology(organizations ? { organizations } : {});
+    return {
+      ...base,
+      storageContainers: base.storageContainers.map((container) => (container._id === 'F1' ? { ...container, roomId: ROOM_ID } : container)),
+      storageLocations,
+    };
+  }
+
+  const freezerLocations = (db) => db.collections.storageLocations.docs.filter((location) => location.code === FREEZER_CODE);
+  const shelfLocation = (db) => db.collections.storageLocations.docs.find((location) => location.code === 'legacy-storage-container:S1');
+
+  it('places a specimen with the freezer location created under its mirrored room', async () => {
+    const db = createFakeDb(roomTopology());
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    const [freezer] = freezerLocations(db);
+    expect(freezer).toMatchObject({ locationType: 'freezer', parentLocationId: 'loc-room-1', organizationId: 'org-1' });
+    expect(shelfLocation(db).parentLocationId).toBe(freezer.storageLocationId);
+  });
+
+  it('finds a freezer location already under its room, and does not duplicate it', async () => {
+    const db = createFakeDb(roomTopology({ storageLocations: [roomLocation(), freezerLocation('loc-room-1')] }));
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    expect(freezerLocations(db)).toHaveLength(1);
+    expect(shelfLocation(db).parentLocationId).toBe('loc-f1');
+  });
+
+  it('leaves the freezer location at the root when its room is mirrored under another organization', async () => {
+    const db = createFakeDb(roomTopology({ storageLocations: [roomLocation({ organizationId: 'org-2' })], organizations: BOTH_ORGANIZATIONS }));
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    expect(freezerLocations(db)).toEqual([expect.objectContaining({ parentLocationId: null, organizationId: 'org-1' })]);
+  });
+
+  it('assignFreezerRoom creates the freezer location under the room, re-parents it and unassigns it', async () => {
+    const other = roomLocation({ storageLocationId: 'loc-room-2', code: 'legacy-room:64d000000000000000000002' });
+    const db = createFakeDb(roomTopology({ storageLocations: [roomLocation(), other] }));
+
+    const created = await bridge.assignFreezerRoom(db, FREEZER, 'loc-room-1');
+    expect(created.roomLocation).toMatchObject({ storageLocationId: 'loc-room-1' });
+    expect(created.freezerLocation).toMatchObject({ code: FREEZER_CODE, locationType: 'freezer', name: 'Freezer 1', parentLocationId: 'loc-room-1', organizationId: 'org-1' });
+
+    const moved = await bridge.assignFreezerRoom(db, FREEZER, 'loc-room-2');
+    expect(moved.freezerLocation).toMatchObject({ storageLocationId: created.freezerLocation.storageLocationId, parentLocationId: 'loc-room-2' });
+
+    const unassigned = await bridge.assignFreezerRoom(db, FREEZER, null);
+    expect(unassigned).toEqual({ freezerLocation: expect.objectContaining({ parentLocationId: null }), roomLocation: null });
+    expect(freezerLocations(db)).toEqual([expect.objectContaining({ storageLocationId: created.freezerLocation.storageLocationId, parentLocationId: null })]);
+    expect(db.writes.filter((write) => ['storageContainers', 'rooms'].includes(write.collection))).toEqual([]);
+  });
+
+  it('assignFreezerRoom resolves an old Room _id through its legacy-room code', async () => {
+    const db = createFakeDb(roomTopology());
+
+    expect((await bridge.assignFreezerRoom(db, FREEZER, ROOM_ID)).freezerLocation.parentLocationId).toBe('loc-room-1');
+    expect((await bridge.assignFreezerRoom(db, FREEZER, String(ROOM_ID))).freezerLocation.parentLocationId).toBe('loc-room-1');
+    expect(freezerLocations(db)).toHaveLength(1);
+  });
+
+  it.each([
+    ['an unknown room', 'loc-missing', [roomLocation()]],
+    ['a location that is not a room', 'loc-shelf', [roomLocation({ storageLocationId: 'loc-shelf', locationType: 'shelf', code: 'legacy-storage-container:S9' })]],
+  ])('assignFreezerRoom refuses %s with ROOM_NOT_FOUND', async (_case, ref, storageLocations) => {
+    const db = createFakeDb(roomTopology({ storageLocations }));
+
+    await expect(bridge.assignFreezerRoom(db, FREEZER, ref)).rejects.toMatchObject({ code: 'ROOM_NOT_FOUND', statusCode: 404 });
+    expect(db.writes).toEqual([]);
+  });
+
+  it('assignFreezerRoom refuses another organization\'s room', async () => {
+    const existing = freezerLocation(null);
+    const db = createFakeDb(roomTopology({ storageLocations: [roomLocation({ organizationId: 'org-2' }), existing], organizations: BOTH_ORGANIZATIONS }));
+
+    await expect(bridge.assignFreezerRoom(db, FREEZER, 'loc-room-1')).rejects.toMatchObject({ code: 'ROOM_OUT_OF_ORGANIZATION', statusCode: 422 });
+    expect(db.collections.storageLocations.docs.find((location) => location.code === FREEZER_CODE).parentLocationId).toBeNull();
+    expect(db.writes).toEqual([]);
+  });
+
+  it('assignFreezerRoom refuses a freezer with no resolved organization', async () => {
+    const db = createFakeDb(roomTopology());
+
+    await expect(bridge.assignFreezerRoom(db, { ...FREEZER, containerID: 9999 }, 'loc-room-1'))
+      .rejects.toMatchObject({ code: 'FREEZER_ORGANIZATION_UNRESOLVED', statusCode: 422 });
+    expect(db.writes).toEqual([]);
+  });
+
+  it('assignFreezerRoom runs every write in the caller\'s session, and builds no index', async () => {
+    const db = createFakeDb(roomTopology());
+
+    await bridge.assignFreezerRoom(db, FREEZER, 'loc-room-1', { session: SESSION });
+    await bridge.assignFreezerRoom(db, FREEZER, null, { session: SESSION });
+
+    expect(db.writes.length).toBeGreaterThan(0);
+    expect(db.writes.filter((write) => write.options?.session !== SESSION)).toEqual([]);
+  });
+});

@@ -1,8 +1,9 @@
 const temperatureService = require('../services/temperature.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
-const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+
+const READING_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // #1080: organization resolution for the machine-ingest path.
 //
@@ -43,6 +44,7 @@ async function resolveMachineIngestOrganization(db, body) {
   if (!sensor) {
     const error = new Error(`sensorId ${sensorId} não encontrado`);
     error.statusCode = 404;
+    error.auditReason = 'unknown_sensor';
     throw error;
   }
 
@@ -78,6 +80,16 @@ class TemperatureController {
         : await resolveMachineIngestOrganization(db, req.body);
       const temperature = await temperatureService.createTemperatureReading(db, temperatureData);
 
+      // RF009 AC7 (#1317): a replayed idempotencyKey wrote nothing, so it
+      // answers 200 with the stored reading and records no CREATE.
+      if (temperature.replayed) {
+        return res.status(200).json({
+          success: true,
+          message: 'Leitura já registrada com este idempotencyKey',
+          data: temperature
+        });
+      }
+
       // Registra log (anonimizado via auditLogger)
       //
       // #1080: this was guarded on `if (req.user)`, so the ONE route here with
@@ -92,7 +104,7 @@ class TemperatureController {
       await auditLogger.log({
         action: 'CREATE',
         resourceType: 'Temperature',
-        resourceId: temperature._id.toString(),
+        resourceId: temperature.telemetryReadingId,
         status: 'success',
         severity: 'info',
         message: `Leitura de temperatura registrada: ${temperature.temperatureValue}${temperature.temperatureUnit}`,
@@ -106,6 +118,14 @@ class TemperatureController {
       });
     } catch (error) {
       logger.error('Erro ao registrar temperatura:', error.message);
+      // #1120 (Axis E E3): this catch answers 404 and 400 for unrelated
+      // causes, and the global audit row recorded them identically. Throw
+      // sites that know the cause tag it; audit.middleware.js writes the tag
+      // into the row's payload.reason. An untagged failure (e.g. the insert
+      // itself) records no reason rather than a guessed one.
+      if (error.auditReason) {
+        res.locals.auditReason = error.auditReason;
+      }
       // #636: organizationId lookup failures throw statusCode:404.
       if (error.statusCode === 404) {
         return res.status(404).json({
@@ -114,10 +134,20 @@ class TemperatureController {
           message: error.message
         });
       }
-      return res.status(400).json({
+      // #1317: InfluxDB did not confirm the write, so nothing was stored.
+      if (error.statusCode === 503) {
+        return res.status(503).json({
+          success: false,
+          code: error.code,
+          error: error.message,
+          message: error.message
+        });
+      }
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao registrar temperatura',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -234,11 +264,14 @@ class TemperatureController {
         });
       }
 
-      const { ObjectId } = require('mongodb');
-      const temperaturesCollection = db.collection('temperatures');
-      const reading = await temperaturesCollection.findOne({ _id: new ObjectId(req.params.id) });
+      // RF009 AC1 (#1391): a reading lives in InfluxDB and is read by its
+      // telemetryReadingId, a uuid. Any other id (an old Mongo ObjectId, a
+      // shadowed `control`) names no reading, so it answers 404 unread.
+      const found = READING_ID_PATTERN.test(req.params.id)
+        ? await temperatureService.getReadingById(db, req.params.id, req.organizationScope)
+        : null;
 
-      if (!reading) {
+      if (!found) {
         return res.status(404).json({
           success: false,
           error: 'Leitura não encontrada'
@@ -246,9 +279,10 @@ class TemperatureController {
       }
 
       // #636 (F3-G09): mirrors sensor.controller.js's own out-of-scope
-      // 403 pattern -- a null organizationId (unscoped/legacy reading) is
-      // out of scope for anyone but a global caller.
-      if (req.organizationScope && !isRecordInOrganizationScope(reading, req.organizationScope, 'organizationId')) {
+      // 403 pattern. A point carries no organizationId, so the scope is by
+      // sensor: a reading of another organization's sensor, or with no
+      // sensorId, is out of scope for anyone but a global caller.
+      if (!found.inScope) {
         return res.status(403).json({
           success: false,
           error: 'Acesso negado',
@@ -258,7 +292,7 @@ class TemperatureController {
 
       return res.status(200).json({
         success: true,
-        data: reading
+        data: found.reading
       });
     } catch (error) {
       logger.error('Erro ao buscar leitura:', error.message);

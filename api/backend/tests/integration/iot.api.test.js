@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const express = require('express');
 const request = require('supertest');
+const { createFakeCollection } = require('../unit/ingestion/testHelpers');
 
 const modulePaths = {
   connection: require.resolve('../../src/infrastructure/database/mongodb/connection'),
@@ -75,7 +76,7 @@ function buildDb() {
 
   const sensorsCollection = {
     find: vi.fn().mockReturnValue({
-      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationID: FREEZER_CONTAINER_ID }]),
+      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationId: FREEZER_CONTAINER_ID }]),
     }),
   };
 
@@ -171,9 +172,16 @@ function buildDb() {
     }),
   };
 
+  const idempotencyKeysCollection = createFakeCollection([]);
+
+  // #1317: null unless a case binds the reading to a datastream.
+  const bindingCollections = { telemetryDatastreams: null, deviceRegistrations: null, temperaturePolicies: null };
+
   return {
     db: {
       collection: vi.fn().mockImplementation((name) => {
+        if (bindingCollections[name]) return bindingCollections[name];
+        if (name === 'ingestionIdempotencyKeys') return idempotencyKeysCollection;
         if (name === 'temperatureIncidents') return incidentCollection;
         if (name === 'environmentalExcursions') return environmentalExcursionsCollection;
         if (name === 'users') return usersCollection;
@@ -198,6 +206,7 @@ function buildDb() {
     samplesCollection,
     sampleMovementsCollection,
     quarantineActionsCollection,
+    bindingCollections,
   };
 }
 
@@ -267,20 +276,107 @@ describe('IoT API integration', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ success: true, accepted: true });
+    expect(response.body).toEqual(expect.objectContaining({ success: true, accepted: true, telemetryReadingId: expect.any(String) }));
 
     await vi.waitFor(() => {
       expect(saveTelemetryPoint).toHaveBeenCalledTimes(1);
       expect(mockDb.incidentCollection.insertOne).toHaveBeenCalledTimes(1);
-      expect(mockDb.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
-      expect(mockDb.sampleMovementsCollection.insertOne).toHaveBeenCalledTimes(1);
       expect(sendCriticalAlertEmail).toHaveBeenCalledTimes(1);
       expect(mockDb.environmentalExcursionsCollection.insertOne).toHaveBeenCalledTimes(1);
+      // Sent after the point where the incident path used to quarantine.
+      expect(sendIncidentAlertEmail).toHaveBeenCalledTimes(1);
     });
 
     expect(mockDb.incidents).toHaveLength(1);
     expect(mockDb.incidents[0].sensorKey).toBe('sensor-1');
     expect(mockDb.incidents[0].status).toBe('open');
+    // #1207: the first out-of-range reading starts the excursion clock and
+    // quarantines nothing. The policy's minimumDuration (or the 2-hour
+    // TELEMETRY_CRITICAL_DURATION_HOURS fallback) has to elapse first.
+    expect(mockDb.incidents[0].excursionStartedAt).toEqual(new Date('2026-04-10T10:00:00.000Z'));
+    expect(mockDb.samplesCollection.updateOne).not.toHaveBeenCalled();
+    expect(mockDb.sampleMovementsCollection.insertOne).not.toHaveBeenCalled();
+
+    expect(mockDb.excursions).toHaveLength(1);
+    expect(mockDb.excursions[0]).toMatchObject({
+      minimumValue: 12.5,
+      maximumValue: 12.5,
+      excursionStatus: 'open',
+    });
+  });
+
+  // RF009 AC4, V2E-0569 (#1317): the same reading, bound to a datastream
+  // whose threshold profile is 0..20, is in range. The case above is its
+  // control: the sensor's own 2..8 opens an incident.
+  it('#1317: POST /api/iot/telemetry judges a bound reading against its datastream threshold profile', async () => {
+    const stream = {
+      telemetryDatastreamId: 'ds-iot-1',
+      sensorId: 'sensor-1',
+      observedProperty: 'temperature',
+      storageLocationId: 'loc-iot-1',
+      validityPeriod: { start: new Date('2026-04-01T00:00:00.000Z'), end: null },
+      thresholdProfileId: 'policy-ds',
+    };
+    mockDb.bindingCollections.telemetryDatastreams = {
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([stream]) }),
+      findOne: vi.fn(async (filter) => (filter.telemetryDatastreamId === stream.telemetryDatastreamId ? stream : null)),
+    };
+    // resolveReadingBinding reads the registration after the stream; without
+    // a findOne here the binding throws and the reading goes on unbound.
+    mockDb.bindingCollections.deviceRegistrations = { findOne: vi.fn().mockResolvedValue(null) };
+    mockDb.bindingCollections.temperaturePolicies = {
+      findOne: vi.fn(async (filter) => (filter._id === 'policy-ds' ? { _id: 'policy-ds', minTemp: 0, maxTemp: 20 } : null)),
+    };
+
+    const response = await request(app).post('/api/iot/telemetry')
+      .set('x-telemetry-ingest-secret', 'iot-test-secret')
+      .send({
+        sensorId: 'sensor-1',
+        temperature: 12.5,
+        timestamp: '2026-04-10T10:00:00.000Z',
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockDb.bindingCollections.temperaturePolicies.findOne).toHaveBeenCalledWith({ _id: 'policy-ds' });
+    expect(sendCriticalAlertEmail).not.toHaveBeenCalled();
+    // The in-range path's detached clock stop has run, so an incident insert
+    // would have run by now too.
+    await vi.waitFor(() => {
+      expect(mockDb.incidentCollection.updateOne).toHaveBeenCalled();
+    });
+    expect(mockDb.incidentCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1207: POST /api/iot/telemetry quarantines the sensor samples once the excursion has outlasted its threshold', async () => {
+    mockDb.incidentCollection.findOne.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439044',
+      sensorKey: 'sensor-1',
+      sensorName: 'Sensor 1',
+      status: 'open',
+      openedAt: new Date('2026-04-10T07:00:00.000Z'),
+      excursionStartedAt: new Date('2026-04-10T07:00:00.000Z'),
+      currentTemperature: 12,
+      maxTemperature: 12,
+      minTemperature: 12,
+      samplesOutOfRange: 30,
+    });
+
+    const response = await request(app).post('/api/iot/telemetry')
+      .set('x-telemetry-ingest-secret', 'iot-test-secret')
+      .send({
+      sensorId: 'sensor-1',
+      temperature: 12.5,
+      timestamp: '2026-04-10T10:00:00.000Z',
+    });
+
+    expect(response.status).toBe(200);
+
+    await vi.waitFor(() => {
+      expect(mockDb.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
+      expect(mockDb.sampleMovementsCollection.insertOne).toHaveBeenCalledTimes(1);
+    });
+    expect(mockDb.incidentCollection.insertOne).not.toHaveBeenCalled();
+
     const update = mockDb.samplesCollection.updateOne.mock.calls[0][1].$set;
     // #408 retired the legacy availabilityStatus field from Sample writes
     // (specimenStatus is the sole source of truth now) -- this assertion
@@ -301,13 +397,6 @@ describe('IoT API integration', () => {
       purpose: 'cold_chain_incident_quarantine',
       destination: 'Quarentena',
       responsible: 'SYSTEM',
-    });
-
-    expect(mockDb.excursions).toHaveLength(1);
-    expect(mockDb.excursions[0]).toMatchObject({
-      minimumValue: 12.5,
-      maximumValue: 12.5,
-      excursionStatus: 'open',
     });
   });
 
@@ -342,6 +431,20 @@ describe('IoT API integration', () => {
       minimumValue: 9,
       maximumValue: 12.5,
     });
+  });
+
+  // RF009 AC7 (#1317): a client idempotencyKey replays the first reading.
+  it('POST /api/iot/telemetry answers a repeated client idempotencyKey with the first reading, written once', async () => {
+    const reading = { sensorId: 'sensor-1', temperature: 5, timestamp: '2026-04-10T10:10:00.000Z', idempotencyKey: 'k-api-1' };
+
+    const first = await request(app).post('/api/iot/telemetry').set('x-telemetry-ingest-secret', 'iot-test-secret').send(reading);
+    const second = await request(app).post('/api/iot/telemetry').set('x-telemetry-ingest-secret', 'iot-test-secret').send(reading);
+
+    expect(first.status).toBe(200);
+    expect(first.body.replayed).toBeUndefined();
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ success: true, accepted: true, replayed: true, telemetryReadingId: first.body.telemetryReadingId });
+    expect(saveTelemetryPoint).toHaveBeenCalledTimes(1);
   });
 
   describe('test-support telemetry-monitor routes (#307)', () => {

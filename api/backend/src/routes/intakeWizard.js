@@ -21,6 +21,9 @@ const clinicalOutcomeService = require('../services/clinical-outcome.service');
 const derivedScoreService = require('../services/derived-score.service');
 const { computeCharlsonScore, ALGORITHM_VERSION: CCI_ALGORITHM_VERSION, SCORE_TYPE: CCI_SCORE_TYPE } = require('../services/charlsonComorbidityIndex');
 const logger = require('../utils/logger');
+const { parseBirthDateDay, birthDateDayRange } = require('../utils/birthDate');
+const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+const { resolveCallerCreateOrganization } = require('../services/callerCreateOrganization.service');
 const { validate } = require('../contracts/canonical/v1');
 
 // #693 (RF005 clinical-data slice 5/5): systemUri constants matching this
@@ -32,7 +35,7 @@ const ORPHA_SYSTEM_URI = 'http://www.orpha.net';
 const OMIM_SYSTEM_URI = 'https://www.omim.org';
 // "CID" in this wizard's own field names is the Brazilian Portuguese
 // abbreviation for ICD -- dict-01_FONTES.md's own SRC_ICD10/SRC_ICD11 rows
-// use the English abbreviation instead (see build-loop's overlay, #255).
+// use the English abbreviation instead (search the dictionary for ICD).
 // Mapped to ICD-10 here since this wizard's diagnosisCidCode field has
 // always meant CID-10 in this repo's existing terminology (no ICD-11
 // picker exists in this wizard).
@@ -380,31 +383,6 @@ function buildIdVariants(...values) {
   return [...new Set(variants)];
 }
 
-function parseBirthDate(value) {
-  if (!value) return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  }
-
-  const raw = normalizeString(value);
-  if (!raw) return null;
-
-  const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
-  if (ddmmyyyy) {
-    const day = Number(ddmmyyyy[1]);
-    const month = Number(ddmmyyyy[2]) - 1;
-    const year = Number(ddmmyyyy[3]);
-    const date = new Date(year, month, day);
-    if (!Number.isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
-      return date;
-    }
-  }
-
-  const iso = new Date(raw);
-  if (Number.isNaN(iso.getTime())) return null;
-  return new Date(iso.getFullYear(), iso.getMonth(), iso.getDate());
-}
-
 function buildFallbackPatientID() {
   const digits = String(Date.now()).replace(/\D/g, '').slice(-8);
   return digits.padStart(8, '0');
@@ -498,6 +476,7 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     unit: normalizeString(specimen.unit) || null,
     specimenStatus,
     linkedProject: normalizeString(specimen.linkedProject) || 'INTAKE_WIZARD',
+    parentSpecimenIds: normalizeArray(specimen.parentSpecimenIds).map((parentId) => normalizeString(parentId)).filter(Boolean),
     sprec: normalizeObject(specimen.sprec),
     consentTemplateId: normalizeString(consent.consentTemplateId) || null,
     clinicalData: buildClinicalData(data),
@@ -515,15 +494,19 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   };
 }
 
-async function resolveMatchedPatient(db, data = {}) {
+async function resolveMatchedPatient(db, data = {}, { organizationId = null, organizationScope = null } = {}) {
   const participant = normalizeObject(data?.participant);
 
+  // #1355: a participant the intake creates carries the intake's
+  // organization; a matched one outside the caller's scope is linked but
+  // never written (#1356).
   const result = await patientIdentityService.matchOrUpsertParticipant(db, {
     participantId: participant.participantId,
     patientName: participant.patientName,
-    birthDate: parseBirthDate(participant.birthDate),
+    birthDate: parseBirthDateDay(participant.birthDate),
     identityDocument: normalizeString(participant.identityDocument) || null,
-  });
+    clinicalUnitId: organizationId,
+  }, { organizationScope });
 
   return result;
 }
@@ -775,7 +758,8 @@ async function handleIntakeWizard(req, res) {
       }),
       ...collectCanonicalViolations(data?.specimen, {
         specimenId: ['sampleID', 'sampleId', 'specimenID', 'mongoSampleId'],
-        parentSpecimenId: ['parentSampleId'],
+        // dict-02 ELM-0120 is the plural parentSpecimenIds (#1368).
+        parentSpecimenIds: ['parentSampleId', 'parentSpecimenId'],
         registeredAt: ['registerDate', 'registrationDate'],
         withdrawnAt: ['withdrawalDate'],
         receivedAt: ['receivedTime'],
@@ -795,7 +779,7 @@ async function handleIntakeWizard(req, res) {
     ];
 
     if (canonicalViolations.length > 0) {
-      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations });
+      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations, details: canonicalViolations.map((field) => `${field}: campo não canônico`) });
     }
 
     const validation = validate('canonical.v1.intake', data);
@@ -805,7 +789,7 @@ async function handleIntakeWizard(req, res) {
         const field = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.') || issue.params?.missingProperty || null;
         if (field) fields.push(field);
       }
-      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)] });
+      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)], details: [...new Set(fields)].map((field) => `${field}: campo não canônico`) });
     }
 
     const db = req.app.locals.db;
@@ -816,7 +800,26 @@ async function handleIntakeWizard(req, res) {
       });
     }
 
-    const matchOutcome = await resolveMatchedPatient(db, data);
+    // #1355, #1376: the organization the intake stamps, by the rule POST
+    // /api/samples uses (#1185): a single-organization caller's own, a
+    // multi-organization caller's pick among its own, or a global caller's
+    // pick of any existing organization or none. The pick is the top-level
+    // organizationId only; specimen.collectionSite (ELM-0128) is data.
+    // Resolved before anything is written.
+    const requestedOrganizationId = typeof data.organizationId === 'string' && data.organizationId.trim() !== ''
+      ? data.organizationId.trim()
+      : undefined;
+    let organizationId;
+    try {
+      ({ organizationId } = await resolveCallerCreateOrganization(db, {
+        organizationScope: req.organizationScope,
+        requested: requestedOrganizationId
+      }));
+    } catch (scopeError) {
+      return res.status(scopeError.statusCode || 403).json({ success: false, error: scopeError.message });
+    }
+
+    const matchOutcome = await resolveMatchedPatient(db, data, { organizationId, organizationScope: req.organizationScope });
     const consentDecision = await resolveConsentDecision(db, matchOutcome.patient);
     const automaticLocation = await resolveAutomaticLocation(db);
     const qualidade = resolverQualidadeMetodologica(data?.specimen || {});
@@ -830,9 +833,12 @@ async function handleIntakeWizard(req, res) {
       severity: 'info',
       message: matchOutcome?.created
         ? 'Novo paciente criado durante intake wizard.'
-        : 'Paciente existente identificado e atualizado durante intake wizard.',
+        : matchOutcome?.outOfScope
+          ? 'Paciente existente identificado fora do escopo do usuário e vinculado sem atualização durante intake wizard.'
+          : 'Paciente existente identificado e atualizado durante intake wizard.',
       payload: {
         created: Boolean(matchOutcome?.created),
+        outOfScope: Boolean(matchOutcome?.outOfScope),
         matched: !Boolean(matchOutcome?.created),
         matchType: matchOutcome?.matchType || null,
         patientID: matchOutcome?.patient?.participantId || null,
@@ -842,6 +848,15 @@ async function handleIntakeWizard(req, res) {
     });
 
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
+    // #1192: the collection site the intake names (ELM-0128) is kept; one
+    // naming none gets the stamped organization, as before. The tenancy key
+    // is the organizationId option createSample stamps below.
+    const namedCollectionSite = data?.specimen?.collectionSite;
+    if (namedCollectionSite !== undefined && namedCollectionSite !== null && namedCollectionSite !== '') {
+      sampleToPersist.collectionSite = String(namedCollectionSite);
+    } else if (organizationId) {
+      sampleToPersist.collectionSite = String(organizationId);
+    }
     sampleToPersist.boxId = automaticLocation.box._id;
     sampleToPersist.positionCode = automaticLocation.previewPosition;
     const qualityAllowsRelease = qualidade.governance_status === 1 && qualidade.final_grade !== 'E';
@@ -875,6 +890,7 @@ async function handleIntakeWizard(req, res) {
         userAgent: req.get('user-agent') || null,
         notes: 'Cadastro integrado via Intake Wizard',
       },
+      organizationId: organizationId ? String(organizationId) : null,
       neo4jDriver: req.app.locals.neo4jDriver || null,
     });
 
@@ -909,19 +925,22 @@ async function handleIntakeWizard(req, res) {
       registeredAt: sampleToPersist.registeredAt,
     });
 
-    const patientsCollection = await getCollection(db, 'patients');
-    await patientsCollection.updateOne(
-      { _id: matchOutcome.patient._id },
-      {
-        $set: {
-          lastClinicalData: sampleToPersist.clinicalData || {},
-          updatedAt: new Date(),
-        },
-        $addToSet: {
-          linkedSampleIds: String(createdSample._id),
-        },
-      }
-    );
+    // #1356: a match outside the caller's scope is linked, never written.
+    if (!matchOutcome?.outOfScope) {
+      const patientsCollection = await getCollection(db, 'patients');
+      await patientsCollection.updateOne(
+        { _id: matchOutcome.patient._id },
+        {
+          $set: {
+            lastClinicalData: sampleToPersist.clinicalData || {},
+            updatedAt: new Date(),
+          },
+          $addToSet: {
+            linkedSampleIds: String(createdSample._id),
+          },
+        }
+      );
+    }
 
     const storageLocation = {
       equipmentID: automaticLocation.freezer?.containerID || null,
@@ -973,6 +992,7 @@ async function handleIntakeWizard(req, res) {
     return res.status(error?.statusCode || error?.status || 500).json({
       success: false,
       error: error?.message || 'Erro desconhecido ao finalizar o Intake Wizard.',
+      details: error?.details,
     });
   }
 }
@@ -984,7 +1004,7 @@ router.get('/patient-match', async (req, res) => {
   }
 
   const patientName = normalizeString(req.query?.patientName || req.query?.name);
-  const birthDate = parseBirthDate(req.query?.birthDate);
+  const birthDate = parseBirthDateDay(req.query?.birthDate);
   const participantIdQuery = normalizeString(req.query?.patientID || req.query?.patientId);
 
   if (!participantIdQuery && (!patientName || !birthDate)) {
@@ -1015,8 +1035,7 @@ router.get('/patient-match', async (req, res) => {
     let identity = rawIdentityById ? participantIdentityService.decryptIdentity(rawIdentityById) : null;
 
     if (!identity && patientNameNormalized && birthDate) {
-      const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
-      const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
+      const { start: startOfDay, end: endOfDay } = birthDateDayRange(birthDate);
       // RF005/RNF007 (#574, done for this field in #1104): birthDate is
       // ciphertext-only, so this narrows by day of birth on the blind index
       // alone. The plaintext range condition below is NOT a fallback for old
@@ -1031,8 +1050,8 @@ router.get('/patient-match', async (req, res) => {
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identityCollection.find({ $or: dateOrConditions }).toArray();
       identity = candidates.find((rawCandidate) => {
-        // patientName is civil identity -- decrypt before comparing so this
-        // keeps matching once the plaintext field is eventually dropped.
+        // patientName is civil identity and ciphertext-only (#1104), so
+        // decrypt before comparing.
         const candidate = participantIdentityService.decryptIdentity(rawCandidate);
         const candidateNormalized = normalizeString(candidate.patientName)
           .normalize('NFD')
@@ -1044,14 +1063,23 @@ router.get('/patient-match', async (req, res) => {
     }
 
     let patientStatus = 'ACTIVE';
+    let patientRecord = null;
     if (identity?.participantId) {
       const patientsCollection = await getCollection(db, 'patients');
-      const patientRecord = await patientsCollection.findOne(
+      patientRecord = await patientsCollection.findOne(
         { participantId: identity.participantId },
-        { projection: { status: 1 } }
+        { projection: { status: 1, clinicalUnitId: 1 } }
       );
       patientStatus = normalizeString(patientRecord?.status) || 'ACTIVE';
     }
+
+    // #1377: a match outside the caller's organizations answers as a
+    // non-match, by the rule matchOrUpsertParticipant applies (#1356), so the
+    // lookup leaks neither its civil fields nor its existence. A missing
+    // Patient record is out of scope for everyone but global scope.
+    const outOfScope = Boolean(identity)
+      && !isRecordInOrganizationScope(patientRecord, req.organizationScope, 'clinicalUnitId');
+    const matched = Boolean(identity) && !outOfScope;
 
     auditLogger.init(db);
     await auditLogger.log({
@@ -1060,12 +1088,13 @@ router.get('/patient-match', async (req, res) => {
       resourceId: identity?.participantId || participantIdQuery || null,
       status: 'success',
       severity: 'info',
-      message: identity
+      message: matched
         ? 'Heurística de intake encontrou paciente existente para upsert.'
         : 'Heurística de intake não encontrou paciente correspondente.',
       payload: {
         endpoint: '/patient-match',
-        matched: Boolean(identity),
+        matched,
+        ...(outOfScope ? { outOfScope: true } : {}),
         query: {
           patientID: participantIdQuery || null,
           patientName: patientName || null,
@@ -1078,8 +1107,8 @@ router.get('/patient-match', async (req, res) => {
 
     return res.json({
       success: true,
-      matched: Boolean(identity),
-      patient: identity
+      matched,
+      patient: matched
         ? {
           patientID: normalizeString(identity.participantId),
           patientName: normalizeString(identity.patientName),
@@ -1087,7 +1116,7 @@ router.get('/patient-match', async (req, res) => {
           status: patientStatus,
         }
         : null,
-      message: identity
+      message: matched
         ? 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.'
         : '',
     });
@@ -1104,7 +1133,7 @@ router._test = {
   normalizeNumber,
   normalizeArray,
   normalizeObject,
-  parseBirthDate,
+  parseBirthDate: parseBirthDateDay,
   buildFallbackPatientID,
   resolvePatientID,
   buildClinicalData,

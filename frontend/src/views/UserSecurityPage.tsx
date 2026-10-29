@@ -24,7 +24,8 @@ import {
 import { useUserSecurity } from '../hooks/useUserSecurity';
 import { useToast } from '../components/UI/ToastContainer';
 import { validatePasswordAndGetError } from '../utils/passwordValidator';
-import { getPasswordIssues } from '../utils/passwordRules';
+import { getPasswordIssues, passwordRequirementItems, rulesForAccount } from '../utils/passwordRules';
+import { usePasswordPolicy, usePasswordResetAllowed } from '../hooks/usePasswordPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { userSecurityService } from '../services/api';
 import './UserSecurityPage.css';
@@ -81,7 +82,7 @@ export default function UserSecurityPage() {
     }
 
     // Valida complexidade da senha
-    const passwordError = validatePasswordAndGetError(newPassword.new);
+    const passwordError = validatePasswordAndGetError(newPassword.new, passwordRules);
     if (passwordError) {
       setPasswordError(passwordError);
       return;
@@ -131,7 +132,12 @@ export default function UserSecurityPage() {
     return days;
   };
 
-  const passwordIssues = getPasswordIssues(newPassword.new);
+  // #1246: the server's passwordRules, not a fixed copy.
+  // #1257: an account enrolled in MFA has the shorter MFA floor.
+  const passwordRules = rulesForAccount(usePasswordPolicy(), Boolean(mfaStatus?.primaryEnabled));
+  // #1249: the reset request is hidden while the policy turns the flow off.
+  const allowPasswordReset = usePasswordResetAllowed();
+  const passwordIssues = getPasswordIssues(newPassword.new, passwordRules);
   const confirmMismatch = newPassword.new && newPassword.confirm && newPassword.new !== newPassword.confirm;
 
   if (loading && !securityStatus) {
@@ -438,6 +444,7 @@ export default function UserSecurityPage() {
               <Lock size={18} />
               {t('userSecurity.password.change')}
             </Button>
+            {allowPasswordReset && (
             <Button 
               variant="secondary" 
               data-testid="request-password-reset-button"
@@ -456,6 +463,7 @@ export default function UserSecurityPage() {
               <Key size={18} />
               {t('userSecurity.password.requestReset')}
             </Button>
+            )}
           </div>
           <div className="password-policy">
             <p>{t('userSecurity.password.policy')}</p>
@@ -627,22 +635,7 @@ export default function UserSecurityPage() {
           <div className="password-requirements" style={{ margin: '0.75rem 0' }}>
             <p style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{t('password.requirements.title')}</p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.35rem' }}>
-              {[{
-                key: 'minLength',
-                label: t('password.requirements.minLength')
-              }, {
-                key: 'upper',
-                label: t('password.requirements.upper')
-              }, {
-                key: 'lower',
-                label: t('password.requirements.lower')
-              }, {
-                key: 'number',
-                label: t('password.requirements.number')
-              }, {
-                key: 'symbol',
-                label: t('password.requirements.symbol')
-              }].map((item) => {
+              {passwordRequirementItems(passwordRules, t).map((item) => {
                 const ok = !passwordIssues.includes(item.key as any);
                 return (
                   <li key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: ok ? 'var(--success)' : 'var(--text)' }}>

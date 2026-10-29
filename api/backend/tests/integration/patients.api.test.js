@@ -61,12 +61,15 @@ describe('RF005 - POST /api/v1/patients', () => {
     app.locals.db = null;
   });
 
-  function createDbMock(patientsCollection) {
+  function createDbMock(patientsCollection, collections = {}) {
     const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
     return {
       collection: (name) => {
         if (name === 'patients' || name === 'pacientes') {
           return patientsCollection;
+        }
+        if (collections[name]) {
+          return collections[name];
         }
         if (rbacCollections[name]) {
           return rbacCollections[name];
@@ -137,20 +140,10 @@ describe('RF005 - POST /api/v1/patients', () => {
     const patientsCollection = {
       createIndex: vi.fn().mockResolvedValue('idx'),
       dropIndex: vi.fn().mockResolvedValue(undefined),
-      // RF005/RNF007 (#575): identityDocument conflicts are now resolved via
-      // ParticipantIdentity (generic mock branch in createDbMock, always
-      // null) — this collection only still owns the recordNumber check.
-      findOne: vi.fn().mockImplementation(async (query) => {
-        if (query && query.recordNumber) {
-          return {
-            _id: 'existing-patient-1',
-            participantId: '12345678',
-            recordNumber: 'PRONT-DUP-01',
-          };
-        }
-        if (query && query.participantId) return null;
-        return null;
-      }),
+      // RF005/RNF007 (#575): identityDocument conflicts are resolved via
+      // ParticipantIdentity. #1386: so is the recordNumber check (P1X-0355,
+      // recordNumberHash), so this collection holds no number.
+      findOne: vi.fn().mockResolvedValue(null),
       find: vi.fn().mockReturnValue({
         limit: vi.fn().mockReturnThis(),
         skip: vi.fn().mockReturnThis(),
@@ -161,7 +154,15 @@ describe('RF005 - POST /api/v1/patients', () => {
       updateOne: vi.fn(),
     };
 
-    app.locals.db = createDbMock(patientsCollection);
+    const participantIdentities = {
+      findOne: vi.fn().mockImplementation(async (query) => (
+        query && query.recordNumberHash ? { participantId: '12345678' } : null
+      )),
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+      createIndex: vi.fn().mockResolvedValue('idx'),
+    };
+
+    app.locals.db = createDbMock(patientsCollection, { participantIdentities });
 
     const response = await request(app)
       .post('/api/v1/patients')

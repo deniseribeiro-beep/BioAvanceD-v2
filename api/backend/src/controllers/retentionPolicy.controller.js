@@ -26,6 +26,8 @@ class RetentionPolicyController {
             triggerEvent: policy.triggerEvent,
             postRetentionAction: policy.postRetentionAction,
             retentionPeriod: policy.retentionPeriod,
+            archiveRetentionPeriod: policy.archiveRetentionPeriod,
+            archiveRetentionBasis: policy.archiveRetentionBasis,
             version: policy.version,
             active: policy.active
           },
@@ -41,10 +43,11 @@ class RetentionPolicyController {
       });
     } catch (error) {
       logger.error('Erro ao criar política de retenção:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar política de retenção',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -73,6 +76,8 @@ class RetentionPolicyController {
             triggerEvent: policy.triggerEvent,
             postRetentionAction: policy.postRetentionAction,
             retentionPeriod: policy.retentionPeriod,
+            archiveRetentionPeriod: policy.archiveRetentionPeriod,
+            archiveRetentionBasis: policy.archiveRetentionBasis,
             version: policy.version,
             active: policy.active,
             previousPolicyId: policy.previousPolicyId || null
@@ -89,10 +94,11 @@ class RetentionPolicyController {
       });
     } catch (error) {
       logger.error('Erro ao atualizar política de retenção:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao atualizar política de retenção',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }

@@ -5,7 +5,20 @@ const require = createRequire(import.meta.url);
 
 const sampleService = require('../../src/services/sample.service');
 const qualityDomain = require('../../src/services/quality-domain.service');
-const { ObjectId } = require('mongodb');
+const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
+const { ObjectId, MongoServerError } = require('mongodb');
+const env = require('../../src/config/env');
+
+// #1378 (ELM-0116): runs `body` with the Sample.barcode migration window closed.
+async function withBarcodeWindowClosed(body) {
+  const saved = env.SAMPLE_BARCODE_WINDOW_CLOSED;
+  env.SAMPLE_BARCODE_WINDOW_CLOSED = true;
+  try {
+    return await body();
+  } finally {
+    env.SAMPLE_BARCODE_WINDOW_CLOSED = saved;
+  }
+}
 
 const BOX_ID = new ObjectId();
 const RACK_ID = new ObjectId();
@@ -72,6 +85,35 @@ function makeCountersCollection() {
   };
 }
 
+// #1374: the physical-chain collections the allocation writes. Each keeps
+// what is inserted and matches a query by equality and `$or`, so the echo
+// read after the create finds the placement the allocation wrote.
+const CHAIN_COLLECTIONS = ['containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments'];
+
+function matchesChainQuery(doc, filter = {}) {
+  return Object.entries(filter).every(([key, value]) =>
+    key === '$or' ? value.some((branch) => matchesChainQuery(doc, branch)) : doc[key] === value
+  );
+}
+
+function makeChainCollection(name) {
+  const docs = [];
+  return {
+    ...makeCollection(name),
+    findOne: vi.fn(async (filter) => docs.find((doc) => matchesChainQuery(doc, filter)) || null),
+    find: vi.fn((filter) => makeCursor(docs.filter((doc) => matchesChainQuery(doc, filter)))),
+    insertOne: vi.fn(async (doc) => {
+      docs.push({ ...doc });
+      return { insertedId: docs.length };
+    }),
+    updateOne: vi.fn(async (filter, update) => {
+      const doc = docs.find((row) => matchesChainQuery(row, filter));
+      if (doc) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0, modifiedCount: doc ? 1 : 0 };
+    })
+  };
+}
+
 // Mirrors the real driver closely enough to prove withMongoTransaction's
 // wiring (#297): withTransaction runs the handler and lets a thrown error
 // propagate uncommitted, same as the real session aborting on throw.
@@ -96,6 +138,7 @@ function makeDb(overrides = {}) {
     storageContainers: makeCollection('storageContainers'),
     storageAssignments: makeCollection('storageAssignments'),
     results: makeCollection('results'),
+    ...Object.fromEntries(CHAIN_COLLECTIONS.map((name) => [name, makeChainCollection(name)])),
     ...overrides
   };
   const session = makeSession();
@@ -152,9 +195,10 @@ function mockOperationalStorage(db) {
     storageContainers: { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) },
     equipment: { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) },
     sensors: { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) },
-    // #474: AllocateSampleUseCase's openStorageAssignment resolves hierarchy
-    // via storagePaths (not the parent_id walk resolveStorageHierarchyForBox
-    // still uses for the pre-allocation equipment/sensor gate above).
+    // #474: AllocateSampleUseCase resolves the hierarchy via storagePaths
+    // (MongoStorageRepository.findStorageHierarchyForBox, not the parent_id
+    // walk resolveStorageHierarchyForBox still uses for the pre-allocation
+    // equipment/sensor gate above).
     storagePaths: {
       findOne: vi.fn().mockResolvedValue({ boxId: BOX_ID, rackId: RACK_ID, shelfId: SHELF_ID, freezerId: FREEZER_ID })
     },
@@ -177,9 +221,18 @@ function mockOperationalStorage(db) {
   // createSample's own insertOne — distinct from the specimenId/barcode
   // duplicate-check lookups earlier in the same call, which keep resolving
   // null (the default from makeCollection) unless a test overrides them.
+  // #1374: the chain keys a placement by the business specimenId, so the
+  // looked-up sample carries the one createSample inserted. The inserts are
+  // kept on the db, since a case may replace or wrap samples.insertOne.
+  db.insertedSamples = [];
+  db.collections.samples.insertOne.mockImplementation(async (doc) => {
+    db.insertedSamples.push(doc);
+    return { insertedId: 'generated-id' };
+  });
   db.collections.samples.findOne.mockImplementation((query) => {
     if (query && query._id !== undefined) {
-      return Promise.resolve({ _id: query._id, barcode: null, storageLocation: null });
+      const inserted = db.insertedSamples.at(-1);
+      return Promise.resolve({ _id: query._id, specimenId: inserted?.specimenId, barcode: null, storageLocation: null });
     }
     return Promise.resolve(null);
   });
@@ -227,54 +280,46 @@ describe('sample.service', () => {
       expect(insertedSample.locationID).toBeNull();
     });
 
-    it('exposes the canonical storageAssignment on the response, resolved from the just-opened StorageAssignment record, per issue #510', async () => {
+    it('exposes the current placement on the response, read from the physical chain the allocation just wrote, per issue #510/#1374', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
-      const baseImplementation = db.collection.getMockImplementation();
-      const opened = { specimenId: 'generated-id', boxId: BOX_ID, positionCode: 'B2', removedAt: null };
-      const storageAssignmentsFindOne = vi.fn(({ specimenId, removedAt }) => {
-        if (specimenId === opened.specimenId && removedAt === null) {
-          return Promise.resolve(opened);
-        }
-        return Promise.resolve(null);
-      });
-      // Override just storageAssignments.findOne with real query-matching
-      // semantics, keeping mockOperationalStorage's other storage-chain mocks.
-      db.collection.mockImplementation((name) => {
-        if (name === 'storageAssignments') {
-          return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }), findOne: storageAssignmentsFindOne };
-        }
-        return baseImplementation(name);
-      });
 
       const result = await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
 
-      expect(result.storageAssignment).toEqual(opened);
+      const [container] = db.collections.containers.insertOne.mock.calls[0];
+      expect(result.storageAssignment).toEqual({
+        boxId: BOX_ID.toString(),
+        positionCode: 'B2',
+        containerId: container.containerId,
+        storagePositionId: `${BOX_ID}:B02`,
+        storageRackId: BOX_ID.toString(),
+        storageLocationId: null,
+        placedAt: expect.any(Date),
+        source: 'physical_chain'
+      });
       expect(result.storageLocation).toEqual({ boxId: BOX_ID, position: 'B2' });
     });
 
-    it('opens a StorageAssignment for the specimen at boxId/positionCode, per issue #462/#474', async () => {
+    it('places the specimen on the physical chain at boxId/positionCode, keyed by its business specimenId, per issue #462/#474/#1374', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
 
-      const result = await sampleService.createSample(db, validSampleData());
+      await sampleService.createSample(db, validSampleData());
 
-      const storageAssignments = db.collection('storageAssignments');
-      expect(storageAssignments.insertOne).toHaveBeenCalledTimes(1);
-      const [assignmentArg] = storageAssignments.insertOne.mock.calls[0];
-      // #474: routed through AllocateSampleUseCase/MongoStorageRepository's
-      // openStorageAssignment, which resolves the hierarchy via storagePaths
-      // (mocked above) rather than sample.service.js's own parent_id walk —
-      // fields come back as strings (StorageAssignmentModel.open casts them).
-      expect(assignmentArg).toMatchObject({
-        specimenId: 'generated-id',
-        boxId: BOX_ID.toString(),
-        positionCode: 'A1',
-        equipmentId: String(FREEZER_ID),
-        shelfId: String(SHELF_ID),
-        rackId: String(RACK_ID),
-        occupancyStatus: 'ocupada'
+      expect(db.collections.containers.insertOne).toHaveBeenCalledTimes(1);
+      const [container] = db.collections.containers.insertOne.mock.calls[0];
+      expect(db.collections.specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.specimenContainerAssignments.insertOne.mock.calls[0][0]).toMatchObject({
+        specimenId: '555001',
+        containerId: container.containerId
       });
+      expect(db.collections.containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.containerPositionAssignments.insertOne.mock.calls[0][0]).toMatchObject({
+        containerId: container.containerId,
+        storagePositionId: `${BOX_ID}:A01`
+      });
+      // The legacy StorageAssignment row is no longer written.
+      expect(db.collection('storageAssignments').insertOne).not.toHaveBeenCalled();
     });
 
     it('rejects with 422 when required MIABIS fields are missing', async () => {
@@ -365,6 +410,35 @@ describe('sample.service', () => {
       expect(result.collectionSite).toBe('org-uuid-123');
     });
 
+    // #1192: Sample.organizationId, the tenancy key, is stamped from the
+    // caller's server-built options only, never from the sample data.
+    it('stores the organizationId option as the sample organizationId (#1192)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await sampleService.createSample(db, validSampleData(), { organizationId: 'org-1' });
+
+      expect(db.collections.samples.insertOne.mock.calls[0][0].organizationId).toBe('org-1');
+    });
+
+    it('stores a null organizationId when the caller passes no option (#1192)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await sampleService.createSample(db, validSampleData());
+
+      expect(db.collections.samples.insertOne.mock.calls[0][0].organizationId).toBeNull();
+    });
+
+    it('never takes organizationId from the sample data (#1192)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await sampleService.createSample(db, validSampleData({ organizationId: 'org-evil' }));
+
+      expect(db.collections.samples.insertOne.mock.calls[0][0].organizationId).toBeNull();
+    });
+
     it('rejects with 404 when collectionSite does not resolve to an Organization', async () => {
       const db = makeDb({ organizations: makeCollection('organizations') });
       mockOperationalStorage(db);
@@ -419,6 +493,61 @@ describe('sample.service', () => {
       ).rejects.toMatchObject({ statusCode: 422 });
     });
 
+    // RF004 AC3/AC4/AC7: a collection admits a specimen only with the one
+    // context its regime names and an approval in force.
+    const GOVERNED = {
+      collectionId: 'COL-1',
+      governanceRegime: 'biorepository',
+      governanceContext: {
+        biorepositoryContextId: 'ctx-1', studyId: 'STU-1', protocolId: 'PRO-1', ethicsApprovalId: 'APR-1',
+        validityPeriod: { start: '2020-01-01', end: null },
+      },
+    };
+    const IN_FORCE = { approvalId: 'APR-1', collectionId: 'COL-1', status: 'active', effectivePeriod: { start: '2020-01-01', end: null } };
+
+    function governedDb(collectionDoc, approvals) {
+      const db = makeDb({ collections: makeCollection('collections'), collectionGovernanceApprovals: makeCollection('collectionGovernanceApprovals') });
+      mockOperationalStorage(db);
+      db.collections.collections.findOne.mockResolvedValue(collectionDoc);
+      db.collections.collectionGovernanceApprovals.find.mockReturnValue(makeCursor(approvals));
+      return db;
+    }
+
+    it('rejects with 422 a collection with a regime and no governance context', async () => {
+      const db = governedDb({ collectionId: 'COL-1', governanceRegime: 'biorepository' }, []);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionId: 'COL-1' }))
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/sem contexto de governança/) });
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects with 422 a governed collection whose approval is suspended', async () => {
+      const db = governedDb(GOVERNED, [{ ...IN_FORCE, status: 'suspended' }]);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionId: 'COL-1' }))
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/sem aprovação de governança vigente/) });
+    });
+
+    it('accepts a specimen into a governed collection with its approval in force', async () => {
+      const db = governedDb(GOVERNED, [IN_FORCE]);
+
+      const result = await sampleService.createSample(db, validSampleData({ collectionId: 'COL-1' }));
+
+      expect(result.collectionId).toBe('COL-1');
+    });
+
+    it('rejects with 422 a biorepository specimen naming another study (RF004 AC4)', async () => {
+      const db = governedDb(GOVERNED, [IN_FORCE]);
+      db.collections.studies = makeCollection('studies');
+      db.collections.studies.findOne.mockResolvedValue({ studyId: 'STU-2', studyStatus: 'active' });
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionId: 'COL-1', studyId: 'STU-2' }))
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/studyId STU-2 difere/) });
+    });
+
     it('rolls back the inserted sample when the ledger append fails', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
@@ -428,6 +557,553 @@ describe('sample.service', () => {
         /Falha ao registrar cadeia de custódia/
       );
       expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
+    });
+
+    // #1378: without a transaction a failed label issue deletes the inserted
+    // sample, as a failed allocation does.
+    it('rolls back the inserted sample when its code is already an active label (#1378)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collections.labelIdentifiers = makeCollection('labelIdentifiers');
+      db.collections.labelIdentifiers.insertOne.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+      await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({
+        statusCode: 409,
+        message: expect.stringMatching(/^Falha ao emitir a etiqueta da amostra: Valor BR-TEST-001 já ativo/)
+      });
+      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
+    });
+
+    // #1378: once the migration window is closed, the code is issued only as
+    // the label; the inserted sample carries no Sample.barcode (ELM-0116).
+    it('with the barcode window closed, inserts no barcode while the label and the birth movement carry the code (#1378)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await withBarcodeWindowClosed(() => sampleService.createSample(db, validSampleData()));
+
+      const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
+      expect(insertedSample).not.toHaveProperty('barcode');
+      expect(db.collections.labelIdentifiers.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.labelIdentifiers.insertOne.mock.calls[0][0]).toMatchObject({ encodedValue: 'BR-TEST-001', status: 'active' });
+      const [birthMovement] = db.collections.sample_movements.insertOne.mock.calls[0];
+      expect(birthMovement).toMatchObject({ type: 'create', barcode: 'BR-TEST-001' });
+    });
+
+    // RF023 AC3, RNF019 C1: the create's insert, birth movement, allocation,
+    // SPECIMEN_UPSERTED and the caller's in-transaction step commit in one
+    // transaction where the deployment runs one.
+    describe('one transaction where one runs (#1367)', () => {
+      const OUTBOX = 'graph_projection_outbox';
+
+      // A replica-set `hello`, and a session that applies the writes made
+      // with it only when the transaction body returns: a throw discards
+      // them, as the server's abort does.
+      //
+      // #1369: the counters collection keeps the server's rule too. A counter
+      // document written outside the session while the transaction runs
+      // commits after its snapshot, so the transaction's own later write to
+      // that document raises WriteConflict.
+      function makeTransactionalDb() {
+        // #1378: the label the create issues on the allocated container.
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX), labelIdentifiers: makeChainCollection('labelIdentifiers') });
+        mockOperationalStorage(db);
+        db.client.db = vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0' }) }));
+        // As the driver does, a second startSession is a session of its own,
+        // so a write in a transaction a callee opens is not the create's.
+        db.client.startSession.mockImplementationOnce(() => db.session).mockImplementation(() => makeSession());
+
+        const committed = { samples: [], sample_movements: [] };
+        const transaction = { inBody: false };
+        const writtenOutside = new Set();
+        let staged = [];
+        db.session.withTransaction = vi.fn(async (body) => {
+          staged = [];
+          writtenOutside.clear();
+          transaction.inBody = true;
+          try {
+            await body();
+          } catch (error) {
+            staged = [];
+            throw error;
+          } finally {
+            transaction.inBody = false;
+          }
+          for (const [name, doc] of staged) committed[name].push(doc);
+        });
+        const counterUpdate = db.collections.counters.findOneAndUpdate;
+        db.collections.counters.findOneAndUpdate = vi.fn(async (query, update, options) => {
+          if (transaction.inBody) {
+            if (options?.session !== db.session) {
+              writtenOutside.add(query._id);
+            } else if (writtenOutside.has(query._id)) {
+              throw new MongoServerError({
+                message: 'Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.',
+                code: 112,
+                codeName: 'WriteConflict',
+                errorLabels: ['TransientTransactionError']
+              });
+            }
+          }
+          return counterUpdate(query, update, options);
+        });
+        const stagedInsert = (name) => vi.fn(async (doc, options) => {
+          if (name === 'samples') db.insertedSamples.push(doc);
+          if (options?.session === db.session) staged.push([name, doc]);
+          else committed[name].push(doc);
+          return { insertedId: 'generated-id' };
+        });
+        db.collections.samples.insertOne = stagedInsert('samples');
+        db.collections.sample_movements.insertOne = stagedInsert('sample_movements');
+        return { db, committed, transaction };
+      }
+
+      const outboxCall = (db, eventType) => db.collections[OUTBOX].updateOne.mock.calls
+        .find(([, update]) => update?.$setOnInsert?.eventType === eventType);
+
+      it('writes the insert, both movements, the allocation and both outbox appends with the one session, and hands it to the caller step', async () => {
+        const { db, committed } = makeTransactionalDb();
+        const onCreatedInTransaction = vi.fn().mockResolvedValue(undefined);
+
+        const result = await sampleService.createSample(db, validSampleData(), { onCreatedInTransaction });
+
+        expect(result._id).toBe('generated-id');
+        expect(db.client.startSession).toHaveBeenCalledTimes(1);
+        expect(db.session.withTransaction).toHaveBeenCalledTimes(1);
+
+        expect(db.collections.samples.insertOne.mock.calls[0][1]).toEqual({ session: db.session });
+        const movementSessions = db.collections.sample_movements.insertOne.mock.calls.map(([doc, options]) => [doc.type, options?.session]);
+        expect(movementSessions).toEqual([['create', db.session], ['allocate', db.session]]);
+        expect(db.collection('storageBoxes').updateOne.mock.calls[0][2]).toEqual({ session: db.session });
+        expect(db.collections.samples.updateOne.mock.calls[0][2]).toEqual({ session: db.session });
+        // #1374: the allocation's chain writes take the create's session.
+        for (const name of ['containers', 'specimenContainerAssignments', 'containerPositionAssignments']) {
+          const inserts = db.collections[name].insertOne.mock.calls;
+          expect(inserts).toHaveLength(1);
+          expect(inserts[0][1]).toEqual({ session: db.session });
+        }
+        expect(db.collection('storageAssignments').insertOne).not.toHaveBeenCalled();
+
+        const specimenUpserted = outboxCall(db, 'SPECIMEN_UPSERTED');
+        expect(specimenUpserted).toBeDefined();
+        expect(specimenUpserted[2]).toEqual({ upsert: true, session: db.session });
+        const allocateCustody = outboxCall(db, 'CUSTODY_EVENT_RECORDED');
+        expect(allocateCustody[1].$setOnInsert.payload.custodyEventType).toBe('allocate');
+        expect(allocateCustody[2]).toEqual({ upsert: true, session: db.session });
+
+        expect(onCreatedInTransaction).toHaveBeenCalledTimes(1);
+        expect(onCreatedInTransaction).toHaveBeenCalledWith(
+          expect.objectContaining({ _id: 'generated-id', barcode: 'BR-TEST-001' }),
+          db.session
+        );
+        expect(committed.samples).toHaveLength(1);
+        expect(committed.sample_movements).toHaveLength(2);
+      });
+
+      it('takes the birth movement id in the create\'s session, so the allocation\'s audit id does not conflict with it (#1369)', async () => {
+        const { db, committed } = makeTransactionalDb();
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction: vi.fn() }))
+          .resolves.toMatchObject({ _id: 'generated-id' });
+
+        expect(committed.samples).toHaveLength(1);
+        expect(committed.sample_movements).toHaveLength(2);
+        const movementCounterCalls = db.collections.counters.findOneAndUpdate.mock.calls
+          .filter(([query]) => query._id === 'sample_movements');
+        expect(movementCounterCalls).toHaveLength(2);
+        for (const [, , options] of movementCounterCalls) expect(options.session).toBe(db.session);
+        expect(db.collections.counters.__store.sample_movements.seq).toBe(2);
+      });
+
+      it('no document write made while the create\'s transaction runs goes outside its session (#1369)', async () => {
+        const { db, transaction } = makeTransactionalDb();
+        const WRITES = ['insertOne', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'deleteOne', 'bulkWrite'];
+        const outside = [];
+        const watched = new WeakSet();
+        const watch = (name, collection) => {
+          if (!collection || watched.has(collection)) return collection;
+          watched.add(collection);
+          for (const method of WRITES) {
+            const original = collection[method];
+            if (typeof original !== 'function') continue;
+            collection[method] = (...args) => {
+              const options = method.startsWith('insert') || method === 'bulkWrite' ? args[1] : args[2];
+              if (transaction.inBody && options?.session !== db.session) outside.push([name, method]);
+              return original.apply(collection, args);
+            };
+          }
+          return collection;
+        };
+        // #1374, #1378: kept before the watch wraps them, to show the chain
+        // and the label were written.
+        const chainInserts = [...CHAIN_COLLECTIONS, 'labelIdentifiers'].map((name) => [name, db.collections[name].insertOne]);
+        for (const [name, collection] of Object.entries(db.collections)) watch(name, collection);
+        const resolve = db.collection.getMockImplementation();
+        db.collection.mockImplementation((name) => watch(name, resolve(name)));
+
+        await expect(sampleService.createSample(db, validSampleData()))
+          .resolves.toMatchObject({ _id: 'generated-id' });
+
+        const written = chainInserts.filter(([, insertOne]) => insertOne.mock.calls.length > 0).map(([name]) => name);
+        expect(written).toEqual(['containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'labelIdentifiers']);
+        expect(outside).toEqual([]);
+      });
+
+      it('#1368: no document write made while a derivative\'s create transaction runs goes outside its session', async () => {
+        const { db, transaction } = makeTransactionalDb();
+        seedParents(db, [parentSample()]);
+        const outboxUpdate = db.collections[OUTBOX].updateOne;
+        const labelInsert = db.collections.labelIdentifiers.insertOne;
+        const WRITES =['insertOne', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'deleteOne', 'bulkWrite'];
+        const outside = [];
+        const watched = new WeakSet();
+        const watch = (name, collection) => {
+          if (!collection || watched.has(collection)) return collection;
+          watched.add(collection);
+          for (const method of WRITES) {
+            const original = collection[method];
+            if (typeof original !== 'function') continue;
+            collection[method] = (...args) => {
+              const options = method.startsWith('insert') || method === 'bulkWrite' ? args[1] : args[2];
+              if (transaction.inBody && options?.session !== db.session) outside.push([name, method]);
+              return original.apply(collection, args);
+            };
+          }
+          return collection;
+        };
+        for (const [name, collection] of Object.entries(db.collections)) watch(name, collection);
+        const resolve = db.collection.getMockImplementation();
+        db.collection.mockImplementation((name) => watch(name, resolve(name)));
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
+          .resolves.toMatchObject({ _id: 'generated-id' });
+
+        expect(outboxUpdate.mock.calls.map(([, update]) => update?.$setOnInsert?.eventType)).toContain('LINEAGE_REGISTERED');
+        expect(labelInsert).toHaveBeenCalledTimes(1);
+        expect(outside).toEqual([]);
+      });
+
+      // #1378: the sample's code is issued as a LabelIdentifier on the
+      // container the allocation loaded, in the create's session.
+      it('issues one active LabelIdentifier for the barcode on the allocated container, in the create\'s session (#1378)', async () => {
+        const { db, committed } = makeTransactionalDb();
+
+        await sampleService.createSample(db, validSampleData(), { auditInfo: { userId: 'user-7' } });
+
+        const containerInserts = db.collections.containers.insertOne.mock.calls;
+        expect(containerInserts).toHaveLength(1);
+        const labelInserts = db.collections.labelIdentifiers.insertOne.mock.calls;
+        expect(labelInserts).toHaveLength(1);
+        const [label, options] = labelInserts[0];
+        expect(options).toEqual({ session: db.session });
+        expect(label).toMatchObject({
+          encodedValue: 'BR-TEST-001',
+          targetType: 'container',
+          targetId: containerInserts[0][0].containerId,
+          identifierOrigin: 'institution_applied',
+          status: 'active',
+          printBatchId: null,
+          issuedBy: 'user-7'
+        });
+        expect(committed.samples).toEqual([expect.objectContaining({ barcode: 'BR-TEST-001' })]);
+      });
+
+      it('with the barcode window closed, commits a sample with no barcode while the label and the birth movement carry the code (#1378)', async () => {
+        const { db, committed } = makeTransactionalDb();
+
+        await withBarcodeWindowClosed(() => sampleService.createSample(db, validSampleData()));
+
+        expect(committed.samples).toHaveLength(1);
+        expect(committed.samples[0]).not.toHaveProperty('barcode');
+        const labelInserts = db.collections.labelIdentifiers.insertOne.mock.calls;
+        expect(labelInserts).toHaveLength(1);
+        expect(labelInserts[0][0]).toMatchObject({ encodedValue: 'BR-TEST-001', status: 'active' });
+        expect(labelInserts[0][1]).toEqual({ session: db.session });
+        expect(committed.sample_movements[0]).toMatchObject({ type: 'create', barcode: 'BR-TEST-001' });
+      });
+
+      it('a code already active as a label aborts the create with 409: nothing committed, no compensating delete (#1378)', async () => {
+        const { db, committed } = makeTransactionalDb();
+        db.collections.labelIdentifiers.insertOne.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+        const onCreatedInTransaction = vi.fn();
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction })).rejects.toMatchObject({
+          statusCode: 409,
+          message: expect.stringMatching(/^Falha ao emitir a etiqueta da amostra: Valor BR-TEST-001 já ativo/)
+        });
+
+        expect(committed.samples).toEqual([]);
+        expect(committed.sample_movements).toEqual([]);
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
+
+      // #1368: a derivative's parents, found by the create's
+      // samples.find({ specimenId: { $in } }) read.
+      const PARENT_ID = new ObjectId();
+      const seedParents = (db, parents) => {
+        db.collections.samples.find = vi.fn((query) => {
+          const wanted = query?.specimenId?.$in;
+          return makeCursor(Array.isArray(wanted) ? parents.filter((parent) => wanted.includes(parent.specimenId)) : []);
+        });
+      };
+      const parentSample = (overrides = {}) => ({
+        _id: PARENT_ID, specimenId: 'SP-PARENT', participantId: '12345678', specimenStatus: 'available', ...overrides
+      });
+
+      it('#1368: a derivative appends one LINEAGE_REGISTERED per parent, keyed by the parent _id, in the create\'s session', async () => {
+        const { db, committed } = makeTransactionalDb();
+        seedParents(db, [parentSample()]);
+
+        await sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] }));
+
+        const lineage = outboxCall(db, 'LINEAGE_REGISTERED');
+        expect(lineage).toBeDefined();
+        expect(lineage[1].$setOnInsert.payload).toStrictEqual({ specimenId: 'generated-id', parentSpecimenId: String(PARENT_ID) });
+        expect(lineage[2]).toEqual({ upsert: true, session: db.session });
+        expect(committed.samples).toHaveLength(1);
+        expect(committed.samples[0].parentSpecimenIds).toStrictEqual(['SP-PARENT']);
+      });
+
+      it('#1368: a failed LINEAGE_REGISTERED append aborts the create: nothing committed, no compensating delete', async () => {
+        const { db, committed } = makeTransactionalDb();
+        seedParents(db, [parentSample()]);
+        db.collections[OUTBOX].updateOne.mockImplementation(async (_filter, update) => {
+          if (update?.$setOnInsert?.eventType === 'LINEAGE_REGISTERED') throw new Error('outbox down');
+          return { acknowledged: true };
+        });
+        const onCreatedInTransaction = vi.fn();
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] }), { onCreatedInTransaction }))
+          .rejects.toThrow('outbox down');
+
+        expect(committed.samples).toEqual([]);
+        expect(committed.sample_movements).toEqual([]);
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
+
+      it('#1368: a sample without parentSpecimenIds appends no LINEAGE_REGISTERED', async () => {
+        const { db, committed } = makeTransactionalDb();
+
+        await sampleService.createSample(db, validSampleData());
+
+        expect(outboxCall(db, 'LINEAGE_REGISTERED')).toBeUndefined();
+        expect(committed.samples[0].parentSpecimenIds).toStrictEqual([]);
+      });
+
+      it('#1368: an unknown parent is refused with 404 before any insert', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, []);
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-NOPE'] })))
+          .rejects.toMatchObject({ statusCode: 404, message: 'parentSpecimenIds SP-NOPE não encontrado' });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+        expect(db.session.withTransaction).not.toHaveBeenCalled();
+      });
+
+      it('#1368: a parent of another participant is refused with 422', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, [parentSample({ participantId: '87654321' })]);
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
+          .rejects.toMatchObject({ statusCode: 422, message: expect.stringContaining('outro participante') });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      });
+
+      it('#1368: a closed parent is refused with 422', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, [parentSample({ specimenStatus: 'closed' })]);
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
+          .rejects.toMatchObject({ statusCode: 422, message: expect.stringContaining('encerrada') });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      });
+
+      it('#1368: the sample named as its own parent is refused with 422', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, []);
+
+        await expect(sampleService.createSample(db, validSampleData({ specimenId: 'SP-SELF', parentSpecimenIds: ['SP-SELF'] })))
+          .rejects.toMatchObject({ statusCode: 422 });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      });
+
+      // Decided 7 of the legacy placement chain: with the create's session
+      // the chain builds no index, since an index build beside the open
+      // transaction is a write conflict.
+      it('builds no physical-chain index while the create\'s transaction runs (#1374)', async () => {
+        const { db, transaction } = makeTransactionalDb();
+        const builtInside = [];
+        for (const name of CHAIN_COLLECTIONS) {
+          db.collections[name].createIndex.mockImplementation(async () => {
+            if (transaction.inBody) builtInside.push(name);
+            return true;
+          });
+        }
+
+        await expect(sampleService.createSample(db, validSampleData()))
+          .resolves.toMatchObject({ _id: 'generated-id' });
+
+        expect(db.collections.containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+        expect(builtInside).toEqual([]);
+      });
+
+      it('builds the movement indexes before the transaction opens (#1369)', async () => {
+        const { db } = makeTransactionalDb();
+
+        await sampleService.createSample(db, validSampleData());
+
+        expect(db.collections.sample_movements.createIndex.mock.invocationCallOrder[0])
+          .toBeLessThan(db.session.withTransaction.mock.invocationCallOrder[0]);
+      });
+
+      it('a failed SPECIMEN_UPSERTED append aborts the create: no sample, no movement, no compensating delete', async () => {
+        const { db, committed } = makeTransactionalDb();
+        db.collections[OUTBOX].updateOne.mockImplementation(async (_filter, update) => {
+          if (update?.$setOnInsert?.eventType === 'SPECIMEN_UPSERTED') throw new Error('outbox down');
+          return { acknowledged: true };
+        });
+        const onCreatedInTransaction = vi.fn();
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction }))
+          .rejects.toThrow('outbox down');
+
+        expect(db.collections.samples.insertOne).toHaveBeenCalledTimes(1);
+        expect(committed.samples).toEqual([]);
+        expect(committed.sample_movements).toEqual([]);
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
+
+      // #1370: the driver retries the transaction body only for a MongoError
+      // labelled TransientTransactionError, so such an error must leave the
+      // body as itself, not inside the create's wrapper.
+      const transientConflict = () => new MongoServerError({
+        message: 'Write conflict during plan execution',
+        code: 112,
+        codeName: 'WriteConflict',
+        errorLabels: ['TransientTransactionError']
+      });
+
+      it('#1370: a transient conflict from the allocation leaves the create as the same error, for the driver to retry', async () => {
+        const { db } = makeTransactionalDb();
+        const conflict = transientConflict();
+        db.collections.containerPositionAssignments.insertOne.mockImplementation(async (_doc, options) => {
+          if (options?.session === db.session) throw conflict;
+          return { insertedId: 'placement-1' };
+        });
+
+        await expect(sampleService.createSample(db, validSampleData())).rejects.toBe(conflict);
+      });
+
+      it('#1370: a transient conflict from the birth movement append leaves the create as the same error', async () => {
+        const { db } = makeTransactionalDb();
+        const conflict = transientConflict();
+        db.collections.sample_movements.insertOne = vi.fn(async (_doc, options) => {
+          if (options?.session === db.session) throw conflict;
+          return { insertedId: 'generated-id' };
+        });
+
+        await expect(sampleService.createSample(db, validSampleData())).rejects.toBe(conflict);
+      });
+
+      it('#1370: a MongoServerError with no transient label from the allocation keeps the wrapper and its 422', async () => {
+        const { db } = makeTransactionalDb();
+        const failure = new MongoServerError({ message: 'assignment write failed', code: 2 });
+        db.collections.containerPositionAssignments.insertOne.mockImplementation(async (_doc, options) => {
+          if (options?.session === db.session) throw failure;
+          return { insertedId: 'placement-1' };
+        });
+
+        await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({
+          statusCode: 422,
+          message: expect.stringMatching(/Falha ao alocar amostra.*assignment write failed/)
+        });
+      });
+
+      it('a failed caller step aborts the create the same way', async () => {
+        const { db, committed } = makeTransactionalDb();
+        const onCreatedInTransaction = vi.fn().mockRejectedValue(new Error('register append failed'));
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction }))
+          .rejects.toThrow('register append failed');
+
+        expect(committed.samples).toEqual([]);
+        expect(committed.sample_movements).toEqual([]);
+      });
+
+      it('without a known transactional deployment the writes run in sequence as before, with no session and no caller step', async () => {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        const onCreatedInTransaction = vi.fn();
+
+        const result = await sampleService.createSample(db, validSampleData(), { onCreatedInTransaction });
+
+        expect(result._id).toBe('generated-id');
+        expect(db.collections.samples.insertOne.mock.calls[0]).toHaveLength(1);
+        expect(db.collections.sample_movements.insertOne.mock.calls[0][1]).toBeUndefined();
+        expect(outboxCall(db, 'SPECIMEN_UPSERTED')[2]).toEqual({ upsert: true });
+        // The allocation still opens its own transaction, as before.
+        expect(db.client.startSession).toHaveBeenCalledTimes(1);
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
+
+      it('a failed SPECIMEN_UPSERTED append without a transaction is logged and the sample stands, as before', async () => {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        db.collections[OUTBOX].updateOne.mockImplementation(async (_filter, update) => {
+          if (update?.$setOnInsert?.eventType === 'SPECIMEN_UPSERTED') throw new Error('outbox down');
+          return { acknowledged: true };
+        });
+
+        const result = await sampleService.createSample(db, validSampleData());
+
+        expect(result._id).toBe('generated-id');
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+      });
+
+      it('#1368: without a transaction the lineage is appended after the insert, and a failed append is logged while the sample stands', async () => {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        seedParents(db, [parentSample()]);
+        db.collections[OUTBOX].updateOne.mockImplementation(async (_filter, update) => {
+          if (update?.$setOnInsert?.eventType === 'LINEAGE_REGISTERED') throw new Error('outbox down');
+          return { acknowledged: true };
+        });
+        const errorSpy = vi.spyOn(require('../../src/utils/logger'), 'error').mockImplementation(() => {});
+
+        const result = await sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] }));
+
+        expect(result._id).toBe('generated-id');
+        const outboxUpdate = db.collections[OUTBOX].updateOne.mock;
+        const lineage = outboxCall(db, 'LINEAGE_REGISTERED');
+        expect(lineage[1].$setOnInsert.payload).toStrictEqual({ specimenId: 'generated-id', parentSpecimenId: String(PARENT_ID) });
+        expect(lineage[2]).toEqual({ upsert: true });
+        expect(outboxUpdate.invocationCallOrder[outboxUpdate.calls.indexOf(lineage)])
+          .toBeGreaterThan(db.collections.samples.insertOne.mock.invocationCallOrder[0]);
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('LINEAGE_REGISTERED nao registrado'));
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+      });
+
+      it('a known standalone deployment keeps today\'s outcome: the allocation refuses and the inserted sample is deleted', async () => {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        db.client.db = vi.fn(() => ({ command: vi.fn().mockResolvedValue({ ismaster: true }) }));
+        const onCreatedInTransaction = vi.fn();
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction }))
+          .rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/Falha ao alocar amostra.*replica set/) });
+
+        expect(db.collections.samples.insertOne.mock.calls[0]).toHaveLength(1);
+        expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
+        expect(db.client.startSession).not.toHaveBeenCalled();
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
     });
 
     it('generates a specimenId automatically when none is provided', async () => {
@@ -654,6 +1330,55 @@ describe('sample.service', () => {
         expect(result.sealedRcsAssessmentId ?? null).toBeNull();
       });
 
+      // RF018 AC2 (#1320): a body's use context reaches the assessment.
+      const qualificationContext = {
+        intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+        workflowProtocolId: 'p1', workflowProtocolVersion: '1.0'
+      };
+
+      it('passes the body qualificationContext on to resolveMethodologicalQuality (RF018 AC2)', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        db.collections.rcsAssessments = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assessment-1' }) };
+        vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+          governance_status: 1,
+          final_grade: 'A',
+          rcs_score: 87.5
+        });
+
+        const sprec = { matrixType: 'PLASMA', sampleType: 'PLASMA' };
+        await sampleService.createSample(db, validSampleData({ sprec, qualificationContext }));
+
+        expect(qualityDomain.resolveMethodologicalQuality).toHaveBeenCalledWith({ sprec, qualificationContext });
+      });
+
+      it('records the body qualificationContext on the RcsAssessment document (RF018 AC2)', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        const fakeCollection = () => ({
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'ignored' }),
+          deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
+        });
+        db.collections.rcsAssessments = fakeCollection();
+        db.collections.rcsInputSnapshots = fakeCollection();
+        db.collections.rcsGovernanceEvidenceSnapshots = fakeCollection();
+        const sprec = {
+          matrixType: 'fluid', sampleType: 'SER', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'B',
+          secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A'
+        };
+
+        await sampleService.createSample(db, validSampleData({ sprec, qualificationContext }));
+
+        expect(db.collections.rcsAssessments.insertOne).toHaveBeenCalledTimes(1);
+        expect(db.collections.rcsAssessments.insertOne.mock.calls[0][0].qualificationContext).toEqual(qualificationContext);
+        const inserted = db.collections.rcsAssessments.insertOne.mock.calls[0][0];
+        expect(inserted.assayFamily).toBe(qualificationContext.assayFamily);
+        expect(inserted.workflowProtocolId).toBe(qualificationContext.workflowProtocolId);
+        expect(inserted.workflowProtocolVersion).toBe(qualificationContext.workflowProtocolVersion);
+        expect(inserted.intendedUseCode).toBe(qualificationContext.intendedUseCode);
+        expect(inserted.targetAnalyte).toBe(qualificationContext.targetAnalyte);
+      });
+
       it('does not fail sample creation when recording the RcsAssessment snapshot rejects', async () => {
         const db = makeDb();
         mockOperationalStorage(db);
@@ -773,11 +1498,47 @@ describe('sample.service', () => {
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
       expect(updateArg.$set.currentQuantity).toBe(0);
-      // #405: specimenStatus is the source of truth; the legacy
-      // lifecycleStatus/availabilityStatus dual-write was removed in #408.
-      expect(updateArg.$set.specimenStatus).toBe('depleted');
+      // RF006 AC2/AC3: a withdrawal moves quantityStatus; specimenStatus is
+      // not written. The legacy lifecycleStatus/availabilityStatus
+      // dual-write was removed in #408.
+      expect(updateArg.$set.quantityStatus).toBe('depleted');
+      expect(updateArg.$set.specimenStatus).toBeUndefined();
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
+      expect(result).toMatchObject({ newStatus: 'available', quantityStatus: 'depleted' });
+    });
+
+    it('moves quantityStatus, not specimenStatus, and appends no OperationalStateDecision (RF006 AC2/AC3/AC7)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1', specimenStatus: 'available' }));
+      await sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+      expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+
+      const again = makeDb();
+      again.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-2', specimenStatus: 'available', currentQuantity: 6 }));
+      const partial = await sampleService.withdrawSample(again, 'sample-1', {
+        withdrawalType: 'Parcial',
+        withdrawalQuantity: 2,
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+      expect(partial.quantityStatus).toBe('partial');
+      expect(again.collections.samples.updateOne.mock.calls[0][1].$set.quantityStatus).toBe('partial');
+      expect(again.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+    });
+
+    it('refuses a withdrawal from a closed specimen (RF026 AC7)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenStatus: 'closed' }));
+      await expect(sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      })).rejects.toThrow(/Status: closed/);
     });
 
     it('performs a partial withdrawal within available quantity', async () => {
@@ -821,6 +1582,24 @@ describe('sample.service', () => {
           linkedProject: 'ProjectX'
         })
       ).rejects.toThrow(/não está disponível para retirada/);
+    });
+
+    it('rejects a withdrawal while an active legal hold covers the specimen, and writes nothing (RF006 AC6, #1315)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-HELD' }));
+      db.collections.legalHolds = makeCollection('legalHolds');
+      db.collections.legalHolds.find.mockImplementation(() => makeCursor([
+        { legalHoldId: 'hold-1', targetEntityType: 'Specimen', targetEntityIds: ['SPC-HELD'], status: 'active' },
+      ]));
+
+      await expect(
+        sampleService.withdrawSample(db, 'sample-1', {
+          withdrawalType: 'Total',
+          withdrawalResponsible: 'Jane Doe',
+          linkedProject: 'ProjectX'
+        })
+      ).rejects.toThrow(/Retirada bloqueada: .*hold-1/);
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
     });
 
     it('rejects an invalid withdrawal type', async () => {
@@ -1027,7 +1806,21 @@ describe('sample.service', () => {
       expect(cursor.skip).toHaveBeenCalledWith(1);
       // specimenStatus is normalized onto every returned document (#415) —
       // this one has none, so it falls back to the 'available' default.
-      expect(result).toEqual({ samples: [{ specimenId: 1, specimenStatus: 'available' }], total: 1, limit: 5, skip: 1 });
+      // quantityStatus is derived the same way (RF006 AC3); no quantities
+      // here, so it reads depleted.
+      expect(result).toEqual({ samples: [{ specimenId: 1, specimenStatus: 'available', quantityStatus: 'depleted' }], total: 1, limit: 5, skip: 1 });
+    });
+
+    it('maps a v1.3.0 partial/depleted status filter onto quantityStatus (RF006 AC2/AC3)', async () => {
+      const db = makeDb();
+      db.collections.samples.find.mockReturnValue(makeCursor([]));
+      db.collections.samples.countDocuments.mockResolvedValue(0);
+
+      await sampleService.listSamples(db, { specimenStatus: 'DEPLETED' });
+      expect(db.collections.samples.find).toHaveBeenLastCalledWith({ quantityStatus: 'depleted' });
+
+      await sampleService.listSamples(db, { quantityStatus: 'partial' });
+      expect(db.collections.samples.find).toHaveBeenLastCalledWith({ quantityStatus: 'partial' });
     });
 
     it('applies default limit/skip when not specified', async () => {
@@ -1046,16 +1839,16 @@ describe('sample.service', () => {
       await expect(sampleService.listSamples(db, {})).rejects.toThrow('mongo down');
     });
 
-    // #340: org-scoped caller sees only samples whose collectionSite is one
-    // of their scoped organizations.
-    it('restricts the query to collectionSite $in organizationIds for an organization scope', async () => {
+    // #340: org-scoped caller sees only samples whose tenancy key is one of
+    // their scoped organizations; #1192: the key is organizationId, falling
+    // back to collectionSite.
+    it('restricts the query to the sample tenancy clause for an organization scope', async () => {
       const db = makeDb();
-      await sampleService.listSamples(db, {
-        organizationScope: { scope: 'organization', organizationIds: ['org-1', 'org-2'] }
-      });
+      const organizationScope = { scope: 'organization', organizationIds: ['org-1', 'org-2'] };
+      await sampleService.listSamples(db, { organizationScope });
 
       expect(db.collections.samples.find).toHaveBeenCalledWith({
-        collectionSite: { $in: ['org-1', 'org-2'] }
+        $and: [sampleOrganizationScopeClause(organizationScope)]
       });
     });
 
@@ -1130,7 +1923,7 @@ describe('sample.service', () => {
       expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
     });
 
-    it('recomputes lifecycle status and persists the update', async () => {
+    it('recomputes quantityStatus and persists the update, leaving specimenStatus alone (RF006 AC2/AC3)', async () => {
       const db = makeDb();
       const existing = {
         _id: 'sample-1',
@@ -1147,12 +1940,76 @@ describe('sample.service', () => {
 
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
-      // #405: specimenStatus is the source of truth; the legacy
-      // lifecycleStatus/availabilityStatus dual-write was removed in #408.
-      expect(updateArg.$set.specimenStatus).toBe('partial');
+      // The legacy lifecycleStatus/availabilityStatus dual-write was removed
+      // in #408; quantity moves quantityStatus, never specimenStatus.
+      expect(updateArg.$set.quantityStatus).toBe('partial');
+      expect(updateArg.$set.specimenStatus).toBeUndefined();
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
       expect(result.currentQuantity).toBe(4);
+    });
+
+    it('appends an OperationalStateDecision when an edit changes specimenStatus, and none for a quantity edit or no change (RF006 AC7, #1315)', async () => {
+      const db = makeDb();
+      const existing = { _id: 'sample-1', specimenId: 'SPC-U', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' };
+      db.collections.samples.findOne.mockResolvedValue(existing);
+
+      await sampleService.updateSample(db, 'SPC-U', { currentQuantity: 4 });
+      expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+
+      await sampleService.updateSample(db, 'SPC-U', { specimenStatus: 'reserved' });
+      const decisions = db.collections.operationalStateDecisions;
+      expect(decisions.insertOne).toHaveBeenCalledTimes(1);
+      const [decision] = decisions.insertOne.mock.calls[0];
+      expect(decision).toMatchObject({ specimenId: 'SPC-U', previousStatus: 'available', newStatus: 'reserved', rulesApplied: ['manual_status_update'], reasonCodes: ['update'] });
+      expect(decision.triggerEventId).toMatch(/^sample-update:/);
+
+      await sampleService.updateSample(db, 'SPC-U', { notes: 'no status change' });
+      expect(decisions.insertOne).toHaveBeenCalledTimes(1);
+    });
+
+    // RF006 AC3 / RF026 AC7 (decision 4): the generic update refuses a
+    // client quantityStatus, `closed`, a v1.3.0 value and a change out of
+    // closed, with a 422-coded error, and writes nothing.
+    it.each([
+      ['a client quantityStatus', { specimenStatus: 'available' }, { quantityStatus: 'full' }, /quantityStatus é derivado/],
+      ['closed through the generic update', { specimenStatus: 'available' }, { specimenStatus: 'closed' }, /POST \/api\/samples\/:id\/close/],
+      ['a v1.3.0 value', { specimenStatus: 'available' }, { specimenStatus: 'depleted' }, /specimenStatus inválido: depleted/],
+      ['a change out of closed', { specimenStatus: 'closed' }, { specimenStatus: 'available' }, /closed não admite mudança/],
+    ])('refuses %s (422)', async (_label, stored, body, message) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-R', initialQuantity: 10, currentQuantity: 10, ...stored });
+      await expect(sampleService.updateSample(db, 'SPC-R', body)).rejects.toMatchObject({
+        statusCode: 422, code: 'SPECIMEN_STATUS_WRITE_REFUSED', message: expect.stringMatching(message),
+      });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    // #1378 (ELM-0116): once the migration window is closed, an update naming
+    // barcode, with any value, is refused and writes nothing.
+    it.each([
+      ['a new value', { barcode: 'BR-NEW-1' }],
+      ['null', { barcode: null }],
+    ])('with the barcode window closed, refuses a barcode write of %s (422)', async (_label, body) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-B', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' });
+
+      await withBarcodeWindowClosed(() => expect(sampleService.updateSample(db, 'SPC-B', { ...body, notes: 'x' })).rejects.toMatchObject({
+        statusCode: 422, code: 'LEGACY_BARCODE_WRITE_REFUSED', message: expect.stringMatching(/ELM-0116/),
+      }));
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('with the barcode window closed, accepts an update that names no barcode (#1378)', async () => {
+      const db = makeDb();
+      const existing = { _id: 'sample-1', specimenId: 'SPC-B', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' };
+      db.collections.samples.findOne.mockResolvedValue(existing);
+
+      const result = await withBarcodeWindowClosed(() => sampleService.updateSample(db, 'SPC-B', { notes: 'x' }));
+
+      expect(result).toMatchObject({ specimenId: 'SPC-B' });
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.notes).toBe('x');
     });
 
     // #540: sample.service.js#updateSample used the raw MongoDB driver and
@@ -1234,25 +2091,95 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('deleteSample', () => {
-    it('returns true when a sample was deleted', async () => {
+    // #1216: the route passes the URL id, an _id or a specimenId. These
+    // doubles once ignored the delete filter, which hid that a bare
+    // { specimenId: <ObjectId> } filter could never match a real sample.
+    it('resolves a specimenId and deletes that sample by its _id', async () => {
       const db = makeDb();
+      const _id = new ObjectId();
+      db.collections.samples.findOne.mockImplementation(async (filter) => (
+        filter.specimenId === '3116768' ? { _id, specimenId: '3116768' } : null
+      ));
       db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 1 });
 
-      expect(await sampleService.deleteSample(db, 'sample-1')).toBe(true);
+      expect(await sampleService.deleteSample(db, '3116768')).toBe(true);
+      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id });
     });
 
-    it('returns false when nothing matched', async () => {
+    it('resolves a Mongo _id string and deletes that sample by its _id', async () => {
       const db = makeDb();
-      db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 0 });
+      const _id = new ObjectId();
+      db.collections.samples.findOne.mockImplementation(async (filter) => (
+        filter._id && String(filter._id) === String(_id) ? { _id, specimenId: '3116768' } : null
+      ));
+      db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 1 });
+
+      expect(await sampleService.deleteSample(db, String(_id))).toBe(true);
+      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id });
+    });
+
+    it('returns false without deleting when no sample resolves', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(null);
 
       expect(await sampleService.deleteSample(db, 'missing')).toBe(false);
+      expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
     });
 
     it('propagates an error from the collection delete', async () => {
       const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: new ObjectId(), specimenId: 'sample-1' });
       db.collections.samples.deleteOne.mockRejectedValue(new Error('mongo down'));
 
       await expect(sampleService.deleteSample(db, 'sample-1')).rejects.toThrow('mongo down');
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // #1219: every QuarantineAction writer recorded the sample's _id, and
+  // this read queried the canonical specimenId, so it found nothing. The
+  // find double honours the filter, so a read keyed on one form only
+  // misses the other row.
+  describe('getQuarantineActions', () => {
+    it('returns both the legacy _id-keyed and the canonical action for a sample', async () => {
+      const _id = new ObjectId();
+      const actions = [
+        { quarantineActionId: 'legacy', specimenIds: [String(_id)] },
+        { quarantineActionId: 'canonical', specimenIds: ['3116768'] },
+        { quarantineActionId: 'other', specimenIds: ['someone-else'] },
+      ];
+      const matches = (value, doc) => (value && Array.isArray(value.$in)
+        ? value.$in.some((v) => doc.specimenIds.includes(v))
+        : doc.specimenIds.includes(value));
+      const quarantineActions = makeCollection('quarantineActions');
+      quarantineActions.find.mockImplementation((filter) => makeCursor(actions.filter((doc) => matches(filter.specimenIds, doc))));
+      const db = makeDb({ quarantineActions });
+      db.collections.samples.findOne.mockImplementation(async (filter) => (
+        filter.specimenId === '3116768' ? { _id, specimenId: '3116768' } : null
+      ));
+
+      const result = await sampleService.getQuarantineActions(db, '3116768');
+
+      expect(result.map((a) => a.quarantineActionId).sort()).toEqual(['canonical', 'legacy']);
+    });
+  });
+
+  describe('getStateDecisions', () => {
+    it('returns the decisions keyed by specimenId and by stored _id, oldest first, and null for an unknown sample (RF006 AC7, #1315)', async () => {
+      const _id = new ObjectId();
+      const rows = [
+        { operationalStateDecisionId: 'canonical', specimenId: 'SPC-D', occurredAt: new Date('2026-10-02') },
+        { operationalStateDecisionId: 'legacy', specimenId: String(_id), occurredAt: new Date('2026-10-01') },
+        { operationalStateDecisionId: 'other', specimenId: 'someone-else', occurredAt: new Date('2026-09-30') },
+      ];
+      const operationalStateDecisions = makeCollection('operationalStateDecisions');
+      operationalStateDecisions.find.mockImplementation((filter) => makeCursor(rows.filter((doc) => doc.specimenId === filter.specimenId)));
+      const db = makeDb({ operationalStateDecisions });
+      db.collections.samples.findOne.mockImplementation(async (filter) => (filter.specimenId === 'SPC-D' ? { _id, specimenId: 'SPC-D' } : null));
+
+      const result = await sampleService.getStateDecisions(db, 'SPC-D');
+      expect(result.map((d) => d.operationalStateDecisionId)).toEqual(['legacy', 'canonical']);
+      expect(await sampleService.getStateDecisions(db, 'missing')).toBeNull();
     });
   });
 
@@ -1450,6 +2377,33 @@ describe('sample.service', () => {
       ).rejects.toThrow('Amostra não encontrada');
     });
 
+    it('un-depletes a depleted specimen through quantityStatus, with no OperationalStateDecision (RF006 AC2/AC3/AC7)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample({
+        specimenId: 'SPC-R', specimenStatus: 'available', quantityStatus: 'depleted', currentQuantity: 0, totalWithdrawn: 10,
+      }));
+      const result = await sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Parcial',
+        returnQuantity: 3
+      });
+      expect(result).toMatchObject({ newStatus: 'available', quantityStatus: 'partial', newAvailableQuantity: 3 });
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set).toMatchObject({ quantityStatus: 'partial' });
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.specimenStatus).toBeUndefined();
+      expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+    });
+
+    it('refuses a return to a closed specimen (RF026 AC7)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample({ specimenStatus: 'closed' }));
+      await expect(sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Total'
+      })).rejects.toThrow(/Status: closed/);
+    });
+
     it('rejects when there is nothing pending to return', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(
@@ -1520,10 +2474,13 @@ describe('sample.service', () => {
       expect(result.returnedQuantity).toBe(6);
       expect(result.newAvailableQuantity).toBe(10);
 
-      // #405: specimenStatus is the source of truth; the legacy
+      // RF006 AC3: a full return restores quantityStatus to full and closes
+      // the withdrawal fields; specimenStatus is not written. The legacy
       // lifecycleStatus/availabilityStatus dual-write was removed in #408.
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
-      expect(updateArg.$set.specimenStatus).toBe('available');
+      expect(updateArg.$set.quantityStatus).toBe('full');
+      expect(updateArg.$set.withdrawnAt).toBeNull();
+      expect(updateArg.$set.specimenStatus).toBeUndefined();
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
     });
@@ -1681,6 +2638,24 @@ describe('sample.service', () => {
       });
     });
 
+    // #1220: a legacy movement keyed by the sample's _id, under another
+    // barcode, still belongs to the sample's history.
+    it('returns a movement keyed by the sample _id under a different barcode', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'oid-1', specimenId: 'SPC-1', barcode: 'BC-1' });
+      const rows = [
+        { movementID: 1, specimenId: 'oid-1', barcode: 'BC-OLD' },
+        { movementID: 2, specimenId: 'other', barcode: 'BC-OTHER' },
+      ];
+      db.collections.sample_movements.find.mockImplementation((filter) => makeCursor(
+        rows.filter((row) => filter.$or.some((arm) => Object.entries(arm).every(([key, value]) => row[key] === value))),
+      ));
+
+      const movements = await sampleService.getSampleMovements(db, 'SPC-1');
+
+      expect(movements).toEqual([{ movementID: 1, specimenId: 'oid-1', barcode: 'BC-OLD' }]);
+    });
+
     it('propagates an error from the collection query', async () => {
       const db = makeDb();
       db.collections.sample_movements.find.mockImplementation(() => {
@@ -1775,11 +2750,68 @@ describe('sample.service', () => {
         sampleType: 'PLASMA'
       });
 
+      // RF006 AC3: a depleted specimen is available in state but unusable.
       expect(db.collections.samples.find).toHaveBeenCalledWith({
         sampleType: 'PLASMA',
-        specimenStatus: 'available'
+        specimenStatus: 'available',
+        quantityStatus: { $ne: 'depleted' }
       });
       expect(result).toEqual([{ specimenStatus: 'available' }]);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // RF026 AC7 (dictionary RULE-006): closing a fully consumed specimen.
+  describe('closeSpecimen', () => {
+    function consumedSample(overrides = {}) {
+      return {
+        _id: 'sample-1', specimenId: 'SPC-C', specimenStatus: 'available',
+        quantity: 10, initialQuantity: 10, currentQuantity: 0, ...overrides,
+      };
+    }
+
+    it('closes a depleted specimen and appends an OperationalStateDecision with the write', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(consumedSample());
+
+      const result = await sampleService.closeSpecimen(db, 'SPC-C', { actorId: 'user-1' });
+
+      expect(result).toMatchObject({ specimenId: 'SPC-C', previousStatus: 'available', specimenStatus: 'closed', quantityStatus: 'depleted' });
+      const [filter, update] = db.collections.samples.updateOne.mock.calls[0];
+      expect(filter).toEqual({ _id: 'sample-1', specimenStatus: 'available' });
+      expect(update.$set).toMatchObject({ specimenStatus: 'closed', quantityStatus: 'depleted' });
+      const [decision] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
+      expect(decision).toMatchObject({
+        specimenId: 'SPC-C', previousStatus: 'available', newStatus: 'closed',
+        rulesApplied: ['rf026_ac7_validated_consumption'], reasonCodes: ['total_consumption'],
+      });
+      expect(decision.triggerEventId).toMatch(/^sample-close:/);
+      expect(result.operationalStateDecisionId).toBe(decision.operationalStateDecisionId);
+    });
+
+    it('closes a not-yet-migrated v1.3.0 depleted specimen, recording it from available', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(consumedSample({ specimenStatus: 'depleted' }));
+      await sampleService.closeSpecimen(db, 'SPC-C');
+      expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ _id: 'sample-1', specimenStatus: 'depleted' });
+      expect(db.collections.operationalStateDecisions.insertOne.mock.calls[0][0]).toMatchObject({ previousStatus: 'available', newStatus: 'closed' });
+    });
+
+    it.each([
+      ['material remains (partial)', { currentQuantity: 4 }, /consumo total validado: quantityStatus é partial/],
+      ['material remains (full), whatever a stale stored quantityStatus says', { currentQuantity: 10, quantityStatus: 'depleted' }, /quantityStatus é full/],
+      ['it is already closed', { specimenStatus: 'closed' }, /já está encerrada/],
+    ])('refuses (409) when %s, and writes nothing', async (_label, overrides, message) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(consumedSample(overrides));
+      await expect(sampleService.closeSpecimen(db, 'SPC-C')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(message) });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('returns null for an unknown specimen', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(null);
+      expect(await sampleService.closeSpecimen(db, 'missing')).toBeNull();
     });
   });
 });

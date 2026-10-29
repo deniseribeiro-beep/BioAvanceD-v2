@@ -7,7 +7,7 @@ const { seedRolesAndPermissions, PERMISSION_CATALOG } = require('../../../src/se
 /**
  * Real query-matching fake (findOne exact-match, insertOne), not a canned
  * stub — proves the seed's upsert-by-business-key idempotency actually
- * depends on querying by roleCode/permissionCode, per build-loop's
+ * depends on querying by roleCode/permissionCode, per this repo's
  * native-only "real backend" proof bar.
  */
 function createFakeCollection() {
@@ -117,15 +117,106 @@ describe('rbac-catalog-seed.service', () => {
     const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
     const coordinatorDoc = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
     const staleRoleId = coordinatorDoc.roleId;
-    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageAccessRequests);
-    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+    // #662: was manageAccessRequests, which the Coordenador no longer holds.
+    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageReportTemplates);
+    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageReportTemplates);
 
     const second = await seedRolesAndPermissions(db);
 
     const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
-    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageReportTemplates);
     expect(coordinator.roleId).toBe(staleRoleId);
     expect(db.collections.roles.docs).toHaveLength(5);
+  });
+
+  // #662 (Denise, 2026-09-25): manageAccessRequests is Administrador-only
+  // until a real multi-approver committee workflow exists.
+  it('#662: seeds manageAccessRequests on the Administrador only, not the Coordenador', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const manageAccessRequestsId = permissions.find((p) => p.permissionCode === 'manageAccessRequests').permissionId;
+
+    const holders = roles.filter((r) => r.permissionIds.includes(manageAccessRequestsId)).map((r) => r.roleCode);
+    expect(holders).toEqual(['administrator']);
+  });
+
+  // #1008 (Denise, 2026-09-25): RF003 makes role assignment the
+  // Administrador's. The Coordenador keeps createUser but not assignRole.
+  it('#1008: seeds assignRole on the Administrador only, while the Coordenador keeps createUser', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const idOf = (code) => permissions.find((p) => p.permissionCode === code).permissionId;
+
+    expect(roles.filter((r) => r.permissionIds.includes(idOf('assignRole'))).map((r) => r.roleCode)).toEqual(['administrator']);
+    expect(roles.find((r) => r.roleCode === 'coordinator').permissionIds).toContain(idOf('createUser'));
+  });
+
+  // #1229: access.routes.js moved off createUser to its own code, seeded to
+  // exactly the roles that held createUser, so no caller gains or loses.
+  it('#1229: seeds manageAccessGrants on exactly the roles that hold createUser', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const idOf = (code) => permissions.find((p) => p.permissionCode === code).permissionId;
+    const holdersOf = (code) => roles.filter((r) => r.permissionIds.includes(idOf(code))).map((r) => r.roleCode);
+
+    expect(holdersOf('manageAccessGrants')).toEqual(['coordinator', 'administrator']);
+    expect(holdersOf('manageAccessGrants')).toEqual(holdersOf('createUser'));
+  });
+
+  // #1229, #1341: no migration. A database seeded before the code existed
+  // gains the Permission document and both roles' grant at the next boot.
+  it('#1229: a database seeded before manageAccessGrants gains it on both roles at the next boot', async () => {
+    const db = createFakeDb();
+    await seedRolesAndPermissions(db);
+    const permissionDocs = db.collections.permissions.docs;
+    const oldIndex = permissionDocs.findIndex((p) => p.permissionCode === 'manageAccessGrants');
+    const [oldDoc] = permissionDocs.splice(oldIndex, 1);
+    const roleIdByCode = {};
+    for (const role of db.collections.roles.docs) {
+      role.permissionIds = role.permissionIds.filter((id) => id !== oldDoc.permissionId);
+      roleIdByCode[role.roleCode] = role.roleId;
+    }
+
+    const second = await seedRolesAndPermissions(db);
+
+    expect(permissionDocs.filter((p) => p.permissionCode === 'manageAccessGrants')).toHaveLength(1);
+    const newId = second.permissions.find((p) => p.permissionCode === 'manageAccessGrants').permissionId;
+    const holders = db.collections.roles.docs.filter((r) => r.permissionIds.includes(newId)).map((r) => r.roleCode);
+    expect(holders).toEqual(['coordinator', 'administrator']);
+    for (const role of db.collections.roles.docs) {
+      expect(role.roleId).toBe(roleIdByCode[role.roleCode]);
+    }
+  });
+
+  // #1341: role grants are catalog-owned, so upsertRole sets the stored
+  // role to the seed's list. A database seeded before #662 still holding
+  // the withdrawn grant loses it, and so does a grant added by hand: the
+  // stored role equals the catalog after the boot.
+  it('#662, #1341: sets an already-seeded role to the catalog, pulling a withdrawn grant and a hand-added one, keeping its roleId', async () => {
+    const db = createFakeDb();
+    const first = await seedRolesAndPermissions(db);
+    const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
+    const seededCoordinatorIds = [...first.roles.find((r) => r.roleCode === 'coordinator').permissionIds];
+
+    // A database seeded before #662: the Coordenador still holds the grant,
+    // plus one an operator added by hand.
+    const coordinatorDoc = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
+    const roleId = coordinatorDoc.roleId;
+    coordinatorDoc.permissionIds = [...coordinatorDoc.permissionIds, permissionIdByCode.manageAccessRequests, permissionIdByCode.manageBackup];
+
+    const second = await seedRolesAndPermissions(db);
+
+    const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
+    expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+    expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageBackup);
+    expect([...coordinator.permissionIds].sort()).toEqual([...seededCoordinatorIds].sort());
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.createUser);
+    expect(coordinator.roleId).toBe(roleId);
+    const stored = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
+    expect(stored.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+
+    const administrator = second.roles.find((r) => r.roleCode === 'administrator');
+    expect(administrator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
   });
   // #1075: `permissions` was the last collection still seeded through the
   // skip-on-existing `upsertByKey` -- the same defect #646 Wave 3 fixed for
@@ -216,6 +307,24 @@ describe('rbac-catalog-seed.service', () => {
     expect(permissions.docs).toHaveLength(insertedCount);
   });
 
+  // #1341: setting a role compares as a set, so a stored list in another
+  // order is not a change and a no-op boot writes no role either.
+  it('#1341 control: a re-seed of roles matching the catalog, in any order, issues no role write', async () => {
+    const db = createFakeDb();
+    await seedRolesAndPermissions(db);
+
+    const roles = db.collections.roles;
+    const coordinatorDoc = roles.docs.find((r) => r.roleCode === 'coordinator');
+    coordinatorDoc.permissionIds = [...coordinatorDoc.permissionIds].reverse();
+    let updateCalls = 0;
+    const realUpdateOne = roles.updateOne.bind(roles);
+    roles.updateOne = async (...args) => { updateCalls += 1; return realUpdateOne(...args); };
+
+    await seedRolesAndPermissions(db);
+
+    expect(updateCalls).toBe(0);
+  });
+
 
   // #921 finding 2: this comment used to claim the table below was
   // "audited against every real requirePermission() call site in
@@ -246,6 +355,9 @@ describe('rbac-catalog-seed.service', () => {
       ['viewTemperature', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
       ['uploadFiles', ['CREATE', 'READ', 'UPDATE']],
       ['createUser', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      // #1008: CREATE is POST /users/register, UPDATE the in-handler check on
+      // PUT /users/:id.
+      ['assignRole', ['CREATE', 'UPDATE']],
       ['editSample', ['UPDATE']],
       ['deleteSample', ['DELETE']],
       ['createPatient', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
@@ -270,6 +382,22 @@ describe('rbac-catalog-seed.service', () => {
       // routes at it. Pinned now, in the table that claims to be the audit.
       ['manageStorageAllocation', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
       ['manageStorageTopology', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      // #929: the read-only pair added by #1087 and #1146 after this table
+      // was last extended. Neither was backfilled here, which is the same
+      // drift the comment above describes -- a code can be introduced, or
+      // later widened, with nothing in the audit table objecting.
+      ['viewEquipment', ['READ']],
+      ['viewStorageTopology', ['READ']],
+      // #929: the Consent-domain code that replaced the borrowed
+      // 'createPatient' on POST /generate-link. CREATE only: the route is a
+      // POST and METHOD_TO_ACTION derives CREATE, so a wider set would buy
+      // nothing and would let the code later gate a read or a delete the way
+      // 'viewTemperature' did before #1073.
+      ['requestConsent', ['CREATE']],
+      // #1316: custody's two routes are POSTs.
+      ['manageCustody', ['CREATE']],
+      // #1229: access.routes.js's GET, POST, PUT and DELETE.
+      ['manageAccessGrants', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
     ])('%s allows exactly %j', (permissionCode, expectedActions) => {
       expect(PERMISSION_CATALOG[permissionCode].allowedActions).toEqual(expectedActions);
     });

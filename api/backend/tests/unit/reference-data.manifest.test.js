@@ -4,6 +4,7 @@ import path from 'path';
 
 const require = createRequire(import.meta.url);
 const { getManifest, getManifestByKey } = require('../../src/reference-data/essential/manifest');
+const ReferenceDatasetReleaseModel = require('../../src/models/ReferenceDatasetRelease');
 
 describe('reference-data essential manifest', () => {
   describe('getManifest()', () => {
@@ -42,6 +43,19 @@ describe('reference-data essential manifest', () => {
       manifest[0].key = 'mutated';
       const manifestAgain = getManifest();
       expect(manifestAgain[0].key).toBe('miabis-minimal');
+    });
+
+    it('carries, per entry, the fields its ReferenceDatasetRelease is registered with (RF028 AC1)', () => {
+      getManifest().forEach((entry) => {
+        const check = ReferenceDatasetReleaseModel.validate({
+          ...entry,
+          datasetCode: entry.key,
+          datasetVersion: entry.version,
+          sourceChecksum: 'a'.repeat(64),
+        });
+        expect(check).toEqual({ isValid: true, errors: [] });
+        expect(entry.retrievalUri).toBe(`file://${entry.source.replace(/\\/g, '/')}`);
+      });
     });
 
     it('does not allow mutating the returned array to affect subsequent calls', () => {

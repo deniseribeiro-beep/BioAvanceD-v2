@@ -10,7 +10,7 @@
 // routers together (no stub inner router, unlike
 // intakeWizard.routes.governance.test.js) to prove the write site is already
 // governed end-to-end, rather than assuming it from reading the code.
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -82,6 +82,8 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
 
   const rbacModule = require(rbacPath);
   rbacModule.requirePermission = () => (req, res, next) => next();
+  // #1355: the wrapper now mounts requireOrganizationScope too.
+  rbacModule.requireOrganizationScope = (req, res, next) => { req.organizationScope = { scope: 'global', organizationIds: [] }; next(); };
 
   const notificationServiceModule = require(notificationServicePath);
   notificationServiceModule.buildConsentMetadata = vi.fn(() => ({ token: 'tok-1' }));
@@ -143,7 +145,7 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
   app.use(express.json());
   app.locals.db = {
     collection: (name) => {
-      if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+      if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
       if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
       if (name === 'storageBoxes') {
         return {
@@ -188,6 +190,21 @@ const VALID_PAYLOAD = {
   biomarkers: [],
 };
 
+// Each case clears only the modules it mocks; the rest of the two routers'
+// module graph loads once, cold, and that load used to land inside the first
+// case's 5000 ms budget (1157 ms alone, over 5000 ms under five parallel
+// workers, #1297). Compose the app once here, under its own timeout.
+beforeAll(() => {
+  loadApp({
+    consentActive: true,
+    samplesCollection: {},
+    quarantineActionsCollection: buildQuarantineActionsCollection(),
+    patientsCollection: {},
+  });
+  vi.restoreAllMocks();
+  clearCache();
+}, 30000);
+
 describe('intake-wizard governance write path (real wrapper + real inner router composed)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -197,7 +214,7 @@ describe('intake-wizard governance write path (real wrapper + real inner router 
   it('persists specimenStatus="available" and records no QuarantineAction when consent is active and quality allows release', async () => {
     const samplesCollection = {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
-      findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', lifecycleStatus: 'AVAILABLE' }),
+      findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', specimenStatus: 'available' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     };
     const quarantineActionsCollection = buildQuarantineActionsCollection();
@@ -221,7 +238,7 @@ describe('intake-wizard governance write path (real wrapper + real inner router 
   it('persists specimenStatus="quarantined" and records a QuarantineAction when consent is not active (governance-blocked create)', async () => {
     const samplesCollection = {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
-      findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', lifecycleStatus: 'BLOCKED' }),
+      findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', specimenStatus: 'available' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     };
     const quarantineActionsCollection = buildQuarantineActionsCollection();

@@ -319,7 +319,8 @@ describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
   it('builds criteria in participantId, cpf, recordNumber, _id order', () => {
     const criteria = engine.buildPatientLinkageQuery(
       {},
-      { patientID: '12345678', cpf: '12345678901', recordNumber: '42', _id: '507f1f77bcf86cd799439011' }
+      // patientData is parsePatientRow's output, which names the id participantId.
+      { participantId: '12345678', cpf: '12345678901', recordNumber: '42', _id: '507f1f77bcf86cd799439011' }
     );
 
     expect(criteria[0]).toEqual({ participantId: '12345678' });
@@ -359,8 +360,8 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   it('returns a payload per valid biomarker field', () => {
     const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:12.5,lysoGb3:4.2' },
-      { patientID: 'P1', _id: 'patient-1' },
-      { sampleID: 'S1', _id: 'sample-1' }
+      { participantId: '12345678', _id: 'patient-1' },
+      { specimenId: 'S1', _id: 'sample-1' }
     );
 
     expect(payloads).toHaveLength(2);
@@ -399,15 +400,28 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
     expect(warnings).toEqual(['Biomarcador alphaGal foi ignorado por não informar valor.']);
   });
 
-  it('falls back through specimen sampleId/barcode and patient rawRow.patientID identifiers', () => {
+  // The patient is the one persistSample linked or created, and the specimen
+  // is createSample's return, so the ids come from their canonical fields; a
+  // patientID column on the row is only a linkage input.
+  it('takes the participantId from the linked patient and the specimenId from the created specimen', () => {
     const { payloads } = engine.buildBiomarkerObservationPayloads(
-      { patientID: 'raw-patient-id', biomarkers: 'alphaGal:1' },
-      {},
-      { sampleId: 'specimen-sample-id' }
+      { patientID: '99999999', biomarkers: 'alphaGal:1' },
+      { participantId: '12345678', _id: 'patient-1' },
+      { specimenId: 'BR-2026-000001', _id: 'sample-1' }
     );
 
-    expect(payloads[0].patientID).toBe('raw-patient-id');
-    expect(payloads[0].sampleID).toBe('specimen-sample-id');
+    expect(payloads[0].participantId).toBe('12345678');
+    expect(payloads[0].specimenId).toBe('BR-2026-000001');
+  });
+
+  it('falls back to the specimen _id when it carries no specimenId', () => {
+    const { payloads } = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal:1' },
+      { participantId: '12345678' },
+      { _id: 'sample-1' }
+    );
+
+    expect(payloads[0].specimenId).toBe('sample-1');
   });
 
   it('falls back to specimen.barcode when no other specimen identifier is present', () => {
@@ -705,6 +719,48 @@ describe('BatchValidationEngine file readers', () => {
     // Dropping the blank without tracking would report them as 2 and 3.
     expect(rows.sourceLines).toEqual([2, 4]);
     expect(Object.prototype.propertyIsEnumerable.call(rows, 'sourceLines')).toBe(false);
+  });
+
+  // #1065: csv-parser emits one data event per RECORD, so a quoted field with an
+  // embedded newline spans two physical lines in one event. A per-event counter
+  // reports every later row one line low; the line must come from the record's
+  // byteOffset instead.
+  it('readCsvRows reports the true physical line for rows after a quoted embedded newline (#1065)', async () => {
+    const filePath = writeTmpFile('rows.csv', 'a,b\n"multi\nline",x\n3,z\n');
+
+    const rows = await engine.readCsvRows(filePath);
+
+    expect(rows).toEqual([{ a: 'multi\nline', b: 'x' }, { a: '3', b: 'z' }]);
+    // Header is line 1; the quoted record occupies lines 2-3, so `3,z` is line 4.
+    expect(rows.sourceLines).toEqual([2, 4]);
+  });
+
+  it('readCsvRows keeps the physical line exact across stream chunks and multi-byte text (#1065)', async () => {
+    // ~110 KB: past fs.createReadStream's 64 KB highWaterMark, so the newline
+    // index is built from more than one chunk. Accented text makes byte and
+    // character offsets diverge, which a string-index implementation misreports.
+    const filler = Array.from({ length: 3000 }, (_, i) => `${i},ação-${i}-çãõéíú`);
+    const content = ['a,b', ...filler, '"x\ny\nz",após', 'último,fim', ''].join('\n');
+    const filePath = writeTmpFile('big.csv', content);
+
+    const rows = await engine.readCsvRows(filePath);
+
+    expect(rows).toHaveLength(3002);
+    // Filler rows are lines 2..3001, the quoted record spans 3002-3004.
+    expect(rows.sourceLines[2999]).toBe(3001);
+    expect(rows.sourceLines[3000]).toBe(3002);
+    expect(rows.sourceLines[3001]).toBe(3005);
+  });
+
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a read
+  // failure after the separator sniff (the file removed in between) was an
+  // uncaught exception that crashed the process instead of a rejection.
+  it('readCsvRows rejects when the read stream fails after the separator sniff (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `batch-validation-missing-${Date.now()}.csv`);
+    const readFileSyncSpy = vi.spyOn(fs, 'readFileSync').mockReturnValueOnce('a,b\n1,2\n');
+
+    await expect(engine.readCsvRows(missingPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    readFileSyncSpy.mockRestore();
   });
 
   it('readCsvRows parses rows using the detected separator', async () => {

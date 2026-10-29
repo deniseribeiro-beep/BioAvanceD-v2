@@ -4,6 +4,7 @@ const auditLogger = require('../utils/auditLogger');
 const bcrypt = require('bcryptjs');
 const passwordService = require('../services/password.service');
 const sessionService = require('../services/session.service');
+const UserModel = require('../models/User');
 
 const REFRESH_COOKIE_NAME = 'refresh_token';
 
@@ -38,62 +39,6 @@ function sanitizeAuthPayload(result) {
  * RF001 - Login com MFA
  */
 class AuthController {
-  async register(req, res) {
-    try {
-      const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({
-          success: false,
-          error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-        });
-      }
-
-      // #1037: attribute the grant. registerUser's third parameter defaults
-      // to the string 'system', which is what UserRoleAssignment.grantedBy
-      // carried for every account created through this route while it was
-      // unauthenticated. The route now requires authenticate +
-      // requirePermission('createUser'), so there is always a real actor.
-      const user = await authService.registerUser(db, req.body, req.user?.userID);
-
-      // #1037: RF003 AC#6 requires auditing account creation, and RF012 AC#1
-      // / RNF009 AC#2 (Crítica) both make the actor a mandatory element of
-      // the event. This route previously wrote no audit row at all. Mirrors
-      // the block in user.routes.js's sibling register handler.
-      //
-      // Audit failure must not fail a successful creation -- auditLogger.log
-      // swallows its own errors, and this try/catch is belt-and-braces so a
-      // logging fault cannot turn a 201 into a 400 via the outer catch.
-      try {
-        auditLogger.init(db);
-        await auditLogger.log({
-          action: 'CREATE',
-          resourceType: 'User',
-          resourceId: user._id?.toString() || user.id,
-          status: 'success',
-          severity: 'info',
-          message: 'Usuário registrado com sucesso',
-          req: req,
-          module: 'Usuários'
-        });
-      } catch (auditError) {
-        logger.error('Falha ao auditar criação de usuário:', auditError.message);
-      }
-
-      return res.status(201).json({
-        success: true,
-        message: (req.t && req.t('users.registerSuccess')) || 'Usuário registrado com sucesso',
-        data: user
-      });
-    } catch (error) {
-      logger.error('Erro no registro:', error.message);
-      return res.status(400).json({
-        success: false,
-        error: (req.t && req.t('users.registerError')) || 'Erro ao registrar usuário',
-        message: error.message
-      });
-    }
-  }
-
   async login(req, res) {
     try {
       const db = req.app.locals.db;
@@ -139,6 +84,9 @@ class AuthController {
         return res.status(200).json({
           success: true,
           requiresPasswordChange: true,
+          // #1251: 'expired' when passwordRules.expirationDays, not an
+          // administrator, asks for the change.
+          ...(result.reason ? { reason: result.reason } : {}),
           message: (req.t && req.t('auth.passwordChangeRequired')) || result.message
         });
       }
@@ -273,6 +221,10 @@ class AuthController {
         });
       }
 
+      if (!(await passwordService.isPasswordResetAllowed(db))) {
+        return res.status(403).json(passwordService.PASSWORD_RESET_DISABLED);
+      }
+
       const { email } = req.body;
       if (!email) {
         return res.status(400).json({
@@ -309,6 +261,10 @@ class AuthController {
           success: false,
           error: 'Banco de dados não disponível'
         });
+      }
+
+      if (!(await passwordService.isPasswordResetAllowed(db))) {
+        return res.status(403).json(passwordService.PASSWORD_RESET_DISABLED);
       }
 
       const { token, newPassword } = req.body;
@@ -397,7 +353,7 @@ class AuthController {
         });
       }
 
-      const oldMatches = await bcrypt.compare(oldPassword, user.password);
+      const oldMatches = await bcrypt.compare(oldPassword, UserModel.passwordHashOf(user));
       if (!oldMatches) {
         // #995: count it. Without this, a caller holding a hijacked session
         // could guess the victim's current password here indefinitely -- useful
@@ -410,33 +366,32 @@ class AuthController {
         });
       }
 
-      passwordService.validateStrength(newPassword);
-      await passwordService.validateReuse(newPassword, user);
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      passwordService.validateStrength(newPassword, passwordPolicy, user);
+      await passwordService.validateReuse(newPassword, user, passwordPolicy);
 
       const newHash = await bcrypt.hash(newPassword, 10);
-      const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
-      const updatedHistory = [user.password, ...history].slice(0, 3);
+      const updatedHistory = passwordService.nextPasswordHistory(user, passwordPolicy);
 
       await usersCollection.updateOne(
         { _id: user._id },
-        {
-          $set: {
-            password: newHash,
-            passwordHistory: updatedHistory,
-            lastPasswordChange: new Date(),
-            forceReset: false,
-            // #995: this was the literal `failedLoginAttempts: 0` alone. The
-            // lockout gate (auth.service.js) reads accountLockedUntil and never
-            // the counter, so zeroing one and leaving the other in the future
-            // accomplished nothing for a locked user -- and left the document
-            // internally inconsistent: zero recorded failures, an active lock.
-            // clearedLockoutFields() is the same helper processLogin's own
-            // success path uses, so the clearing has one definition.
-            ...authService.clearedLockoutFields(),
-            updatedAt: new Date()
-          }
-        }
+        UserModel.storedUpdateOf({
+          passwordHash: newHash,
+          passwordHistoryHashes: updatedHistory,
+          passwordChangedAt: new Date(),
+          forcePasswordReset: false,
+          // #995: this was the literal `failedLoginAttempts: 0` alone. The
+          // lockout gate (auth.service.js) reads accountLockedUntil and never
+          // the counter, so zeroing one and leaving the other in the future
+          // accomplished nothing for a locked user -- and left the document
+          // internally inconsistent: zero recorded failures, an active lock.
+          // clearedLockoutFields() is the same helper processLogin's own
+          // success path uses, so the clearing has one definition.
+          ...authService.clearedLockoutFields(),
+          updatedAt: new Date()
+        })
       );
+      await authService.moveToCanonicalNames(usersCollection, user, authService.PASSWORD_WRITE_FIELDS);
 
       // #958 / RNF021 AC#2: "Logout, inativação, troca de senha ou alteração
       // crítica de papel revogam as sessões afetadas." All-but-current, because
@@ -445,11 +400,11 @@ class AuthController {
       // session was authenticated with a password that no longer exists.
       //
       // A missing Authorization header fails CLOSED for free: hashToken(undefined)
-      // hashes '' and matches no stored tokenHash, so nothing is excluded and all
+      // hashes '' and matches no stored accessTokenHash, so nothing is excluded and all
       // sessions die.
       const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
       await sessionService.revokeAllOtherSessions(
-        db, req.user.userID, currentToken, 'password_change', req.user.userID
+        db, req.user.userID, currentToken, 'password_change', req.user.userID, { req }
       );
       
       return res.status(200).json({
@@ -484,7 +439,7 @@ class AuthController {
         });
       }
 
-      const result = await authService.setupMFAFirstLogin(db, { username, password });
+      const result = await authService.setupMFAFirstLogin(db, { username, password }, req);
 
       logger.info('QR Code gerado com sucesso para primeiro login:', { username });
 

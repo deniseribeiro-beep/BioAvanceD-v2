@@ -9,6 +9,7 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { createFakeDb } = require('../unit/foundation/helpers/fake-db');
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 4 }]);
 // #913: real RBAC fixtures for the Técnico/Coordenador role-gate tests below --
@@ -60,6 +61,23 @@ describe('GET /api/measurement-units', () => {
       .set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  // #1332: the chain above ignores its sort; this store sorts.
+  it('lists items newest first', async () => {
+    const store = createFakeDb().collection('measurementUnits');
+    await store.insertOne({ _id: 'mid', name: 'mid', createdAt: new Date('2026-02-02') });
+    await store.insertOne({ _id: 'newest', name: 'newest', createdAt: new Date('2026-02-03') });
+    await store.insertOne({ _id: 'oldest', name: 'oldest', createdAt: new Date('2026-02-01') });
+    const coll = createCollectionMock({ find: vi.fn((filter) => store.find(filter)) });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .get('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((item) => item.name)).toEqual(['newest', 'mid', 'oldest']);
   });
 });
 
@@ -205,7 +223,10 @@ describe('PUT /api/measurement-units/:id', () => {
   });
 
   it('updates item for admin', async () => {
-    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }) });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_ITEM, unitID: 1, description: 'mL' }),
+      findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }),
+    });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
@@ -217,7 +238,10 @@ describe('PUT /api/measurement-units/:id', () => {
   });
 
   it('updates item by numeric (non-ObjectId) id, matching on idField', async () => {
-    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }) });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_ITEM, unitID: 1, description: 'mL' }),
+      findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }),
+    });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
@@ -245,6 +269,7 @@ describe('PUT /api/measurement-units/:id', () => {
   // alongside the handler-owned `updatedAt`.
   it('#875 regression: PUT ignores non-model keys and the id/idField spoof attempt', async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_ITEM, unitID: 1, description: 'mL' }),
       findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'x' }),
     });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
@@ -310,6 +335,76 @@ describe('DELETE /api/measurement-units/:id', () => {
         $or: expect.arrayContaining([{ unitID: 42 }, { unitID: '42' }]),
       })
     );
+  });
+});
+
+// ── RF020 AC4: a collection's governanceRegime is set at creation and never
+// rewritten by an edit; a conversion is a governed event, not a PUT.
+describe('PUT /api/collections/:id (governanceRegime is immutable)', () => {
+  const EXISTING = { collectionId: 'col-1', collectionName: 'Coleção', governanceRegime: 'biobank' };
+
+  it('answers 422 and writes nothing when an edit changes the regime', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(EXISTING),
+      findOneAndUpdate: vi.fn(),
+    });
+    app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/collections/col-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ collectionName: 'Renomeada', governanceRegime: 'biorepository' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/governanceRegime não pode ser alterado/);
+    expect(res.body.details).toEqual([res.body.message]);
+    expect(coll.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts an edit that repeats the same regime', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(EXISTING),
+      findOneAndUpdate: vi.fn().mockResolvedValue({ ...EXISTING, collectionName: 'Renomeada' }),
+    });
+    app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/collections/col-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ collectionName: 'Renomeada', governanceRegime: 'biobank' });
+
+    expect(res.status).toBe(200);
+    expect(coll.findOneAndUpdate).toHaveBeenCalled();
+  });
+
+  it('lets a collection stored before the regime existed receive its first one', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ collectionId: 'col-legacy', collectionName: 'Antiga' }),
+      findOneAndUpdate: vi.fn().mockResolvedValue({ collectionId: 'col-legacy', governanceRegime: 'biorepository' }),
+    });
+    app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/collections/col-legacy')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ governanceRegime: 'biorepository' });
+
+    expect(res.status).toBe(200);
+    expect(coll.findOneAndUpdate).toHaveBeenCalled();
+  });
+
+  it('answers 422 for a collection created with no regime', async () => {
+    const coll = createCollectionMock({ insertOne: vi.fn() });
+    app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .post('/api/collections')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ collectionId: 'col-2', collectionName: 'Sem regime' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.details.join(' ')).toMatch(/governanceRegime/);
+    expect(coll.insertOne).not.toHaveBeenCalled();
   });
 });
 
@@ -390,6 +485,7 @@ describe('GET /api/sample-types/:id (canonical string business key)', () => {
 describe('PUT /api/sample-types/:id (canonical string business key)', () => {
   it('updates a seeded row found by its canonical string key ("PLASMA")', async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Plasma' }),
       findOneAndUpdate: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Plasma Updated' }),
     });
     app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
@@ -411,6 +507,7 @@ describe('PUT /api/sample-types/:id (canonical string business key)', () => {
 
   it('regression: still updates a row found by its Mongo _id', async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Plasma' }),
       findOneAndUpdate: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Updated' }),
     });
     app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
@@ -612,6 +709,7 @@ describe('unexpected-error (500) branches', () => {
 
   it('PUT /:id returns 500 when findOneAndUpdate throws', async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_ITEM, unitID: 1, description: 'mL' }),
       findOneAndUpdate: vi.fn().mockRejectedValue(new Error('boom')),
     });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });

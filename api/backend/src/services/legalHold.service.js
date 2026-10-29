@@ -1,12 +1,20 @@
 const LegalHoldModel = require('../models/LegalHold');
 const { getCollection } = require('../utils/collectionResolver');
 
+const SPECIMEN_TARGET_TYPES = ['Specimen', 'Sample'];
+
 class LegalHoldService {
   /** AC#2: aplica o bloqueio legal/ético. */
   async imposeHold(db, payload) {
     const validation = LegalHoldModel.validate(payload);
     if (!validation.isValid) {
-      throw new Error(validation.errors.join(', '));
+      // RNF018 (#1300): a validation failure answers 422; the caller's catch
+      // keeps every other error on its own status.
+      const validationError = new Error(validation.errors.join(', '));
+      validationError.statusCode = 422;
+
+      validationError.details = validation.errors;
+      throw validationError;
     }
 
     const collection = await getCollection(db, 'legalHolds');
@@ -50,6 +58,23 @@ class LegalHoldService {
     const collection = await getCollection(db, 'legalHolds');
     const holds = await collection.find({ targetEntityType: entityType, status: 'active' }).toArray();
     return holds.some((hold) => hold.targetEntityIds.some((id) => entityIds.includes(id)));
+  }
+
+  /**
+   * RF006 AC6 (#1315): why a specimen may not move, or null. A hold names a
+   * specimen as `Specimen`, the canonical entity, or `Sample`, the name the
+   * hold records were first written with, and by its specimenId or its
+   * stored _id. Withdrawal, allocation, movement and loading all ask here;
+   * destruction keeps its own check in dispositionAction.service.js.
+   */
+  async specimenHoldRefusal(db, sample) {
+    if (!sample) return null;
+    const ids = [sample.specimenId, sample._id].filter(Boolean).map(String);
+    const collection = await getCollection(db, 'legalHolds');
+    const holds = await collection.find({ status: 'active' }).toArray();
+    const hold = holds.find((candidate) => SPECIMEN_TARGET_TYPES.includes(candidate.targetEntityType)
+      && (candidate.targetEntityIds || []).some((id) => ids.includes(String(id))));
+    return hold ? `Espécime ${sample.specimenId || sample._id} sob bloqueio legal ativo (${hold.legalHoldId})` : null;
   }
 
   async getById(db, legalHoldId) {

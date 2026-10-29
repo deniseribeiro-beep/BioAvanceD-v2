@@ -38,8 +38,8 @@ async function resolveRelease(releases, concept) {
  * never actually discriminated between rows a re-import's superseded
  * release left behind and the current active release's own rows; it
  * silently fell back to insertion order, which can surface the superseded
- * row. Resolved instead via release status: `promote()` in
- * reference-imports/pipeline.js guarantees at most one `releaseStatus:
+ * row. Resolved instead via release status: `promoteRelease` in
+ * services/referenceRelease.service.js guarantees at most one `releaseStatus:
  * 'active'` release per `datasetCode`, so filtering candidate concepts down
  * to the one whose own release is active is unambiguous by construction.
  * More than one active-release match is a genuine upstream data bug (two

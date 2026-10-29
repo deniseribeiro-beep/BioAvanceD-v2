@@ -291,3 +291,109 @@ export async function waitForTerminologyRelation(
       `(last seen: ${lastSeen ?? 'no relation found'})`
   );
 }
+
+async function readGovernedByConsentIds(sampleId: string): Promise<string[]> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (:Sample {id: $sampleId})-[:GOVERNED_BY]->(c:EthicalConsent) RETURN c.id AS consentId',
+      { sampleId }
+    );
+    return result.records.map((record) => String(record.get('consentId')));
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * #1225 fixture: polls Neo4j until `(:Sample {id: sampleId})-[:GOVERNED_BY]->
+ * (:EthicalConsent {id: consentId})` exists, or throws once `timeoutMs`
+ * elapses. `sampleId` is the key the sample and custody projections MERGE
+ * the sample under (the Mongo _id). Both events are projected asynchronously by
+ * the outbox worker, and either may land first.
+ */
+export async function waitForSampleGovernedBy(
+  sampleId: string,
+  consentId: string,
+  { timeoutMs = 15_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen: string[] = [];
+
+  while (Date.now() < deadline) {
+    lastSeen = await readGovernedByConsentIds(sampleId);
+    if (lastSeen.includes(consentId)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `waitForSampleGovernedBy: timed out after ${timeoutMs}ms waiting for Sample ${sampleId} ` +
+      `-[GOVERNED_BY]-> EthicalConsent ${consentId} (last seen: ${lastSeen.length ? lastSeen.join(', ') : 'no GOVERNED_BY edge'})`
+  );
+}
+
+async function countDerivedFromEdges(childId: string, parentId: string): Promise<number> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (c:Sample {id: $childId})-[:DERIVED_FROM]->(p:Sample {id: $parentId}) RETURN count(*) AS n',
+      { childId, parentId }
+    );
+    return Number(result.records[0].get('n'));
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * #1368 fixture: polls Neo4j until `(:Sample {id: childId})-[:DERIVED_FROM]->
+ * (:Sample {id: parentId})` exists, or throws once `timeoutMs` elapses. Both
+ * ids are Mongo _id strings, the key the projector MERGEs a LINEAGE_REGISTERED
+ * edge under; the event is projected asynchronously by the outbox worker.
+ */
+export async function waitForDerivedFrom(
+  childId: string,
+  parentId: string,
+  { timeoutMs = 15_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen = 0;
+
+  while (Date.now() < deadline) {
+    lastSeen = await countDerivedFromEdges(childId, parentId);
+    if (lastSeen > 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `waitForDerivedFrom: timed out after ${timeoutMs}ms waiting for Sample ${childId} ` +
+      `-[DERIVED_FROM]-> Sample ${parentId} (last seen: no DERIVED_FROM edge)`
+  );
+}
+
+/** Counts `:Sample` nodes with the given id — #1225's phantom-node check (a consent id must never key a Sample). */
+export async function countSampleNodes(sampleId: string): Promise<number> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run('MATCH (s:Sample {id: $sampleId}) RETURN count(s) AS n', { sampleId });
+    return Number(result.records[0].get('n'));
+  } finally {
+    await session.close();
+  }
+}
+
+/** #1325: every node and relationship in the database, the scope of the backup's Neo4j export. */
+export async function countGraph(): Promise<{ nodes: number; relationships: number }> {
+  const session = getDriver().session({ database });
+  try {
+    const nodes = await session.run('MATCH (n) RETURN count(n) AS n');
+    const relationships = await session.run('MATCH ()-[r]->() RETURN count(r) AS n');
+    return { nodes: Number(nodes.records[0].get('n')), relationships: Number(relationships.records[0].get('n')) };
+  } finally {
+    await session.close();
+  }
+}

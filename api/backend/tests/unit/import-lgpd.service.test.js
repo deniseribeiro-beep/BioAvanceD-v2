@@ -360,9 +360,16 @@ describe('ImportLGPDService', () => {
     });
 
     it('maps the legacy lifecycleStatus column onto specimenStatus, not the trio', () => {
+      // RF006 AC2 (V2E-0544): the v1.3.0 `depleted` folds to available; the
+      // depletion is quantityStatus, derived from the quantities.
       const result = importLgpdService.parseSampleRow({ lifecycleStatus: 'DEPLETED' });
-      expect(result.specimenStatus).toBe('depleted');
+      expect(result.specimenStatus).toBe('available');
       expect(result.lifecycleStatus).toBeUndefined();
+    });
+
+    it('maps v1.3.0 destroyed to unavailable and never imports closed (RF026 AC7)', () => {
+      expect(importLgpdService.parseSampleRow({ specimenStatus: 'destroyed' }).specimenStatus).toBe('unavailable');
+      expect(importLgpdService.parseSampleRow({ specimenStatus: 'closed' }).specimenStatus).toBe('unavailable');
     });
 
     it('defaults specimenStatus to available when no status column is supplied', () => {
@@ -373,6 +380,15 @@ describe('ImportLGPDService', () => {
     it('strips an ATC: prefix and uppercases the atcCode', () => {
       const result = importLgpdService.parseSampleRow({ atcCode: 'atc:a10bx02' });
       expect(result.pharmacologyData.atcCode).toBe('A10BX02');
+    });
+
+    it('maps a named collectionSite column, trimmed (ELM-0128, #1376)', () => {
+      expect(importLgpdService.parseSampleRow({ collectionSite: ' org-b ' }).collectionSite).toBe('org-b');
+    });
+
+    it('maps a blank or absent collectionSite column to null (ELM-0128, #1376)', () => {
+      expect(importLgpdService.parseSampleRow({ collectionSite: '   ' }).collectionSite).toBeNull();
+      expect(importLgpdService.parseSampleRow({}).collectionSite).toBeNull();
     });
   });
 

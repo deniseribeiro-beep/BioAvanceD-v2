@@ -1,4 +1,4 @@
-const { connectDB, closeConnection } = require('../../database/mongo');
+const { connectDB } = require('../../database/mongo');
 const integrityService = require('../../services/integrityCheckService');
 const auditRootService = require('../../services/auditRoot.service');
 const auditV2Service = require('../../services/audit-v2.service');
@@ -85,9 +85,13 @@ async function runOnce() {
   const date = new Date();
   const targetDate = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - 1)).toISOString().slice(0, 10);
 
-  let db = null;
+  // No closeConnection() here: connectDB() hands back the process-wide shared
+  // client, which the worker's queue handlers hold for the life of the process.
+  // Closing it at the end of this nightly run left every later job failing with
+  // "Client must be connected before running operations" while the heartbeat
+  // healthcheck stayed green. The process that opened the connection owns it.
   try {
-    db = await connectDB();
+    const db = await connectDB();
     logger.info(`[daily-merkle] Gerando Merkle Root para ${targetDate}`);
     const result = await integrityService.buildMerkleForDate(targetDate, db, { persistMissing: true });
     if (!isValidMerkleResult(result)) {
@@ -97,6 +101,7 @@ async function runOnce() {
 
     await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, treeSize: result.leaves.length, db });
     await anchorV2ForDate(db, targetDate, result);
+    await sealEventChain(db);
     await recoverMissingDates(db, targetDate);
     await auditRootService.processTimestampBacklog({ externalDb: db });
     logger.info(`[daily-merkle] Root salva para ${targetDate} -> ${result.root}`);
@@ -112,8 +117,6 @@ async function runOnce() {
     } else {
       logger.error('[daily-merkle] Erro ao executar job diário de Merkle:', error.message || error);
     }
-  } finally {
-    if (db) await closeConnection();
   }
 }
 
@@ -132,6 +135,15 @@ async function anchorV2ForDate(db, date, result) {
   }, db);
   logger.info(`[daily-merkle] Tree head v2 gerado para ${date} com anchorStatus=${treeHead.anchorStatus}`);
   return treeHead;
+}
+
+// #1307: the audit_events chain is sealed as its own signed tree head, at its
+// current size, beside the daily roots of `logs` above. Without it no event
+// could be verified (verifyAudit looks the head up by the event's own logId).
+async function sealEventChain(db) {
+  const head = await auditV2Service.sealChain(db);
+  if (head) logger.info(`[daily-merkle] Cadeia audit_events selada em treeSize=${head.treeSize} com anchorStatus=${head.anchorStatus}`);
+  return head;
 }
 
 // #959: the ONLY caller of createTreeHead used to be scheduleNextRun's bare
@@ -169,4 +181,4 @@ if (require.main === module) {
   scheduleNextRun();
 }
 
-module.exports = { runOnce, scheduleNextRun, anchorDate };
+module.exports = { runOnce, scheduleNextRun, anchorDate, sealEventChain };

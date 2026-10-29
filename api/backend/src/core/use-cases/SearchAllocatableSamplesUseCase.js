@@ -12,7 +12,8 @@ class SearchAllocatableSamplesUseCase {
    */
   async execute(query) {
     const candidates = await this.storageRepository.searchAllocatableSampleCandidates({
-      query: query?.query || ''
+      query: query?.query || '',
+      scopeFilter: query?.scopeFilter || {}
     });
 
     return this.patientConsentReadRepository.enrichSamplesWithConsent(candidates);

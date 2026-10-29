@@ -8,7 +8,7 @@ const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
-const { parseGroupFields } = require('../utils/importGroupFields');
+const { parseGroupFields, groupFieldsErrorBody } = require('../utils/importGroupFields');
 const { parseImportMapping } = require('../utils/importMapping');
 const {
   SPECIMEN_TYPES,
@@ -198,6 +198,50 @@ class ImportLGPDController {
   }
 
   /**
+   * #800 on this branch: the organizations a quarantine batch is stamped
+   * with, which are the importer's own scoped organizations. Global scope
+   * (Administrador) and an org-less caller both stamp none, and an
+   * unstamped batch is readable only by global scope. Fails closed to none,
+   * the narrowest reach, if the lookup throws.
+   */
+  async resolveImportOrganizationIds(db, req) {
+    try {
+      const { resolveUserOrganizationScope } = require('../services/rbac-assignment.service');
+      const scope = await resolveUserOrganizationScope(db, req.user?.userID);
+      return scope?.scope === 'organization' ? [...scope.organizationIds] : [];
+    } catch (error) {
+      logger.warn('Falha ao resolver organizacoes do importador para a quarentena LGPD:', error.message || error);
+      return [];
+    }
+  }
+
+  /**
+   * #1353: the organization an import stamps on what it writes, each
+   * sample's collectionSite and each participant's clinicalUnitId, by the
+   * rule POST /api/samples and POST /api/pacientes use (#1185,
+   * resolveOrganizationIdForCreate). A single-organization caller gets their
+   * own; a multi-organization caller names one of theirs in the form field
+   * `organizationId`; a global caller may name any existing one, or none,
+   * which leaves the rows unstamped as before. Throws with a statusCode on a
+   * refusal.
+   */
+  async resolveImportTargetOrganizationId(db, req) {
+    const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+    const requested = typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined;
+    const organizationId = resolveOrganizationIdForCreate(req.organizationScope, requested);
+    if (!organizationId) return null;
+    if (req.organizationScope?.scope === 'global') {
+      const organization = await db.collection('organizations').findOne({ organizationId: String(organizationId) });
+      if (!organization) {
+        const error = new Error(`organizationId ${organizationId} não encontrado`);
+        error.statusCode = 404;
+        throw error;
+      }
+    }
+    return String(organizationId);
+  }
+
+  /**
    * GET /api/import-lgpd/batches/:batchId (#794, RNF011 AC#4)
    *
    * Le de volta um lote de quarentena criado pelo #787. Sem isto as linhas
@@ -217,6 +261,7 @@ class ImportLGPDController {
       const types = await this.resolveReadableQuarantineTypes(db, req);
       const { batch, records } = await importLGPDService.getQuarantineBatch(db, req.params.batchId, {
         types,
+        organizationScope: req.organizationScope,
       });
 
       return res.status(200).json({ success: true, batch, records });
@@ -228,6 +273,57 @@ class ImportLGPDController {
       return res.status(status).json({
         success: false,
         error: status >= 500 ? 'Erro ao ler lote de quarentena' : error.message,
+      });
+    }
+  }
+
+  /**
+   * POST /api/import-lgpd/batches/:batchId/records/:recordId/resubmit
+   * (#1352, RNF011 AC#4)
+   *
+   * Corrige e reenvia uma linha em quarentena pelo mesmo caminho da
+   * importacao (processSampleRow). Corpo: `{ row: { coluna: valor, ... } }`.
+   * 200 com o id da amostra; 422 com os novos erros quando a linha e
+   * rejeitada de novo (o registro volta a ERROR e guarda a tentativa); 409
+   * quando o registro ja nao esta em ERROR.
+   */
+  async resubmitQuarantinedRow(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const result = await importLGPDService.resubmitQuarantinedSampleRow(
+        db,
+        req.params.batchId,
+        req.params.recordId,
+        req.body?.row,
+        {
+          organizationScope: req.organizationScope,
+          neo4jDriver: req.app.locals.neo4jDriver || null,
+          // Both spellings, as importSamples passes them (#911).
+          actor: {
+            userID: req.user?.userID || req.user?.id || req.user?._id || null,
+            userId: req.user?.userID || req.user?.id || req.user?._id || null,
+            userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
+            userRole: req.user?.role || null,
+            ipAddress: req.ip || null,
+            userAgent: req.get?.('user-agent') || null,
+          },
+        }
+      );
+
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      const status = error?.statusCode || 500;
+      if (status >= 500) {
+        logger.error('Erro ao reenviar linha de quarentena LGPD:', error.message || error);
+      }
+      return res.status(status).json({
+        success: false,
+        error: status >= 500 ? 'Erro ao reenviar linha de quarentena' : error.message,
+        ...(Array.isArray(error?.errors) ? { errors: error.errors } : {}),
       });
     }
   }
@@ -254,6 +350,7 @@ class ImportLGPDController {
         limit: req.query.limit,
         page: req.query.page,
         types,
+        organizationScope: req.organizationScope,
       });
 
       return res.status(200).json({
@@ -291,6 +388,13 @@ class ImportLGPDController {
 
       const reportsCollection = db.collection('importSummaryReports');
       const filter = { type: 'patients-smart-import' };
+      // #1353: an organization-scoped caller lists only reports stamped with
+      // one of their organizations; an unstamped (legacy) report is reachable
+      // by global scope only, the quarantine batches' rule.
+      if (req.organizationScope) {
+        const { applyOrganizationScopeFilter } = require('../services/rbac-assignment.service');
+        applyOrganizationScopeFilter(filter, req.organizationScope, 'organizationIds');
+      }
 
       const [items, total] = await Promise.all([
         reportsCollection.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray(),
@@ -416,13 +520,18 @@ class ImportLGPDController {
       const parsedGroupFields = parseGroupFields(req.body?.groupFields);
       if (!parsedGroupFields.ok) {
         importLGPDService.cleanupFile(file.path);
-        return res.status(400).json({
-          success: false,
-          error: 'groupFields inválido',
-          message: 'groupFields deve ser um JSON válido'
-        });
+        return res.status(400).json(groupFieldsErrorBody(parsedGroupFields.reason));
       }
       const groupFields = parsedGroupFields.value;
+
+      // #1353: resolved before any row is read, so a refusal writes nothing.
+      let organizationId;
+      try {
+        organizationId = await this.resolveImportTargetOrganizationId(db, req);
+      } catch (scopeError) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(scopeError.statusCode || 500).json({ success: false, error: scopeError.message });
+      }
 
       // Processa importação
       // #814 (RNF011 AC#4 / RF029 AC#5-6): actor is required so a quarantine
@@ -431,13 +540,17 @@ class ImportLGPDController {
       // real key, not id/_id).
       const results = await importLGPDService.importPatients(db, file, {
         groupFields,
+        organizationId,
         actor: {
           userID: req.user?.userID || req.user?.id || req.user?._id || null,
           userId: req.user?.userID || req.user?.id || req.user?._id || null,
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
-          userAgent: req.get?.('user-agent') || null
+          userAgent: req.get?.('user-agent') || null,
+          // #800 on this branch: the batch a rejected row opens is stamped
+          // with the importer's organizations, which the readers scope on.
+          organizationIds: await this.resolveImportOrganizationIds(db, req),
         }
       });
 
@@ -557,11 +670,7 @@ class ImportLGPDController {
       const parsedGroupFields = parseGroupFields(req.body?.groupFields);
       if (!parsedGroupFields.ok) {
         importLGPDService.cleanupFile(file.path);
-        return res.status(400).json({
-          success: false,
-          error: 'groupFields inválido',
-          message: 'groupFields deve ser um JSON válido'
-        });
+        return res.status(400).json(groupFieldsErrorBody(parsedGroupFields.reason));
       }
       const groupFields = parsedGroupFields.value;
 
@@ -584,6 +693,15 @@ class ImportLGPDController {
         });
       }
       const mapping = parsedMapping.value;
+
+      // #1353: resolved before any row is read, so a refusal writes nothing.
+      let organizationId;
+      try {
+        organizationId = await this.resolveImportTargetOrganizationId(db, req);
+      } catch (scopeError) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(scopeError.statusCode || 500).json({ success: false, error: scopeError.message });
+      }
 
       const fileBuffer = fs.readFileSync(file.path);
       const fileHashSHA256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
@@ -616,13 +734,17 @@ class ImportLGPDController {
       const results = await importLGPDService.importPatientsSmart(db, file, {
         mapping,
         groupFields,
+        organizationId,
         actor: {
           userID: req.user?.userID || req.user?.id || req.user?._id || null,
           userId: req.user?.userID || req.user?.id || req.user?._id || null,
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
-          userAgent: req.get?.('user-agent') || null
+          userAgent: req.get?.('user-agent') || null,
+          // #800 on this branch: the batch a rejected row opens is stamped
+          // with the importer's organizations, which the readers scope on.
+          organizationIds: await this.resolveImportOrganizationIds(db, req),
         }
       });
 
@@ -643,6 +765,9 @@ class ImportLGPDController {
         // matching fhir-import-staging.controller.js's own actor resolution.
         userId: req.user?.userID || req.user?.id || req.user?._id || null,
         userName: req.user?.name || req.user?.username || null,
+        // #1353: the importer's organizations, which the report list scopes
+        // on, as the quarantine batches are stamped (#800 on this branch).
+        organizationIds: await this.resolveImportOrganizationIds(db, req),
         totalSucesso: results.success,
         totalFalhas: results.errors.length,
         errorsDetails: stripInternalErrorFields(results.errors).slice(0, 200)
@@ -784,13 +909,18 @@ class ImportLGPDController {
       const parsedGroupFields = parseGroupFields(req.body?.groupFields);
       if (!parsedGroupFields.ok) {
         importLGPDService.cleanupFile(file.path);
-        return res.status(400).json({
-          success: false,
-          error: 'groupFields inválido',
-          message: 'groupFields deve ser um JSON válido'
-        });
+        return res.status(400).json(groupFieldsErrorBody(parsedGroupFields.reason));
       }
       const groupFields = parsedGroupFields.value;
+
+      // #1353: resolved before any row is read, so a refusal writes nothing.
+      let organizationId;
+      try {
+        organizationId = await this.resolveImportTargetOrganizationId(db, req);
+      } catch (scopeError) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(scopeError.statusCode || 500).json({ success: false, error: scopeError.message });
+      }
 
       logger.debug('Parâmetros de importação:', { startBoxId, autoIncrement });
 
@@ -799,6 +929,8 @@ class ImportLGPDController {
         startBoxId,
         autoIncrement,
         groupFields,
+        organizationId,
+        organizationScope: req.organizationScope,
         neo4jDriver: req.app.locals.neo4jDriver || null,
         // #911: same null-actor bug as above. `userID` is emitted too because
         // quarantineRejectedSampleRows reads `actor?.userID` first for the
@@ -810,7 +942,10 @@ class ImportLGPDController {
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
-          userAgent: req.get?.('user-agent') || null
+          userAgent: req.get?.('user-agent') || null,
+          // #800 on this branch: the batch a rejected row opens is stamped
+          // with the importer's organizations, which the readers scope on.
+          organizationIds: await this.resolveImportOrganizationIds(db, req),
         }
       });
 
@@ -891,6 +1026,7 @@ class ImportLGPDController {
               actor: {
                 userID: req.user?.userID || req.user?.id || req.user?._id || null,
                 userId: req.user?.userID || req.user?.id || req.user?._id || null,
+                organizationIds: await this.resolveImportOrganizationIds(db, req),
               },
               importOptions: {
                 startBoxId: req.body?.boxId || null,
@@ -1241,7 +1377,7 @@ class ImportLGPDController {
         ['• quantity: Quantidade em microlitros (µL) - Número decimal maior que zero'],
         ['• quality: Qualidade conforme MIABIS (GOOD, COMPROMISED ou UNKNOWN)'],
         ['• linkedProject: Nome do projeto vinculado (Texto)'],
-        ['• specimenStatus: Estado operacional atual - available, reserved, checked_out, partial, depleted, quarantined, destroyed, unavailable ou disposed'],
+        ['• specimenStatus: Estado operacional atual - available, reserved, checked_out, quarantined ou unavailable (a condição quantitativa, quantityStatus, é derivada das quantidades)'],
         [],
         ['CAMPOS OPCIONAIS:'],
         ['• barcode: Código de barras único (Texto) - OPCIONAL. Se não fornecido, será gerado automaticamente no formato BR-YYYY-NNN'],
@@ -1280,12 +1416,10 @@ class ImportLGPDController {
         ['• available (Disponível)'],
         ['• reserved (Reservada)'],
         ['• checked_out (Retirada)'],
-        ['• partial (Parcial)'],
-        ['• depleted (Esgotada)'],
         ['• quarantined (Em quarentena)'],
-        ['• destroyed (Destruída)'],
         ['• unavailable (Indisponível)'],
-        ['• disposed (Descartada)'],
+        ['• Valores da v1.3.0 são convertidos: partial e depleted -> available (quantityStatus derivado); destroyed e disposed -> unavailable'],
+        ['• closed não é importado: o encerramento exige consumo total validado ou destinação executada'],
         [],
         ['EXEMPLO DE PREENCHIMENTO:'],
         ['participantId: 12345678'],

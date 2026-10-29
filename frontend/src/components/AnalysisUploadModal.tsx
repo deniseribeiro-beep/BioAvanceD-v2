@@ -141,8 +141,8 @@ export default function AnalysisUploadModal({
   const sampleOptions = useMemo(() => {
     if (!samples || samples.length === 0) return [];
     return samples.map((s: Sample) => ({
-      value: String(s.sampleID || s._id || ''),
-      label: `${s.sampleID || s._id} ${s.barcode ? `• ${s.barcode}` : ''}`,
+      value: String(s.specimenId || s._id || ''),
+      label: `${s.specimenId || s._id} ${s.barcode ? `• ${s.barcode}` : ''}`,
     }));
   }, [samples]);
 

@@ -1,5 +1,9 @@
 require('dotenv').config();
 
+const os = require('os');
+const path = require('path');
+const { createEdgeBuffer, httpSender } = require('./telemetry-edge-buffer');
+
 const DEFAULT_ENDPOINT = 'http://localhost:3000/api/iot/telemetry';
 const SENSOR_IDS = ['CRYO-001', 'CRYO-002', 'CRYO-003'];
 const NORMAL_MIN_TEMP = -82;
@@ -9,6 +13,14 @@ const INTERVAL_MS = 2000;
 
 const endpoint = process.env.IOT_TELEMETRY_ENDPOINT || DEFAULT_ENDPOINT;
 const anomalyProbability = Number(process.env.IOT_ANOMALY_PROBABILITY || 0.05);
+// RNF004 C1 (#1392): each sensor keeps its readings in its own durable
+// buffer and drains it, so a failed POST loses nothing.
+const bufferRoot = process.env.IOT_EDGE_BUFFER_DIR || path.join(os.tmpdir(), 'bioavanced-iot-edge-buffer');
+const buffers = new Map(SENSOR_IDS.map((sensorId) => [
+  sensorId,
+  createEdgeBuffer({ dir: path.join(bufferRoot, sensorId), deviceId: sensorId }),
+]));
+const send = httpSender({ endpoint, secret: process.env.TELEMETRY_INGEST_SECRET });
 
 let cycleCount = 0;
 let intervalHandle = null;
@@ -25,21 +37,6 @@ function buildReading(sensorId, forceAnomaly = false) {
   };
 }
 
-async function postTelemetry(payload) {
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const responseText = await response.text().catch(() => '');
-    throw new Error(`HTTP ${response.status} ${response.statusText}${responseText ? ` - ${responseText}` : ''}`);
-  }
-}
-
 async function runCycle() {
   cycleCount += 1;
 
@@ -51,14 +48,17 @@ async function runCycle() {
 
   for (let index = 0; index < SENSOR_IDS.length; index += 1) {
     const sensorId = SENSOR_IDS[index];
-    const payload = buildReading(sensorId, index === anomalySensorIndex);
+    const buffer = buffers.get(sensorId);
 
     try {
-      await postTelemetry(payload);
+      const entry = buffer.enqueue(buildReading(sensorId, index === anomalySensorIndex));
       const anomalyTag = index === anomalySensorIndex ? ' [ANOMALIA]' : '';
-      console.log(`[iot-simulator] POST enviado${anomalyTag}:`, payload);
+      console.log(`[iot-simulator] Leitura ${entry.sequenceNumber} do sensor ${sensorId} no buffer${anomalyTag}:`, entry.body);
+      const { acked, deadLettered, retained, stoppedOn } = await buffer.drain(send);
+      const stopTag = stoppedOn === null ? '' : ` | interrompido em ${stoppedOn}`;
+      console.log(`[iot-simulator] Sensor ${sensorId}: ${acked} confirmada(s), ${deadLettered} recusada(s), ${retained} retida(s)${stopTag}`);
     } catch (error) {
-      console.error(`[iot-simulator] Falha ao enviar telemetria do sensor ${sensorId}:`, error.message || error);
+      console.error(`[iot-simulator] Falha ao bufferizar ou enviar telemetria do sensor ${sensorId}:`, error.message || error);
     }
   }
 }
@@ -75,6 +75,7 @@ function stopSimulator(signal) {
 
 function startSimulator() {
   console.log(`[iot-simulator] Endpoint: ${endpoint}`);
+  console.log(`[iot-simulator] Buffer de borda: ${bufferRoot}`);
   console.log(`[iot-simulator] Sensores: ${SENSOR_IDS.join(', ')}`);
   console.log(`[iot-simulator] Intervalo: ${INTERVAL_MS}ms | Anomalia a cada 10 ciclos ou probabilidade ${anomalyProbability}`);
 

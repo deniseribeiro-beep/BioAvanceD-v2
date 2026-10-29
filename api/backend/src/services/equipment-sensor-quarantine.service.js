@@ -1,20 +1,28 @@
 const SampleMovementModel = require('../models/SampleMovement');
+const { SampleModel, TERMINAL_STORED_SPECIMEN_STATUSES } = require('../models/Sample');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
 const quarantineActionService = require('./quarantine-action.service');
+const operationalStateDecisionService = require('./operationalStateDecision.service');
 const logger = require('../utils/logger');
+const { currentDatastreamsBySensor, freezerContainerIdOf, TEMPERATURE_PROPERTY } = require('./sensorDatastream.service');
+const physicalChain = require('./physicalChain.service');
 
+// #883: routine "Maintenance"/"Inactive" states are deliberately excluded
+// here. A sample-bearing freezer taken out of service for routine
+// maintenance, or marked inactive, must not silently bulk-quarantine every
+// sample stored under it -- quarantine is reserved for failure states that
+// actually threaten sample integrity (offline/powered-down, repair). Keeping
+// an out-of-service location from being used further is RF017 AC#7's job,
+// already enforced at the readiness gate -- not a reason to quarantine its
+// contents.
 const QUARANTINE_TRIGGER_STATUSES = new Set([
   'offline',
   'desligado',
-  'inactive',
-  'inativo',
   'repair',
-  'maintenance',
   'aguardando reparo',
-  'awaiting repair',
-  'manutencao',
-  'manutenção'
+  'awaiting repair'
 ]);
 
 function normalizeStatus(value) {
@@ -174,6 +182,9 @@ async function resolveFreezersByEquipmentIdentifiers(db, identifiers = [], optio
   }
 
   const storageContainersCollection = db.collection('storageContainers');
+  // #1163: the containerID lookup below is served by the unique index this
+  // helper builds, so it is ensured on the read path too.
+  ensureStorageContainerIndexes(storageContainersCollection);
   const sessionOptions = options.session ? { session: options.session } : undefined;
 
   return storageContainersCollection.find(
@@ -193,6 +204,9 @@ async function resolveFreezersByEquipmentIdentifiers(db, identifiers = [], optio
 async function findBoxIdsUnderFreezer(db, freezerId, options = {}) {
   const storageContainersCollection = db.collection('storageContainers');
   const storageBoxesCollection = db.collection('storageBoxes');
+  // #1163: the parent_id walk below is what the two lookup indexes serve.
+  ensureStorageContainerIndexes(storageContainersCollection);
+  ensureStorageBoxIndexes(storageBoxesCollection);
   const sessionOptions = options.session ? { session: options.session } : undefined;
 
   const shelves = await storageContainersCollection.find(
@@ -311,6 +325,15 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
         boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
       }
 
+      // #1208: registration (sensor.service.js linkSensorMetadata, #311)
+      // binds a sensor to its freezer by storageContainer, the FREEZER's
+      // _id -- the same link TelemetryMonitor.resolveRootSamples reads for
+      // the Neo4j COMPROMISED mark. Without this, a sensor registered that
+      // way resolved no boxes and a cold-chain excursion quarantined nothing.
+      if (metadata.storageContainer) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, metadata.storageContainer, options));
+      }
+
       const equipment = await findEquipmentByMetadata(db, metadata, options);
       if (equipment) {
         boxIds.push(...await findBoxIdsByEquipment(db, equipment, options));
@@ -320,7 +343,74 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
     logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar sensorMetadata para incidente', { sensorKey: rawSensorKey, error: error.message });
   }
 
+  // #1392: the sensor's temperature datastream valid now adds its mirrored
+  // freezer's boxes and its equipment's, to the union above. The lookup
+  // takes no session; it only reads.
+  try {
+    const stream = (await currentDatastreamsBySensor(db, [rawSensorKey])).get(rawSensorKey);
+    if (stream) {
+      const freezerId = await freezerContainerIdOf(db, stream.storageLocationId);
+      if (freezerId) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, freezerId, options));
+      }
+
+      const freezersFromStream = await resolveFreezersByEquipmentIdentifiers(db, collectIdentifierValues(stream.equipmentId), options);
+      for (const freezer of freezersFromStream) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
+      }
+
+      const equipment = await findEquipmentByMetadata(db, { equipmentId: stream.equipmentId }, options);
+      if (equipment) {
+        boxIds.push(...await findBoxIdsByEquipment(db, equipment, options));
+      }
+    }
+  } catch (error) {
+    logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar TelemetryDatastream para incidente', { sensorKey: rawSensorKey, error: error.message });
+  }
+
   return dedupeIds(boxIds);
+}
+
+function validDate(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// #1392 (RF009 AC5): the specimens the physical chain puts, during the
+// window, at the location of a temperature datastream of the sensor valid
+// then. The lookup takes no session; it only reads. On an error it finds
+// nothing, and the box paths still apply: cold-chain availability wins.
+async function findChainSpecimenIdsBySensorKey(db, sensorKey, { from, to } = {}) {
+  const rawSensorKey = normalizeString(sensorKey);
+  if (!rawSensorKey) return [];
+
+  try {
+    const fromTime = new Date(from).getTime();
+    const toTime = new Date(to).getTime();
+    const streams = (await (await getCollection(db, 'telemetryDatastreams')).find({
+      sensorId: rawSensorKey,
+      observedProperty: TEMPERATURE_PROPERTY,
+    }).toArray()).filter((stream) => {
+      if (!stream || String(stream.sensorId) !== rawSensorKey || stream.observedProperty !== TEMPERATURE_PROPERTY) return false;
+      const start = validDate(stream.validityPeriod?.start);
+      if (!start || start.getTime() > toTime) return false;
+      const end = validDate(stream.validityPeriod?.end);
+      return !end || fromTime < end.getTime();
+    });
+
+    const locationIds = [...new Set(streams.map((stream) => normalizeString(stream.storageLocationId)).filter(Boolean))];
+    const specimenIds = new Set();
+    for (const storageLocationId of locationIds) {
+      for (const specimenId of await physicalChain.specimenIdsAtLocation(db, storageLocationId, { from, to })) {
+        specimenIds.add(String(specimenId));
+      }
+    }
+    return [...specimenIds].sort();
+  } catch (error) {
+    logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar a cadeia física para incidente', { sensorKey: rawSensorKey, error: error.message });
+    return [];
+  }
 }
 
 function buildSampleFilterFromBoxIds(boxIds = []) {
@@ -329,6 +419,31 @@ function buildSampleFilterFromBoxIds(boxIds = []) {
   }
 
   return { 'storageLocation.boxId': { $in: dedupeIds(boxIds) } };
+}
+
+// #1392: the box paths' filter, or its union with the chain's specimens. A
+// legacy sample's chain key is its _id (#1314), compared via $toString for
+// #912's handle-agnostic reason.
+function buildColdChainSampleFilter(boxIds = [], specimenIds = []) {
+  if (!Array.isArray(specimenIds) || specimenIds.length === 0) {
+    return buildSampleFilterFromBoxIds(boxIds);
+  }
+
+  const branches = [];
+  if (Array.isArray(boxIds) && boxIds.length > 0) {
+    branches.push({ 'storageLocation.boxId': { $in: dedupeIds(boxIds) } });
+  }
+  branches.push({ specimenId: { $in: specimenIds } });
+  branches.push({ $expr: { $in: [{ $toString: '$_id' }, specimenIds] } });
+  return { $or: branches };
+}
+
+// The rule a quarantine applied, named on its ledger movement and its
+// OperationalStateDecision: a caller's own, else the cold-chain or the
+// equipment/sensor rule.
+function quarantineRule(context = {}) {
+  if (context.rule) return context.rule;
+  return context.coldChainIncidentId ? 'cold_chain_incident_quarantine' : 'sensor_equipment_quarantine';
 }
 
 async function quarantineSamplesByFilter(db, filter, context = {}) {
@@ -344,12 +459,15 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   // #540: the "not already quarantined" guard reads the canonical
   // specimenStatus field, not the legacy status/currentStatus pair (no
   // longer written below either).
+  // RF026 AC7: a closed specimen (or a not-yet-migrated destroyed/disposed
+  // one) is final, so a quarantine never selects it.
   const samples = await samplesCollection
     .find(
       {
         $and: [
           filter,
-          { specimenStatus: { $ne: 'quarantined' } }
+          { specimenStatus: { $ne: 'quarantined' } },
+          { specimenStatus: { $nin: [...TERMINAL_STORED_SPECIMEN_STATUSES] } }
         ]
       },
       queryOptions
@@ -364,7 +482,12 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   let movements = 0;
 
   for (const sample of samples) {
-    const sampleId = String(sample._id);
+    // RF026 AC7: the query excludes terminal specimens; this also skips one
+    // whose stored value differs only in case or spacing.
+    if (SampleModel.isTerminalSpecimen(sample)) {
+      continue;
+    }
+    const previousStatus = SampleModel.resolveSpecimenStatus(sample);
     const specimenStatus = 'quarantined';
     const updatePayload = {
       specimenStatus,
@@ -395,34 +518,46 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       updatePayload.locationStatus = 'Quarantine';
     }
 
-    await samplesCollection.updateOne(
+    const updateResult = await samplesCollection.updateOne(
       { _id: sample._id },
       { $set: updatePayload },
       queryOptions
     );
 
+    // #883: a sample counts as quarantined -- and gets a QuarantineAction and
+    // a ledger movement -- only when this update actually changed it. The
+    // find above already skips quarantined samples, so modifiedCount 0 means
+    // a concurrent writer got there first and recorded its own action and
+    // movement; writing them again would duplicate the audit trail. The
+    // reported count used to be a loop counter.
+    if (!(updateResult?.modifiedCount > 0)) {
+      continue;
+    }
+    quarantined += 1;
+
     await quarantineActionService.recordAction(db, {
-      specimenIds: [sampleId],
+      specimenIds: [quarantineActionService.canonicalSpecimenId(sample)],
       reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
     }, context.session);
 
-    quarantined += 1;
-
     const quantitySnapshot = Number(sample.currentQuantity ?? sample.quantity ?? 0);
-    const movementID = await SampleMovementModel.generateMovementID(db);
+    // #1369: inside the caller's transaction the movement id is taken in its
+    // session, like the append below, so the counter bump is not a
+    // write outside the transaction that conflicts with an in-session one.
+    const movementID = await SampleMovementModel.generateMovementID(db, context.session);
 
     await appendMovementWithHashChain(
       movementsCollection,
       SampleMovementModel.create({
         movementID,
-        sampleID: sampleId,
+        specimenId: quarantineActionService.canonicalSpecimenId(sample),
         barcode: sample.barcode || null,
         type: 'adjust',
         quantity: quantitySnapshot,
         unit: sample.unit || 'µL',
         responsible: 'SYSTEM',
         destination: 'Quarentena',
-        purpose: context.coldChainIncidentId ? 'cold_chain_incident_quarantine' : 'sensor_equipment_quarantine',
+        purpose: quarantineRule(context),
         linkedProject: sample.linkedProject || null,
         observations: context.reason || 'Quarentena automática por falha de equipamento/sensor',
         userId: context.auditInfo?.userId || null,
@@ -435,6 +570,16 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       }),
       context.session ? { session: context.session } : {}
     );
+
+    // RF006 AC7: the status change, append-only, beside its ledger movement.
+    await operationalStateDecisionService.recordStatusChange(db, {
+      specimenId: quarantineActionService.canonicalSpecimenId(sample),
+      previousStatus,
+      newStatus: specimenStatus,
+      triggerEventId: movementID,
+      rulesApplied: [quarantineRule(context)],
+      reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
+    }, { session: context.session });
 
     movements += 1;
   }
@@ -542,7 +687,13 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
   }
 
   const boxIds = await findBoxIdsBySensorKey(db, sensorKey, options);
-  const filter = buildSampleFilterFromBoxIds(boxIds);
+  // #1392: the excursion's window, from its clock (#1207), else the
+  // incident's opening, to now.
+  const to = options.now ? new Date(options.now) : new Date();
+  let from = validDate(incident.excursionStartedAt) || validDate(incident.openedAt) || to;
+  if (from > to) from = to;
+  const specimenIds = await findChainSpecimenIdsBySensorKey(db, sensorKey, { from, to });
+  const filter = buildColdChainSampleFilter(boxIds, specimenIds);
   const incidentId = incident?._id ? String(incident._id) : sensorKey;
   const reason = buildColdChainIncidentReason(incident);
 
@@ -561,7 +712,8 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
     matched: result.matched,
     quarantined: result.quarantined,
     movements: result.movements,
-    boxIds
+    boxIds,
+    specimenIds
   });
 
   return {
@@ -569,6 +721,7 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
     ...result,
     reason,
     boxIds,
+    specimenIds,
     incidentId,
     sensorKey
   };
@@ -604,7 +757,7 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
   );
 
   for (const sample of matchedSamples) {
-    await quarantineActionService.markPendingReview(db, String(sample._id), options.session);
+    await quarantineActionService.markPendingReview(db, sample, options.session);
   }
 
   logger.warn('[QUARANTINE][COLD_CHAIN] Incidente resolvido; amostras mantidas para revisão pós-incidente', {
@@ -621,11 +774,37 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
   };
 }
 
+// RF019 AC1 (#1315): a nonconformance opened against specimens quarantines
+// those of its affectedEntityIds that name a specimen. The other ids (an
+// equipment, a document, a process) quarantine nothing. Release stays the
+// authorized, evidenced act RF019 AC5 asks for; closing the
+// nonconformance does not release.
+async function quarantineByNonconformance(db, nonconformance = {}, options = {}) {
+  const ids = (nonconformance.affectedEntityIds || []).map(String).filter(Boolean);
+  if (!ids.length) {
+    return { triggered: false, matched: 0, quarantined: 0, movements: 0 };
+  }
+  const result = await quarantineSamplesByFilter(db, { specimenId: { $in: ids } }, {
+    source: 'nonconformance',
+    sourceId: nonconformance.nonconformanceId || null,
+    reason: `Quarentena por não conformidade ${nonconformance.nonconformanceId} (${nonconformance.nonconformanceType})`,
+    rule: 'nonconformance_quarantine',
+    auditInfo: options.auditInfo,
+    session: options.session,
+  });
+  return { triggered: true, ...result };
+}
+
 module.exports = {
   isQuarantineTriggerStatus,
+  quarantineByNonconformance,
   quarantineByEquipmentStatus,
   quarantineBySensorStatus,
   quarantineByColdChainIncident,
   markColdChainIncidentSamplesForReview,
-  findBoxIdsBySensorKey
+  findBoxIdsBySensorKey,
+  findChainSpecimenIdsBySensorKey,
+  // #1163: exported so their index wiring can be pinned directly.
+  resolveFreezersByEquipmentIdentifiers,
+  findBoxIdsUnderFreezer
 };

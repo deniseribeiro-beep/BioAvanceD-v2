@@ -21,7 +21,8 @@ import Input from '../components/UI/Input';
 import Spinner from '../components/UI/Spinner';
 import { useToast } from '../components/UI/ToastContainer';
 import { consentService } from '../services/api';
-import type { ConsentTemplate, ConsentPolicy } from '../types/models';
+import type { ConsentTemplate, ConsentPolicy, PurposeCode } from '../types/models';
+import { describeConsentPublication, type ConsentNotificationCounts } from './tclePublication';
 import './TcleBuilderPage.css';
 
 type PreviewValueMap = Record<string, string>;
@@ -30,6 +31,9 @@ type ConsentItemDraft = {
   id: string;
   label: string;
   required: boolean;
+  // RF010 AC3 (#1349): the governed purpose (a GA4GH DUO code) the
+  // permission covers, which an access decision is judged against.
+  purposeCode?: string;
 };
 
 const PREVIEW_VALUES: PreviewValueMap = {
@@ -172,6 +176,7 @@ function normalizeDraftItems(items: Array<Partial<ConsentItemDraft> | null | und
       id: createId(),
       label: String(item?.label || '').trim(),
       required: Boolean(item?.required),
+      ...(item?.purposeCode ? { purposeCode: String(item.purposeCode) } : {}),
     }))
     .filter((item) => item.label.length > 0);
 
@@ -212,9 +217,10 @@ function normalizeGranularPermissions(items: ConsentItemDraft[]) {
         key,
         label,
         required: Boolean(item.required),
+        ...(item.purposeCode ? { purposeCode: item.purposeCode } : {}),
       };
     })
-    .filter(Boolean) as Array<{ key: string; label: string; required: boolean }>;
+    .filter(Boolean) as Array<{ key: string; label: string; required: boolean; purposeCode?: string }>;
 }
 
 function parseVersionNumber(version: string) {
@@ -496,6 +502,9 @@ export default function TcleBuilderPage() {
   const [activeTab, setActiveTab] = useState<'editor' | 'history'>('editor');
   const [title, setTitle] = useState('');
   const [caae, setCaae] = useState('');
+  // RF010 AC1 (ENUM-0043..0046): the modality the term offers, which each
+  // Consent signed on it records (ELM-0095).
+  const [consentModel, setConsentModel] = useState<NonNullable<ConsentTemplate['consentModel']> | ''>('');
   const [validFrom, setValidFrom] = useState('');
   const [validTo, setValidTo] = useState('');
   const [bodyHtml, setBodyHtml] = useState(DEFAULT_BODY_HTML.trim());
@@ -509,6 +518,7 @@ export default function TcleBuilderPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [editorReady, setEditorReady] = useState(false);
+  const [purposeCodes, setPurposeCodes] = useState<PurposeCode[]>([]);
 
   const normalizedBody = useMemo(() => stripHtml(bodyHtml), [bodyHtml]);
   const currentModelTitle = useMemo(() => normalizeTitle(historyAnchorTitle || title), [historyAnchorTitle, title]);
@@ -520,6 +530,22 @@ export default function TcleBuilderPage() {
     active: historyItems.filter((item) => item.active).length,
     obsolete: historyItems.filter((item) => !item.active).length,
   }), [historyItems]);
+
+  // #1349: the active DUO purposes a permission may name. A failed load
+  // leaves the select with "no purpose" only; publishing still works.
+  useEffect(() => {
+    let active = true;
+    consentService.getPurposeCodes()
+      .then((response) => {
+        if (active) setPurposeCodes(Array.isArray(response.data?.data) ? response.data.data : []);
+      })
+      .catch(() => {
+        if (active) setPurposeCodes([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -573,6 +599,7 @@ export default function TcleBuilderPage() {
         setLoadedTemplate(template);
         setTitle(String(template.title || ''));
         setCaae(String(template.caae || ''));
+        setConsentModel(template.consentModel || '');
         setValidFrom(toDateInputValue(template.validFrom || null));
         setValidTo(toDateInputValue(template.validTo || null));
         setBodyHtml(String(template.htmlContent || template.content || DEFAULT_BODY_HTML.trim()));
@@ -723,6 +750,7 @@ export default function TcleBuilderPage() {
     const payload = {
       title: trimmedTitle,
       ...(caae.trim() ? { caae: caae.trim() } : {}),
+      ...(consentModel ? { consentModel } : {}),
       htmlContent: bodyHtml.trim(),
       content: bodyHtml.trim(), // Ensure 'content' is sent for backend validation
       ...(activeHistoryEntry?.version ? { version: String(activeHistoryEntry.version).trim() } : {}),
@@ -751,6 +779,7 @@ export default function TcleBuilderPage() {
       setLoadedTemplate(savedTemplate);
       setTitle(String(savedTemplate.title || trimmedTitle));
       setCaae(String(savedTemplate.caae || caae));
+      setConsentModel(savedTemplate.consentModel || consentModel);
       setValidFrom(toDateInputValue(savedTemplate.validFrom || null));
       setValidTo(toDateInputValue(savedTemplate.validTo || null));
       setBodyHtml(String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim()));
@@ -762,10 +791,12 @@ export default function TcleBuilderPage() {
         editorRef.current.innerHTML = String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim());
       }
 
-      showToast(
-        isEditing ? 'Nova versão criada e a anterior foi desativada.' : 'TCLE criado com sucesso.',
-        'success'
+      // #824: publishing now runs the consent-invitation sweep; say what it did.
+      const publication = describeConsentPublication(
+        Boolean(isEditing),
+        (savedTemplate as ConsentTemplate & { consentNotifications?: ConsentNotificationCounts }).consentNotifications
       );
+      showToast(publication.message, publication.level);
 
       navigate(`/admin/tcle/edit/${savedTemplate._id}`, { replace: true });
     } catch (error: any) {
@@ -858,6 +889,22 @@ export default function TcleBuilderPage() {
                 placeholder="Ex.: 12345678.9.0000.0000"
                 helperText="Informe o número CAAE associado a esta versão do TCLE."
               />
+              <div className="input-group">
+                <label className="input-label mb-1.5 text-sm font-semibold text-gray-700" htmlFor="tcleConsentModel">Modalidade de Consentimento</label>
+                <select
+                  id="tcleConsentModel"
+                  className="input w-full rounded-lg border border-gray-300 px-3 py-2"
+                  data-testid="tcle-consent-model-select"
+                  value={consentModel}
+                  onChange={(event) => setConsentModel(event.target.value as typeof consentModel)}
+                >
+                  <option value="">Não informada</option>
+                  <option value="specific">Específico</option>
+                  <option value="broad">Amplo</option>
+                  <option value="tiered">Escalonado</option>
+                  <option value="dynamic">Dinâmico</option>
+                </select>
+              </div>
               <Input
                 label="Data de Início da Vigência"
                 type="date"
@@ -1004,6 +1051,22 @@ export default function TcleBuilderPage() {
                             />
                             Checkbox obrigatório
                           </label>
+                          <div className="tcle-builder-consent-item__field">
+                            <label htmlFor={`consent-purpose-${item.id}`}>Finalidade (DUO)</label>
+                            <select
+                              id={`consent-purpose-${item.id}`}
+                              data-testid={`consent-purpose-${index + 1}`}
+                              value={item.purposeCode || ''}
+                              onChange={(event) => updateConsentItem(item.id, { purposeCode: event.target.value || undefined })}
+                            >
+                              <option value="">Sem finalidade codificada</option>
+                              {purposeCodes.map((purpose) => (
+                                <option key={purpose.code} value={purpose.code}>
+                                  {purpose.display} ({purpose.code})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
 
                         <Button type="button" variant="secondary" className="btn-small btn-ghost tcle-builder-consent-item__remove" onClick={() => removeConsentItem(item.id)}>

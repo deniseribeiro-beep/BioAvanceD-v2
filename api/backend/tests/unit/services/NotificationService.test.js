@@ -427,55 +427,6 @@ describe('NotificationService - getNotificationQueue', () => {
   });
 });
 
-describe('NotificationService - sendCriticalTempAlertFromInflux', () => {
-  function freshServiceWithInflux({ collectRows }) {
-    const influxPath = require.resolve('../../../src/infrastructure/database/influxdb/connection');
-    const servicePath = require.resolve('../../../src/services/NotificationService');
-    delete require.cache[influxPath];
-    delete require.cache[servicePath];
-    // eslint-disable-next-line global-require
-    const influxModule = require('../../../src/infrastructure/database/influxdb/connection');
-    vi.spyOn(influxModule, 'connectInfluxDB').mockResolvedValue(undefined);
-    vi.spyOn(influxModule, 'getInfluxQueryApi').mockReturnValue({ collectRows });
-    vi.spyOn(influxModule, 'getInfluxConfig').mockReturnValue({ bucket: 'telemetry' });
-    // eslint-disable-next-line global-require
-    const freshService = require('../../../src/services/NotificationService');
-    return { freshService, influxModule };
-  }
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('reports no trigger when InfluxDB has no recent rows', async () => {
-    const { freshService } = freshServiceWithInflux({ collectRows: vi.fn().mockResolvedValue([]) });
-
-    const result = await freshService.sendCriticalTempAlertFromInflux('sample-1');
-
-    expect(result).toEqual({
-      triggered: false,
-      reason: 'Sem dados recentes no InfluxDB para simulação'
-    });
-  });
-
-  it('delegates to sendCriticalTempAlert with the latest temperature row, including an optional locationId filter', async () => {
-    const collectRows = vi.fn().mockResolvedValue([{ _value: '-90' }]);
-    const { freshService } = freshServiceWithInflux({ collectRows });
-    const alertSpy = vi
-      .spyOn(freshService, 'sendCriticalTempAlert')
-      .mockResolvedValue({ triggered: true });
-
-    const result = await freshService.sendCriticalTempAlertFromInflux('sample-1', {
-      locationId: 'loc-1',
-      lookbackHours: 2
-    });
-
-    expect(collectRows).toHaveBeenCalledWith(expect.stringContaining('filter(fn: (r) => r.locationId == "loc-1")'));
-    expect(alertSpy).toHaveBeenCalledWith('sample-1', -90, { locationId: 'loc-1', lookbackHours: 2 });
-    expect(result).toEqual({ triggered: true });
-  });
-});
-
 // #805: buildConsentLink against the shapes its six production callers
 // actually pass. Every one of them hands it either a PatientModel.create()
 // result or a spread of a patients-collection document; both carry

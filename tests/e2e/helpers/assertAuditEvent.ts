@@ -45,13 +45,11 @@ async function fetchStats(
  * the Merkle tree over the `logs` collection live (integrityCheckService.
  * buildMerkleForDate) — every audited action mirrors into this collection
  * synchronously (see log.service.js's ingestLogRecord call), so this is safe
- * to read immediately before/after an action. This deliberately does NOT use
- * POST /api/audit/verify's full chain-integrity check (Merkle root + RFC3161
- * timestamp + external witness): that verification depends on a daily tree-
- * head anchor job (daily-merkle.job.js, ~02:30 UTC) that hasn't run yet for
- * "today" during a normal test run, so an event created moments ago has no
- * anchored tree head to verify against. Use `audit-e2e-real.js` as the
- * reference if a spec ever needs to prove the anchor/witness chain itself.
+ * to read immediately before/after an action. It does not use POST
+ * /api/audit/verify, which needs the event's chain sealed first (POST
+ * /api/audit/anchor, #1307) and proves integrity rather than that an action
+ * was recorded. audit-chain-integrity.spec.ts proves the seal and verify
+ * path itself.
  */
 export async function watchAuditTrail(
   request: APIRequestContext,

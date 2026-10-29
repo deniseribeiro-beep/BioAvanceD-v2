@@ -1,0 +1,156 @@
+import { test, expect } from '@playwright/test';
+import { realLogin, seedRealAuth } from './helpers/realAuth';
+import { removeTemperaturePolicy, findTemperaturePolicy, findTemperaturePolicyByName, closeSeedSensorDb } from './helpers/seedSensor';
+
+// Real-backend proof for #1178: the Políticas de Temperatura tab keyed every
+// row on `policyID`, which GET /api/policies never returns (it returns _id,
+// plus the legacy id as `policyId`, null since #1089). So a policy that
+// exists was filtered out of the list, and edit/delete sent `undefined`.
+// The policy is created through the real API, the path the UI itself uses.
+const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
+
+test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
+
+test.describe('Temperature policies tab (#1178) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  test('a policy created through the API is listed, shows its active limit, and deletes by _id', async ({ page, request }) => {
+    let session;
+    try {
+      session = await realLogin(request);
+    } catch (err: any) {
+      console.warn(`realLogin failed — DB may not be seeded with an admin user yet: ${err.message}`);
+      return;
+    }
+
+    const suffix = Date.now();
+    const policyName = `e2e-1178-${suffix}`;
+    const createResponse = await request.post(`${apiBaseURL}/api/policies`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+      data: {
+        name: policyName,
+        minTemp: 2,
+        maxTemp: 8,
+        minimumDuration: 30,
+        effectivePeriod: {
+          start: new Date().toISOString(),
+          end: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+      },
+    });
+    expect(createResponse.status()).toBe(201);
+    const created = (await createResponse.json())?.data;
+    const policyId: string = created?._id;
+    expect(policyId).toBeTruthy();
+    // The premise of #1178, asserted rather than assumed: no policyID on the wire.
+    expect(created).not.toHaveProperty('policyID');
+
+    let deleted = false;
+    try {
+      // #1195: the alert delay lands on minimumDuration, the field
+      // TelemetryMonitor enforces, and not on an extension nothing reads.
+      // Read from Mongo, because before the fix GET echoed the stored
+      // extension back and an API-only check passed either way.
+      const stored = await findTemperaturePolicy(policyId);
+      expect(stored?.minimumDuration).toBe(30);
+      expect(stored).not.toHaveProperty('alertDelayMin');
+      const fetched = await request.get(`${apiBaseURL}/api/policies/${policyId}`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      expect(fetched.status()).toBe(200);
+      expect((await fetched.json())?.data?.minimumDuration).toBe(30);
+
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=policies');
+
+      const row = page.getByTestId(`policy-row-${policyId}`);
+      await expect(row).toBeVisible();
+      await expect(row).toContainText(policyName);
+      // The active-limit fetch now runs for the row, keyed by _id.
+      await expect(row).toContainText('Limite ativo: 8.0°C');
+
+      page.once('dialog', (dialog) => dialog.accept());
+      await page.getByTestId(`policy-delete-${policyId}`).click();
+      await expect(row).toHaveCount(0);
+
+      const after = await request.get(`${apiBaseURL}/api/policies/${policyId}`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      expect(after.status()).toBe(404);
+      deleted = true;
+    } finally {
+      if (!deleted) await removeTemperaturePolicy(policyId);
+    }
+  });
+
+  // #1139: the API no longer translates legacy names, so the form has to send
+  // the stored names itself. Anything it still sent under an old name would
+  // 422 (a required field) or be dropped, so the stored document is the proof.
+  test('a policy created through the form is stored under the canonical names (#1139)', async ({ page, request }) => {
+    let session;
+    try {
+      session = await realLogin(request);
+    } catch (err: any) {
+      console.warn(`realLogin failed — DB may not be seeded with an admin user yet: ${err.message}`);
+      return;
+    }
+
+    const policyName = `e2e-1139-${Date.now()}`;
+    let stored: any = null;
+    try {
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=policies');
+      await page.getByRole('button', { name: 'Nova Política' }).click();
+      await page.getByLabel('Nome da Política').fill(policyName);
+      // #1196: the untouched default is 30 minutes.
+      await expect(page.getByLabel('Duração Mínima da Excursão (minutos)')).toHaveValue('30');
+      await page.getByLabel('Duração Mínima da Excursão (minutos)').fill('15');
+      // #1198: the unit is fixed at Celsius, not a select offering °F/K.
+      await expect(page.getByTestId('policy-temperature-unit')).toContainText('°C');
+      await page.getByRole('button', { name: 'Salvar' }).click();
+
+      await expect(page.getByRole('row', { name: new RegExp(policyName) })).toBeVisible();
+
+      stored = await findTemperaturePolicyByName(policyName);
+      expect(stored).not.toBeNull();
+      // The form's defaults, landing on the fields TelemetryMonitor reads.
+      expect(stored.minTemp).toBe(-85);
+      expect(stored.maxTemp).toBe(-75);
+      expect(stored).not.toHaveProperty('targetTemp'); // #1197
+      expect(stored.minimumDuration).toBe(15);
+      expect(stored.temperatureUnit).toBe('°C');
+      expect(stored.effectivePeriod.start).toBeInstanceOf(Date);
+      for (const legacy of ['policyName', 'minThreshold', 'maxThreshold', 'targetTemperature', 'alertDelayMin', 'validFrom', 'validTo']) {
+        expect(stored).not.toHaveProperty(legacy);
+      }
+    } finally {
+      if (stored?._id) await removeTemperaturePolicy(String(stored._id));
+    }
+  });
+
+  // #1198: enforcement compares readings against a policy's limits in
+  // Celsius, so a °F policy is refused rather than stored and misapplied.
+  test('a °F policy is refused by the real API and never stored (#1198)', async ({ request }) => {
+    let session;
+    try {
+      session = await realLogin(request);
+    } catch (err: any) {
+      console.warn(`realLogin failed — DB may not be seeded with an admin user yet: ${err.message}`);
+      return;
+    }
+
+    const policyName = `e2e-1198-${Date.now()}`;
+    const res = await request.post(`${apiBaseURL}/api/policies`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+      data: { name: policyName, minTemp: 35.6, maxTemp: 46.4, temperatureUnit: '°F' },
+    });
+    expect(res.status()).toBe(422);
+    expect((await res.json())?.message).toContain('temperatureUnit deve ser °C');
+
+    const stored = await findTemperaturePolicyByName(policyName);
+    if (stored?._id) await removeTemperaturePolicy(String(stored._id));
+    expect(stored).toBeNull();
+  });
+});

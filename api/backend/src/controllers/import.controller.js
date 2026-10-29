@@ -2,6 +2,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const importService = require('../services/import.service');
+const { loadConformanceRegistry } = require('../services/identifierNamespaceRegistry.service');
+const callerCreateOrganization = require('../services/callerCreateOrganization.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
@@ -128,7 +130,9 @@ class ImportController {
 
       // JSON - validação básica
       if (path.extname(file.originalname).toLowerCase() === '.json') {
-        const fhirValidation = importService.validateFHIRFile(file);
+        // RF011 AC3 (#1322): the stored identifier namespaces join the base registry.
+        const registry = await loadConformanceRegistry(db);
+        const fhirValidation = importService.validateFHIRFile(file, { registry });
 
         if (fhirValidation.isFhir && !fhirValidation.valid) {
           logger.warn('Validação FHIR falhou (sync import):', JSON.stringify(fhirValidation.operationOutcome));
@@ -196,9 +200,24 @@ class ImportController {
           case 'patients':
             results = await importService.importPatients(db, file);
             break;
-          case 'samples':
-            results = await importService.importSamples(db, file);
+          case 'samples': {
+            // #1376, #1192: resolved before any row is read, so a refusal
+            // writes nothing; the sample's organizationId comes from the
+            // caller's scope, as on the LGPD import.
+            let organizationId;
+            try {
+              ({ organizationId } = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
+                userId: req.user?.userID,
+                organizationScope: req.organizationScope,
+                requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
+              }));
+            } catch (scopeError) {
+              importService.cleanupFile(file.path);
+              return res.status(scopeError.statusCode || 403).json({ success: false, error: scopeError.message });
+            }
+            results = await importService.importSamples(db, file, { organizationId });
             break;
+          }
           case 'temperature':
             results = await importService.importTemperature(db, file);
             break;

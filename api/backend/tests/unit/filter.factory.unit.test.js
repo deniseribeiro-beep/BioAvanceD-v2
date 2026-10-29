@@ -207,6 +207,21 @@ describe('filter.factory — createMatchingCollection', () => {
     await expect(samples.countDocuments()).resolves.toBe(0);
   });
 
+  // #1336: the driver's insert contract, which code under test reads back.
+  it('gives an inserted document without an _id a fresh ObjectId, as the driver does', async () => {
+    const files = createMatchingCollection([]);
+    const doc = { name: 'a' };
+
+    const one = await files.insertOne(doc);
+    const many = await files.insertMany([{ name: 'b' }, { _id: 'kept', name: 'c' }]);
+
+    expect(doc._id).toBeInstanceOf(ObjectId);
+    expect(one.insertedId).toBe(doc._id);
+    expect(many.insertedIds[0]).toBeInstanceOf(ObjectId);
+    expect(many.insertedIds[1]).toBe('kept');
+    await expect(files.findOne({ _id: one.insertedId })).resolves.toBe(doc);
+  });
+
   it('reports matchedCount 0 rather than silently succeeding on a miss', async () => {
     const samples = createMatchingCollection([{ _id: 's1' }]);
     await expect(samples.updateOne({ _id: 'nope' }, { $set: { a: 1 } }))

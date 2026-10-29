@@ -2,16 +2,24 @@ const express = require('express');
 const { ObjectId } = require('mongodb');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireRole } = require('../../infrastructure/middleware/rbac');
+// #1266: lgpd.allowDataExport switches the two report exports off.
+const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
 const ReportsModel = require('../../models/Reports');
 // #1045: stripConsentSecrets -- the patient reports return raw participant documents.
 const PatientModel = require('../../models/Patient');
 const { SampleModel } = require('../../models/Sample');
 const { SPECIMEN_TYPE_IDS, SAMPLE_ORIGIN_IDS } = require('../../config/constants/specimen.constants');
 const logger = require('../../utils/logger');
+const { anonymizeLogs, generateAnonId } = require('../../utils/userAnonymization');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
+const { resolveReportGrantScope, allowsReport, allowsReportType, reportIdFilter } = require('../../services/report-grant.service');
+const { sampleOrganizationScopeClause } = require('../../services/sampleTenancy.service');
+// RF009 AC1 (#1317): required as a module object, so a test spy reaches it.
+const influxTelemetryReadRepository = require('../../infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
+const { currentDatastreamsBySensor, policiesByProfileId } = require('../../services/sensorDatastream.service');
 
 function normalizeReport(report) {
   return {
@@ -105,8 +113,19 @@ function normalizeReleaseStatus(value) {
   if (!normalized) return '';
   if (['ATIVA', 'AVAILABLE', 'DISPONIVEL', 'DISPONÍVEL'].includes(normalized)) return 'AVAILABLE';
   if (['QUARENTINE', 'QUARANTINE', 'EM_QUARENTENA', 'QUARENTENA'].includes(normalized)) return 'QUARANTINE';
-  if (['ESGOTADA', 'DEPLETED', 'BLOCKED', 'BLOQUEADA'].includes(normalized)) return 'BLOCKED';
+  // RF006 AC3: exhausted and partly used are quantity, not state.
+  if (['ESGOTADA', 'DEPLETED'].includes(normalized)) return 'DEPLETED';
+  if (['PARCIAL', 'PARTIAL'].includes(normalized)) return 'PARTIAL';
+  if (['BLOCKED', 'BLOQUEADA'].includes(normalized)) return 'BLOCKED';
   return normalized;
+}
+
+// RF006 AC2/AC3: DEPLETED and PARTIAL filter quantityStatus; every other
+// value filters specimenStatus.
+function releaseStatusCondition(releaseStatus) {
+  if (releaseStatus === 'DEPLETED') return { quantityStatus: 'depleted' };
+  if (releaseStatus === 'PARTIAL') return { quantityStatus: 'partial' };
+  return { specimenStatus: releaseStatusToSpecimenStatus(releaseStatus) };
 }
 
 function normalizeTreatmentStatus(value) {
@@ -119,8 +138,8 @@ function normalizeTreatmentStatus(value) {
 }
 
 // #531: maps the filter's public AVAILABLE/QUARANTINE/BLOCKED vocabulary
-// onto specimenStatus's canonical lowercase values (dict-02 ELM-0123 +
-// the documented `disposed` extension, see Sample.js). BLOCKED collapses
+// onto specimenStatus's canonical lowercase values (RF006 AC2, see
+// Sample.js). BLOCKED collapses
 // into `unavailable` — the same coarsening canonical-data-contract-v1.md
 // already applied when it retired the old `availabilityStatus` field. An
 // unrecognized raw value case-folds through as-is (matches no real
@@ -147,7 +166,7 @@ function normalizeSprecCode(value) {
  * for what "current" means here.
  *
  * #531: the release/quarantine filter now queries the canonical
- * `specimenStatus` (dict-02 ELM-0123) instead of the legacy embedded
+ * `specimenStatus` (V2E-0544) instead of the legacy embedded
  * `release_status` — which was never `releaseStatus`-cased SampleModel
  * writes, and was never folded into the #389/#398/#399/#405/#406/#408
  * specimenStatus/QuarantineAction consolidation despite representing the
@@ -224,7 +243,7 @@ async function buildSampleQuery(db, filters = {}) {
 
   const releaseStatus = normalizeReleaseStatus(filters.status || filters.releaseStatus || filters.graphStatus);
   if (releaseStatus) {
-    conditions.push({ specimenStatus: releaseStatusToSpecimenStatus(releaseStatus) });
+    conditions.push(releaseStatusCondition(releaseStatus));
   }
 
   // #739 (RF008 AC#1): "Aplicar filtros por periodo, colecao, tipo, origem,
@@ -285,10 +304,11 @@ async function buildSampleQuery(db, filters = {}) {
   }
 
   // #341 (RF003 AC#3): org-scoped caller's sample-rooted report queries
-  // only see samples whose collectionSite is one of their scoped
-  // organizations, same field/pattern #340 wired into listSamples.
-  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
-    conditions.push({ collectionSite: { $in: filters.organizationScope.organizationIds } });
+  // only see samples whose tenancy key is one of their scoped
+  // organizations (#1192: organizationId, falling back to collectionSite).
+  const sampleScopeClause = sampleOrganizationScopeClause(filters.organizationScope);
+  if (sampleScopeClause) {
+    conditions.push(sampleScopeClause);
   }
 
   return conditions.length > 0 ? { $and: conditions } : {};
@@ -307,10 +327,12 @@ async function getMatchingPatientIds(samplesCollection, sampleQuery) {
 
 // #341 (RF003 AC#3): only report types rooted in the samples/patients
 // collections (plus, per #621, Result — scoped via a join through its
-// linked Sample's collectionSite; per #634/#635/#636, Sensor/Equipment/
-// Temperature — scoped directly by their own organizationId) carry an
-// organization reference to scope by — confirmed with Dennis 2026-08-18.
-// access-log/withdrawal-history report types, and saved Report documents
+// linked Sample's tenancy key (#1192); per #1410, withdrawal history —
+// scoped the same way, through each withdrawal movement's sample tenancy
+// key; per #634/#635/#636, Sensor/Equipment/Temperature — scoped directly
+// by their own organizationId) carry an organization reference to scope
+// by — confirmed with Dennis 2026-08-18.
+// access-log report types, and saved Report documents
 // themselves, have no organization concept anywhere yet and are
 // deliberately left unscoped (see the follow-up filed alongside this
 // issue, #621, and its #629/#634-#637 split). Keyed by `handlerKey` now
@@ -324,6 +346,7 @@ const SCOPED_HANDLER_KEYS = new Set([
   'sensor',
   'equipment',
   'result',
+  'withdrawalHistory',
   'tissueOriginHistory',
   'extracellularNetwork',
 ]);
@@ -344,12 +367,10 @@ const SCOPED_HANDLER_KEYS = new Set([
 // /:type/export, /:type/export/pdf and POST /generate in one place -- all
 // four already translate a thrown `statusCode === 403` into a 403 response.
 //
-// This is the GATE only. It bounds WHO may call these types, not WHAT the
-// export contains. As of #1058/#1061/#1050 the CSV export IS bounded, by
-// EXPORT_CATALOG below -- but the preview, the PDF branch and the Report
-// document POST /generate persists are all still the raw handler output,
-// so this sentence still holds for three of the four surfaces.
-const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs']);
+// This is the GATE only. It bounds WHO may call these types. WHAT they
+// contain is bounded by EXPORT_CATALOG below, which buildPreviewData applies
+// to every handler's output (#1077), so all four surfaces share it.
+const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs', 'auditEvents']);
 
 function unknownTypeResult(rawType) {
   return {
@@ -399,6 +420,13 @@ async function buildPreviewData(db, rawType, filters = {}) {
     throw auditError;
   }
 
+  // RF002 AC4: an external user builds only the report types a grant names.
+  if (!allowsReportType(await resolveReportGrantScope(db, filters.userAccountId), template.code)) {
+    const grantError = new Error('Relatório não autorizado para este usuário.');
+    grantError.statusCode = 403;
+    throw grantError;
+  }
+
   if (SCOPED_HANDLER_KEYS.has(handlerKey)) {
     const organizationScope = await resolveUserOrganizationScope(db, filters.userAccountId);
     if (!isOrganizationScopeUsable(organizationScope)) {
@@ -409,7 +437,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
     filters.organizationScope = organizationScope;
   }
 
-  return handler(db, filters, handlerOptions);
+  // #1077: the catalog bounds the result here, where all four surfaces --
+  // the preview, the CSV, the "PDF" branch and the Report POST /generate
+  // persists -- receive it, rather than at one surface at a time.
+  return boundPreviewData(await handler(db, filters, handlerOptions), handlerKey);
 }
 
 async function handleSamplesByPatient(db, filters) {
@@ -571,10 +602,7 @@ async function handlePatient(db, filters) {
 async function handleSampleAnalysis(db, filters) {
   const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
   const resultsCollection = resolveCollection(db, ['results']);
-  const sampleAnalysisQuery =
-    filters.organizationScope && filters.organizationScope.scope === 'organization'
-      ? { collectionSite: { $in: filters.organizationScope.organizationIds } }
-      : {};
+  const sampleAnalysisQuery = sampleOrganizationScopeClause(filters.organizationScope) || {};
   const samples = await samplesCollection.find(sampleAnalysisQuery).limit(100).toArray();
 
   // #633: `sample.sampleID` doesn't exist on the canonical Sample
@@ -605,10 +633,11 @@ async function handleSampleAnalysis(db, filters) {
       barcode: sample.barcode || null,
       sampleType: sample.sampleType || null,
       patientID: sample.participantId || null,
-      // #539: derives from the canonical specimenStatus (dict-02
-      // ELM-0123) instead of the legacy currentStatus/status fields
+      // #539: derives from the canonical specimenStatus (V2E-0544)
+      // instead of the legacy currentStatus/status fields
       // canonical-data-contract-v1.md bans.
       status: SampleModel.resolveSpecimenStatus(sample),
+      quantityStatus: SampleModel.resolveQuantityStatus(sample),
       resultCount: sampleResults.length,
       hasResults: sampleResults.length > 0,
     };
@@ -634,48 +663,92 @@ async function handleSample(db, filters) {
 }
 
 async function handleTemperature(db, filters, handlerOptions = {}) {
-  const collection = resolveCollection(db, ['temperature', 'temperatures']);
-  const dateRange = buildDateQuery(filters);
-  const queryParts = [];
-  if (dateRange) {
-    queryParts.push({ $or: [{ timestamp: dateRange }, { dateTime: dateRange }] });
+  // RF009 AC1 (#1317): readings live in InfluxDB, so the report reads them
+  // there (both measurements, see InfluxTelemetryReadRepository), not from
+  // the Mongo `temperatures` copy. A point carries no organizationId,
+  // thresholds or sensor status, so each comes from Mongo's registry:
+  // - scope: an org-scoped caller sees the readings of their organizations'
+  //   sensors (a sensor is its organization's, #634, #1071); a caller whose
+  //   organizations hold no sensor sees nothing;
+  // - thresholds: in Celsius, from the TemperaturePolicy that the
+  //   thresholdProfileId of the sensor's temperature datastream valid now
+  //   names (#1392); SensorMetadata.temperaturePolicy is the fallback, for
+  //   an unbound sensor or a profile that names no policy;
+  // - the sensor flag: sensors.maintenanceStatus maintenance|error, where the
+  //   copy's sensorStatus faulty|maintenance stood.
+  // The fakes these handlers are tested with do not apply queries, so each
+  // lookup is filtered again in JS.
+  const range = buildDateQuery(filters);
+  const start = range?.$gte || null;
+  // A Flux range stop is exclusive, and $lte is already 23:59:59.999.
+  const stop = range?.$lte ? new Date(range.$lte.getTime() + 1) : null;
+
+  let sensorIds = null;
+  if (filters.organizationScope?.scope === 'organization') {
+    const orgIds = filters.organizationScope.organizationIds || [];
+    const sensors = (await db.collection('sensors').find({ organizationId: { $in: orgIds } }).toArray())
+      .filter((sensor) => orgIds.includes(sensor.organizationId));
+    sensorIds = [...new Set(sensors.map((sensor) => sensor.sensorId).filter(Boolean).map(String))];
+  }
+  const inScope = (sensorId) => !sensorIds || sensorIds.includes(String(sensorId));
+
+  const boundsBySensor = new Map();
+  let flaggedSensorIds = [];
+  if (!sensorIds || sensorIds.length > 0) {
+    const metas = (await db.collection('sensorMetadata')
+      .find(sensorIds ? { sensorId: { $in: sensorIds }, temperaturePolicy: { $ne: null } } : { temperaturePolicy: { $ne: null } })
+      .toArray())
+      .filter((meta) => meta.temperaturePolicy && inScope(meta.sensorId));
+    const policies = metas.length
+      ? await db.collection('temperaturePolicies').find({ _id: { $in: metas.map((meta) => meta.temperaturePolicy) } }).toArray()
+      : [];
+    const policyById = new Map(policies.map((policy) => [String(policy._id), policy]));
+    const boundsOf = (policy) => {
+      const bounds = {};
+      if (Number.isFinite(Number(policy.minTemp)) && policy.minTemp !== null) bounds.min = Number(policy.minTemp);
+      if (Number.isFinite(Number(policy.maxTemp)) && policy.maxTemp !== null) bounds.max = Number(policy.maxTemp);
+      return bounds;
+    };
+    for (const meta of metas) {
+      const policy = policyById.get(String(meta.temperaturePolicy));
+      if (!policy) continue;
+      boundsBySensor.set(String(meta.sensorId), boundsOf(policy));
+    }
+
+    // #1392: a datastream whose profile names a policy overwrites the
+    // SensorMetadata bounds.
+    const streams = [...(await currentDatastreamsBySensor(db, sensorIds)).values()]
+      .filter((stream) => inScope(stream.sensorId));
+    const streamPolicies = await policiesByProfileId(db, streams.map((stream) => stream.thresholdProfileId));
+    for (const stream of streams) {
+      const policy = stream.thresholdProfileId ? streamPolicies.get(String(stream.thresholdProfileId)) : null;
+      if (!policy) continue;
+      boundsBySensor.set(String(stream.sensorId), boundsOf(policy));
+    }
+
+    const flaggedStatuses = ['maintenance', 'error'];
+    flaggedSensorIds = [...new Set((await db.collection('sensors').find({ maintenanceStatus: { $in: flaggedStatuses } }).toArray())
+      .filter((sensor) => flaggedStatuses.includes(sensor.maintenanceStatus) && sensor.sensorId && inScope(sensor.sensorId))
+      .map((sensor) => String(sensor.sensorId)))];
   }
 
-  // #864: readingStatus's whole vocabulary is valid|invalid|suspicious
-  // (Temperature.js; import.service.js, iot-streaming.service.js and
-  // mqtt-telemetry.service.js all write only those three) and no writer of
-  // the temperature collection ever sets `severity` -- so the old
-  // readingStatus/severity 'critical|alert' regex legs could never match
-  // anything and are dropped rather than repaired. sensorStatus
-  // faulty|maintenance is kept (a broken/offline sensor is a real critical
-  // condition, and today the only populated signal). The threshold-breach
-  // leg below is correct but mostly unpopulated today -- minThreshold/
-  // maxThreshold default to null and none of the three bulk writers
-  // supplies them (thresholds normally come from a Policy at alert time) --
-  // so it is explicitly non-null-guarded rather than silently matching the
-  // null-threshold majority.
-  if (isTruthyFilter(filters.criticalAlertsOnly)) {
-    queryParts.push({
-      $or: [
-        { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
-        { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
-        { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
-      ],
-    });
-  }
+  // An InfluxDB failure propagates: the route answers 500 rather than an
+  // empty report.
+  const { rows, total } = await influxTelemetryReadRepository.temperatureReport({
+    start,
+    stop,
+    sensorIds,
+    critical: isTruthyFilter(filters.criticalAlertsOnly) ? { boundsBySensor, flaggedSensorIds } : null,
+    limit: 100,
+  });
 
-  // #636 (F3-G09): org-scoped caller sees only readings whose
-  // organizationId is one of their scoped organizations.
-  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
-    queryParts.push({ organizationId: { $in: filters.organizationScope.organizationIds } });
-  }
-
-  const query = queryParts.length > 0 ? { $and: queryParts } : {};
-  const temperatures = await collection.find(query).sort({ timestamp: -1, dateTime: -1 }).limit(100).toArray();
-  const total = await collection.countDocuments(query);
+  const temperatures = rows.map((row) => {
+    const bounds = boundsBySensor.get(String(row.sensorId));
+    return { ...row, minThreshold: bounds?.min ?? null, maxThreshold: bounds?.max ?? null };
+  });
 
   const values = temperatures
-    .map((entry) => Number(entry.temperatureValue))
+    .map((entry) => Number(entry.temperatureCelsius))
     .filter((value) => Number.isFinite(value));
 
   const statistics = values.length
@@ -683,18 +756,13 @@ async function handleTemperature(db, filters, handlerOptions = {}) {
         average: values.reduce((sum, value) => sum + value, 0) / values.length,
         min: Math.min(...values),
         max: Math.max(...values),
-        // #864: mirrors the criticalAlertsOnly query predicate above in JS
-        // instead of the dead readingStatus 'alert'/'critical' substring
-        // check -- a breach requires a non-null threshold on the relevant
-        // side, so a null-threshold entry (today's honest majority) never
-        // counts.
+        // Mirrors the repository's critical filter: a Celsius breach of a
+        // bound the sensor's policy sets, or a flagged sensor.
         alerts: temperatures.filter((entry) => {
-          const value = Number(entry.temperatureValue);
-          const hasMin = entry.minThreshold !== null && entry.minThreshold !== undefined;
-          const hasMax = entry.maxThreshold !== null && entry.maxThreshold !== undefined;
-          const breachesMin = hasMin && Number.isFinite(value) && value < Number(entry.minThreshold);
-          const breachesMax = hasMax && Number.isFinite(value) && value > Number(entry.maxThreshold);
-          const sensorFlag = /faulty|maintenance/i.test(String(entry.sensorStatus || ''));
+          const celsius = Number(entry.temperatureCelsius);
+          const breachesMin = entry.minThreshold !== null && Number.isFinite(celsius) && celsius < entry.minThreshold;
+          const breachesMax = entry.maxThreshold !== null && Number.isFinite(celsius) && celsius > entry.maxThreshold;
+          const sensorFlag = flaggedSensorIds.includes(String(entry.sensorId));
           return breachesMin || breachesMax || sensorFlag;
         }).length,
       }
@@ -735,24 +803,30 @@ async function handleEquipment(db, filters) {
   return { total, equipment, previewLimited: total > 100 };
 }
 
+// The specimenIds (as strings) of the samples inside an organization
+// scope — the join key Result (#621, #1192) and withdrawal history
+// (#1410) scope by, since neither carries an organization of its own.
+async function scopedSampleSpecimenIds(db, organizationScope) {
+  const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+  const sampleScopeClause = sampleOrganizationScopeClause(organizationScope);
+  const scopedSamples = await samplesCollection.find(sampleScopeClause).toArray();
+  return scopedSamples
+    .map((sample) => sample.specimenId)
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => String(value));
+}
+
 async function handleResult(db, filters) {
   const collection = resolveCollection(db, ['results']);
   let query = {};
   if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
     // #621: Result has no organization reference of its own — derive
-    // scope via a join through its linked Sample's collectionSite.
+    // scope via a join through its linked Sample's tenancy key (#1192).
     // #628: Result.specimenId is now the sole canonical shape (every
     // write path writes it, and the #628 migration backfilled existing
     // documents) — a single-shape match, not the dual _id/specimenId
     // check #621 originally needed while the field was still stale.
-    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const scopedSamples = await samplesCollection
-      .find({ collectionSite: { $in: filters.organizationScope.organizationIds } })
-      .toArray();
-    const scopedSpecimenIds = scopedSamples
-      .map((sample) => sample.specimenId)
-      .filter((value) => value !== undefined && value !== null)
-      .map((value) => String(value));
+    const scopedSpecimenIds = await scopedSampleSpecimenIds(db, filters.organizationScope);
     query = { specimenId: { $in: scopedSpecimenIds } };
   }
   const results = await collection.find(query).limit(100).toArray();
@@ -765,11 +839,20 @@ async function handleWithdrawalHistory(db, filters) {
   // path — the real withdrawal record lives in the sample movement
   // ledger (sample.service.js#withdrawSample writes type: 'withdraw'),
   // the same source GET /:id/movements already surfaces per-sample.
+  // #1410: a movement has no organization of its own — an
+  // organization-scoped caller sees only withdrawals whose specimenId
+  // names a sample inside its scope (the Result join, #621/#1192); a
+  // movement with no specimenId or an out-of-scope sample is left out.
   const collection = resolveCollection(db, ['sample_movements', 'sampleMovements']);
   const dateRange = buildDateQuery(filters);
-  const query = dateRange
+  const baseQuery = dateRange
     ? { type: 'withdraw', createdAt: dateRange }
     : { type: 'withdraw' };
+  let query = baseQuery;
+  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+    const scopedSpecimenIds = await scopedSampleSpecimenIds(db, filters.organizationScope);
+    query = { ...baseQuery, specimenId: { $in: scopedSpecimenIds } };
+  }
 
   const withdrawals = await collection.find(query).sort({ createdAt: -1 }).limit(100).toArray();
   const total = await collection.countDocuments(query);
@@ -781,10 +864,8 @@ async function handleTissueOriginHistory(db, filters) {
   const baseQuery = {
     $or: [{ sampleOrigin: { $exists: true, $ne: null } }, { linkedProject: { $exists: true, $ne: null } }],
   };
-  const query =
-    filters.organizationScope && filters.organizationScope.scope === 'organization'
-      ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
-      : baseQuery;
+  const sampleScopeClause = sampleOrganizationScopeClause(filters.organizationScope);
+  const query = sampleScopeClause ? { $and: [baseQuery, sampleScopeClause] } : baseQuery;
 
   const samples = await collection.find(query).sort({ registeredAt: -1, createdAt: -1 }).limit(100).toArray();
   const total = await collection.countDocuments(query);
@@ -799,10 +880,8 @@ async function handleExtracellularNetwork(db, filters) {
       { sampleOrigin: { $regex: 'extracel', $options: 'i' } },
     ],
   };
-  const query =
-    filters.organizationScope && filters.organizationScope.scope === 'organization'
-      ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
-      : baseQuery;
+  const sampleScopeClause = sampleOrganizationScopeClause(filters.organizationScope);
+  const query = sampleScopeClause ? { $and: [baseQuery, sampleScopeClause] } : baseQuery;
 
   const samples = await collection.find(query).sort({ registeredAt: -1, createdAt: -1 }).limit(100).toArray();
   const total = await collection.countDocuments(query);
@@ -818,9 +897,48 @@ async function handleAccessLogs(db, filters) {
     query.$or = [{ dateTime: dateQuery }, { timestamp: dateQuery }];
   }
 
-  const logs = await collection.find(query).sort({ dateTime: -1, timestamp: -1 }).limit(200).toArray();
+  const rawLogs = await collection.find(query).sort({ dateTime: -1, timestamp: -1 }).limit(200).toArray();
   const total = await collection.countDocuments(query);
+  // #1076: the same read-time anonymization log.service#getLogs applies for
+  // /api/logs. auditLogger already writes a USR- pseudonym into userName, but
+  // this handler returned raw documents, so any row not written through it
+  // (or written before it anonymized) left with its stored name through the
+  // preview, the CSV, /export/pdf and the persisted Report alike.
+  const logs = await anonymizeLogs(rawLogs, db);
   return { total, logs, previewLimited: total > 200 };
+}
+
+// #733: RF008 names AuditEvent as the audit report's contract (requisitos
+// v4.0.0), so 'Auditoria' reads the hash-chained `audit_events` trail
+// (audit-v2.service.js) rather than sharing handleAccessLogs' `logs` query.
+// Stored `occurredAt` is an ISO string, so the range is compared as ISO
+// strings -- a Date bound never matches a string field.
+const PSEUDONYM_PATTERN = /^USR-(?:[0-9A-F]{8}|SYSTEM)$/;
+
+function toActorPseudonym(actor) {
+  if (!actor || actor === 'system') return 'USR-SYSTEM';
+  const value = String(actor);
+  // ingestLogRecord copies the log's userName, falling back to its userID.
+  // A row written before the userName was pseudonymized carries the raw
+  // value, and audit_events is append-only, so it is masked here on read.
+  return PSEUDONYM_PATTERN.test(value) ? value : generateAnonId(value);
+}
+
+async function handleAuditEvents(db, filters) {
+  const collection = db.collection('audit_events');
+  const query = {};
+
+  const dateQuery = buildDateQuery(filters);
+  if (dateQuery) {
+    query.occurredAt = {};
+    if (dateQuery.$gte) query.occurredAt.$gte = dateQuery.$gte.toISOString();
+    if (dateQuery.$lte) query.occurredAt.$lte = dateQuery.$lte.toISOString();
+  }
+
+  const rawEvents = await collection.find(query).sort({ occurredAt: -1, sequenceNumber: -1 }).limit(200).toArray();
+  const total = await collection.countDocuments(query);
+  const auditEvents = rawEvents.map((event) => ({ ...event, actorPseudonym: toActorPseudonym(event.actorPseudonym) }));
+  return { total, auditEvents, previewLimited: total > 200 };
 }
 
 // #726: one entry per ReportTemplate.HANDLER_KEYS value -- buildPreviewData
@@ -839,6 +957,7 @@ const REPORT_HANDLERS = {
   tissueOriginHistory: handleTissueOriginHistory,
   extracellularNetwork: handleExtracellularNetwork,
   accessLogs: handleAccessLogs,
+  auditEvents: handleAuditEvents,
 };
 
 // #732 (RF008 AC#1/AC#6): GET /:type/filters used to ignore its own
@@ -864,8 +983,10 @@ const SAMPLE_QUERY_FILTERS = [
   { name: 'sampleOrigin', label: 'Origem', type: 'select', options: [...SAMPLE_ORIGIN_IDS] },
   // #531: the public vocabulary normalizeReleaseStatus accepts, which it
   // then maps onto canonical specimenStatus values.
-  { name: 'status', label: 'Estado', type: 'select', options: ['AVAILABLE', 'QUARANTINE', 'BLOCKED'] },
-  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'text' },
+  { name: 'status', label: 'Estado', type: 'select', options: ['AVAILABLE', 'QUARANTINE', 'BLOCKED', 'PARTIAL', 'DEPLETED'] },
+  // #1215: `storageBox`, so the page offers a freezer-then-box picker
+  // instead of a free-text field for a 24-hex id.
+  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'storageBox' },
   { name: 'storagePosition', label: 'Posição na caixa', type: 'text' },
   { name: 'orphaCode', label: 'Código ORPHA', type: 'text' },
   { name: 'atcCode', label: 'Código ATC', type: 'text' },
@@ -905,6 +1026,7 @@ const FILTER_CATALOG = {
   tissueOriginHistory: [],
   extracellularNetwork: [],
   accessLogs: DATE_RANGE_FILTERS,
+  auditEvents: DATE_RANGE_FILTERS,
 };
 
 // #1058/#1061/#1050 piece 2: `toCsvRows` used to pick its rows by sniffing a
@@ -953,7 +1075,7 @@ const FILTER_CATALOG = {
 // `sealedRcsAssessmentId` / `sealedSpecimenPreanalyticsId`.
 const SAMPLE_EXPORT_COLUMNS = [
   'specimenId', 'participantId', 'sampleType', 'sampleOrigin', 'barcode',
-  'specimenStatus', 'registeredAt', 'receivedAt', 'withdrawnAt',
+  'specimenStatus', 'quantityStatus', 'registeredAt', 'receivedAt', 'withdrawnAt',
   'collectionSite', 'locationId', 'matrixType', 'quantity', 'unit',
   'currentQuantity', 'initialQuantity', 'linkedProject', 'studyId',
   'collectionId', 'consentStatus', 'governanceStatus', 'rcsScore',
@@ -967,11 +1089,11 @@ const SAMPLE_EXPORT_COLUMNS = [
 // leave through the other route -- it would only create an unrecorded
 // divergence between two exports of one collection.
 //
-// Note this means real userName and ipSource DO leave through both, which
-// dict-04's P-033 row names as an anti-pattern outright ("nomes reais em
-// exportações de log") and dict-02 P1X-0328 `actorAnonId` exists to
-// replace. That is a real finding against BOTH surfaces and is filed
-// separately rather than half-fixed here.
+// The `userName` column carries the USR- pseudonym, not a real name (dict-04
+// P-033 forbids "nomes reais em exportações de log"): auditLogger writes it
+// anonymized, and both surfaces anonymize again on read -- getLogs for
+// /api/logs, handleAccessLogs here (#1076). ipSource is exported as stored;
+// dict-02 only says it "pode" be masked.
 const AUDIT_LOG_EXPORT_COLUMNS = [
   'timestamp', 'userName', 'action', 'entity', 'result', 'severity',
   'module', 'ipSource', 'message',
@@ -985,9 +1107,13 @@ const EXPORT_CATALOG = {
   // recordNumberCiphertext), `email`/`phone`, the free-form clinical blobs
   // `anamneseGeral`/`dadosEspecificos`, and the consent token pair #1045
   // already strips upstream.
+  // `nested`: each patient row carries its own samples. The CSV has no
+  // column for them, but the preview and the stored Report do (#1077), so
+  // they are bounded by the Sample column list.
   samplesByPatient: {
     rowKey: 'patients',
-    columns: ['participantId', 'status', 'clinicalUnit', 'unitAcronym', 'clinicalUnitId', 'consentTemplateId', 'consentAcceptedAt', 'sampleCount', 'samplesLimited'],
+    columns: ['participantId', 'status', 'clinicalUnit', 'unitAcronym', 'clinicalUnitId', 'consentTemplateId', 'consentAcceptedAt', 'consentTokenExpiresAt', 'sampleCount', 'samplesLimited'],
+    nested: { samples: SAMPLE_EXPORT_COLUMNS },
   },
   patient: {
     rowKey: 'patients',
@@ -996,17 +1122,17 @@ const EXPORT_CATALOG = {
   sample: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
   tissueOriginHistory: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
   extracellularNetwork: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
-  // The one handler that already projects. Its seven fields ARE the
+  // The one handler that already projects. Its eight fields ARE the
   // allow-list; restated here so the catalog is the single place to read.
   sampleAnalysis: {
     rowKey: 'analysis',
-    columns: ['sampleID', 'barcode', 'sampleType', 'patientID', 'status', 'resultCount', 'hasResults'],
+    columns: ['sampleID', 'barcode', 'sampleType', 'patientID', 'status', 'quantityStatus', 'resultCount', 'hasResults'],
   },
   // Excluded: `operatorId` -- who took a reading is operator identity, and
   // nothing in a temperature report needs it.
   temperature: {
     rowKey: 'temperatures',
-    columns: ['logId', 'timestamp', 'sensorId', 'sensorName', 'sensorType', 'locationId', 'locationName', 'facility', 'zone', 'temperatureValue', 'temperatureUnit', 'minThreshold', 'maxThreshold', 'targetTemperature', 'readingStatus', 'sensorStatus', 'batteryLevel', 'signalQuality', 'errorCode', 'dataQualityScore'],
+    columns: ['logId', 'timestamp', 'sensorId', 'sensorName', 'sensorType', 'locationId', 'locationName', 'facility', 'zone', 'temperatureValue', 'temperatureUnit', 'temperatureCelsius', 'minThreshold', 'maxThreshold', 'targetTemperature', 'readingStatus', 'sensorStatus', 'batteryLevel', 'signalQuality', 'errorCode', 'dataQualityScore'],
   },
   // Excluded: `macAddress` -- a device network identifier, and the sensor
   // is already identified by sensorId.
@@ -1036,7 +1162,55 @@ const EXPORT_CATALOG = {
     columns: ['movementId', 'specimenId', 'barcode', 'type', 'quantity', 'unit', 'destination', 'purpose', 'linkedProject', 'condition', 'previousQuantity', 'newQuantity', 'previousState', 'newState', 'createdAt'],
   },
   accessLogs: { rowKey: 'logs', columns: AUDIT_LOG_EXPORT_COLUMNS },
+  // #733: the same exclusions as the logs list above -- no entity ids, and
+  // none of the hash-chain internals (eventHash, previousEventHash,
+  // canonicalLeaf, inclusionProof), for the reason withdrawalHistory gives.
+  // `eventId` stays: it is what POST /api/audit/verify takes, so an auditor
+  // can check any exported row against the tree.
+  auditEvents: {
+    rowKey: 'auditEvents',
+    columns: ['eventId', 'sequenceNumber', 'occurredAt', 'recordedAt', 'actorPseudonym', 'action', 'entityType', 'result', 'source'],
+  },
 };
+
+function pickColumns(row, columns) {
+  const picked = {};
+  for (const column of columns) {
+    if (row && Object.prototype.hasOwnProperty.call(row, column)) {
+      picked[column] = row[column];
+    }
+  }
+  return picked;
+}
+
+// #1077: the same allow-list as the CSV, applied to the handler's whole
+// result. The row array keeps only its declared columns (and a declared
+// nested array only its own). Scalar and object keys -- total, statistics,
+// mode, previewLimited -- pass through. Any OTHER array is dropped, and a
+// handlerKey with no entry keeps no rows at all: deny by default, as below.
+function boundPreviewData(previewData, handlerKey) {
+  if (!previewData || typeof previewData !== 'object') {
+    return previewData;
+  }
+  const entry = EXPORT_CATALOG[handlerKey];
+  const bounded = {};
+  for (const [key, value] of Object.entries(previewData)) {
+    if (!Array.isArray(value)) {
+      bounded[key] = value;
+    } else if (entry && key === entry.rowKey) {
+      bounded[key] = value.map((row) => {
+        const picked = pickColumns(row, entry.columns);
+        for (const [nestedKey, nestedColumns] of Object.entries(entry.nested || {})) {
+          if (Array.isArray(row?.[nestedKey])) {
+            picked[nestedKey] = row[nestedKey].map((nestedRow) => pickColumns(nestedRow, nestedColumns));
+          }
+        }
+        return picked;
+      });
+    }
+  }
+  return bounded;
+}
 
 function toCsvRows(previewData, handlerKey) {
   const entry = EXPORT_CATALOG[handlerKey];
@@ -1067,7 +1241,9 @@ router.get('/', authenticate, requirePermission('viewReports'), async (req, res)
     if (!isOrganizationScopeUsable(organizationScope)) {
       return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
     }
-    const query = applyOrganizationScopeFilter({}, organizationScope, 'organizationIds');
+    // RF002 AC4: an external user lists only the reports a grant names.
+    const grantScope = await resolveReportGrantScope(db, req.user?.userID || req.user?._id);
+    const query = applyOrganizationScopeFilter(reportIdFilter(grantScope), organizationScope, 'organizationIds');
 
     const reports = await db.collection('reports').find(query).sort({ generatedAt: -1, createdAt: -1 }).toArray();
     return res.status(200).json(reports.map(normalizeReport));
@@ -1112,6 +1288,11 @@ router.get('/:id', authenticate, requirePermission('viewReports'), async (req, r
     // isn't 'global'.
     if (!isRecordInOrganizationScope(report, organizationScope, 'organizationIds')) {
       return res.status(403).json({ error: 'Acesso negado', message: 'Este relatório pertence a outra organização' });
+    }
+
+    // RF002 AC4: an external user reads only the reports a grant names.
+    if (!allowsReport(await resolveReportGrantScope(db, req.user?.userID || req.user?._id), report)) {
+      return res.status(403).json({ error: 'Acesso negado', message: 'Relatório não autorizado para este usuário.' });
     }
 
     return res.status(200).json(normalizeReport(report));
@@ -1171,25 +1352,46 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('viewReports'), async (req, res) => {
+// #1186: viewReports is UsuarioExterno's whole permission set, and RF008's
+// actor is the Coordenador; the external actor only consults data. Deleting
+// a saved report is Coordenador-and-up, as createMasterDataRouter's writes are.
+router.delete('/:id', authenticate, requirePermission('viewReports'), requireRole(3, 4), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({ error: 'Banco de dados não disponível' });
     }
 
+    // #1185: GET /:id's scope resolution and record check, which this route
+    // lacked -- any viewReports holder could delete any organization's report.
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    if (!isOrganizationScopeUsable(organizationScope)) {
+      return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
+    }
+
     const reportsCollection = db.collection('reports');
     const { id } = req.params;
 
-    let deleteResult = null;
+    // Resolve the one report first, by the same reportID-then-_id order,
+    // and delete by its _id, so the record checked is the record removed.
+    let report = null;
     if (/^\d+$/.test(id)) {
-      deleteResult = await reportsCollection.deleteOne({ reportID: Number(id) });
+      report = await reportsCollection.findOne({ reportID: Number(id) });
     }
 
-    if ((!deleteResult || deleteResult.deletedCount === 0) && ObjectId.isValid(id)) {
-      deleteResult = await reportsCollection.deleteOne({ _id: new ObjectId(id) });
+    if (!report && ObjectId.isValid(id)) {
+      report = await reportsCollection.findOne({ _id: new ObjectId(id) });
     }
 
+    if (!report) {
+      return res.status(404).json({ error: 'Relatório não encontrado' });
+    }
+
+    if (!isRecordInOrganizationScope(report, organizationScope, 'organizationIds')) {
+      return res.status(403).json({ error: 'Acesso negado', message: 'Este relatório pertence a outra organização' });
+    }
+
+    const deleteResult = await reportsCollection.deleteOne({ _id: report._id });
     if (!deleteResult || deleteResult.deletedCount === 0) {
       return res.status(404).json({ error: 'Relatório não encontrado' });
     }
@@ -1221,7 +1423,15 @@ router.get('/:type/filters', authenticate, requirePermission('viewReports'), asy
     }
 
     const filters = FILTER_CATALOG[template.handlerKey] || [];
-    return res.status(200).json({ filters, reportType: template.code, handlerKey: template.handlerKey });
+    // #735: name/description label a custom template on the query page,
+    // which has no frontend definition for it.
+    return res.status(200).json({
+      filters,
+      reportType: template.code,
+      handlerKey: template.handlerKey,
+      name: template.name || template.code,
+      description: template.description || null,
+    });
   } catch (error) {
     return res.status(500).json({ error: 'Erro ao obter filtros', message: error.message });
   }
@@ -1250,7 +1460,7 @@ router.post('/:type/preview', authenticate, requirePermission('viewReports'), as
   }
 });
 
-router.get('/:type/export', authenticate, requirePermission('viewReports'), async (req, res) => {
+router.get('/:type/export', authenticate, requirePermission('viewReports'), requireDataExportAllowed, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1281,7 +1491,7 @@ router.get('/:type/export', authenticate, requirePermission('viewReports'), asyn
   }
 });
 
-router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), async (req, res) => {
+router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), requireDataExportAllowed, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

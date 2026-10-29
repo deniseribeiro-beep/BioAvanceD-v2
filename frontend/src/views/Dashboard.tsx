@@ -1,38 +1,154 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
-import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, FileSearch } from 'lucide-react';
+import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, FileSearch, Boxes, BarChart3, UserCog, ShieldCheck, ScrollText, Settings } from 'lucide-react';
 import { usePatients } from '../hooks/usePatients';
 import { useSamples } from '../hooks/useSamples';
 import { useResults } from '../hooks/useResults';
 import { useTemperature } from '../hooks/useTemperature';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { securityService } from '../services/api';
+import { useTemperatureReadings } from '../hooks/useTemperatureReadings';
+import { securityService, reportsService } from '../services/api';
+import { apiClient } from '../api/client';
+import { DASHBOARD_CARDS, dashboardRole, needsReportCount, type DashboardCardKey } from './dashboardCards';
+import { activeIncidents, buildTemperatureSeries } from './dashboardTemperature';
 import { onDashboardDataChanged } from '../utils/dashboardRefresh';
 import './Dashboard.css';
 
-const ALERT_DEDUP_WINDOW_MS = 10000;
-const ALERT_TTL_MS = 30000;
-const ALERT_CLEANUP_INTERVAL_MS = 5000;
-const ALERT_LIST_LIMIT = 10;
+type DashboardIncident = {
+  _id: string;
+  sensorName: string;
+  currentTemperature: number;
+  openedAt: string;
+  status: 'open' | 'acknowledged' | 'escalated' | 'resolved';
+};
 
-function createAlertId() {
-  if (typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
+type IncidentRead = { status: 'loading' } | { status: 'error' } | { status: 'ready'; items: DashboardIncident[] };
+
+const CHART_COLORS = ['#2563eb', '#16a34a', '#dc2626'];
+
+// #1397 (RF009 AC7): the chart draws the readings persisted in InfluxDB, and
+// an empty or failed read as such, never a generated value.
+function DashboardTemperatureChart() {
+  const { t, language } = useLanguage();
+  const locale = language;
+  const { readings, loading, error } = useTemperatureReadings();
+
+  if (error) {
+    // RNF027 C2 (#1324): --danger on white is 3.8:1; this is 8.3:1.
+    return (
+      <div role="alert" data-testid="dashboard-temperature-error" style={{ color: '#991b1b' }}>
+        Falha ao carregar as leituras de temperatura: {error}
+      </div>
+    );
   }
 
-  return `alert-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
+  if (loading && readings.length === 0) {
+    return <div data-testid="dashboard-temperature-loading">Carregando leituras de temperatura…</div>;
+  }
 
-type ActiveTemperatureAlert = {
-  id: string;
-  sensorKey: string;
-  sensorName: string;
-  time: string;
-  temperature: number;
-  timestamp: number;
-};
+  const { series, domain, timeRange } = buildTemperatureSeries(readings);
+  if (series.length === 0 || !timeRange) {
+    return <div data-testid="dashboard-temperature-empty">Nenhuma leitura de temperatura registrada.</div>;
+  }
+
+  const chartHeight = 280;
+  const chartWidth = 860;
+  const chartPadding = { top: 20, right: 24, bottom: 36, left: 56 };
+  const innerWidth = chartWidth - chartPadding.left - chartPadding.right;
+  const innerHeight = chartHeight - chartPadding.top - chartPadding.bottom;
+  const chartRange = domain.max - domain.min;
+  const timeSpan = timeRange.end - timeRange.start;
+  const xOf = (time: number) => (timeSpan > 0
+    ? chartPadding.left + ((time - timeRange.start) / timeSpan) * innerWidth
+    : chartPadding.left + innerWidth / 2);
+  const yOf = (celsius: number) => chartPadding.top + ((domain.max - celsius) / chartRange) * innerHeight;
+
+  const tickCount = 5;
+  const chartTicks = Array.from({ length: tickCount }, (_, index) => {
+    const value = domain.max - ((chartRange / (tickCount - 1)) * index);
+    return { value, y: yOf(value) };
+  });
+  const timeLabels = (timeSpan > 0 ? [timeRange.start, timeRange.end] : [timeRange.start]).map((time) => ({
+    time,
+    x: xOf(time),
+    label: new Date(time).toLocaleTimeString(locale, { hour12: false }).slice(0, 5),
+  }));
+
+  return (
+    <div className="temperature-chart-svg-wrap">
+      <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={t('dashboard.temperatureChartAria', 'Gráfico de temperatura em tempo real')}>
+        <defs>
+          <linearGradient id="chartAreaGradient" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
+            <stop offset="100%" stopColor="rgba(236,253,245,0.8)" />
+          </linearGradient>
+        </defs>
+
+        <rect x="0" y="0" width={chartWidth} height={chartHeight} rx="18" fill="url(#chartAreaGradient)" />
+
+        {chartTicks.map((tick) => (
+          <g key={tick.value}>
+            <line
+              x1={chartPadding.left}
+              y1={tick.y}
+              x2={chartWidth - chartPadding.right}
+              y2={tick.y}
+              stroke="rgba(15, 23, 42, 0.08)"
+              strokeDasharray="4 6"
+            />
+            <text
+              x={chartPadding.left - 10}
+              y={tick.y + 4}
+              textAnchor="end"
+              fontSize="12"
+              fill="rgba(15, 23, 42, 0.72)"
+            >
+              {`${tick.value}°C`}
+            </text>
+          </g>
+        ))}
+
+        {timeLabels.map((item) => (
+          <text
+            key={item.time}
+            x={item.x}
+            y={chartHeight - 14}
+            textAnchor="middle"
+            fontSize="11"
+            fill="rgba(15, 23, 42, 0.6)"
+          >
+            {item.label}
+          </text>
+        ))}
+
+        {series.map((item, index) => (
+          <polyline
+            key={item.sensorId}
+            data-testid={`dashboard-temperature-line-${item.sensorId}`}
+            points={item.points.map((point) => `${xOf(point.time)},${yOf(point.celsius)}`).join(' ')}
+            fill="none"
+            stroke={CHART_COLORS[index]}
+            strokeWidth="3"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ))}
+      </svg>
+
+      <div className="temperature-chart-legend">
+        {series.map((item, index) => (
+          <div key={item.sensorId} data-testid={`dashboard-temperature-sensor-${item.sensorId}`} className="temperature-chart-legend__item">
+            <span className="temperature-chart-legend__swatch" style={{ backgroundColor: CHART_COLORS[index] }} />
+            <span>{item.sensorId}</span>
+            <strong>{`${item.latest.temperatureCelsius.toFixed(1)}°C`}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -45,115 +161,44 @@ export default function Dashboard() {
   const { temperatures, loading: loadingTemperatures, viewControl } = useTemperature();
   const [consentQueueStats, setConsentQueueStats] = useState<{ waiting: number; delayed: number; active: number; failed: number; totalQueued: number; available: boolean } | null>(null);
   const [loadingConsentQueue, setLoadingConsentQueue] = useState(false);
-  // Telemetria demo mantida para visualizacao local enquanto sensores reais estao desativados.
-  const [telemetryData, setTelemetryData] = useState<Array<{ time: string; sensor1: number; sensor2: number; sensor3: number }>>([
-    { time: '10:01:00', sensor1: -80.4, sensor2: -79.3, sensor3: -81.1 },
-    { time: '10:03:00', sensor1: -80.8, sensor2: -78.9, sensor3: -80.6 },
-    { time: '10:05:00', sensor1: -79.7, sensor2: -80.1, sensor3: -81.4 },
-    { time: '10:07:00', sensor1: -80.9, sensor2: -79.8, sensor3: -80.3 },
-    { time: '10:09:00', sensor1: -80.1, sensor2: -79.5, sensor3: -81.0 },
-  ]);
-  const [activeAlerts, setActiveAlerts] = useState<ActiveTemperatureAlert[]>([]);
+  const role = dashboardRole(user);
+  // RF002 AC2/AC4: saved reports, which the backend limits to the granted
+  // ones for an external user. null until loaded or when the call fails.
+  const [reportCount, setReportCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!needsReportCount(role)) return;
+    let cancelled = false;
+    reportsService.getAll()
+      .then((response) => { if (!cancelled) setReportCount(Array.isArray(response.data) ? response.data.length : 0); })
+      .catch(() => { if (!cancelled) setReportCount(null); });
+    return () => { cancelled = true; };
+  }, [role]);
+
+  // #1397 (RF015): the alerts are the backend's temperature incidents that are
+  // not resolved, read once; never an alert raised in the browser.
+  const [incidentRead, setIncidentRead] = useState<IncidentRead>({ status: 'loading' });
+
+  useEffect(() => {
+    if (!role || role === 'external') return;
+    let cancelled = false;
+    setIncidentRead({ status: 'loading' });
+    apiClient.get('/incidents', {
+      params: { limit: '50' },
+      suppressErrorToast: true,
+    } as Parameters<typeof apiClient.get>[1])
+      .then(({ data }) => {
+        if (cancelled) return;
+        setIncidentRead(Array.isArray(data?.incidents)
+          ? { status: 'ready', items: activeIncidents(data.incidents as DashboardIncident[]) }
+          : { status: 'error' });
+      })
+      .catch(() => { if (!cancelled) setIncidentRead({ status: 'error' }); });
+    return () => { cancelled = true; };
+  }, [role]);
 
   // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
   const TEMPERATURE_READING_DISABLED = true;
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTelemetryData((current) => {
-        const sensor1 = Number((-82 + Math.random() * 4).toFixed(1));
-        const sensor2 = Number((-82 + Math.random() * 4).toFixed(1));
-        const sensor3 = Number((-82 + Math.random() * 4).toFixed(1));
-        const nextIndex = current.length + 1;
-        const forceAnomaly = nextIndex % 10 === 0;
-        const anomalySensor = forceAnomaly ? Math.floor(Math.random() * 3) : -1;
-        const anomalyTriggered = forceAnomaly || Math.random() < 0.08;
-        const time = new Date().toLocaleTimeString(locale, { hour12: false });
-
-        const nextEntry = {
-          time,
-          sensor1: anomalyTriggered && anomalySensor === 0 ? -60 : sensor1,
-          sensor2: anomalyTriggered && anomalySensor === 1 ? -60 : sensor2,
-          sensor3: anomalyTriggered && anomalySensor === 2 ? -60 : sensor3,
-        };
-
-        const updated = [...current, nextEntry];
-        return updated.slice(-20);
-      });
-    }, 2000);
-
-    return () => clearInterval(interval);
-    // telemetryData is intentionally excluded to keep a stable interval.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const latest = telemetryData[telemetryData.length - 1];
-    if (!latest) {
-      return;
-    }
-
-    const now = Date.now();
-
-    const sensorEntries = [
-      { key: 'sensor1', label: t('dashboard.sensor1', 'Sensor 1'), temperature: latest.sensor1 },
-      { key: 'sensor2', label: t('dashboard.sensor2', 'Sensor 2'), temperature: latest.sensor2 },
-      { key: 'sensor3', label: t('dashboard.sensor3', 'Sensor 3'), temperature: latest.sensor3 },
-    ];
-
-    const criticalAlerts = sensorEntries
-      .filter((entry) => entry.temperature > -70)
-      .map((entry) => ({
-        id: createAlertId(),
-        sensorKey: entry.key,
-        sensorName: entry.label,
-        time: latest.time,
-        temperature: entry.temperature,
-        timestamp: now,
-      }));
-
-    if (criticalAlerts.length === 0) {
-      return;
-    }
-
-    setActiveAlerts((current) => {
-      const merged = [...current];
-
-      criticalAlerts.forEach((incomingAlert) => {
-        const existingIndex = merged.findIndex((existingAlert) => {
-          if (existingAlert.sensorKey !== incomingAlert.sensorKey) {
-            return false;
-          }
-
-          return incomingAlert.timestamp - existingAlert.timestamp < ALERT_DEDUP_WINDOW_MS;
-        });
-
-        if (existingIndex >= 0) {
-          merged[existingIndex] = {
-            ...merged[existingIndex],
-            temperature: incomingAlert.temperature,
-            time: incomingAlert.time,
-            timestamp: incomingAlert.timestamp,
-          };
-        } else {
-          merged.unshift(incomingAlert);
-        }
-      });
-
-      merged.sort((a, b) => b.timestamp - a.timestamp);
-
-      return merged.slice(0, ALERT_LIST_LIMIT);
-    });
-  }, [telemetryData]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const cutoff = Date.now() - ALERT_TTL_MS;
-      setActiveAlerts((current) => current.filter((alert) => alert.timestamp >= cutoff));
-    }, ALERT_CLEANUP_INTERVAL_MS);
-
-    return () => clearInterval(interval);
-  }, []);
 
   // Carrega controle de temperatura (não bloqueia o carregamento da dashboard)
   useEffect(() => {
@@ -198,62 +243,7 @@ export default function Dashboard() {
 
   const loading = loadingPatients || loadingSamples || loadingResults || loadingTemperatures;
 
-  const chartHeight = 280;
-  const chartWidth = 860;
-  const chartPadding = { top: 20, right: 24, bottom: 36, left: 56 };
-  const chartDomain = { min: -90, max: -50 };
-  const chartRange = chartDomain.max - chartDomain.min;
-  const chartData = telemetryData.map((entry, index) => ({
-    ...entry,
-    index,
-  }));
-
-  const chartPoints = useMemo(() => {
-    if (chartData.length === 0) {
-      return { sensor1: '', sensor2: '', sensor3: '' };
-    }
-
-    const innerWidth = chartWidth - chartPadding.left - chartPadding.right;
-    const innerHeight = chartHeight - chartPadding.top - chartPadding.bottom;
-    const stepX = chartData.length > 1 ? innerWidth / (chartData.length - 1) : innerWidth;
-
-    const buildPath = (key: 'sensor1' | 'sensor2' | 'sensor3') => {
-      return chartData
-        .map((point, index) => {
-          const value = point[key];
-          const normalized = Math.max(chartDomain.min, Math.min(chartDomain.max, value));
-          const x = chartPadding.left + (index * stepX);
-          const y = chartPadding.top + ((chartDomain.max - normalized) / chartRange) * innerHeight;
-          return `${x},${y}`;
-        })
-        .join(' ');
-    };
-
-    return {
-      sensor1: buildPath('sensor1'),
-      sensor2: buildPath('sensor2'),
-      sensor3: buildPath('sensor3'),
-    };
-  }, [chartData]);
-
-  const chartTicks = useMemo(() => {
-    const tickCount = 5;
-    const innerHeight = chartHeight - chartPadding.top - chartPadding.bottom;
-    return Array.from({ length: tickCount }, (_, index) => {
-      const value = chartDomain.max - ((chartRange / (tickCount - 1)) * index);
-      const y = chartPadding.top + ((chartDomain.max - value) / chartRange) * innerHeight;
-      return { value, y };
-    });
-  }, []);
-
-  const chartLegend = useMemo(() => ([
-    { label: t('dashboard.sensor1', 'Sensor 1'), color: '#2563eb' },
-    { label: t('dashboard.sensor2', 'Sensor 2'), color: '#16a34a' },
-    { label: t('dashboard.sensor3', 'Sensor 3'), color: '#dc2626' },
-  ]), [t]);
-
-  const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
-  const activeTemperatureAlertsCount = activeAlerts.length;
+  const isAdmin = role === 'administrator';
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -286,81 +276,28 @@ export default function Dashboard() {
     };
   }, [isAdmin]);
 
-  // Define quais cards cada tipo de acesso pode ver
+  // RF002: each role's cards come from DASHBOARD_CARDS (dashboardCards.ts).
   const statCards = useMemo(() => {
-    if (!user) return [];
-
-    const allCards = [
-      {
-        title: t('dashboard.patients'),
-        value: stats.patients,
-        icon: Users,
-        color: 'var(--primary)',
-        link: '/patients',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [1, 2, 3, 4], // Inclui Administrador (4)
-      },
-      {
-        title: t('dashboard.samples'),
-        value: stats.samples,
-        icon: FlaskConical,
-        color: 'var(--success)',
-        link: '/samples',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [1, 2, 3],
-      },
-      {
-        title: t('dashboard.custodyReports', 'Relatórios de Custódia'),
-        value: stats.samples,
-        icon: FileSearch,
-        link: '/samples/custody-reports',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [2, 3, 4],
-      },
-      {
-        title: t('dashboard.results'),
-        value: stats.results,
-        icon: FileText,
-        color: 'var(--warning)',
-        link: '/results',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [1, 2, 3],
-      },
-      {
-        title: t('dashboard.temperatureAlerts'),
-        value: activeTemperatureAlertsCount,
-        icon: Thermometer,
-        color: 'var(--danger)',
-        link: '/temperature',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [2, 3, 4], // Administrador (4) também tem acesso
-      },
-    ];
-
-    // Filtra cards baseado no role ou accessType
-    return allCards.filter(card => {
-      // Se tem roleName, usa ele
-      if (user.roleName) {
-        return card.allowedRoles.includes(user.roleName);
-      }
-      
-      // Fallback para accessType com lógica hierárquica
-      // Administrador (4) tem acesso a tudo
-      if (user.accessType === 4) {
-        return true;
-      }
-      // Coordenador (3) tem acesso a tudo exceto itens exclusivos de admin
-      if (user.accessType === 3) {
-        return card.allowedAccessTypes.includes(3) || card.allowedAccessTypes.includes(2);
-      }
-      // Técnico (2) tem acesso aos seus itens
-      if (user.accessType === 2) {
-        return card.allowedAccessTypes.includes(2) || card.allowedAccessTypes.includes(1);
-      }
-      // Usuário Externo (1) tem acesso apenas aos seus itens
-      return card.allowedAccessTypes.includes(user.accessType || 0);
-    });
-  }, [user, stats, t, activeTemperatureAlertsCount]);
+    if (!role) return [];
+    const open = t('dashboard.openCard', 'Abrir');
+    const reports = reportCount === null ? '—' : reportCount;
+    const temperatureAlerts = incidentRead.status === 'ready' ? incidentRead.items.length : '—';
+    const cards: Record<DashboardCardKey, { title: string; value: number | string; icon: typeof Users; link: string }> = {
+      patients: { title: t('dashboard.patients'), value: stats.patients, icon: Users, link: '/patients' },
+      samples: { title: t('dashboard.samples'), value: stats.samples, icon: FlaskConical, link: '/samples' },
+      custodyReports: { title: t('dashboard.custodyReports', 'Relatórios de Custódia'), value: stats.samples, icon: FileSearch, link: '/samples/custody-reports' },
+      storage: { title: t('dashboard.storage', 'Armazenamento'), value: open, icon: Boxes, link: '/locations' },
+      results: { title: t('dashboard.results'), value: stats.results, icon: FileText, link: '/results' },
+      temperatureAlerts: { title: t('dashboard.temperatureAlerts'), value: temperatureAlerts, icon: Thermometer, link: '/temperature' },
+      governanceReports: { title: t('dashboard.governanceReports', 'Relatórios de Governança'), value: reports, icon: BarChart3, link: '/reports' },
+      authorizedReports: { title: t('dashboard.authorizedReports', 'Relatórios Autorizados'), value: reports, icon: BarChart3, link: '/reports' },
+      users: { title: t('dashboard.users', 'Usuários'), value: open, icon: UserCog, link: '/users' },
+      security: { title: t('dashboard.security', 'Segurança'), value: open, icon: ShieldCheck, link: '/security' },
+      audit: { title: t('dashboard.audit', 'Auditoria'), value: open, icon: ScrollText, link: '/logs' },
+      settings: { title: t('dashboard.settings', 'Configurações'), value: open, icon: Settings, link: '/system-management' },
+    };
+    return DASHBOARD_CARDS[role].map((key) => ({ key, ...cards[key] }));
+  }, [role, stats, t, incidentRead, reportCount]);
 
   return (
     <div className="dashboard-bento">
@@ -392,7 +329,8 @@ export default function Dashboard() {
             : 'primary';
           return (
             <Card
-              key={stat.title}
+              key={stat.key}
+              data-testid={`dashboard-card-${stat.key}`}
               className={`kpi-card ${isAlert ? 'alert' : ''} ${stat.link ? 'is-clickable' : ''}`}
               onClick={handleClick}
             >
@@ -408,7 +346,8 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* Main Area: Temperature Chart + Alerts */}
+      {/* Main Area: Temperature Chart + Alerts. RF002 AC4: not for an external user. */}
+      {role !== 'external' && (
       <div className="content-grid">
         <Card
           className="temperature-card"
@@ -418,77 +357,7 @@ export default function Dashboard() {
             <p className="temperature-card-subtitle">{t('dashboard.temperatureChartSubtitle', 'Monitoramento térmico contínuo')}</p>
           </div>
           <div className="temperature-chart-slot">
-            <div className="temperature-chart-svg-wrap">
-              <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={t('dashboard.temperatureChartAria', 'Gráfico de temperatura em tempo real')}>
-                <defs>
-                  <linearGradient id="chartAreaGradient" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
-                    <stop offset="100%" stopColor="rgba(236,253,245,0.8)" />
-                  </linearGradient>
-                </defs>
-
-                <rect x="0" y="0" width={chartWidth} height={chartHeight} rx="18" fill="url(#chartAreaGradient)" />
-
-                {chartTicks.map((tick) => (
-                  <g key={tick.value}>
-                    <line
-                      x1={chartPadding.left}
-                      y1={tick.y}
-                      x2={chartWidth - chartPadding.right}
-                      y2={tick.y}
-                      stroke="rgba(15, 23, 42, 0.08)"
-                      strokeDasharray="4 6"
-                    />
-                    <text
-                      x={chartPadding.left - 10}
-                      y={tick.y + 4}
-                      textAnchor="end"
-                      fontSize="12"
-                      fill="rgba(15, 23, 42, 0.72)"
-                    >
-                      {`${tick.value}°C`}
-                    </text>
-                  </g>
-                ))}
-
-                {telemetryData.map((entry, index) => {
-                  const innerWidth = chartWidth - chartPadding.left - chartPadding.right;
-                  const stepX = telemetryData.length > 1 ? innerWidth / (telemetryData.length - 1) : innerWidth;
-                  const x = chartPadding.left + (index * stepX);
-                  return (
-                    <text
-                      key={`${entry.time}-${index}`}
-                      x={x}
-                      y={chartHeight - 14}
-                      textAnchor="middle"
-                      fontSize="11"
-                      fill="rgba(15, 23, 42, 0.6)"
-                    >
-                      {entry.time.slice(0, 5)}
-                    </text>
-                  );
-                })}
-
-                <polyline points={chartPoints.sensor1} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-                <polyline points={chartPoints.sensor2} fill="none" stroke="#16a34a" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-                <polyline points={chartPoints.sensor3} fill="none" stroke="#dc2626" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-
-                {chartLegend.map((item) => (
-                  <g key={item.label} transform="translate(0, 0)">
-                    <circle cx="22" cy="20" r="5" fill={item.color} />
-                  </g>
-                ))}
-              </svg>
-
-              <div className="temperature-chart-legend">
-                {chartLegend.map((item) => (
-                  <div key={item.label} className="temperature-chart-legend__item">
-                    <span className="temperature-chart-legend__swatch" style={{ backgroundColor: item.color }} />
-                    <span>{item.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {role && <DashboardTemperatureChart />}
           </div>
         </Card>
 
@@ -497,19 +366,23 @@ export default function Dashboard() {
             className="side-card"
           >
             <h3 className="side-card-title">{t('dashboard.activeTemperatureAlertsTitle', 'Alertas de Temperatura Ativos')}</h3>
-            {activeAlerts.length > 0 ? (
+            {incidentRead.status === 'loading' ? (
+              <p className="side-card-text" data-testid="dashboard-alerts-loading">{t('dashboard.queueLoading', 'Carregando...')}</p>
+            ) : incidentRead.status === 'error' ? (
+              <p className="side-card-text" role="alert" data-testid="dashboard-alerts-error">Falha ao carregar os incidentes de temperatura.</p>
+            ) : incidentRead.items.length > 0 ? (
               <div className="alert-list">
-                {activeAlerts.map((alert) => (
-                  <div key={alert.id} className="alert-item alert-item--critical">
+                {incidentRead.items.map((incident) => (
+                  <div key={incident._id} data-testid={`dashboard-alert-${incident._id}`} className="alert-item alert-item--critical">
                     <AlertTriangle size={18} className="alert-item-icon" />
                     <p className="alert-item-text">
-                      <strong>{alert.sensorName}</strong> atingiu <strong>{alert.temperature}°C</strong> às <strong>{alert.time}</strong>
+                      <strong>{incident.sensorName}</strong> atingiu <strong>{incident.currentTemperature}°C</strong> às <strong>{new Date(incident.openedAt).toLocaleString(locale)}</strong>
                     </p>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="side-card-text">{t('dashboard.noActiveAlerts', 'Nenhum alerta ativo.')}</p>
+              <p className="side-card-text" data-testid="dashboard-alerts-empty">{t('dashboard.noActiveAlerts', 'Nenhum alerta ativo.')}</p>
             )}
           </Card>
 
@@ -542,6 +415,7 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

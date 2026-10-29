@@ -32,8 +32,9 @@ const REQUIRED_FORBIDDEN = [
 // These 17 names ARE enforced, live, in the position where they mean
 // something: filter-keys.arch.test.js copies this list verbatim as
 // RETIRED_FILTER_KEYS (:162-180, provenance at :150-161) and fails any of
-// them appearing as a `.find`/`.findOne` filter key, with a line-keyed
-// RETIRED_KEY_EXEMPT allowlist for documented legacy-resolution sites.
+// them appearing as a `.find`/`.findOne` filter key, with a RETIRED_KEY_EXEMPT
+// allowlist, keyed by each site's filter text, for documented
+// legacy-resolution sites.
 // **Add new terms there, not here.**
 //
 // They cannot be enforced as substrings the way REQUIRED_FORBIDDEN is, and

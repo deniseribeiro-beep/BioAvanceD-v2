@@ -33,11 +33,10 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const BACKEND_SRC = path.resolve(__dirname, '../../src');
-const ROUTE_DIRS = [
-  path.resolve(BACKEND_SRC, 'routes'),
-  path.resolve(BACKEND_SRC, 'interface/routes'),
-];
+// #1342: the route files and their gate sites come from the shared,
+// comment-stripped extractor, so a gate spelled out in a comment is not a
+// call site.
+const { BACKEND_SRC, routeFiles, gateSites } = require('./helpers/route-gate-sites');
 
 const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
 
@@ -55,130 +54,29 @@ const METHOD_TO_ACTION = {
   DELETE: 'DELETE',
 };
 
-// `router.get(`, `router.post(` ... — the start of a route registration.
-// Everything up to the next one belongs to it, which is what lets a
-// `requirePermission` sitting three lines below its verb be attributed
-// correctly. Multi-line route registrations are the normal shape in this
-// repo (sample.routes.js, import.routes.js), so a line-scoped regex would
-// silently attribute almost nothing.
-const ROUTE_START = /\brouter\.(get|post|put|patch|delete|head)\s*\(/gi;
-
-// `router.use(...)` — a router-level gate, applying to EVERY verb
-// registered under it rather than to one route. These are the widest gates
-// in the codebase and the ones a call-site-scoped analysis is least able to
-// see: `backup.routes.js:20` puts every backup route behind one
-// `requirePermission('manageBackup')`, so that code's allowedActions must
-// cover every verb in the file, not one.
-const ROUTER_USE = /\brouter\.use\s*\(/g;
-
 // A `router.use` whose verbs live in another file — it mounts a sub-router
 // rather than registering routes itself. Static analysis stops at the file
 // boundary, so these are named explicitly instead of being silently
 // attributed to whatever verbs happen to follow them (there are none) and
-// passing vacuously. Keyed by `file:line` so a moved gate re-surfaces here
-// rather than inheriting the exemption.
+// passing vacuously. Keyed by file and the gate call's text (#1361), never by
+// line: a `file:line` key broke on every line added above an unchanged gate,
+// while a gate moved to another file or given another permission still
+// re-surfaces here rather than inheriting the exemption.
+const mountGateKey = (site) => `${site.file} router.use ${site.kind}(${String(site.rawArgs).replace(/\s+/g, ' ').trim()})`;
 const SUBROUTER_MOUNT_GATES = new Set([
   // `router.use(authenticate, requirePermission('createSample'),
-  //  intakeGovernanceResponseGuard, intakeWizardRouter)` — the verbs are on
-  //  intakeWizardRouter, in src/routes/intakeWizard.js.
-  'interface/routes/intakeWizard.routes.js:203',
+  //  requireOrganizationScope, intakeGovernanceResponseGuard,
+  //  intakeWizardRouter)` — the verbs are on intakeWizardRouter, in
+  //  src/routes/intakeWizard.js.
+  "interface/routes/intakeWizard.routes.js router.use requirePermission('createSample')",
 ]);
 
-// `requirePermission('code')` or `requirePermission('code', 'ACTION')`.
-// Only string literals — a computed code cannot be checked statically and
-// is reported separately rather than skipped silently.
-const REQUIRE_PERMISSION = /requirePermission\(\s*(['"])([^'"]+)\1\s*(?:,\s*(['"])([^'"]+)\3\s*)?\)/g;
-const REQUIRE_PERMISSION_ANY = /requirePermission\(/g;
-
-function routeFiles() {
-  const files = [];
-  for (const dir of ROUTE_DIRS) {
-    if (!fs.existsSync(dir)) continue;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isFile() && /\.js$/.test(entry.name)) files.push(path.join(dir, entry.name));
-    }
-  }
-  return files;
-}
-
-function relative(file) {
-  return path.relative(BACKEND_SRC, file).split(path.sep).join('/');
-}
-
-/**
- * Every `requirePermission` call site in one file, attributed to the HTTP
- * verb of the `router.<verb>(` registration it sits inside.
- */
-function callSitesIn(content, file) {
-  const starts = [];
-  ROUTE_START.lastIndex = 0;
-  for (const match of content.matchAll(ROUTE_START)) {
-    starts.push({ index: match.index, method: match[1].toUpperCase() });
-  }
-
-  const methodAt = (index) => {
-    let current = null;
-    for (const start of starts) {
-      if (start.index <= index) current = start.method;
-      else break;
-    }
-    return current;
-  };
-
-  // Every `router.use(` opening index, so a requirePermission can be told
-  // apart from a per-route one.
-  const useStarts = [];
-  ROUTER_USE.lastIndex = 0;
-  for (const match of content.matchAll(ROUTER_USE)) useStarts.push(match.index);
-
-  // A gate belongs to a `router.use` when the nearest preceding `router.*`
-  // construct is a `use` rather than a verb.
-  const isRouterUse = (index) => {
-    const lastUse = Math.max(...useStarts.filter((i) => i <= index), -1);
-    const lastVerb = Math.max(...starts.filter((s) => s.index <= index).map((s) => s.index), -1);
-    return lastUse > lastVerb;
-  };
-
-  // The verbs a router-level gate actually covers: everything registered
-  // after it in this file.
-  const verbsAfter = (index) => [
-    ...new Set(starts.filter((s) => s.index > index).map((s) => s.method)),
-  ];
-
-  const sites = [];
-  REQUIRE_PERMISSION.lastIndex = 0;
-  for (const match of content.matchAll(REQUIRE_PERMISSION)) {
-    const line = content.slice(0, match.index).split('\n').length;
-    const routerLevel = isRouterUse(match.index);
-    sites.push({
-      file: relative(file),
-      line,
-      code: match[2],
-      explicitAction: match[4] || null,
-      routerLevel,
-      // A per-route gate has one method; a router-level one covers many.
-      method: routerLevel ? null : methodAt(match.index),
-      coveredMethods: routerLevel ? verbsAfter(match.index) : null,
-    });
-  }
-  return sites;
-}
-
 function sweep() {
-  const sites = [];
-  let literalCalls = 0;
-  let allCalls = 0;
-
-  for (const file of routeFiles()) {
-    const content = fs.readFileSync(file, 'utf8');
-    const found = callSitesIn(content, file);
-    sites.push(...found);
-    literalCalls += found.length;
-    REQUIRE_PERMISSION_ANY.lastIndex = 0;
-    allCalls += (content.match(REQUIRE_PERMISSION_ANY) || []).length;
-  }
-
-  return { sites, literalCalls, allCalls };
+  const permissionSites = gateSites().filter((site) => site.kind === 'requirePermission');
+  // A computed permission code cannot be checked statically: the extractor
+  // reports it with `code: null`, and the first test refuses it.
+  const sites = permissionSites.filter((site) => site.code !== null);
+  return { sites, literalCalls: sites.length, allCalls: permissionSites.length };
 }
 
 test('#921/#630: the derivation actually reads route files and finds call sites', () => {
@@ -196,7 +94,7 @@ test('#921/#630: the derivation actually reads route files and finds call sites'
   // one is a parse failure, not a pass. The sub-router mounts are the one
   // named exception, and naming them is the point.
   const unattributed = sites.filter((site) => {
-    if (SUBROUTER_MOUNT_GATES.has(`${site.file}:${site.line}`)) return false;
+    if (site.routerLevel && SUBROUTER_MOUNT_GATES.has(mountGateKey(site))) return false;
     if (site.routerLevel) return (site.coveredMethods || []).length === 0;
     return !site.method;
   });
@@ -209,7 +107,7 @@ test('#921/#630: the derivation actually reads route files and finds call sites'
   // The allowlist must not rot: an entry that no longer names a real
   // router-level gate is stale, and silently keeps something exempt.
   const routerLevelKeys = new Set(
-    sites.filter((s) => s.routerLevel).map((s) => `${s.file}:${s.line}`)
+    sites.filter((s) => s.routerLevel).map(mountGateKey)
   );
   assert.deepEqual(
     [...SUBROUTER_MOUNT_GATES].filter((key) => !routerLevelKeys.has(key)),
@@ -244,7 +142,7 @@ test('#630 audit, for real: every gate action is inside its code allowedActions'
     // code's allowedActions must cover all of them — one uncovered verb is
     // a route that always 403s.
     if (site.routerLevel) {
-      if (SUBROUTER_MOUNT_GATES.has(`${site.file}:${site.line}`)) continue;
+      if (SUBROUTER_MOUNT_GATES.has(mountGateKey(site))) continue;
       const methods = site.coveredMethods || [];
       const missing = methods
         .map((method) => site.explicitAction || METHOD_TO_ACTION[method])

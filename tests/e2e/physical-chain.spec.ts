@@ -1,0 +1,337 @@
+import { test, expect, type APIRequestContext } from '@playwright/test';
+import { realLogin } from './helpers/realAuth';
+import { deleteOrganizations } from './helpers/listOrganizations';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
+import {
+  seedCustodyFixture,
+  setApprovalStatus,
+  countScanEvents,
+  cleanupCustodyFixture,
+  closeCustodyDb,
+  type CustodyFixture,
+} from './helpers/seedCustody';
+
+// Real-backend proof for #1314 and #1316: custody as its own assignment
+// (RF021 AC4-AC6), the specimen -> container -> position and rack ->
+// location chain (RF016 AC3, RF017 AC3/AC4) over StorageLocation records
+// (RF017 AC1/AC8), the label route and the scan resolver (RF016 AC4/AC6),
+// all scoped by the specimen's custodian, and a scanner's lifecycle
+// (RF017 AC6/AC8). Two organizations, a
+// Coordenador and a Tecnico in the first, a Tecnico in the second.
+const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
+
+test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
+
+test.describe('Physical chain and custody (#1314, #1316) — real backend', () => {
+  const organizationIds: string[] = [];
+  let fixture: CustodyFixture | null = null;
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const containerId = `CT-CHAIN-${suffix}`;
+  const rackId = `rack-chain-${suffix}`;
+  const tubeCode = `BVA2:synthetic:${suffix}`;
+  const scannerId = `scanner-chain-${suffix}`;
+  const roomId = `room-chain-${suffix}`;
+  const freezerId = `freezer-chain-${suffix}`;
+  const emptyContainerId = `CT-EMPTY-${suffix}`;
+  const emptyRackId = `rack-empty-${suffix}`;
+  const emptyLocationId = `freezer-empty-${suffix}`;
+  const emptyTubeCode = `BVA2:synthetic:empty-${suffix}`;
+
+  test.afterAll(async ({ request }) => {
+    // The empty-tube case seeds no specimen; its rows go with the same sweep.
+    const swept = fixture ?? { specimenId: `none-${suffix}`, collectionId: `none-${suffix}`, approvalId: `none-${suffix}` };
+    await cleanupCustodyFixture(
+      swept, [containerId, emptyContainerId], [rackId, emptyRackId], [tubeCode, emptyTubeCode], [scannerId],
+      [roomId, freezerId, `${freezerId}-x`, emptyLocationId],
+    ).catch(() => {});
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await closeCustodyDb();
+  });
+
+  async function registerUser(request: APIRequestContext, adminAuth: Record<string, string>, label: string, accessType: number, roleName: string, organizationId: string) {
+    const username = `chain.${label}.${Date.now()}`;
+    const password = 'Cadeia@12345-forte';
+    const res = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: adminAuth,
+      data: { name: `#1314 ${label}`, email: `${username}@example.com`, username, password, accessType, roleName, organizationId },
+    });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    const session = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+    return { Authorization: `Bearer ${session.token}` };
+  }
+
+  test('custody bounds who may load, place, read and scan a specimen, and an approval out of force stops it', async ({ request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const makeOrg = async (label: string) => {
+      const res = await request.post(`${apiBaseURL}/api/organizations`, {
+        headers: adminAuth,
+        data: { officialName: `#1314 ${label} ${suffix}`, countryCode: 'BR' },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const organizationId = (await res.json()).data.organizationId as string;
+      organizationIds.push(organizationId);
+      return organizationId;
+    };
+    const orgA = await makeOrg('A');
+    const orgB = await makeOrg('B');
+    fixture = await seedCustodyFixture(suffix, orgA);
+    const { specimenId } = fixture;
+
+    const coordA = await registerUser(request, adminAuth, 'coordA', 3, 'Coordenador', orgA);
+    const techA = await registerUser(request, adminAuth, 'techA', 2, 'Técnico', orgA);
+    const techB = await registerUser(request, adminAuth, 'techB', 2, 'Técnico', orgB);
+    const post = (path: string, headers: Record<string, string>, data: Record<string, unknown> = {}) =>
+      request.post(`${apiBaseURL}/api/physical-chain${path}`, { headers, data });
+    const get = (path: string, headers: Record<string, string>) => request.get(`${apiBaseURL}/api/physical-chain${path}`, { headers });
+
+    // RF021 AC4: the collection site's Coordenador assigns the first custody;
+    // a Tecnico holds no manageCustody.
+    const custodyBody = {
+      specimenId, custodianOrganizationId: orgA, authorizationId: fixture.approvalId, responsibleInvestigatorId: 'inv-chain',
+      effectivePeriod: { start: '2026-01-01T00:00:00.000Z' },
+    };
+    expect((await post('/custody', techA, custodyBody)).status()).toBe(403);
+    const assigned = await post('/custody', coordA, custodyBody);
+    expect(assigned.status(), await assigned.text()).toBe(201);
+    expect((await assigned.json()).data).toMatchObject({ specimenId, custodianOrganizationId: orgA, assignmentStatus: 'active' });
+
+    // RF021 AC5: a second custody overlapping the first is refused.
+    const overlap = await post('/custody', adminAuth, { ...custodyBody, custodianOrganizationId: orgB });
+    expect(overlap.status(), await overlap.text()).toBe(409);
+
+    const created = await post('/containers', coordA, { containerId, containerType: 'cryovial' });
+    expect(created.status(), await created.text()).toBe(201);
+
+    // RF017 AC3: only the custodian's Tecnico loads the specimen.
+    const foreignLoad = await post(`/containers/${containerId}/specimens`, techB, { specimenId });
+    expect(foreignLoad.status(), await foreignLoad.text()).toBe(403);
+    expect((await foreignLoad.json()).error).toBe('SPECIMEN_OUT_OF_SCOPE');
+    const loaded = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
+    expect(loaded.status(), await loaded.text()).toBe(201);
+    const load = (await loaded.json()).data;
+
+    // RF017 AC2/AC3 and RULE-035: the container takes a position, and the
+    // rack a StorageLocation of the custodian's organization (RF017 AC1:
+    // a freezer inside a room). Another organization does not see it.
+    const placed = await post(`/containers/${containerId}/position`, techA, { storagePositionId: `${rackId}:A01` });
+    expect(placed.status(), await placed.text()).toBe(201);
+    const room = await post('/locations', coordA, { storageLocationId: roomId, locationType: 'room', name: 'Sala criogenica', code: `R-${suffix}`, organizationId: orgA });
+    expect(room.status(), await room.text()).toBe(201);
+    const foreignLocation = await post('/locations', coordA, { storageLocationId: `${freezerId}-x`, locationType: 'freezer', name: 'Freezer B', code: `FZB-${suffix}`, organizationId: orgB });
+    expect((await foreignLocation.json()).error).toBe('LOCATION_OUT_OF_SCOPE');
+    const freezer = await post('/locations', coordA, { storageLocationId: freezerId, locationType: 'freezer', name: 'Freezer -80', code: `FZ-${suffix}`, organizationId: orgA, parentLocationId: roomId });
+    expect(freezer.status(), await freezer.text()).toBe(201);
+    const listedB = await get('/locations', techB);
+    expect(listedB.status(), await listedB.text()).toBe(200);
+    expect(((await listedB.json()).data as Array<{ storageLocationId: string }>).map((l) => l.storageLocationId)).not.toContain(freezerId);
+
+    // RF017 AC8: an interdicted room blocks the freezer in it; restored, the
+    // rack is located.
+    const interdicted = await post(`/locations/${roomId}/status`, coordA, { locationStatus: 'interdicted', reason: 'synthetic e2e' });
+    expect(interdicted.status(), await interdicted.text()).toBe(200);
+    const blocked = await post(`/racks/${rackId}/location`, coordA, { storageLocationId: freezerId });
+    expect(blocked.status(), await blocked.text()).toBe(422);
+    expect((await blocked.json()).error).toBe('LOCATION_UNUSABLE');
+    expect((await post(`/locations/${roomId}/status`, coordA, { locationStatus: 'active' })).status()).toBe(200);
+    const located = await post(`/racks/${rackId}/location`, coordA, { storageLocationId: freezerId });
+    expect(located.status(), await located.text()).toBe(201);
+
+    // RF016 AC3: the chain resolves link by link, for the custodian only.
+    const location = await get(`/specimens/${specimenId}/location`, techA);
+    expect(location.status(), await location.text()).toBe(200);
+    expect((await location.json()).data).toMatchObject({ containerId, storagePositionId: `${rackId}:A01`, storageRackId: rackId, storageLocationId: freezerId });
+    expect((await get(`/specimens/${specimenId}/location`, techB)).status()).toBe(403);
+
+    // RF016 AC4: the custodian's Coordenador issues the tube's institutional
+    // label, which carries no personal data (RULE-012).
+    const labelBody = {
+      encodedValue: tubeCode, symbology: 'data_matrix', identifierOrigin: 'institution_applied', namespaceRegistryId: 'ns-chain',
+      carrierPlacement: 'side', immutableAtSource: true, templateVersionId: 'tpl-chain', printBatchId: `batch-${suffix}`,
+    };
+    const personal = await post(`/containers/${containerId}/labels`, coordA, { ...labelBody, encodedValue: '123.456.789-09' });
+    expect(personal.status(), await personal.text()).toBe(422);
+    const issued = await post(`/containers/${containerId}/labels`, coordA, labelBody);
+    expect(issued.status(), await issued.text()).toBe(201);
+    expect((await issued.json()).data).toMatchObject({ targetType: 'container', targetId: containerId, status: 'active' });
+
+    // RF016 AC6: the tube code resolves to the specimen; another
+    // organization's scan is refused and leaves no ScanEvent.
+    const scan = { rawValue: `]d2${tubeCode}`, symbology: 'data_matrix', deviceId: scannerId };
+
+    // RF017 AC6/AC8: the scanner is registered not homologated, so it is
+    // refused until the Coordenador records its homologation.
+    const device = (path: string, data: Record<string, unknown>) => request.post(`${apiBaseURL}/api/devices${path}`, { headers: coordA, data });
+    const registered = await device('', { deviceId: scannerId, deviceType: 'scanner', maintenanceRecords: ['maint-chain'] });
+    expect(registered.status(), await registered.text()).toBe(201);
+    const unqualified = await post('/scan', techA, scan);
+    expect(unqualified.status(), await unqualified.text()).toBe(422);
+    expect((await unqualified.json()).error).toBe('DEVICE_UNUSABLE');
+    expect((await device(`/${scannerId}/events`, { eventType: 'installed', locationId: freezerId })).status()).toBe(201);
+    const qualified = await device(`/${scannerId}/events`, { eventType: 'qualified', evidenceUri: 'object://synthetic/scanner-pq.pdf' });
+    expect(qualified.status(), await qualified.text()).toBe(201);
+    const history = await request.get(`${apiBaseURL}/api/devices/${scannerId}`, { headers: techA });
+    expect(history.status(), await history.text()).toBe(200);
+    expect(((await history.json()).data.history as Array<{ eventType: string }>).map((e) => e.eventType)).toEqual(['installed', 'qualified']);
+
+    expect((await post('/scan', techB, scan)).status()).toBe(403);
+    expect(await countScanEvents(specimenId)).toBe(0);
+    const resolved = await post('/scan', techA, scan);
+    expect(resolved.status(), await resolved.text()).toBe(200);
+    expect((await resolved.json()).data).toMatchObject({ resolved: true, specimenId, containerId });
+    expect(await countScanEvents(specimenId)).toBe(1);
+
+    // RF021 AC6: with the approval suspended, the specimen cannot be loaded
+    // again; restored, it can.
+    const unloaded = await post(`/specimen-assignments/${load.specimenContainerAssignmentId}/unload`, techA);
+    expect(unloaded.status(), await unloaded.text()).toBe(200);
+    await setApprovalStatus(fixture.approvalId, 'suspended');
+    const inactive = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
+    expect(inactive.status(), await inactive.text()).toBe(422);
+    expect((await inactive.json()).error).toBe('CUSTODY_INACTIVE');
+    await setApprovalStatus(fixture.approvalId, 'active');
+
+    // RF006 AC6: an active legal hold on the specimen stops loading it;
+    // released, it loads.
+    const holdRes = await request.post(`${apiBaseURL}/api/legal-holds`, {
+      headers: coordA,
+      data: { targetEntityType: 'Specimen', targetEntityIds: [specimenId], reason: 'synthetic e2e hold' },
+    });
+    expect(holdRes.status(), await holdRes.text()).toBe(201);
+    const hold = (await holdRes.json()).data as { legalHoldId: string };
+    const heldLoad = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
+    expect(heldLoad.status(), await heldLoad.text()).toBe(409);
+    expect((await heldLoad.json()).error).toBe('LEGAL_HOLD_ACTIVE');
+    const released = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, { headers: coordA, data: { releaseReason: 'synthetic e2e release' } });
+    expect(released.status(), await released.text()).toBe(200);
+
+    const reloaded = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
+    expect(reloaded.status(), await reloaded.text()).toBe(201);
+  });
+
+  // #1314: an empty tube holds no specimen, so it is in scope through the
+  // location its rack is at (P1X-0103). The Tecnico places it and the
+  // Coordenador labels it; another organization's are refused.
+  test("an empty tube is placed and labelled by the holder of its rack's location only", async ({ request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const makeOrg = async (label: string) => {
+      const res = await request.post(`${apiBaseURL}/api/organizations`, {
+        headers: adminAuth,
+        data: { officialName: `#1314 empty ${label} ${suffix}`, countryCode: 'BR' },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const organizationId = (await res.json()).data.organizationId as string;
+      organizationIds.push(organizationId);
+      return organizationId;
+    };
+    const orgA = await makeOrg('A');
+    const orgB = await makeOrg('B');
+    const coordA = await registerUser(request, adminAuth, 'emptyCoordA', 3, 'Coordenador', orgA);
+    const coordB = await registerUser(request, adminAuth, 'emptyCoordB', 3, 'Coordenador', orgB);
+    const techA = await registerUser(request, adminAuth, 'emptyTechA', 2, 'Técnico', orgA);
+    const techB = await registerUser(request, adminAuth, 'emptyTechB', 2, 'Técnico', orgB);
+    const post = (path: string, headers: Record<string, string>, data: Record<string, unknown> = {}) =>
+      request.post(`${apiBaseURL}/api/physical-chain${path}`, { headers, data });
+
+    const location = await post('/locations', coordA, { storageLocationId: emptyLocationId, locationType: 'freezer', name: 'Freezer vazio', code: `FZE-${suffix}`, organizationId: orgA });
+    expect(location.status(), await location.text()).toBe(201);
+    const located = await post(`/racks/${emptyRackId}/location`, coordA, { storageLocationId: emptyLocationId });
+    expect(located.status(), await located.text()).toBe(201);
+    const created = await post('/containers', coordA, { containerId: emptyContainerId, containerType: 'cryovial' });
+    expect(created.status(), await created.text()).toBe(201);
+
+    const foreignPlace = await post(`/containers/${emptyContainerId}/position`, techB, { storagePositionId: `${emptyRackId}:A01` });
+    expect(foreignPlace.status(), await foreignPlace.text()).toBe(403);
+    expect((await foreignPlace.json()).error).toBe('CONTAINER_OUT_OF_SCOPE');
+    const placed = await post(`/containers/${emptyContainerId}/position`, techA, { storagePositionId: `${emptyRackId}:A01` });
+    expect(placed.status(), await placed.text()).toBe(201);
+
+    const labelBody = {
+      encodedValue: emptyTubeCode, symbology: 'data_matrix', identifierOrigin: 'institution_applied', namespaceRegistryId: 'ns-chain',
+      carrierPlacement: 'side', immutableAtSource: true, templateVersionId: 'tpl-chain', printBatchId: `batch-empty-${suffix}`,
+    };
+    const foreignLabel = await post(`/containers/${emptyContainerId}/labels`, coordB, labelBody);
+    expect(foreignLabel.status(), await foreignLabel.text()).toBe(403);
+    expect((await foreignLabel.json()).error).toBe('CONTAINER_OUT_OF_SCOPE');
+    const issued = await post(`/containers/${emptyContainerId}/labels`, coordA, labelBody);
+    expect(issued.status(), await issued.text()).toBe(201);
+    expect((await issued.json()).data).toMatchObject({ targetType: 'container', targetId: emptyContainerId, status: 'active' });
+  });
+});
+
+// #1363 (RF026 AC6): a specimen's destruction or transfer executes only when
+// compatible with custody, the collection's ethics approval and, for a
+// transfer, the participant's consent. The fixture specimen names no
+// participant, so its transfer can never pass the consent rule.
+test.describe('Disposition compatibility (#1363, RF026 AC6) — real backend', () => {
+  const organizationIds: string[] = [];
+  let fixture: CustodyFixture | null = null;
+  const suffix = `disp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  test.afterAll(async ({ request }) => {
+    if (fixture) await cleanupCustodyFixture(fixture, [], [], [], []).catch(() => {});
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await closeCustodyDb();
+  });
+
+  test('a specimen destruction waits for custody, and a transfer without consent is refused', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const org = await request.post(`${apiBaseURL}/api/organizations`, { headers: auth, data: { officialName: `#1363 custodian ${suffix}`, countryCode: 'BR' } });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    fixture = await seedCustodyFixture(suffix, organizationId);
+    const { specimenId, approvalId } = fixture;
+
+    const policy = await request.post(`${apiBaseURL}/api/retention-policies`, {
+      headers: auth,
+      data: {
+        applicableEntityTypes: ['Specimen'],
+        triggerEvent: 'creation',
+        postRetentionAction: 'destroy',
+        retentionPeriod: 'P365D',
+        jurisdiction: 'BR',
+        retentionBasis: ['RF026 AC6 e2e fixture basis'],
+        legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+        reviewRequired: false,
+      },
+    });
+    expect(policy.status(), await policy.text()).toBe(201);
+    const retentionPolicyId = String((await policy.json()).data._id);
+    const plan = async (dispositionAction: string) => {
+      const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+        headers: auth,
+        data: { retentionPolicyId, entityType: 'Specimen', affectedRecordIds: [specimenId], dispositionAction },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+      return `${apiBaseURL}/api/disposition-actions/${(await res.json()).data.dispositionActionId}`;
+    };
+    const execute = (base: string) => request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-ac6'] } });
+
+    // No custody holds the specimen: the destruction is refused and stays planned.
+    const destroy = await plan('destroy');
+    const refused = await execute(destroy);
+    expect(refused.status(), await refused.text()).toBe(409);
+    const refusedBody = await refused.json();
+    expect(refusedBody.code).toBe('DISPOSITION_INCOMPATIBLE');
+    expect(refusedBody.unsatisfied).toEqual([expect.objectContaining({ specimenId, rule: 'custody' })]);
+    expect((await (await request.get(destroy, { headers: auth })).json()).data.actionStatus).toBe('planned');
+
+    const custody = await request.post(`${apiBaseURL}/api/physical-chain/custody`, {
+      headers: auth,
+      data: { specimenId, custodianOrganizationId: organizationId, authorizationId: approvalId, responsibleInvestigatorId: 'inv-disp' },
+    });
+    expect(custody.status(), await custody.text()).toBe(201);
+
+    // In custody, a transfer still needs the participant's consent.
+    const transfer = await execute(await plan('transfer'));
+    expect(transfer.status(), await transfer.text()).toBe(409);
+    expect((await transfer.json()).unsatisfied).toEqual([expect.objectContaining({ specimenId, rule: 'consent' })]);
+
+    const executed = await execute(destroy);
+    expect(executed.status(), await executed.text()).toBe(200);
+    expect((await executed.json()).data.actionStatus).toBe('executed');
+  });
+});

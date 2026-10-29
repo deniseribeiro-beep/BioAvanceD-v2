@@ -5,6 +5,8 @@ const require = createRequire(import.meta.url);
 
 const controller = require('../../src/controllers/import-batch.controller');
 const stagingImportService = require('../../src/services/staging-import.service');
+const callerCreateOrganization = require('../../src/services/callerCreateOrganization.service');
+const batchValidationEngine = require('../../src/services/batch-validation-engine.service');
 const logger = require('../../src/utils/logger');
 const mongooseConnection = require('../../src/infrastructure/database/mongodb/connection');
 const fs = require('fs');
@@ -177,6 +179,13 @@ describe('import-batch.controller', () => {
   });
 
   describe('createBatchImport', () => {
+    const appDb = { name: 'app-db' };
+
+    beforeEach(() => {
+      vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization')
+        .mockResolvedValue({ organizationId: 'org-a', organizationScope: { scope: 'single' } });
+    });
+
     it('returns 400 when req.file is missing', async () => {
       const req = {};
       const res = createRes();
@@ -192,7 +201,9 @@ describe('import-batch.controller', () => {
 
     it('happy path: returns 202 with correct body shape and cleans up temp file', async () => {
       const req = {
-        file: { path: '/tmp/some-upload.csv', originalname: 'some-upload.csv' }
+        file: { path: '/tmp/some-upload.csv', originalname: 'some-upload.csv' },
+        app: { locals: { db: appDb } },
+        user: { userID: 'user-1' }
       };
       const res = createRes();
 
@@ -211,7 +222,7 @@ describe('import-batch.controller', () => {
 
       await controller.createBatchImport(req, res);
 
-      expect(stagingImportService.createBatchImportJob).toHaveBeenCalledWith(req.file);
+      expect(stagingImportService.createBatchImportJob).toHaveBeenCalledWith(req.file, { organizationId: 'org-a' });
       expect(fs.existsSync).toHaveBeenCalledWith(req.file.path);
       expect(unlinkSpy).toHaveBeenCalledWith(req.file.path);
       expect(res.status).toHaveBeenCalledWith(202);
@@ -229,7 +240,8 @@ describe('import-batch.controller', () => {
 
     it('happy path: does not attempt cleanup when temp file does not exist', async () => {
       const req = {
-        file: { path: '/tmp/gone.csv', originalname: 'gone.csv' }
+        file: { path: '/tmp/gone.csv', originalname: 'gone.csv' },
+        app: { locals: { db: appDb } }
       };
       const res = createRes();
 
@@ -248,7 +260,8 @@ describe('import-batch.controller', () => {
 
     it('error path: returns 500, logs error, and still attempts temp-file cleanup', async () => {
       const req = {
-        file: { path: '/tmp/broken.csv', originalname: 'broken.csv' }
+        file: { path: '/tmp/broken.csv', originalname: 'broken.csv' },
+        app: { locals: { db: appDb } }
       };
       const res = createRes();
 
@@ -269,27 +282,100 @@ describe('import-batch.controller', () => {
         message: 'service exploded'
       });
     });
+
+    // #1376: the worker that persists the rows has no request, so the
+    // uploader's organization is resolved here and staged with the file.
+    it("resolves the uploader's organization and hands it to createBatchImportJob (#1376)", async () => {
+      const req = {
+        file: { path: '/tmp/org.csv', originalname: 'org.csv' },
+        app: { locals: { db: appDb } },
+        user: { userID: 'user-7' },
+        body: { organizationId: '  org-b  ' }
+      };
+      const res = createRes();
+
+      callerCreateOrganization.resolveCallerCreateOrganization.mockResolvedValue({ organizationId: 'org-b' });
+      vi.spyOn(stagingImportService, 'createBatchImportJob').mockResolvedValue({
+        jobId: 'job-org',
+        stagingImport: { jobId: 's-org', status: 'staged', fileName: 'org.csv' }
+      });
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.createBatchImport(req, res);
+
+      expect(callerCreateOrganization.resolveCallerCreateOrganization).toHaveBeenCalledWith(appDb, {
+        userId: 'user-7',
+        requested: 'org-b'
+      });
+      expect(stagingImportService.createBatchImportJob).toHaveBeenCalledWith(req.file, { organizationId: 'org-b' });
+      expect(res.status).toHaveBeenCalledWith(202);
+    });
+
+    it("returns the helper's 403, removes the temp file and stages nothing when the uploader has no organization (#1376)", async () => {
+      const req = {
+        file: { path: '/tmp/no-org.csv', originalname: 'no-org.csv' },
+        app: { locals: { db: appDb } },
+        user: { userID: 'user-orgless' }
+      };
+      const res = createRes();
+
+      const refusal = new Error('Sem organização atribuída');
+      refusal.statusCode = 403;
+      callerCreateOrganization.resolveCallerCreateOrganization.mockRejectedValue(refusal);
+      const jobSpy = vi.spyOn(stagingImportService, 'createBatchImportJob');
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.createBatchImport(req, res);
+
+      expect(jobSpy).not.toHaveBeenCalled();
+      expect(unlinkSpy).toHaveBeenCalledWith(req.file.path);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Sem organização atribuída' });
+    });
+
+    it('returns 503, removes the temp file and stages nothing when there is no db (#1376)', async () => {
+      const req = { file: { path: '/tmp/no-db.csv', originalname: 'no-db.csv' } };
+      const res = createRes();
+
+      const jobSpy = vi.spyOn(stagingImportService, 'createBatchImportJob');
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.createBatchImport(req, res);
+
+      expect(callerCreateOrganization.resolveCallerCreateOrganization).not.toHaveBeenCalled();
+      expect(jobSpy).not.toHaveBeenCalled();
+      expect(unlinkSpy).toHaveBeenCalledWith(req.file.path);
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Banco de dados não disponível' });
+    });
   });
 
   describe('getBatchImportStatus', () => {
-    // #826: the handler now opens the Mongoose connection before touching
-    // StagingImport, instead of relying on the upload path having done it as a
-    // side effect earlier in the same process. Stub it -- the real one throws
-    // without MONGO_URI, which is not what these tests are about.
+    // #826 made this handler open a Mongoose connection before touching
+    // StagingImport; #830 moved StagingImport to the native driver, so it must
+    // not need one. Stubbed so an accidental call is observable rather than a
+    // throw on the missing MONGO_URI.
     beforeEach(() => {
       vi.spyOn(mongooseConnection, 'connectMongoDB').mockResolvedValue({ readyState: 1 });
     });
 
-    it('connects Mongoose before querying StagingImport', async () => {
-      const req = { params: { jobId: 'job-xyz' } };
+    // #830: StagingImport is on the native driver, reached with the API's own
+    // db handle, so the status read no longer depends on a Mongoose connection.
+    it('queries StagingImport through the native store with the app db, opening no Mongoose connection', async () => {
+      const appDb = { name: 'app-db' };
+      const req = { params: { jobId: 'job-xyz' }, app: { locals: { db: appDb } } };
       const res = createRes();
 
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockResolvedValue(null);
 
       await controller.getBatchImportStatus(req, res);
 
-      expect(mongooseConnection.connectMongoDB).toHaveBeenCalled();
+      expect(StagingImport.findOne).toHaveBeenCalledWith({ jobId: 'job-xyz' }, appDb);
+      expect(mongooseConnection.connectMongoDB).not.toHaveBeenCalled();
     });
 
     it('returns 400 when jobId param is missing', async () => {
@@ -309,12 +395,12 @@ describe('import-batch.controller', () => {
       const req = { params: { jobId: 'job-xyz' } };
       const res = createRes();
 
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockResolvedValue(null);
 
       await controller.getBatchImportStatus(req, res);
 
-      expect(StagingImport.findOne).toHaveBeenCalledWith({ jobId: 'job-xyz' });
+      expect(StagingImport.findOne).toHaveBeenCalledWith({ jobId: 'job-xyz' }, null);
       expect(res.status).toHaveBeenCalledWith(404);
       expect(res.json).toHaveBeenCalledWith({
         success: false,
@@ -338,7 +424,7 @@ describe('import-batch.controller', () => {
         updatedAt: 'u1'
       };
 
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockResolvedValue(stagingImport);
 
       await controller.getBatchImportStatus(req, res);
@@ -378,7 +464,7 @@ describe('import-batch.controller', () => {
         updatedAt: 'u2'
       };
 
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockResolvedValue(stagingImport);
 
       await controller.getBatchImportStatus(req, res);
@@ -403,12 +489,69 @@ describe('import-batch.controller', () => {
       });
     });
 
+    // #1384: the route runs requireOrganizationScope, and the batch's
+    // organization rides in rawData.organizationId (#1376).
+    describe('the organization of the batch (#1384)', () => {
+      const stagingImport = {
+        jobId: 'job-org',
+        fileName: 'org.csv',
+        status: 'completed',
+        totalRows: 2,
+        processedRows: 2,
+        rawData: { organizationId: 'ORG-A' },
+        createdAt: 'c3',
+        updatedAt: 'u3'
+      };
+
+      async function readAs(organizationScope, batch = stagingImport) {
+        const req = { params: { jobId: 'job-org' }, organizationScope };
+        const res = createRes();
+        const StagingImport = require('../../src/services/stagingImport.store');
+        vi.spyOn(StagingImport, 'findOne').mockResolvedValue(batch);
+        await controller.getBatchImportStatus(req, res);
+        return res;
+      }
+
+      it('refuses 403 a batch whose organization is outside the caller scope', async () => {
+        const res = await readAs({ scope: 'organization', organizationIds: ['ORG-B'] });
+
+        expect(res.status).toHaveBeenCalledWith(403);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este lote pertence a outra organização'
+        });
+      });
+
+      it('refuses 403 a batch with no organization to a non-global caller', async () => {
+        const res = await readAs({ scope: 'organization', organizationIds: ['ORG-A'] }, { ...stagingImport, rawData: {} });
+
+        expect(res.status).toHaveBeenCalledWith(403);
+      });
+
+      it('answers 200 for a batch in the caller scope', async () => {
+        const res = await readAs({ scope: 'organization', organizationIds: ['ORG-A', 'ORG-B'] });
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ jobId: 'job-org', rawData: { organizationId: 'ORG-A' } })
+        }));
+      });
+
+      it('answers 200 for a global caller', async () => {
+        const res = await readAs({ scope: 'global', organizationIds: [] });
+
+        expect(res.status).toHaveBeenCalledWith(200);
+      });
+    });
+
     it('error path: returns 500 with error message when findOne throws', async () => {
       const req = { params: { jobId: 'job-err' } };
       const res = createRes();
 
       const error = new Error('db unreachable');
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockRejectedValue(error);
       const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 
@@ -420,6 +563,40 @@ describe('import-batch.controller', () => {
         success: false,
         error: 'Erro ao obter status do batch import',
         message: 'db unreachable'
+      });
+    });
+  });
+
+  describe('getQuarantineBatch (#1385)', () => {
+    const ORG_B = { scope: 'organization', organizationIds: ['org-b'] };
+
+    it('forwards req.organizationScope to the service and answers 200', async () => {
+      const req = { app: { locals: { db: 'the-db' } }, params: { id: 'q-1' }, organizationScope: ORG_B };
+      const res = createRes();
+      const spy = vi.spyOn(batchValidationEngine, 'getQuarantineBatch').mockResolvedValue({ batch: { _id: 'q-1' }, records: [] });
+
+      await controller.getQuarantineBatch(req, res);
+
+      expect(spy).toHaveBeenCalledWith('the-db', 'q-1', { organizationScope: ORG_B });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ success: true, batch: { _id: 'q-1' }, records: [] });
+    });
+
+    it("answers the service's out-of-scope refusal as 403", async () => {
+      const req = { app: { locals: { db: 'the-db' } }, params: { id: 'q-2' }, organizationScope: ORG_B };
+      const res = createRes();
+      const refusal = new Error('Lote de quarentena fora do escopo organizacional do usuário.');
+      refusal.statusCode = 403;
+      vi.spyOn(batchValidationEngine, 'getQuarantineBatch').mockRejectedValue(refusal);
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await controller.getQuarantineBatch(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao obter lote de quarentena do batch import',
+        message: 'Lote de quarentena fora do escopo organizacional do usuário.'
       });
     });
   });

@@ -6,10 +6,11 @@ const ExcelJS = require('exceljs');
 const { ObjectId } = require('mongodb');
 
 const batchValidationEngine = require('../../src/services/batch-validation-engine.service');
+const { sealStagedRecord, revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 const patientService = require('../../src/services/patient.service');
 const sampleService = require('../../src/services/sample.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
-const StagingImport = require('../../src/models/StagingImport');
+const StagingImport = require('../../src/services/stagingImport.store');
 
 function createDb(patientsByFilter = {}) {
   // #853: `patients` never writes a `patientID` key (that's the
@@ -83,6 +84,65 @@ describe('batch-validation-engine.service#buildSampleRow', () => {
     });
   });
 
+  // The #767 failure mode on the participant column: `patientid` mapped onto
+  // `patientID`, and parseSampleRow reads only `participantId`, so the id
+  // never reached the sample whichever header the file used.
+  it('maps every participant id header onto the field parseSampleRow actually reads', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+
+    ['participantId', 'patientID', 'patient_id'].forEach((header) => {
+      const mapped = batchValidationEngine.buildSampleRow({ [header]: '12345678', sampleType: 'Sangue' });
+      const parsed = importLGPDService.parseSampleRow(mapped);
+
+      expect(parsed.participantId, `header: ${header}`).toBe('12345678');
+    });
+  });
+
+  // The same failure mode on the specimen column: `sampleid`/`specimenid`
+  // mapped onto `sampleID`, which parseSampleRow never reads, so the file's
+  // own id was dropped and createSample generated one with no trace of it.
+  // It lands in sourceRecordId (v2.0.0 ELM-0011), never in specimenId.
+  it('maps every specimen id header onto sourceRecordId, which parseSampleRow reads', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+
+    ['sampleID', 'specimenId', 'specimen_id', 'sourceRecordId'].forEach((header) => {
+      const mapped = batchValidationEngine.buildSampleRow({ [header]: ' LIMS-0042 ', sampleType: 'Sangue' });
+      const parsed = importLGPDService.parseSampleRow(mapped);
+
+      expect(parsed.sourceRecordId, `header: ${header}`).toBe('LIMS-0042');
+      expect(parsed.specimenId, `header: ${header}`).toBeUndefined();
+    });
+  });
+
+  // The same failure mode on the storage pair, and the one that kept every
+  // valid row out: parseSampleRow reads boxId and positionCode, but the
+  // header map had no entry for either, so createSample's required-location
+  // check rejected every sample the async importer handed it.
+  it('maps the boxId and positionCode headers onto the pair parseSampleRow reads', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+    const boxId = '64b000000000000000000001';
+
+    [
+      { boxId, positionCode: 'A1' },
+      { boxid: boxId, position: 'A1' },
+      { box_id: boxId, wellPosition: 'A1' },
+    ].forEach((row) => {
+      const parsed = importLGPDService.parseSampleRow(batchValidationEngine.buildSampleRow({ ...row, sampleType: 'Sangue' }));
+
+      expect(parsed.boxId, JSON.stringify(row)).toBe(boxId);
+      expect(parsed.positionCode, JSON.stringify(row)).toBe('A1');
+    });
+  });
+
+  it('leaves sourceRecordId null when the file carries no specimen id', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+
+    const parsed = importLGPDService.parseSampleRow(batchValidationEngine.buildSampleRow({ sampleType: 'Sangue' }));
+    expect(parsed.sourceRecordId).toBeNull();
+    expect(importLGPDService.parseSampleRow({ sourceRecordId: '  ' }).sourceRecordId).toBeNull();
+    expect(importLGPDService.parseSampleRow({ sourceRecordId: 4217 }).sourceRecordId).toBe('4217');
+  });
+
   // #525: `locationid`/`idlocalizacao` headers used to map onto a
   // `locationID` field that import-lgpd.service.js#parseSampleRow never
   // reads (#459/#462 dropped the legacy field from runtime persistence in
@@ -118,7 +178,7 @@ describe('batch-validation-engine.service', () => {
   it('reutiliza paciente existente e persiste specimen e biomarcadores vinculados', async () => {
     const patient = {
       _id: 'patient-object-id-1',
-      patientID: '12345678',
+      participantId: '12345678',
       cpf: '12345678901',
       recordNumber: 'RN-001',
     };
@@ -131,7 +191,7 @@ describe('batch-validation-engine.service', () => {
     const createPatientSpy = vi.spyOn(patientService, 'createPatient');
     const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: 'sample-object-id-1',
-      sampleID: 'sample-001',
+      specimenId: 'BR-2026-000001',
     });
     const createObservationSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({
       _id: 'observation-object-id-1',
@@ -163,10 +223,13 @@ describe('batch-validation-engine.service', () => {
 
     expect(createPatientSpy).not.toHaveBeenCalled();
     expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    // createSample and createObservation both refuse a payload without
+    // participantId (Sample.validate, BiomarkerObservation.validate), so the
+    // linked patient's id has to reach them under that name.
     expect(createSampleSpy).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
-        patientID: '12345678',
+        participantId: '12345678',
         patientObjectId: 'patient-object-id-1',
       }),
       expect.objectContaining({
@@ -178,8 +241,9 @@ describe('batch-validation-engine.service', () => {
     expect(createObservationSpy).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
-        patientID: '12345678',
+        participantId: '12345678',
         patientObjectId: 'patient-object-id-1',
+        specimenId: 'BR-2026-000001',
         specimenObjectId: 'sample-object-id-1',
         linkedResourceId: 'patient-object-id-1',
       })
@@ -198,11 +262,11 @@ describe('batch-validation-engine.service', () => {
 
     const createPatientSpy = vi.spyOn(patientService, 'createPatient').mockResolvedValue({
       _id: 'patient-object-id-2',
-      patientID: '87654321',
+      participantId: '87654321',
     });
     const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: 'sample-object-id-2',
-      sampleID: 'sample-002',
+      specimenId: 'BR-2026-000002',
     });
     const createObservationSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({
       _id: 'observation-object-id-2',
@@ -229,10 +293,78 @@ describe('batch-validation-engine.service', () => {
 
     expect(createPatientSpy).toHaveBeenCalledTimes(1);
     expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    // The row carries no id; the participantId createPatient generated is the
+    // one the specimen and the observation are recorded against.
+    expect(createSampleSpy).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ participantId: '87654321' }),
+      expect.anything()
+    );
     expect(createObservationSpy).toHaveBeenCalledTimes(1);
+    expect(createObservationSpy).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ participantId: '87654321', specimenId: 'BR-2026-000002' })
+    );
     expect(result.classification).toBe('PARTIAL');
     expect(result.persistedIds).toContain('patient-object-id-2');
     expect(result.persistedIds).toContain('sample-object-id-2');
+  });
+
+  // #1376, #1192: the uploader's organization, resolved at upload, stamps the
+  // sample and defaults its collection site, as POST /api/samples does.
+  it("stamps the uploader's organization on the sample and defaults its collectionSite to it (#1376)", async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-org', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-org' });
+
+    const result = await batchValidationEngine.persistSample(
+      db,
+      { patientID: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', quantity: '1' },
+      2,
+      { organizationId: 'org-a' }
+    );
+
+    expect(result.classification).not.toBe('INVALID');
+    expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    const [, sampleData, options] = createSampleSpy.mock.calls[0];
+    expect(options.organizationId).toBe('org-a');
+    expect(options).toMatchObject({ batchImport: true, source: 'batch-import' });
+    expect(sampleData.collectionSite).toBe('org-a');
+  });
+
+  // #1376 box 4: the participant's organization is its own decision, so the
+  // participant a sample row creates gets none from the upload.
+  it('creates the participant with no organizationId while the sample carries it (#1376)', async () => {
+    const db = createDb();
+    const createPatientSpy = vi.spyOn(patientService, 'createPatient').mockResolvedValue({
+      _id: 'patient-object-id-new',
+      participantId: '87654321',
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-new' });
+
+    await batchValidationEngine.persistSample(
+      db,
+      {
+        patientName: 'Paciente Org',
+        birthDate: '1990-01-01',
+        sex: 'F',
+        email: 'paciente.org@example.com',
+        consentTemplateId: 'template-1',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+      },
+      3,
+      { organizationId: 'org-a' }
+    );
+
+    expect(createPatientSpy).toHaveBeenCalledTimes(1);
+    const patientOptions = createPatientSpy.mock.calls[0][2];
+    expect(patientOptions).toMatchObject({ batchImport: true, source: 'batch-import' });
+    expect(patientOptions).not.toHaveProperty('organizationId');
+    expect(createSampleSpy.mock.calls[0][2].organizationId).toBe('org-a');
   });
 
   it('returns INVALID when required sample fields are missing', async () => {
@@ -281,10 +413,43 @@ describe('batch-validation-engine.service', () => {
     expect(result.errors[0]).toMatch(/Paciente não encontrado/);
   });
 
+  it('links an existing patient from a participantId column, the header the import template uses', async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-6', participantId: '12345678' },
+    });
+    const createPatientSpy = vi.spyOn(patientService, 'createPatient');
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+      _id: 'sample-object-id-6',
+      specimenId: 'BR-2026-000006',
+    });
+
+    const result = await batchValidationEngine.persistSample(
+      db,
+      {
+        participantId: '12345678',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+      },
+      10
+    );
+
+    expect(db.collection('patients').findOne).toHaveBeenCalledWith({ participantId: '12345678' });
+    expect(createPatientSpy).not.toHaveBeenCalled();
+    expect(createSampleSpy).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ participantId: '12345678', patientObjectId: 'patient-object-id-6' }),
+      expect.anything()
+    );
+    expect(result.classification).not.toBe('INVALID');
+    expect(result.persistedIds).toContain('sample-object-id-6');
+  });
+
   it('returns INVALID with the thrown error message when createSample rejects', async () => {
     const db = createDb({
       patientID: '12345678',
-      patient: { _id: 'patient-object-id-3', patientID: '12345678' },
+      patient: { _id: 'patient-object-id-3', participantId: '12345678' },
     });
 
     vi.spyOn(sampleService, 'createSample').mockRejectedValue(new Error('storage collision'));
@@ -307,7 +472,7 @@ describe('batch-validation-engine.service', () => {
   it('returns INVALID with a fallback message when the persist step throws a non-Error value', async () => {
     const db = createDb({
       patientID: '12345678',
-      patient: { _id: 'patient-object-id-4', patientID: '12345678' },
+      patient: { _id: 'patient-object-id-4', participantId: '12345678' },
     });
 
     vi.spyOn(sampleService, 'createSample').mockRejectedValue('a plain string rejection');
@@ -419,16 +584,13 @@ describe('batch-validation-engine.service processBatchImport', () => {
   });
 
   // #900: every other test in this file spies over StagingImport.updateOne,
-  // so a rename of the persisted field to a name the schema does not declare
-  // would stay green here forever -- the schema never runs. This one goes
-  // through the real model instead (mirrors
-  // tests/unit/staging-import.service.test.js:179-192, which pins the same
-  // failure mode for the sibling service): errors/errorEntry must land on
-  // `importErrors`, the field the StagingImport schema (strict: true)
-  // actually declares, or Mongoose silently strips the whole $push.
-  it('writes to a field that actually exists on the StagingImport schema (#900)', () => {
+  // so a rename of the persisted field to a name the document does not
+  // declare would stay green here forever. errors/errorEntry must land on
+  // `importErrors`. Under the Mongoose schema (strict) a write elsewhere was
+  // silently stripped; the #830 native store throws on it instead.
+  it('writes to a field that actually exists on the StagingImport document (#900)', () => {
     const entry = { row: 4, classification: 'INVALID', errors: ['sampleType é obrigatório'] };
-    const doc = new StagingImport({
+    const doc = StagingImport.buildDocument({
       jobId: 'schema-check-batch-validation',
       fileName: 'data.csv',
       status: 'processing',
@@ -438,8 +600,15 @@ describe('batch-validation-engine.service processBatchImport', () => {
       rawData: { storagePath: '/tmp/data.csv' },
     });
 
-    expect(doc.toObject().importErrors).toHaveLength(1);
-    expect(doc.toObject().importErrors[0]).toMatchObject(entry);
+    expect(doc.importErrors).toHaveLength(1);
+    expect(doc.importErrors[0]).toMatchObject(entry);
+    expect(StagingImport.FIELDS).toContain('importErrors');
+  });
+
+  it('refuses an update to an undeclared field instead of stripping it (#830)', async () => {
+    await expect(
+      StagingImport.updateOne({ jobId: 'x' }, { $push: { errors: { row: 1 } } }, { collection: () => ({}) })
+    ).rejects.toThrow(/não declarado/);
   });
 
   // The wiring, not the writer: a quarantine helper nothing calls is exactly
@@ -485,6 +654,54 @@ describe('batch-validation-engine.service processBatchImport', () => {
 
     // And the job document points at its own quarantine rather than orphaning it.
     expect(result.quarantineBatchId).toBe('batch-813-wiring');
+  });
+
+  // #1376: the worker has no request; the organization staged at upload is
+  // the one each sample row is persisted with.
+  it('passes the staged rawData.organizationId to persistSample (#1376)', async () => {
+    const filePath = writeTmpFile('samples-org.json', JSON.stringify([
+      { participantId: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', barcode: 'B-1' },
+    ]));
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      jobId: 'job-1376',
+      fileName: 'samples-org.json',
+      rawData: { storagePath: filePath, organizationId: 'org-a' },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    const persistSpy = vi.spyOn(batchValidationEngine, 'persistSample').mockResolvedValue({
+      classification: 'VALID', errors: [], warnings: [], persistedId: 'sample-1',
+    });
+
+    await batchValidationEngine.processBatchImport({}, 'job-1376');
+
+    expect(persistSpy).toHaveBeenCalledTimes(1);
+    expect(persistSpy.mock.calls[0][3]).toEqual({ organizationId: 'org-a' });
+  });
+
+  // #1385: the quarantine batch carries the organization staged at upload.
+  it('passes the staged rawData.organizationId to quarantineRejectedRows (#1385)', async () => {
+    const filePath = writeTmpFile('samples-org-quarantine.json', JSON.stringify([
+      { participantId: '87654321', sampleType: '', sampleOrigin: 'Coleta', barcode: 'B-2' },
+    ]));
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      jobId: 'job-1385',
+      fileName: 'samples-org-quarantine.json',
+      rawData: { storagePath: filePath, organizationId: 'org-a' },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    vi.spyOn(batchValidationEngine, 'persistSample').mockResolvedValue({
+      classification: 'INVALID', errors: ['sampleType é obrigatório'], warnings: [],
+    });
+    const quarantineSpy = vi
+      .spyOn(batchValidationEngine, 'quarantineRejectedRows')
+      .mockResolvedValue('batch-1385');
+
+    await batchValidationEngine.processBatchImport({}, 'job-1385');
+
+    expect(quarantineSpy).toHaveBeenCalledTimes(1);
+    expect(quarantineSpy.mock.calls[0][1].organizationId).toBe('org-a');
   });
 
   it('does not open a quarantine batch when every row succeeded', async () => {
@@ -619,7 +836,7 @@ describe('batch-validation-engine.service processBatchImport', () => {
     vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     const db = createDb({
       patientID: '12345678',
-      patient: { _id: 'patient-object-id-5', patientID: '12345678' },
+      patient: { _id: 'patient-object-id-5', participantId: '12345678' },
     });
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-object-id-5' });
 
@@ -642,10 +859,11 @@ describe('batch-validation-engine.service processBatchImport', () => {
 describe('#813 quarantine of rejected rows', () => {
   function quarantineDb() {
     const importBatches = {
-      insertOne: vi.fn(async () => ({ insertedId: 'batch-813' })),
+      insertOne: vi.fn(async (doc) => ({ insertedId: doc._id })),
     };
     const stagingRecords = {
       insertMany: vi.fn(async (docs) => ({ insertedCount: docs.length })),
+      deleteMany: vi.fn(async () => ({ deletedCount: 0 })),
     };
     const db = {
       collection: vi.fn((name) => {
@@ -685,9 +903,9 @@ describe('#813 quarantine of rejected rows', () => {
       counts: { total: 10, success: 8 },
     });
 
-    expect(batchId).toBe('batch-813');
     expect(importBatches.insertOne).toHaveBeenCalledTimes(1);
     const doc = importBatches.insertOne.mock.calls[0][0];
+    expect(batchId).toBe(doc._id);
     expect(doc).toMatchObject({
       status: 'QUARANTINED',
       source: 'ASYNC_BATCH',
@@ -705,7 +923,7 @@ describe('#813 quarantine of rejected rows', () => {
   it('writes one staging record per rejected row, carrying the original row data', async () => {
     const { db, stagingRecords } = quarantineDb();
 
-    await batchValidationEngine.quarantineRejectedRows(db, {
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
       jobId: 'job-813',
       dataType: 'samples',
       fileName: 'amostras.csv',
@@ -714,10 +932,14 @@ describe('#813 quarantine of rejected rows', () => {
     });
 
     expect(stagingRecords.insertMany).toHaveBeenCalledTimes(1);
-    const docs = stagingRecords.insertMany.mock.calls[0][0];
+    const stored = stagingRecords.insertMany.mock.calls[0][0];
+    // #807: sealed at rest -- no row value in the stored document.
+    expect(JSON.stringify(stored)).not.toContain('NOPE');
+    expect(stored[0].sealedPayload).toMatchObject({ alg: 'aes-256-gcm' });
+    const docs = stored.map(revealStagedRecord);
     expect(docs).toHaveLength(2);
+    expect(docs[0].batchId).toBe(batchId);
     expect(docs[0]).toMatchObject({
-      batchId: 'batch-813',
       rowNumber: 2,
       status: 'ERROR',
       errors: ['sampleType inválido'],
@@ -726,6 +948,44 @@ describe('#813 quarantine of rejected rows', () => {
     });
     expect(docs[1].rowNumber).toBe(5);
     expect(docs[1].row).toEqual({ participantId: '87654321', sampleType: '' });
+  });
+
+  // #1385: the batch and each of its rows carry the uploader's organization.
+  it('#1385: stamps organizationId on the batch document and every row', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+
+    await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-1385',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+      organizationId: 'org-a',
+    });
+
+    expect(importBatches.insertOne.mock.calls[0][0].organizationId).toBe('org-a');
+    const rows = stagingRecords.insertMany.mock.calls[0][0];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.organizationId).toBe('org-a');
+    }
+  });
+
+  it('#1385: stamps organizationId null when none is given', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+
+    await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-1385',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+    });
+
+    expect(importBatches.insertOne.mock.calls[0][0].organizationId).toBeNull();
+    for (const row of stagingRecords.insertMany.mock.calls[0][0]) {
+      expect(row.organizationId).toBeNull();
+    }
   });
 
   it('writes nothing when no row was rejected', async () => {
@@ -744,31 +1004,70 @@ describe('#813 quarantine of rejected rows', () => {
     expect(stagingRecords.insertMany).not.toHaveBeenCalled();
   });
 
-  // #807/#814: a patient row carries patientName/birthDate/email -- civil
-  // identifiers, which are encrypted at rest everywhere else (#566). Staging
-  // them here would widen a known plaintext-at-rest problem to the most
-  // sensitive of the import paths, which is exactly what #814 says to settle
-  // (via #807) before quarantining a patient path. Samples are pseudonymous
-  // (participantId), which is why #787 was able to quarantine them.
-  it('refuses to quarantine patient rows while #807 is open', async () => {
+  // #813's patients half, unblocked by #807: a patient row carries
+  // patientName/birthDate/email, so it is quarantined like a sample row but
+  // sealed at rest, as participantIdentities stores the same values (#566).
+  it('quarantines patient rows too, with the civil values sealed at rest', async () => {
     const { db, importBatches, stagingRecords } = quarantineDb();
 
     const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
       jobId: 'job-813',
       dataType: 'patients',
       fileName: 'pacientes.csv',
-      rejected: [{ rowNumber: 2, row: { patientName: 'Maria', birthDate: '01/01/1990' }, errors: ['x'] }],
+      rejected: [{ rowNumber: 2, row: { patientName: 'Maria Souza', birthDate: '01/01/1990' }, errors: ['x'] }],
       counts: { total: 3, success: 2 },
     });
 
-    expect(batchId).toBeNull();
-    expect(importBatches.insertOne).not.toHaveBeenCalled();
-    expect(stagingRecords.insertMany).not.toHaveBeenCalled();
+    expect(batchId).toBe(importBatches.insertOne.mock.calls[0][0]._id);
+    expect(importBatches.insertOne.mock.calls[0][0]).toMatchObject({ type: 'ASYNC_BATCH_IMPORT', dataType: 'patients' });
+    const stored = stagingRecords.insertMany.mock.calls[0][0];
+    expect(stored).toHaveLength(1);
+    expect(JSON.stringify(stored)).not.toContain('Maria Souza');
+    expect(JSON.stringify(stored)).not.toContain('01/01/1990');
+    expect(stored[0]).toMatchObject({ rowNumber: 2, status: 'ERROR', errors: ['x'] });
+    expect(revealStagedRecord(stored[0]).row).toEqual({ patientName: 'Maria Souza', birthDate: '01/01/1990' });
   });
 
   // Quarantine is a record-keeping step appended to an import that already
   // ran. A failure to write it must not turn a partially-successful import
   // into a failed one -- same posture as the LGPD path's own writer.
+  // #1295: the batch was written before its rows, so a reader that found the
+  // batch (the e2e spec polling by jobId, or the quarantine route) could read
+  // it with no rows yet. The rows go first; the batch makes them visible.
+  it('writes the staging rows before the batch that points at them', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-1295',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+    });
+
+    expect(stagingRecords.insertMany.mock.invocationCallOrder[0]).toBeLessThan(
+      importBatches.insertOne.mock.invocationCallOrder[0]
+    );
+    expect(revealStagedRecord(stagingRecords.insertMany.mock.calls[0][0][0]).batchId).toBe(batchId);
+  });
+
+  it('removes the written rows when the batch itself cannot be written', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+    importBatches.insertOne.mockRejectedValue(new Error('mongo down'));
+
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-1295',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+    });
+
+    expect(batchId).toBeNull();
+    const stagedBatchId = revealStagedRecord(stagingRecords.insertMany.mock.calls[0][0][0]).batchId;
+    expect(stagingRecords.deleteMany).toHaveBeenCalledWith({ batchId: stagedBatchId });
+  });
+
   it('swallows a staging failure instead of failing the import', async () => {
     const { db, importBatches } = quarantineDb();
     importBatches.insertOne.mockRejectedValue(new Error('mongo down'));
@@ -872,6 +1171,85 @@ describe('#939 reading a quarantined ASYNC_BATCH_IMPORT batch back', () => {
     expect(importStagingRecords.find.mock.results[0].value.sort).toHaveBeenCalledWith({ rowNumber: 1 });
   });
 
+  // #807: rows are sealed at rest; the reader hands them back as staged, and
+  // a row staged before #807 (plaintext) reads back unchanged.
+  it('unseals the staged row for the reader, and passes a legacy row through', async () => {
+    const batchId = new ObjectId();
+    const sealed = sealStagedRecord({ batchId, rowNumber: 2, status: 'ERROR', row: { patientName: 'Maria Souza' } });
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED' },
+      { __collection: 'import_staging_records', ...sealed },
+      { __collection: 'import_staging_records', batchId, rowNumber: 5, status: 'ERROR', row: { participantId: '1' } },
+    ]);
+
+    const { records } = await batchValidationEngine.getQuarantineBatch(db, String(batchId));
+
+    expect(records[0].row).toEqual({ patientName: 'Maria Souza' });
+    expect(records[0]).not.toHaveProperty('sealedPayload');
+    expect(records[1].row).toEqual({ participantId: '1' });
+  });
+
+  // #1385: an organization scope reaches only a batch stamped with one of
+  // its organizations; an unstamped batch only global scope reaches; no
+  // scope passed is an internal caller.
+  it('#1385: 403s an org-b scope on an org-a batch', async () => {
+    const batchId = new ObjectId();
+    const { db, importStagingRecords } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED', organizationId: 'org-a' },
+    ]);
+
+    await expect(
+      batchValidationEngine.getQuarantineBatch(db, String(batchId), {
+        organizationScope: { scope: 'organization', organizationIds: ['org-b'] },
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(importStagingRecords.find).not.toHaveBeenCalled();
+  });
+
+  it('#1385: 403s an organization scope on an unstamped (legacy) batch', async () => {
+    const batchId = new ObjectId();
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED' },
+    ]);
+
+    await expect(
+      batchValidationEngine.getQuarantineBatch(db, String(batchId), {
+        organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('#1385: an org-a scope reads its org-a batch, and global and no scope read any batch', async () => {
+    const stampedId = new ObjectId();
+    const legacyId = new ObjectId();
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: stampedId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED', organizationId: 'org-a' },
+      { __collection: 'import_batches', _id: legacyId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED' },
+    ]);
+    const orgA = { scope: 'organization', organizationIds: ['org-a'] };
+    const global = { scope: 'global', organizationIds: [] };
+
+    await expect(batchValidationEngine.getQuarantineBatch(db, String(stampedId), { organizationScope: orgA }))
+      .resolves.toMatchObject({ batch: { organizationId: 'org-a' } });
+    await expect(batchValidationEngine.getQuarantineBatch(db, String(legacyId), { organizationScope: global }))
+      .resolves.toMatchObject({ batch: { status: 'QUARANTINED' } });
+    await expect(batchValidationEngine.getQuarantineBatch(db, String(legacyId)))
+      .resolves.toMatchObject({ batch: { status: 'QUARANTINED' } });
+  });
+
+  it('#1385: 404 stays ahead of 403 for a batch of another type', async () => {
+    const batchId = new ObjectId();
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'LGPD_SAMPLE_CSV', status: 'QUARANTINED' },
+    ]);
+
+    await expect(
+      batchValidationEngine.getQuarantineBatch(db, String(batchId), {
+        organizationScope: { scope: 'organization', organizationIds: ['org-b'] },
+      })
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it('400s on an id that is not a valid ObjectId', async () => {
     const { db } = createReaderDb([]);
 
@@ -903,8 +1281,9 @@ describe('#939 GET /batch/quarantine/:id route registration', () => {
       (item) => item.route && item.route.path === '/batch/quarantine/:id' && item.route.methods.get
     );
     expect(layer).toBeTruthy();
-    // authenticate, requirePermission('uploadFiles'), the controller handler.
-    expect(layer.route.stack).toHaveLength(3);
+    // authenticate, requirePermission('uploadFiles'), requireOrganizationScope
+    // (#1385), the controller handler.
+    expect(layer.route.stack).toHaveLength(4);
 
     const req = { method: 'GET', user: { userID: 'user-939' }, app: { locals: { db: {} } } };
     const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };

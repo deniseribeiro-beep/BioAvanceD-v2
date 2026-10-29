@@ -61,12 +61,15 @@ class SampleMovementModel {
     };
   }
 
-  static async generateMovementID(db) {
+  static async generateMovementID(db, session) {
     const countersCollection = db.collection('counters');
+    // #1369: inside a transaction the id is taken in the caller's session, so
+    // it is given back on abort and does not conflict with the same
+    // transaction's later in-session bump of this counter.
     const counter = await countersCollection.findOneAndUpdate(
       { _id: 'sample_movements' },
       { $inc: { seq: 1 }, $setOnInsert: { createdAt: new Date() } },
-      { upsert: true, returnDocument: 'after' }
+      { upsert: true, returnDocument: 'after', ...(session ? { session } : {}) }
     );
     // mongodb driver v5+ returns the modified document directly, not
     // wrapped in `{ value: doc }` (that shape only applies with

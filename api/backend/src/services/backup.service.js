@@ -6,8 +6,13 @@ const { MongoClient, BSON } = require('mongodb');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const backupPolicyService = require('./backup-policy.service');
-const keyRegistry = require('../config/keyRegistry');
-const { encryptFileBuffer, decryptFileBuffer } = require('../utils/fileCrypto');
+const { decryptFileBuffer } = require('../utils/fileCrypto');
+// #1325: taken as an object, so exportSecondaryStores is looked up per call.
+const backupStores = require('./backup-stores.service');
+// #1325 (RNF010 C1): taken as an object too, so uploadBackupRunOffsite is looked up per call.
+const backupOffsite = require('./backup-offsite.service');
+
+const { assertEncryptionKeyConfigured, encryptFileInPlace } = backupStores;
 
 const DEFAULT_RETENTION_DAYS = 30;
 
@@ -34,63 +39,26 @@ async function resolveRetentionDays(db) {
   return Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
 }
 
-// #734: mirrors resolveRetentionDays's db-optional, fail-open-to-prior-
-// behavior pattern, but for encryptionEnabled rather than retentionDays.
-// "Prior behavior" here is plaintext (encryption never existed before this
-// change), so the no-db and policy-lookup-failed paths both resolve to
-// false -- every existing caller that never threaded a db through keeps
-// writing exactly the bytes it always did. Only a policy actually read
-// (successfully, with an explicit boolean) can turn encryption on.
+// #1325: unlike resolveRetentionDays, this fails closed. A run whose policy
+// cannot be read (no db handle, or the lookup throws) is aborted rather
+// than written in plaintext (RNF010: "cópias criptografadas"). Only a
+// policy actually read with an explicit encryptionEnabled: false turns
+// encryption off; true, a missing field or a non-boolean value encrypts.
+// That last rule is an inference, not a stated one: the policy default is
+// true, validatePolicy admits only booleans, and #734 already aborts
+// rather than write plaintext when the key is missing
+// (assertEncryptionKeyConfigured).
 async function resolveEncryptionEnabled(db) {
-  if (!db) return false;
+  if (!db) throw new Error('Sem conexão com o banco: a política de criptografia de backup não pode ser lida. Backup abortado para não gravar dados em texto plano.');
 
+  let policy;
   try {
-    const policy = await backupPolicyService.getPolicy(db);
-    if (typeof policy?.encryptionEnabled === 'boolean') {
-      return policy.encryptionEnabled;
-    }
+    policy = await backupPolicyService.getPolicy(db);
   } catch (error) {
-    logger.error('Erro ao buscar política de criptografia de backup, usando padrão:', error.message);
+    throw new Error(`Falha ao ler a política de criptografia de backup: ${error.message}. Backup abortado para não gravar dados em texto plano.`);
   }
 
-  return false;
-}
-
-// #734: encryptFileBuffer (fileCrypto.js) returns null rather than throwing
-// when ENCRYPTION_KEY isn't configured -- the right behavior for its other
-// caller (sample-file.controller.js), which falls back to storing
-// plaintext. That silent fallback is exactly the defect this issue is
-// about, so backups check for a configured key up front and abort loudly
-// instead of ever reaching that null.
-function assertEncryptionKeyConfigured() {
-  if (!keyRegistry.getActiveKey()) {
-    throw new Error(
-      'Criptografia de backup habilitada (encryptionEnabled) mas nenhuma chave de criptografia está configurada (ENCRYPTION_KEY). Backup abortado para não gravar dados em texto plano.'
-    );
-  }
-}
-
-// Encrypts one file's bytes in place, returning the per-file envelope
-// (algorithm/keyId/iv/tag) to be recorded in manifest.json. Field names
-// match sample-file.controller.js's persisted shape so decryptFileBuffer
-// can be handed the entry object directly on restore.
-async function encryptFileInPlace(filePath) {
-  const plaintext = await fs.promises.readFile(filePath);
-  const encryption = encryptFileBuffer(plaintext);
-  if (!encryption) {
-    // assertEncryptionKeyConfigured() is always called before this, so
-    // reaching here means the key vanished between the two checks -- still
-    // fail loudly rather than silently leaving plaintext on disk.
-    assertEncryptionKeyConfigured();
-  }
-  await fs.promises.writeFile(filePath, encryption.ciphertext);
-  return {
-    encrypted: true,
-    encryptionAlgorithm: encryption.algorithm,
-    encryptionKeyId: encryption.keyId,
-    encryptionIv: encryption.iv,
-    encryptionTag: encryption.tag
-  };
+  return policy?.encryptionEnabled !== false;
 }
 
 // mongodump path: encrypts every file under dirPath recursively (the dump
@@ -778,6 +746,11 @@ async function writeJsonBackup(backupDir, mongoUri, encryptionEnabled = false) {
       }
     }
 
+    // #1325: the Neo4j and InfluxDB exports, encrypted by their own module
+    // and covered by the checksum below. A throw here fails the run through
+    // performBackup's fallback catch.
+    manifest.stores = await backupStores.exportSecondaryStores(backupDir, encryptionEnabled);
+
     const checksum = await computeDirChecksum(backupDir);
     manifest.checksum = checksum;
 
@@ -792,14 +765,15 @@ async function writeJsonBackup(backupDir, mongoUri, encryptionEnabled = false) {
       path: backupDir,
       mode: 'json-fallback',
       collections: manifest.collections.length,
-      checksum
+      checksum,
+      stores: manifest.stores
     };
   } finally {
     await client.close();
   }
 }
 
-async function performBackup(retentionDaysOverride, encryptionEnabled = false) {
+async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
   const mongoUri = env.MONGO_URI;
   if (!mongoUri) {
     logger.warn('Backup ignorado: MONGO_URI não configurado.');
@@ -844,6 +818,22 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = false) {
       encryptedFiles = await encryptDirectoryFilesInPlace(backupDir);
     }
 
+    // #1325: the Neo4j and InfluxDB exports run after the dump tree is
+    // encrypted, so their files are encrypted once, by their own module, and
+    // before the checksum, so it covers them. A store error is answered here,
+    // never by the catch below: its dumpBinaryMissing test matches ENOENT,
+    // which a store's fs or socket error can carry, and would send the run to
+    // the JSON fallback. No manifest.json is written for this folder, so a
+    // restore test of it fails.
+    let stores;
+    try {
+      stores = await backupStores.exportSecondaryStores(backupDir, encryptionEnabled);
+    } catch (storeError) {
+      const storeDetails = storeError?.message || String(storeError);
+      logger.error('Erro ao executar backup:', storeDetails);
+      return { success: false, error: storeDetails };
+    }
+
     const checksum = await computeDirChecksum(backupDir);
     await fs.promises.writeFile(
       path.join(backupDir, 'manifest.json'),
@@ -852,15 +842,29 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = false) {
         dbName: resolveDatabaseName(mongoUri),
         type: 'mongodump',
         checksum,
-        ...(encryptionEnabled ? { encrypted: true, encryptedFiles } : {})
+        ...(encryptionEnabled ? { encrypted: true, encryptedFiles } : {}),
+        stores
       }, null, 2),
       'utf8'
     );
 
+    // #1325 (RNF010 C1): the off-site copy runs once the manifest is written
+    // and before retention. Its error is answered here, as a store error is,
+    // so an ENOENT in its message never starts the JSON fallback. The local
+    // copy is complete, so the run keeps its path and checksum.
+    let offsite;
+    try {
+      offsite = await backupOffsite.uploadBackupRunOffsite(backupDir, encryptionEnabled);
+    } catch (offsiteError) {
+      const offsiteDetails = offsiteError?.message || String(offsiteError);
+      logger.error('Erro ao executar backup:', offsiteDetails);
+      return { success: false, error: offsiteDetails, path: backupDir, checksum };
+    }
+
     const retentionDays = Number.isFinite(Number(retentionDaysOverride)) ? Number(retentionDaysOverride) : Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
     await cleanupOldBackups(baseDir, retentionDays);
 
-    return { success: true, path: backupDir, mode: 'mongodump', checksum };
+    return { success: true, path: backupDir, mode: 'mongodump', checksum, stores, offsite };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
     const dumpBinaryMissing = /mongodump: not found|is not recognized|ENOENT/i.test(String(details || ''));
@@ -869,12 +873,14 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = false) {
       try {
         logger.warn('mongodump indisponível. Usando fallback de backup em JSON.');
         const fallbackResult = await writeJsonBackup(backupDir, mongoUri, encryptionEnabled);
+        // #1325 (RNF010 C1): a throw here is answered by the catch below.
+        const fallbackOffsite = await backupOffsite.uploadBackupRunOffsite(backupDir, encryptionEnabled);
 
         const retentionDays = Number.isFinite(Number(retentionDaysOverride)) ? Number(retentionDaysOverride) : Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
         await cleanupOldBackups(baseDir, retentionDays);
 
         logger.info(`✅ Backup fallback concluído: ${backupDir}`);
-        return fallbackResult;
+        return { ...fallbackResult, offsite: fallbackOffsite };
       } catch (fallbackError) {
         const fallbackDetails = fallbackError?.message || String(fallbackError);
         logger.error('Erro no fallback de backup JSON:', fallbackDetails);
@@ -891,12 +897,20 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = false) {
 // whichever internal branch it takes -- records exactly one history
 // entry, instead of scattering recordBackupHistory calls across each
 // branch of performBackup(). `db` is optional (see recordBackupHistory);
-// existing callers that don't pass one keep their prior behavior exactly.
+// a run without one records nothing, and fails (#1325) because its
+// encryption policy cannot be read.
 async function runBackup(db) {
   const startedAt = new Date();
   const retentionDays = await resolveRetentionDays(db);
-  const encryptionEnabled = await resolveEncryptionEnabled(db);
-  const result = await performBackup(retentionDays, encryptionEnabled);
+  let result;
+  let encryptionEnabled;
+  try {
+    encryptionEnabled = await resolveEncryptionEnabled(db);
+  } catch (err) {
+    logger.error('Erro ao executar backup:', err.message);
+    result = { success: false, error: err.message };
+  }
+  if (!result) result = await performBackup(retentionDays, encryptionEnabled);
 
   await recordBackupHistory(db, {
     startedAt,
@@ -905,7 +919,8 @@ async function runBackup(db) {
     mode: result.mode || null,
     path: result.path || null,
     checksum: result.checksum || null,
-    error: result.error || null
+    error: result.error || null,
+    offsite: result.offsite || null
   });
 
   return result;
@@ -1068,6 +1083,32 @@ async function runControlledRestoreTest(backupPath) {
   // cases, so a random per-file IV never perturbs it.
   const recomputedChecksum = await computeDirChecksum(backupPath);
   const checksumVerified = !!(manifest && manifest.checksum && manifest.checksum === recomputedChecksum);
+  // #1325: a checksum that does not match, or a backup with none to match,
+  // fails the test (RNF010: "validados por checksum"). The restore below
+  // still runs so its counts stay diagnostic.
+  let checksumError = null;
+  if (!checksumVerified) {
+    checksumError = manifest && manifest.checksum
+      ? 'Checksum do backup não confere com o manifest.json: backup alterado ou corrompido.'
+      : 'Backup sem manifest.json com checksum: integridade não verificável.';
+  }
+
+  // #1325 (RNF010 C5): the Neo4j and InfluxDB exports are decrypted and
+  // parsed, never loaded into a database. A store that fails fails the test;
+  // the Mongo restore below still runs for its counts, as with the checksum.
+  // Its own catch, so an unexpected throw (say an ENOENT) can never reach the
+  // catch below and be read as a missing mongorestore binary.
+  let storesCheck;
+  try {
+    storesCheck = await backupStores.verifySecondaryStores(
+      backupPath,
+      manifest ? manifest.stores : undefined,
+      getRestoreScratchBaseDir()
+    );
+  } catch (storesError) {
+    storesCheck = { stores: null, error: `Teste de restauração dos stores falhou: ${storesError?.message || String(storesError)}` };
+  }
+  const testError = [checksumError, storesCheck.error].filter(Boolean).join(' ') || null;
 
   const sourceDbName = (manifest && manifest.dbName) || resolveDatabaseName(mongoUri);
   const scratchDb = `${sourceDbName}_restoretest_${Date.now()}`;
@@ -1109,14 +1150,16 @@ async function runControlledRestoreTest(backupPath) {
       await countScratchContents(mongoUri, scratchDb);
 
     return {
-      success: true,
+      success: checksumVerified && !storesCheck.error,
+      ...(testError ? { error: testError } : {}),
       testedFrom: path.basename(backupPath),
       testedAt: new Date(),
       mode: 'mongorestore',
       scratchDb,
       checksumVerified,
       restoredCollections,
-      restoredDocuments
+      restoredDocuments,
+      stores: storesCheck.stores
     };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
@@ -1130,21 +1173,25 @@ async function runControlledRestoreTest(backupPath) {
         // same `restored*` names the mongorestore path reports, so callers
         // and the restoreTestHistory entry see one shape regardless of which
         // path ran.
+        const fallbackError = fallback.error || testError;
         return {
           ...fallback,
+          success: fallback.success === true && checksumVerified && !storesCheck.error,
+          ...(fallbackError ? { error: fallbackError } : {}),
           scratchDb,
           checksumVerified,
           restoredCollections: fallback.collections ?? null,
-          restoredDocuments: fallback.documents ?? null
+          restoredDocuments: fallback.documents ?? null,
+          stores: storesCheck.stores
         };
       } catch (fallbackError) {
         const fallbackDetails = fallbackError?.message || String(fallbackError);
         logger.error('Erro no fallback de teste de restauração JSON:', fallbackDetails);
-        return { success: false, error: fallbackDetails, checksumVerified };
+        return { success: false, error: fallbackDetails, checksumVerified, stores: storesCheck.stores };
       }
     }
 
-    return { success: false, error: details || 'Erro ao testar restauração', checksumVerified };
+    return { success: false, error: details || 'Erro ao testar restauração', checksumVerified, stores: storesCheck.stores };
   } finally {
     await dropScratch();
     await cleanupDecryptedRestoreCopy(scratchDecryptDir);
@@ -1171,6 +1218,8 @@ async function testRestoreBackup(backupPath, db) {
     // healthy one, so the document count is what makes the record diagnostic
     // rather than merely present.
     restoredDocuments: typeof result.restoredDocuments === 'number' ? result.restoredDocuments : null,
+    // #1325: per-store verified/skipped/failed, null when not tested.
+    stores: result.stores ?? null,
     error: result.error || null
   });
 

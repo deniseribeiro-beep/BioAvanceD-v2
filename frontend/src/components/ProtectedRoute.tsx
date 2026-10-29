@@ -7,9 +7,12 @@ interface ProtectedRouteProps {
   children: React.ReactNode;
   requiredAccessType?: number;
   requiredRole?: RoleName | RoleName[];
+  // #1239: admit only the backend's audit readers (administrator or the
+  // additive auditor role), from the user's isAuditReader flag.
+  requireAuditReader?: boolean;
 }
 
-export default function ProtectedRoute({ children, requiredAccessType, requiredRole }: ProtectedRouteProps) {
+export default function ProtectedRoute({ children, requiredAccessType, requiredRole, requireAuditReader }: ProtectedRouteProps) {
     const renderAccessDenied = (message: string, currentRole: string) => (
       <div className="protected-route-access-denied">
         <h2>Acesso Negado</h2>
@@ -40,6 +43,13 @@ export default function ProtectedRoute({ children, requiredAccessType, requiredR
       console.log('[ProtectedRoute] Redirecionando para login - sem autenticação');
     }
     return <Navigate to="/login" replace />;
+  }
+
+  if (requireAuditReader && user?.isAuditReader !== true) {
+    return renderAccessDenied(
+      'Esta página requer o perfil Administrador ou Auditor.',
+      user?.roleName || 'Não definida'
+    );
   }
 
   // Verifica acesso por role (prioridade)

@@ -43,7 +43,7 @@ function createMoveSampleController() {
 
       const storageRepository = new MongoStorageRepository(db);
       const auditRepository = new MongoAuditRepository(db);
-      const lineageRepository = new LineageRepository(req.app.locals.neo4jDriver || null);
+      const lineageRepository = new LineageRepository(db);
 
       const useCase = new MoveSampleUseCase({
         storageRepository,

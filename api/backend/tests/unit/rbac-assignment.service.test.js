@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { grantRoleForAccessType, changeUserRole, backfillUserRoleAssignments, userHasPermission, getActiveRoleCodes, isAuditReader, isAdministrator, findUserAccountIdsByRoleCodes, grantAdditionalRole, revokeAdditionalRole, updateAssignmentScope, resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate, assertOrganizationFieldNotReparented } = require('../../src/services/rbac-assignment.service');
+const { grantRoleForAccessType, changeUserRole, backfillUserRoleAssignments, userHasPermission, getActiveRoleCodes, isAuditReader, isAdministrator, findUserAccountIdsByRoleCodes, grantAdditionalRole, revokeAdditionalRole, updateAssignmentScope, listOrganizationScopes, grantOrganizationScope, revokeOrganizationScope, resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate, assertOrganizationFieldNotReparented } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
@@ -519,6 +519,108 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     expect(await resolveUserOrganizationScope(db, 'u1')).toEqual({ scope: 'none', organizationIds: [] });
   });
 
+  // #1358: a user's role in several organizations, one assignment per scope.
+  describe('#1358: several organization scopes', () => {
+    const coordIn = (assignmentId, scopeId) => ({ assignmentId, userAccountId: 'u1', roleId: 'role-coord', scopeType: 'organization', scopeId, assignmentStatus: 'active', validUntil: null });
+    const active = (assignments) => assignments.filter((a) => a.assignmentStatus === 'active');
+
+    it('grantOrganizationScope adds an assignment of the primary role for the new organization, and resolveUserOrganizationScope sees both', async () => {
+      const assignments = [coordIn('a1', 'org-1')];
+      const db = buildDb({ roles, assignments });
+
+      const { assignment, created } = await grantOrganizationScope(db, { userAccountId: 'u1', organizationId: 'org-2', grantedBy: 'admin1' });
+
+      expect(created).toBe(true);
+      expect(assignment).toMatchObject({ roleId: 'role-coord', scopeType: 'organization', scopeId: 'org-2', grantedBy: 'admin1' });
+      expect(await resolveUserOrganizationScope(db, 'u1')).toEqual({ scope: 'organization', organizationIds: ['org-1', 'org-2'] });
+      expect(await listOrganizationScopes(db, 'u1')).toEqual({ global: false, organizationIds: ['org-1', 'org-2'] });
+    });
+
+    it('grantOrganizationScope is idempotent for an organization already held', async () => {
+      const assignments = [coordIn('a1', 'org-1')];
+      const db = buildDb({ roles, assignments });
+
+      const { assignment, created } = await grantOrganizationScope(db, { userAccountId: 'u1', organizationId: 'org-1', grantedBy: 'admin1' });
+
+      expect(created).toBe(false);
+      expect(assignment.assignmentId).toBe('a1');
+      expect(assignments).toHaveLength(1);
+    });
+
+    it('grantOrganizationScope extends the primary role only, never an additive auditor grant', async () => {
+      const assignments = [
+        { ...coordIn('a1', 'org-1'), roleId: 'role-auditor' },
+        { ...coordIn('a2', 'org-1'), roleId: 'role-tech' },
+      ];
+      const db = buildDb({ roles, assignments });
+
+      const { assignment } = await grantOrganizationScope(db, { userAccountId: 'u1', organizationId: 'org-2', grantedBy: 'admin1' });
+
+      expect(assignment.roleId).toBe('role-tech');
+    });
+
+    it('grantOrganizationScope refuses an Administrador (global), a user with no scoped primary role, and an unknown organization', async () => {
+      const admin = buildDb({ roles, assignments: [{ ...coordIn('a1', null), roleId: 'role-admin', scopeType: 'global' }] });
+      await expect(grantOrganizationScope(admin, { userAccountId: 'u1', organizationId: 'org-2', grantedBy: 'admin1' }))
+        .rejects.toMatchObject({ statusCode: 409 });
+
+      const none = buildDb({ roles, assignments: [] });
+      await expect(grantOrganizationScope(none, { userAccountId: 'u1', organizationId: 'org-2', grantedBy: 'admin1' }))
+        .rejects.toMatchObject({ statusCode: 409 });
+
+      const unknown = buildDb({ roles, assignments: [coordIn('a1', 'org-1')], organizations: [] });
+      await expect(grantOrganizationScope(unknown, { userAccountId: 'u1', organizationId: 'org-x', grantedBy: 'admin1' }))
+        .rejects.toThrow(/organizationId/);
+    });
+
+    it('revokeOrganizationScope revokes that organization and refuses the last one', async () => {
+      const assignments = [coordIn('a1', 'org-1'), coordIn('a2', 'org-2')];
+      const db = buildDb({ roles, assignments });
+
+      const revoked = await revokeOrganizationScope(db, { userAccountId: 'u1', organizationId: 'org-2', revokedBy: 'admin1' });
+
+      expect(revoked.map((a) => a.assignmentId)).toEqual(['a2']);
+      expect(assignments.find((a) => a.assignmentId === 'a2')).toMatchObject({ assignmentStatus: 'revoked', revokedBy: 'admin1', revocationReason: 'scope_removed' });
+      expect(await revokeOrganizationScope(db, { userAccountId: 'u1', organizationId: 'org-9', revokedBy: 'admin1' })).toEqual([]);
+      await expect(revokeOrganizationScope(db, { userAccountId: 'u1', organizationId: 'org-1', revokedBy: 'admin1' }))
+        .rejects.toMatchObject({ statusCode: 409 });
+      expect(active(assignments).map((a) => a.scopeId)).toEqual(['org-1']);
+    });
+
+    it('updateAssignmentScope given the previous home organization moves only its assignment, and merges into one already held', async () => {
+      const assignments = [coordIn('a1', 'org-1'), coordIn('a2', 'org-2')];
+      const db = buildDb({ roles, assignments });
+
+      await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: 'org-3', previousOrganizationId: 'org-1', updatedBy: 'admin1' });
+      expect(active(assignments).map((a) => a.scopeId).sort()).toEqual(['org-2', 'org-3']);
+
+      await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: 'org-2', previousOrganizationId: 'org-3', updatedBy: 'admin1' });
+      expect(active(assignments).map((a) => a.scopeId)).toEqual(['org-2']);
+      expect(assignments.find((a) => a.assignmentId === 'a1').revocationReason).toBe('scope_merged');
+    });
+
+    it('changeUserRole keeps every organization the old role held', async () => {
+      const assignments = [coordIn('a1', 'org-1'), coordIn('a2', 'org-2')];
+      const db = buildDb({ roles, assignments });
+
+      await changeUserRole(db, { userAccountId: 'u1', accessType: 2, changedBy: 'admin1', organizationId: 'org-1' });
+
+      const now = active(assignments);
+      expect(now.every((a) => a.roleId === 'role-tech')).toBe(true);
+      expect(now.map((a) => a.scopeId).sort()).toEqual(['org-1', 'org-2']);
+    });
+
+    it('changeUserRole to Administrador leaves one global assignment', async () => {
+      const assignments = [coordIn('a1', 'org-1'), coordIn('a2', 'org-2')];
+      const db = buildDb({ roles, assignments });
+
+      await changeUserRole(db, { userAccountId: 'u1', accessType: 4, changedBy: 'admin1', organizationId: 'org-1' });
+
+      expect(active(assignments)).toHaveLength(1);
+      expect(active(assignments)[0]).toMatchObject({ roleId: 'role-admin', scopeType: 'global' });
+    });
+  });
+
   it('backfillUserRoleAssignments usa organizationId do usuário, com fallback para organizationIds[0]', async () => {
     const users = [
       { _id: { toString: () => 'u1' }, accessType: 3, organizationId: 'org-1' },
@@ -528,9 +630,12 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
 
     const result = await backfillUserRoleAssignments(db);
 
-    const byUser = Object.fromEntries(result.granted.map((a) => [a.userAccountId, a]));
-    expect(byUser.u1.scopeId).toBe('org-1');
-    expect(byUser.u2.scopeId).toBe('org-2');
+    const scopesOf = (id) => result.granted.filter((a) => a.userAccountId === id).map((a) => a.scopeId);
+    expect(scopesOf('u1')).toEqual(['org-1']);
+    // #1358: the primary grant takes organizationIds[0], and each further
+    // organization gets its own assignment of the same role.
+    expect(scopesOf('u2')).toEqual(['org-2', 'org-3']);
+    expect(new Set(result.granted.filter((a) => a.userAccountId === 'u2').map((a) => a.roleId)).size).toBe(1);
   });
 
   describe('#340: organization-scope query helpers', () => {
@@ -707,5 +812,24 @@ describe('#1053: assertOrganizationFieldNotReparented', () => {
 
   it('names the field in the message, so it can be reused for collectionSite', () => {
     expect(() => assertOrganizationFieldNotReparented(scoped, 'a', 'b', 'collectionSite')).toThrow(/collectionSite/);
+  });
+
+  // #1183: a missing scope means requireOrganizationScope is not on the
+  // route -- every real caller, global included, has a scope object. The
+  // create-side twin fails closed on that; this one used to return, a
+  // guaranteed no-op on a mis-wired route.
+  it('fails closed with 403 when no scope was resolved and the field is being written', () => {
+    expect(() => assertOrganizationFieldNotReparented(undefined, 'org-a', 'org-b')).toThrow(/Escopo organizacional/);
+    try {
+      assertOrganizationFieldNotReparented(null, 'org-a', 'org-a');
+    } catch (error) {
+      expect(error.statusCode).toBe(403);
+      return;
+    }
+    throw new Error('expected a throw for a missing scope even when the value is unchanged');
+  });
+
+  it('CONTROL: a missing scope is harmless when the field is not being written', () => {
+    expect(() => assertOrganizationFieldNotReparented(undefined, 'org-a', undefined)).not.toThrow();
   });
 });

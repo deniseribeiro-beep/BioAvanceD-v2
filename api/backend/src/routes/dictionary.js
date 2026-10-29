@@ -4,6 +4,10 @@ const router = express.Router();
 const redis = require('redis');
 const { getNeo4jDriver } = require('../database/neo4j');
 const DrugService = require('../services/DrugService');
+const { escapeRegex } = require('../utils/escapeRegex');
+const { checkActiveCode } = require('../ingestion/activeCodeValidator');
+const { findAssociationsForOrpha } = require('../services/biomarkerAssociation.service');
+const { currentRequestId, neo4jTxConfig } = require('../utils/requestContext');
 
 let redisClient = null;
 let redisConnectPromise = null;
@@ -61,9 +65,12 @@ function normalizeOrphaCode(value) {
 }
 
 function normalizeDiseaseProfile(record = {}) {
+  // The biomarker requirements are not served (#1206): BiomarkerAssociation
+  // holds that knowledge, and every other key passes through.
   const requirements = record?.validation_requirements && typeof record.validation_requirements === 'object'
-    ? record.validation_requirements
+    ? { ...record.validation_requirements }
     : {};
+  delete requirements.biomarkers;
 
   return {
     orpha_code: normalizeOrphaCode(record.orpha_code),
@@ -80,27 +87,15 @@ function normalizeHpoCode(value) {
   return /^HP:/i.test(raw) ? raw.replace(/^hp:/i, 'HP:') : raw;
 }
 
-function normalizeBiomarkerCode(value) {
-  return String(value || '').trim();
-}
-
-function biomarkerDisplayName(code) {
-  const normalized = normalizeBiomarkerCode(code);
-  const known = {
-  };
-  return known[normalized] || normalized;
-}
-
 function normalizeLocalPhenotype(raw = {}) {
   const code = normalizeHpoCode(raw.hpoId || raw.code || raw.codigo || raw.relacoes?.hpo);
   const display = String(raw.label || raw.display || raw.descricao || raw.name || raw.nome || code).trim();
   return normalizeCoding({ system: 'http://purl.obolibrary.org/obo/hp.owl', code, display }, 'http://purl.obolibrary.org/obo/hp.owl');
 }
 
-function normalizeLocalBiomarker(raw) {
-  const code = normalizeBiomarkerCode(typeof raw === 'string' ? raw : raw?.code || raw?.biomarkerType || raw?.id || raw?.codigo);
-  const display = String((typeof raw === 'object' && (raw.display || raw.label || raw.name || raw.nome)) || biomarkerDisplayName(code)).trim();
-  return normalizeCoding({ system: 'http://loinc.org', code, display }, 'http://loinc.org');
+function analyteCoding({ analyte }) {
+  const display = typeof analyte.display === 'string' && analyte.display.trim() ? analyte.display : analyte.code;
+  return normalizeCoding({ system: analyte.systemUri, code: analyte.code, display });
 }
 
 function uniqueCodings(codings = []) {
@@ -147,13 +142,10 @@ async function buildLocalSemanticSuggestions(db, orphaCode) {
     })),
   ].filter(Boolean));
 
-  const requirements = disease?.validation_requirements || {};
-  const biomarkerRequirements = [
-    ...(Array.isArray(requirements?.biomarkers?.required) ? requirements.biomarkers.required : []),
-    ...(Array.isArray(requirements?.biomarkers?.recommended) ? requirements.biomarkers.recommended : []),
-    ...(Array.isArray(disease?.biomarkers) ? disease.biomarkers : []),
-  ];
-  const biomarkers = uniqueCodings(biomarkerRequirements.map(normalizeLocalBiomarker).filter(Boolean));
+  // #1206: the biomarkers are the analytes of the valid BiomarkerAssociation
+  // rows for this disease, no longer disease_dictionary's lists.
+  const associations = await findAssociationsForOrpha(db, normalizedOrpha);
+  const biomarkers = uniqueCodings(associations.map(analyteCoding).filter(Boolean));
 
   if (!disease && phenotypes.length === 0 && biomarkers.length === 0) {
     return null;
@@ -168,6 +160,65 @@ async function buildLocalSemanticSuggestions(db, orphaCode) {
     phenotypes,
     biomarkers,
   };
+}
+
+/**
+ * RF029 AC4 on the read side (#885): the write side (intakeWizard's
+ * recordClinicalEntities -> phenotype-observation.service) checks every
+ * phenotype's hpoCoding against an active ReferenceDatasetRelease and skips
+ * the observation when it fails, so a suggestion outside an active release
+ * is one the operator can pick and the server will not record. Each
+ * phenotype runs the same checkActiveCode the write side runs, on the same
+ * systemUri+code pair, and only active ones are offered. Every coding whose
+ * concept resolves active also carries that concept's `version`, the one the
+ * write side would stamp (#866).
+ *
+ * Only phenotypes are filtered, because only they are gated on write. The
+ * disease is the code the operator asked about, and the biomarkers are the
+ * analyte Codings of BiomarkerAssociation rows (#1206), which no write gates,
+ * so both are annotated, never dropped. Excluded phenotypes are listed in `releaseGate.excluded` with the
+ * validator's status, so an empty list is distinguishable from "no
+ * phenotypes known".
+ *
+ * Runs per response, after the cache, so a release promoted or retired takes
+ * effect on the next request rather than after the cache TTL. Without a db
+ * the gate cannot run and the payload goes out as before, with no
+ * `releaseGate` field; app.js always sets app.locals.db.
+ */
+async function applyReleaseGate(db, payload) {
+  if (!db || typeof db.collection !== 'function' || !payload) return payload;
+
+  const check = async (coding) => {
+    if (!coding?.system || !coding?.code) return { coding, result: null };
+    const result = await checkActiveCode(db, { systemUri: coding.system, code: coding.code });
+    const version = result.active ? result.concept?.version : null;
+    return { coding: version ? { ...coding, version } : coding, result };
+  };
+
+  const phenotypeChecks = await Promise.all((payload.phenotypes || []).map(check));
+  const biomarkerChecks = await Promise.all((payload.biomarkers || []).map(check));
+  const diseaseCheck = payload.disease ? await check(payload.disease) : null;
+
+  return {
+    ...payload,
+    disease: diseaseCheck ? diseaseCheck.coding : payload.disease,
+    phenotypes: phenotypeChecks.filter(({ result }) => result?.active).map(({ coding }) => coding),
+    biomarkers: biomarkerChecks.map(({ coding }) => coding),
+    releaseGate: {
+      status: 'applied',
+      excluded: phenotypeChecks
+        .filter(({ result }) => !result?.active)
+        .map(({ coding, result }) => ({ ...coding, status: result?.status || 'unknown' })),
+    },
+  };
+}
+
+async function sendSuggestions(req, res, payload) {
+  try {
+    return res.json(await applyReleaseGate(req.app.locals.db, payload));
+  } catch (gateError) {
+    return res.status(500).json({ error: gateError.message });
+  }
 }
 
 function normalizeMedicationRecord(raw = {}) {
@@ -234,6 +285,7 @@ router.get('/atc/search', async (req, res) => {
 // Busca ORPHA/HPO com cache
 router.get('/search', async (req, res) => {
   const { query = '' } = req.query;
+  if (typeof query !== 'string') return res.status(400).json({ error: 'Invalid query' });
   if (!query.trim()) return res.status(400).json({ error: 'Missing query' });
   const cacheKey = `orpha:search:${String(query).toLowerCase()}`;
   try {
@@ -252,7 +304,8 @@ router.get('/search', async (req, res) => {
         ORDER BY d.nome
         LIMIT 20
       `,
-      { query: String(query).trim() }
+      { query: String(query).trim() },
+      neo4jTxConfig(currentRequestId())
     );
     await session.close();
 
@@ -282,7 +335,7 @@ router.get('/suggest', async (req, res) => {
   const cacheKey = `orpha:suggest:${orphaCode}`;
   try {
     const cached = await getCacheValue(cacheKey);
-    if (cached) return res.json(JSON.parse(cached));
+    if (cached) return sendSuggestions(req, res, JSON.parse(cached));
 
     const driver = getNeo4jDriver();
     const session = driver.session();
@@ -293,7 +346,7 @@ router.get('/suggest', async (req, res) => {
       OPTIONAL MATCH (d)-[:POSSUI_BIOMARCADOR]->(b:Biomarcador)
       RETURN d, collect(DISTINCT h) as fenotipos, collect(DISTINCT b) as biomarcadores
     `;
-    const result = await session.run(cypher, { orphaCode });
+    const result = await session.run(cypher, { orphaCode }, neo4jTxConfig(currentRequestId()));
     await session.close();
     if (!result.records.length) return res.status(404).json({ error: 'Not found' });
     const d = result.records[0].get('d').properties;
@@ -323,7 +376,7 @@ router.get('/suggest', async (req, res) => {
     };
 
     await setCacheValue(cacheKey, 3600, JSON.stringify(response));
-    res.json(response);
+    return sendSuggestions(req, res, response);
   } catch (err) {
     const db = req.app.locals.db;
     if (!db || typeof db.collection !== 'function') {
@@ -334,7 +387,7 @@ router.get('/suggest', async (req, res) => {
       const fallback = await buildLocalSemanticSuggestions(db, orphaCode);
       if (fallback) {
         await setCacheValue(cacheKey, 3600, JSON.stringify(fallback));
-        return res.json(fallback);
+        return sendSuggestions(req, res, fallback);
       }
 
       return res.status(404).json({ error: 'Not found' });
@@ -356,6 +409,9 @@ router.get('/disease-profile', async (req, res) => {
   try {
     const collection = db.collection('disease_dictionary');
     const disease = await collection.findOne({ orpha_code: orphaCode, active: { $ne: false } });
+    // No stack seeds disease_dictionary (a legacy store, seeded only by
+    // hand, #1200), so this 404 is the expected answer. The intake wizard
+    // treats it as "no disease profile".
     if (!disease) {
       return res.status(404).json({ error: 'Disease profile not found' });
     }
@@ -386,7 +442,7 @@ router.get('/medications/search', async (req, res) => {
 
     const filters = [{ active: { $ne: false } }];
     if (query) {
-      const regex = new RegExp(query, 'i');
+      const regex = new RegExp(escapeRegex(query), 'i');
       filters.push({
         $or: [
           { name: regex },

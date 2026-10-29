@@ -7,6 +7,8 @@ import fs from 'fs';
 const require2 = createRequire(import.meta.url);
 const importService = require2('../../src/services/import.service');
 const SampleGraphValidator = require2('../../src/services/SampleGraphValidator');
+const { createMatchingCollection } = require2('../factories/filter.factory');
+const env = require2('../../src/config/env');
 
 const tmpFiles = [];
 
@@ -64,11 +66,54 @@ function makeSpecimenPreanalyticsCollection() {
   };
 }
 
-function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection(), specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection()) {
+// #1225: each imported sample appends a SPECIMEN_UPSERTED outbox event. Its
+// own collection keeps that upsert out of the samples collection's updates.
+function makeOutboxCollection() {
+  const events = [];
   return {
+    events,
+    createIndex: async () => true,
+    updateOne: async (query, update) => {
+      events.push(update.$setOnInsert);
+      return { upsertedCount: 1 };
+    },
+  };
+}
+
+// #1313: the outbox's per-aggregate version counter.
+function makeAggregateVersionsCollection() {
+  const versions = new Map();
+  return {
+    findOneAndUpdate: async (query) => {
+      const version = (versions.get(query._id) || 0) + 1;
+      versions.set(query._id, version);
+      return { _id: query._id, version };
+    },
+  };
+}
+
+// #1378: a row that gives a barcode is issued a LabelIdentifier on a
+// container created and loaded for it, after the legacy placement
+// (storageAssignments) it would adopt is read.
+const PHYSICAL_CHAIN_COLLECTIONS = ['containers', 'specimenContainerAssignments', 'labelIdentifiers', 'storageAssignments'];
+
+function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection(), specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection(), outboxCollection = makeOutboxCollection()) {
+  const aggregateVersionsCollection = makeAggregateVersionsCollection();
+  // #1320: recordAssessment first freezes the RCS input in its own collection.
+  const rcsInputSnapshotsCollection = createMatchingCollection([], { collectionName: 'rcsInputSnapshots' });
+  const rcsGovernanceEvidenceSnapshotsCollection = createMatchingCollection([], { collectionName: 'rcsGovernanceEvidenceSnapshots' });
+  const physicalChain = Object.fromEntries(PHYSICAL_CHAIN_COLLECTIONS.map((name) => [name, createMatchingCollection([], { collectionName: name })]));
+  return {
+    outboxCollection,
+    physicalChain,
     collection: (name) => {
+      if (physicalChain[name]) return physicalChain[name];
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
+      if (name === 'rcsInputSnapshots') return rcsInputSnapshotsCollection;
+      if (name === 'rcsGovernanceEvidenceSnapshots') return rcsGovernanceEvidenceSnapshotsCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
+      if (name === 'graph_projection_outbox') return outboxCollection;
+      if (name === 'graph_projection_outbox_aggregate_versions') return aggregateVersionsCollection;
       return collection;
     },
   };
@@ -102,12 +147,20 @@ describe('ImportService.importSamples (JSON)', () => {
       sprec: { sampleType: 'BLD', primaryContainer: 'PED' },
     })));
     const collection = makeSamplesCollection();
+    const db = makeDb(collection);
 
-    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'valid.json' });
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'valid.json' });
 
     expect(result).toEqual({ success: 1, errors: [], total: 1 });
     expect(collection.inserted).toHaveLength(1);
     expect(collection.updates).toHaveLength(1);
+    // #1225: the imported sample reaches the graph under its Mongo _id with its donor.
+    expect(db.outboxCollection.events).toHaveLength(1);
+    expect(db.outboxCollection.events[0]).toMatchObject({
+      eventType: 'SPECIMEN_UPSERTED',
+      aggregateId: 'sample-1',
+      payload: { specimenId: 'sample-1', participantId: '12345678' },
+    });
     const sprecPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedSpecimenPreanalyticsId);
     expect(sprecPinUpdate.update.$set.sealedSpecimenPreanalyticsId).toBe('preanalytics-1');
   });
@@ -257,6 +310,103 @@ describe('ImportService.importSamples (JSON)', () => {
   });
 });
 
+describe('ImportService.importSamples (JSON) LabelIdentifier issue (#1378)', () => {
+  beforeEach(() => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+  });
+
+  it('issues a row with a barcode one active LabelIdentifier on its one container', async () => {
+    const filePath = writeTmpFile('labelled.json', JSON.stringify(validSample({ barcode: '  BC-IMPORT-1 ' })));
+    const db = makeDb(makeSamplesCollection());
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'labelled.json' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    const { containers, specimenContainerAssignments, labelIdentifiers } = db.physicalChain;
+    expect(containers.docs).toHaveLength(1);
+    const { containerId } = containers.docs[0];
+    expect(specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ containerId, sourceEventId: expect.stringMatching(/^specimen-label-issuance:sample-1:/) }),
+    ]);
+    expect(labelIdentifiers.docs).toEqual([
+      expect.objectContaining({
+        encodedValue: 'BC-IMPORT-1',
+        targetType: 'container',
+        targetId: containerId,
+        identifierOrigin: 'institution_applied',
+        status: 'active',
+        printBatchId: null,
+      }),
+    ]);
+  });
+
+  it('issues no label to a row without a barcode, since this import generates none', async () => {
+    const filePath = writeTmpFile('unlabelled.json', JSON.stringify(validSample()));
+    const db = makeDb(makeSamplesCollection());
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'unlabelled.json' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(db.physicalChain.labelIdentifiers.docs).toEqual([]);
+    expect(db.physicalChain.containers.docs).toEqual([]);
+  });
+
+  it('records a row error when its barcode is already an active label', async () => {
+    const filePath = writeTmpFile('taken.json', JSON.stringify(validSample({ barcode: 'BC-TAKEN-1' })));
+    const db = makeDb(makeSamplesCollection());
+    db.physicalChain.labelIdentifiers.insertOne = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'taken.json' });
+
+    expect(result.success).toBe(0);
+    expect(result.total).toBe(1);
+    expect(result.errors).toEqual([{ row: 1, error: expect.stringMatching(/BC-TAKEN-1 já ativo/) }]);
+  });
+});
+
+// #1378 (ELM-0116): once the migration window is closed, a row's code is
+// issued only as the label; the inserted sample carries no Sample.barcode.
+describe('ImportService.importSamples with the barcode window closed (#1378)', () => {
+  let saved;
+  beforeEach(() => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    saved = env.SAMPLE_BARCODE_WINDOW_CLOSED;
+    env.SAMPLE_BARCODE_WINDOW_CLOSED = true;
+  });
+  afterEach(() => {
+    env.SAMPLE_BARCODE_WINDOW_CLOSED = saved;
+  });
+
+  it('a JSON row inserts no barcode and is issued the label with its code', async () => {
+    const filePath = writeTmpFile('closed.json', JSON.stringify(validSample({ barcode: 'BC-CLOSED-1' })));
+    const collection = makeSamplesCollection();
+    const db = makeDb(collection);
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'closed.json' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted).toHaveLength(1);
+    expect(collection.inserted[0]).not.toHaveProperty('barcode');
+    expect(db.physicalChain.labelIdentifiers.docs).toEqual([expect.objectContaining({ encodedValue: 'BC-CLOSED-1', status: 'active' })]);
+  });
+
+  it('a CSV row inserts no barcode and is issued the label with its code', async () => {
+    const filePath = writeTmpFile(
+      'closed.csv',
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt,barcode\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01,BC-CLOSED-2\n',
+    );
+    const collection = makeSamplesCollection();
+    const db = makeDb(collection);
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'closed.csv' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted).toHaveLength(1);
+    expect(collection.inserted[0]).not.toHaveProperty('barcode');
+    expect(db.physicalChain.labelIdentifiers.docs).toEqual([expect.objectContaining({ encodedValue: 'BC-CLOSED-2', status: 'active' })]);
+  });
+});
+
 describe('ImportService.importSamples (CSV)', () => {
   it('short-circuits with a structural error when required CSV columns are missing', async () => {
     const filePath = writeTmpFile('bad-structure.csv', 'foo,bar\n1,2\n');
@@ -314,6 +464,85 @@ describe('ImportService.importSamples (CSV)', () => {
     for (const u of collection.updates) {
       expect(u.update.$set || {}).not.toHaveProperty('releaseStatus');
     }
+  });
+
+  it('short-circuits with a structural error naming the read failure when the CSV does not exist (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `does-not-exist-samples-${Date.now()}.csv`);
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: missingPath, originalname: 'missing.csv' });
+
+    expect(result).toEqual({ success: 0, errors: [{ row: 0, error: expect.stringContaining('ENOENT') }], total: 0 });
+  });
+
+  // #1175: the row read is a second stream, after validateCSVStructure's own.
+  // Its source 'error' was never listened for, so a file removed between the
+  // two reads crashed the process instead of rejecting.
+  it('rejects when the row read fails after the structure check passed (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `does-not-exist-samples-${Date.now()}.csv`);
+    vi.spyOn(importService, 'validateCSVStructure').mockResolvedValueOnce({ valid: true });
+    const collection = makeSamplesCollection();
+
+    await expect(importService.importSamples(makeDb(collection), { path: missingPath, originalname: 'missing.csv' }))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// #1376, #1192: the organization the caller's scope resolved is the
+// sample's tenancy key; a row never supplies it.
+describe('ImportService.importSamples stamps the caller organization (#1376)', () => {
+  const CSV_HEADER = 'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt';
+
+  beforeEach(() => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+  });
+
+  it('a JSON row is stamped with the organization and takes it as its site', async () => {
+    const filePath = writeTmpFile('org.json', JSON.stringify(validSample()));
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'org.json' }, { organizationId: 'org-a' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted[0]).toMatchObject({ organizationId: 'org-a', collectionSite: 'org-a' });
+  });
+
+  it('a CSV row is stamped with the organization and takes it as its site', async () => {
+    const filePath = writeTmpFile('org.csv', `${CSV_HEADER}\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n`);
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'org.csv' }, { organizationId: 'org-a' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted[0]).toMatchObject({ organizationId: 'org-a', collectionSite: 'org-a' });
+  });
+
+  it('a JSON row naming its collection site keeps it and is still stamped with the organization', async () => {
+    const filePath = writeTmpFile('org-site.json', JSON.stringify(validSample({ collectionSite: 'org-b' })));
+    const collection = makeSamplesCollection();
+
+    await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'org-site.json' }, { organizationId: 'org-a' });
+
+    expect(collection.inserted[0]).toMatchObject({ organizationId: 'org-a', collectionSite: 'org-b' });
+  });
+
+  it("a JSON row carrying its own organizationId is stamped with the caller's instead", async () => {
+    const filePath = writeTmpFile('org-row.json', JSON.stringify(validSample({ organizationId: 'org-x' })));
+    const collection = makeSamplesCollection();
+
+    await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'org-row.json' }, { organizationId: 'org-a' });
+
+    expect(collection.inserted[0].organizationId).toBe('org-a');
+  });
+
+  it('with no organization resolved a row keeps organizationId null, as before', async () => {
+    const filePath = writeTmpFile('no-org.json', JSON.stringify(validSample({ organizationId: 'org-x' })));
+    const collection = makeSamplesCollection();
+
+    await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'no-org.json' });
+
+    expect(collection.inserted[0].organizationId).toBeNull();
+    expect(collection.inserted[0].collectionSite).toBeNull();
   });
 });
 

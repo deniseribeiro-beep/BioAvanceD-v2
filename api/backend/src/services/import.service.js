@@ -7,25 +7,49 @@ const PatientModel = require('../models/Patient');
 const SampleModule = require('../models/Sample');
 const SampleModel = SampleModule.SampleModel || SampleModule;
 const TemperatureModel = require('../models/Temperature');
+const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const { readingIdentityOf, screenReading } = require('./telemetryReadingContract');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const {
+  omitLegacyIdentityFields,
+  PARTICIPANT_IDENTITY_ONLY_FIELDS,
+  omitParticipantIdentityOnlyFields
+} = require('../utils/legacyPatientIdentityFields');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
+const { parseBirthDateInput } = require('../utils/birthDate');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const { insertSampleWithProjection } = require('./graphProjection.service');
+const { issueSpecimenLabel } = require('./specimenLabel.service');
+const { withoutLegacyBarcode } = require('../utils/sampleBarcodeWindow');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
+const { hashConsentToken } = require('../utils/consentTokenHash');
 
 /**
  * Service de Importação de Dados
  * RF007 - Upload e Importação de Dados
  * Suporta: Pacientes (CSV/JSON), Amostras (CSV/JSON), Arquivos de Analise (ZIP/RAW/CSV), Temperatura (CSV/Streaming)
  */
+// #1378: a row that gives a code has it issued as a LabelIdentifier
+// (V2E-0169) on the specimen's container, created and loaded here, as
+// its first placement would be. This import generates no code, so a row
+// without one gets no label. A code already active as a label fails the row.
+async function issueImportedSampleLabel(db, sample, insertedId) {
+  if (sample.barcode === undefined || sample.barcode === null || !String(sample.barcode).trim()) return;
+  await issueSpecimenLabel(db, { ...sample, _id: insertedId }, {
+    code: String(sample.barcode).trim(),
+    actorId: null,
+    at: new Date(),
+  });
+}
+
 class ImportService {
   normalizeImportKey(value) {
     return String(value || '')
@@ -135,6 +159,7 @@ class ImportService {
       let headerRow = null;
 
       const stream = fs.createReadStream(file.path)
+        .on('error', reject)
         .pipe(csv())
         .on('headers', (headers) => {
           headerRow = headers;
@@ -175,7 +200,7 @@ class ImportService {
   /**
    * Valida arquivo JSON como FHIR R4 (Patient/Specimen/Observation/Organization)
    */
-  validateFHIRFile(file) {
+  validateFHIRFile(file, { registry } = {}) {
     try {
       const raw = fs.readFileSync(file.path, 'utf8');
       const payload = JSON.parse(raw);
@@ -184,7 +209,7 @@ class ImportService {
         return { isFhir: false, valid: true };
       }
 
-      const result = fhirValidator.validatePayload(payload, ['Patient', 'Specimen', 'Observation', 'Organization', 'Bundle']);
+      const result = fhirValidator.validatePayload(payload, ['Patient', 'Specimen', 'Observation', 'Organization', 'Bundle'], { registry });
       const operationOutcome = fhirValidator.buildOperationOutcome(result.issues || []);
 
       return {
@@ -286,8 +311,8 @@ class ImportService {
       //
       // RF005/RNF007 (#563): identityDocument is civil identity — resolved
       // via ParticipantIdentity, same as patient.service.js#checkIdentifierConflict
-      // (#561). recordNumber is a hospital record number, not civil
-      // identity, so it stays checked against Patient directly.
+      // (#561). #1386: so is recordNumber now (P1X-0355, recordNumberHash);
+      // a number held only on the legacy patients.recordNumber is not matched.
       // RF005/RNF007 (#575): patientName/birthDate were previously enforced
       // as required by PatientModel.validate() (they were in its
       // requiredText list). Now that they're civil identity — segregated to
@@ -318,23 +343,35 @@ class ImportService {
         if (patientData.identityDocument) {
           const identityCollection = getCollection(db, 'participantIdentities');
           // RF005/RNF007 (#574): identityDocumentHash lets this dedup match
-          // without querying the plaintext field once it's eventually
-          // dropped; the plaintext branch stays as a fallback for records
-          // written before the hash sibling existed.
+          // without querying the plaintext field.
           // #1099: match under EVERY registered key, not just the active
           // one -- a hash written before a rotation is otherwise
           // unmatchable, and a missed dedup here creates a DUPLICATE
           // participant rather than raising an error.
+          // #1104: identityDocument is ciphertext-only, so a plaintext arm
+          // beside the hash would match nothing and make this $or
+          // unindexable. The plaintext is queried only on a keyless stack
+          // (#1083), the one case that still writes it -- canonicalized,
+          // because every writer stores the digits-only form (#1109).
           const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates('identityDocument', patientData.identityDocument);
           const orConditions = identityDocumentHashes.length
-            ? [{ identityDocumentHash: { $in: identityDocumentHashes } }, { identityDocument: patientData.identityDocument }]
-            : [{ identityDocument: patientData.identityDocument }];
+            ? [{ identityDocumentHash: { $in: identityDocumentHashes } }]
+            : [{ identityDocument: participantIdentityService.normalizeIdentityDocument(patientData.identityDocument) }];
           const existingIdentity = await identityCollection.findOne({ $or: orConditions });
           if (existingIdentity) {
             existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });
           }
         } else if (patientData.recordNumber) {
-          existing = await patientsCollection.findOne({ recordNumber: patientData.recordNumber });
+          // #1386: the identity holding this number (P1X-0355). A
+          // blank number runs no identity query, and the row still imports
+          // as a new participant, as it did before the move.
+          const recordNumberQuery = participantIdentityService.recordNumberIdentityQuery(patientData.recordNumber);
+          const existingIdentity = recordNumberQuery
+            ? await getCollection(db, 'participantIdentities').findOne(recordNumberQuery)
+            : null;
+          if (existingIdentity) {
+            existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });
+          }
         } else {
           return { existing: null, error: 'Sem identificador único (Documento de identidade ou Prontuário)' };
         }
@@ -348,7 +385,7 @@ class ImportService {
           // Novo cadastro
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
-          patientData.consentToken = consentMetadata.token;
+          patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
           const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
@@ -362,7 +399,10 @@ class ImportService {
           const identityDoc = participantIdentityService.encryptIdentityFields(
             ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
           );
-          await identityCollection.insertOne(identityDoc);
+          // #1166 slice 3: a refused identity insert must not leave the Patient behind.
+          await participantIdentityService.insertIdentityOrRollbackPatient(
+            identityCollection, identityDoc, patientsCollection, insertResult.insertedId
+          );
 
           if (patient.participantId) {
             try {
@@ -390,7 +430,16 @@ class ImportService {
           // never land on Patient — `merged` (used below, un-stripped, for
           // the ParticipantIdentity sync) may still carry them from
           // `existing` (pre-#575 data) even when `patientData` doesn't.
-          await patientsCollection.updateOne({ _id: existing._id }, { $set: omitLegacyIdentityFields(merged) });
+          // #1166 slice 4 / #1168: likewise the contact and the
+          // representative, which go to the identity sync below and nowhere else.
+          // #1386: and the record number, whose stale Patient copy is removed.
+          await patientsCollection.updateOne(
+            { _id: existing._id },
+            {
+              $set: omitParticipantIdentityOnlyFields(omitLegacyIdentityFields(merged)),
+              ...(Object.prototype.hasOwnProperty.call(merged, 'recordNumber') ? { $unset: { recordNumber: '' } } : {}),
+            }
+          );
 
           // RF005/RNF007 (#561/#563): keep ParticipantIdentity in sync on
           // update, same as patient.service.js#updatePatient — an import
@@ -399,17 +448,34 @@ class ImportService {
           if (merged.participantId && (
             Object.prototype.hasOwnProperty.call(merged, 'patientName') ||
             Object.prototype.hasOwnProperty.call(merged, 'birthDate') ||
-            Object.prototype.hasOwnProperty.call(merged, 'identityDocument')
+            Object.prototype.hasOwnProperty.call(merged, 'identityDocument') ||
+            PARTICIPANT_IDENTITY_ONLY_FIELDS.some((field) => merged[field])
           )) {
             const identityUpdate = { updatedAt: merged.updatedAt };
+            for (const field of PARTICIPANT_IDENTITY_ONLY_FIELDS) {
+              if (merged[field]) {
+                identityUpdate[field] = field === 'email' || field === 'representativeEmail'
+                  ? String(merged[field]).trim().toLowerCase()
+                  : merged[field];
+              }
+            }
             if (Object.prototype.hasOwnProperty.call(merged, 'patientName')) identityUpdate.patientName = merged.patientName;
-            if (Object.prototype.hasOwnProperty.call(merged, 'birthDate')) identityUpdate.birthDate = merged.birthDate ? new Date(merged.birthDate) : null;
+            if (Object.prototype.hasOwnProperty.call(merged, 'birthDate')) identityUpdate.birthDate = merged.birthDate ? parseBirthDateInput(merged.birthDate) : null;
             if (Object.prototype.hasOwnProperty.call(merged, 'identityDocument')) identityUpdate.identityDocument = merged.identityDocument;
 
             const identityCollection = getCollection(db, 'participantIdentities');
+            const identitySet = participantIdentityService.encryptIdentityFields(identityUpdate);
+            // #1386: the old <field>Encrypted envelope goes with the rewrite,
+            // and an empty $unset (refused before MongoDB 5.0) is not sent.
+            const legacyUnset = participantIdentityService.legacyCiphertextUnset(identitySet);
             await identityCollection.updateOne(
               { participantId: merged.participantId },
-              { $set: participantIdentityService.encryptIdentityFields(identityUpdate) },
+              {
+                $set: identitySet,
+                ...(Object.keys(legacyUnset).length > 0 ? { $unset: legacyUnset } : {}),
+                // #1386: a merged participant with no identity record gets one here.
+                $setOnInsert: ParticipantIdentityModel.onInsertFields(),
+              },
               { upsert: true }
             );
           }
@@ -460,6 +526,7 @@ class ImportService {
         const rows = [];
         await new Promise((resolve, reject) => {
           fs.createReadStream(file.path)
+            .on('error', reject)
             .pipe(csv())
             .on('data', (row) => rows.push(row))
             .on('end', resolve)
@@ -513,7 +580,9 @@ class ImportService {
   /**
    * Processa importação de amostras
    */
-  async importSamples(db, file) {
+  async importSamples(db, file, options = {}) {
+    // #1376: the organization the controller resolved from the caller's scope.
+    const organizationId = options.organizationId || null;
     try {
       const ext = path.extname(file.originalname).toLowerCase();
       const samplesCollection = await getCollection(db, 'samples');
@@ -542,7 +611,19 @@ class ImportService {
             }
 
             const sample = SampleModel.create(sampleData);
-            const insertResult = await samplesCollection.insertOne(sample);
+            // #1376, #1192: the tenancy key comes from the caller's scope,
+            // never from the row (SampleModel.create nulls a row's own). A
+            // named collection site is kept; a row naming none gets the
+            // organization.
+            if (organizationId && (sample.collectionSite === undefined
+              || sample.collectionSite === null
+              || sample.collectionSite === '')) {
+              sample.collectionSite = organizationId;
+            }
+            sample.organizationId = organizationId ? String(organizationId) : null;
+            // #1313 (RF023 AC3): the sample and its SPECIMEN_UPSERTED commit together.
+            // #1378: after the migration window the inserted sample has no barcode.
+            const insertResult = await insertSampleWithProjection(db, samplesCollection, withoutLegacyBarcode(sample), { sourceService: 'import.service' });
             if (sample.rcsEvaluation) {
               try {
                 const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
@@ -575,6 +656,7 @@ class ImportService {
                 });
               }
             }
+            await issueImportedSampleLabel(db, sample, insertResult.insertedId);
             try {
               await validator.validateSampleCompliance(String(insertResult.insertedId));
             } catch (validationError) {
@@ -608,6 +690,7 @@ class ImportService {
           : await new Promise((resolve, reject) => {
             const dataRows = [];
             fs.createReadStream(file.path)
+              .on('error', reject)
               .pipe(csv())
               .on('data', (row) => dataRows.push(row))
               .on('end', () => resolve(dataRows))
@@ -644,7 +727,19 @@ class ImportService {
             }
 
             const sample = SampleModel.create(sampleData);
-            const insertResult = await samplesCollection.insertOne(sample);
+            // #1376, #1192: the tenancy key comes from the caller's scope,
+            // never from the row (SampleModel.create nulls a row's own). A
+            // named collection site is kept; a row naming none gets the
+            // organization.
+            if (organizationId && (sample.collectionSite === undefined
+              || sample.collectionSite === null
+              || sample.collectionSite === '')) {
+              sample.collectionSite = organizationId;
+            }
+            sample.organizationId = organizationId ? String(organizationId) : null;
+            // #1313 (RF023 AC3): the sample and its SPECIMEN_UPSERTED commit together.
+            // #1378: after the migration window the inserted sample has no barcode.
+            const insertResult = await insertSampleWithProjection(db, samplesCollection, withoutLegacyBarcode(sample), { sourceService: 'import.service' });
             if (sample.rcsEvaluation) {
               try {
                 const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
@@ -677,6 +772,7 @@ class ImportService {
                 });
               }
             }
+            await issueImportedSampleLabel(db, sample, insertResult.insertedId);
             try {
               await validator.validateSampleCompliance(String(insertResult.insertedId));
             } catch (validationError) {
@@ -718,12 +814,12 @@ class ImportService {
    */
   async importTemperature(db, file) {
     try {
-      const temperaturesCollection = db.collection('temperatures');
       const results = { success: 0, errors: [], total: 0 };
 
       const rows = [];
       await new Promise((resolve, reject) => {
         fs.createReadStream(file.path)
+          .on('error', reject)
           .pipe(csv())
           .on('data', (row) => rows.push(row))
           .on('end', resolve)
@@ -741,8 +837,22 @@ class ImportService {
               errors: validation.errors
             });
           } else {
-            const temperature = TemperatureModel.create(tempData);
-            await temperaturesCollection.insertOne(temperature);
+            // RF009 AC1-AC3, AC7 (#1317): an imported reading takes the same reading
+            // contract and confirmed InfluxDB write as the other ingestion paths.
+            // InfluxDB is the reading's only store (#1391): a row counts as imported
+            // once InfluxDB confirms the point, and a failed write is that row's error.
+            const identity = readingIdentityOf(tempData, new Date(), { ingestionService: 'temperature-import' });
+            // [inference] the import time says nothing about the device's clock, since
+            // a file carries readings taken long before it was uploaded, so the clock is
+            // `unknown` (V2E-0556, the origin clock's known condition), not `drift`.
+            identity.clockStatus = 'unknown';
+            await screenReading(db, identity, tempData);
+            const temperature = { ...TemperatureModel.create(tempData), ...identity, timestamp: identity.observedAt };
+            try {
+              temperature.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(temperature);
+            } catch (error) {
+              throw new Error(`Leitura não persistida no InfluxDB: ${error.message || error}`);
+            }
             results.success++;
           }
         } catch (error) {
@@ -767,7 +877,7 @@ class ImportService {
   parsePatientCSV(row) {
     return {
       patientName: row.patientName,
-      birthDate: new Date(row.birthDate),
+      birthDate: parseBirthDateInput(row.birthDate),
       sex: row.sex,
       email: row.email || null,
       consentTemplateId: row.consentTemplateId || null,

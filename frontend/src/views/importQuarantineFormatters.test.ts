@@ -9,6 +9,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  canResubmit,
+  toEditableRow,
+  resubmitErrorMessages,
   formatBatchSummary,
   formatRecordErrors,
   describeRowFields,
@@ -169,5 +172,36 @@ describe('describeRowFields', () => {
     expect(describeRowFields({ row: { Meta: { a: 1 } } })).toEqual([
       { label: 'Meta', value: '{"a":1}' },
     ]);
+  });
+});
+
+describe('correct-and-resubmit helpers (#1352)', () => {
+  const sampleBatch = { _id: 'b1', type: 'LGPD_SAMPLE_CSV' };
+  const errorRecord = { _id: 'r1', status: 'ERROR', row: { sampleType: 'NOPE', quantity: 5 } };
+
+  it('offers a resubmit only for a sample batch record in ERROR with a retained row', () => {
+    expect(canResubmit(sampleBatch, errorRecord)).toBe(true);
+    expect(canResubmit({ ...sampleBatch, type: 'LGPD_PATIENT_CSV' }, errorRecord)).toBe(false);
+    expect(canResubmit(sampleBatch, { ...errorRecord, status: 'RESUBMITTED' })).toBe(false);
+    expect(canResubmit(sampleBatch, { ...errorRecord, row: null })).toBe(false);
+    expect(canResubmit(sampleBatch, { ...errorRecord, row: {} })).toBe(false);
+    expect(canResubmit(sampleBatch, { ...errorRecord, _id: undefined })).toBe(false);
+    expect(canResubmit(null, errorRecord)).toBe(false);
+  });
+
+  it('turns the retained row into text cells in column order, a blank for null and JSON for an object', () => {
+    expect(
+      toEditableRow({ row: { sampleType: 'NOPE', quantity: 5, note: null, extra: { a: 1 } } })
+    ).toEqual({ sampleType: 'NOPE', quantity: '5', note: '', extra: '{"a":1}' });
+    expect(Object.keys(toEditableRow({ row: { b: 1, a: 2 } }))).toEqual(['b', 'a']);
+    expect(toEditableRow({ row: null })).toEqual({});
+  });
+
+  it("reads a 422's row errors, else the message, else a fallback", () => {
+    expect(resubmitErrorMessages({ errors: ['sampleType inválido'], error: 'rejeitada' })).toEqual(['sampleType inválido']);
+    expect(resubmitErrorMessages({ error: 'Registro de quarentena ja esta em RESUBMITTED' })).toEqual([
+      'Registro de quarentena ja esta em RESUBMITTED',
+    ]);
+    expect(resubmitErrorMessages(undefined)).toEqual(['Não foi possível reenviar a linha.']);
   });
 });

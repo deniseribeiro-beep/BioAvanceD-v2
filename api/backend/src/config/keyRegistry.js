@@ -57,16 +57,21 @@ function getPreviousKeyId() {
  *   3. reiniciar; envelopes novos saem sob a chave nova, os antigos ainda
  *      decifram
  *
- * #1101: NAO ha passo 4. O slot e aposentado POR POLITICA, nao
- * mecanicamente -- nada neste repositorio reescreve envelopes antigos,
- * entao "depois de reescrever os antigos, esvaziar o slot" era um passo
- * sem gatilho e sem como ser dado por concluido. Esvaziar o slot e
- * IRREVERSIVEL para os dados sob a chave antiga: os envelopes passam a
- * decifrar como null, silenciosamente, e desde #1099 os indices cegos vao
- * junto -- identityDocumentHash/birthDateHash sao casados sob TODA chave
- * registrada, entao um valor indexado antes da rotacao deixa de casar, e
- * uma identidade nao casada gera participante DUPLICADO em vez de erro.
- * O inventario de campos e o ferramental de reescrita sao o #1103.
+ *   4. (#1103) `npm run encryption:rewrite -- --apply` recifra todo campo
+ *      de utils/encryptedFieldRegistry.js sob a chave nova e rederiva os
+ *      indices cegos; depois, `npm run encryption:rewrite` (simulacao) e
+ *      esvaziar o slot SOMENTE quando ele imprimir
+ *      "safeToEmptyPreviousSlot": true.
+ *
+ * Esvaziar o slot e IRREVERSIVEL para o que ainda estiver sob a chave
+ * antiga: os envelopes passam a decifrar como null, silenciosamente, e
+ * desde #1099 os indices cegos vao junto -- identityDocumentHash/
+ * birthDateHash sao casados sob TODA chave registrada, entao um valor
+ * indexado antes da rotacao deixa de casar, e uma identidade nao casada
+ * gera participante DUPLICADO em vez de erro. A simulacao tambem conta
+ * linhas de arquivo (encryptionKeyId) sob a chave antiga: a reescrita
+ * recifra os binarios de DataFile guardados no Object Storage e ainda so
+ * conta as demais linhas de arquivo.
  */
 function getKeyEntries() {
   const entries = [];

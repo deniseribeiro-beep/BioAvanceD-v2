@@ -5,13 +5,14 @@ const StorageContainerSchema = new mongoose.Schema(
     // Identificação
     containerID: {
       type: Number,
-      // #941: INERT. mongoose connects with autoIndex:false
+      // #941: inert ON ITS OWN -- mongoose connects with autoIndex:false
       // (infrastructure/database/mongodb/connection.js) and nothing calls
-      // syncIndexes()/createIndexes(), so this declaration is never built on any
-      // stack. The constraint below is a real requirement with live writers -- it
-      // is not decorative -- but it is NOT enforced today. Do not read it as a
-      // guarantee. Building it means a native ensureIndexes helper on the
-      // utils/sampleIndexes.js precedent, wired into the write path.
+      // syncIndexes()/createIndexes(). The constraint is enforced natively:
+      // utils/storageIndexes.js#ensureStorageContainerIndexes builds
+      // storage_containers_containerid_unique_v3, partial on
+      // `containerID: { $exists: true }` (#1209). Change one, change both;
+      // tests/architecture/schema-index-built.arch.test.js fails a declaration
+      // with no native build.
       unique: true,
       sparse: true,
     },
@@ -39,14 +40,6 @@ const StorageContainerSchema = new mongoose.Schema(
       ref: "StorageContainer",
       default: null,
       comment: "null para FREEZER, SHELF_ID para RACK, FREEZER_ID para SHELF",
-    },
-
-    // dict-02 StorageAssignment.roomId (ELM-0169): sala controlada onde o
-    // equipamento está instalado. Aplicável apenas a FREEZER.
-    roomId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Room",
-      default: null,
     },
 
     // Apenas Freezers
@@ -99,7 +92,13 @@ const StorageContainerSchema = new mongoose.Schema(
 // ==================== ÍNDICES ====================
 StorageContainerSchema.index({ containerType: 1, status: 1 });
 StorageContainerSchema.index({ parent_id: 1, containerType: 1 });
-StorageContainerSchema.index({ name: 1 });
+// #941: `index({ name: 1 })` deleted here. Measured on mongo:7 against a
+// representative tree: it is never the winning plan for any query shape in
+// src/. Every .sort({ name: 1 }) on this collection follows a SELECTIVE
+// filter (containerType+status, or parent_id+containerType), so the planner
+// takes that compound index and sorts the already-small result in memory.
+// Both compound indexes ARE built now, natively, by
+// utils/storageIndexes.js#ensureStorageContainerIndexes.
 // #941: this line declared the SAME {containerID} unique+sparse spec already
 // declared field-level at the top of this schema. One of the two was pure
 // noise; the field-level one survives, marked there.
@@ -119,11 +118,6 @@ StorageContainerSchema.pre("save", async function (next) {
   // Validação: temperatura apenas para FREEZER
   if (this.containerType !== "FREEZER" && this.temperature !== null) {
     throw new Error("Apenas FREEZER pode ter temperatura");
-  }
-
-  // Validação: roomId apenas para FREEZER
-  if (this.containerType !== "FREEZER" && this.roomId) {
-    throw new Error("Apenas FREEZER pode ter roomId");
   }
 
   // Verificar hierarquia correta (SHELF pai de RACK)

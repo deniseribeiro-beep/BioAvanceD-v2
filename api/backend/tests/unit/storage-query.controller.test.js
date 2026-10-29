@@ -27,8 +27,12 @@ function buildRes() {
   return res;
 }
 
+// #1211: in the app, requireOrganizationScope runs ahead of these
+// controllers and sets req.organizationScope; the list reads fail closed
+// without it. A global scope keeps these tests about the controllers -- the
+// scoped filters are covered in storage-query-scope.api.test.js.
 function buildReq(overrides = {}) {
-  return { app: { locals: { db: {} } }, params: {}, query: {}, ...overrides };
+  return { app: { locals: { db: {} } }, params: {}, query: {}, organizationScope: { scope: 'global', organizationIds: [] }, ...overrides };
 }
 
 afterEach(() => {
@@ -84,17 +88,29 @@ describe('storage-query.controller.searchSamplesController', () => {
   const controller = createSearchSamplesController();
 
   it('passes req.query.q through to the use case and returns 200', async () => {
+    // One row in the shape enrichSamplesWithConsent really returns.
+    const found = [{
+      _id: 'oid-1',
+      specimenId: 'S1',
+      barcode: 'BC1',
+      participantId: 'P1',
+      sampleType: 'blood',
+      specimenStatus: 'available',
+      consentValid: true,
+      consentStatus: 'CONSENT_ACTIVE',
+      canAllocate: true
+    }];
     const executeSpy = vi
       .spyOn(SearchAllocatableSamplesUseCase.prototype, 'execute')
-      .mockResolvedValue([{ sampleId: 'S1' }]);
+      .mockResolvedValue(found);
     const req = buildReq({ query: { q: 'blood' } });
     const res = buildRes();
 
     await controller(req, res);
 
-    expect(executeSpy).toHaveBeenCalledWith({ query: 'blood' });
+    expect(executeSpy).toHaveBeenCalledWith({ query: 'blood', scopeFilter: {} });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ sampleId: 'S1' }] });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: found });
   });
 
   it('defaults query to an empty string when req.query.q is absent', async () => {
@@ -104,7 +120,7 @@ describe('storage-query.controller.searchSamplesController', () => {
 
     await controller(req, res);
 
-    expect(executeSpy).toHaveBeenCalledWith({ query: '' });
+    expect(executeSpy).toHaveBeenCalledWith({ query: '', scopeFilter: {} });
   });
 
   it('returns 500 with error message when the use case throws', async () => {

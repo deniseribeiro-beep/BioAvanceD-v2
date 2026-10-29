@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { readFile } = require('fs/promises');
 const env = require('../config/env');
+const auditSigningProvider = require('./audit-signing.provider');
 
 const SIGNATURE_ALGORITHM = 'ED25519';
 const HASH_ALGORITHM = 'SHA-256';
@@ -33,7 +34,9 @@ function sha256Base64(input) {
 }
 
 function parsePublicKeyRegistry() {
-  const raw = String(env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON || '').trim();
+  // #1157: one source, two postures -- this reader degrades to {} on malformed
+  // JSON where the provider propagates, and a test pins each.
+  const raw = auditSigningProvider.readPublicKeyRegistrySource();
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw);

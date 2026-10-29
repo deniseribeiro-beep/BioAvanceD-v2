@@ -158,4 +158,37 @@ describe('POST /api/workflow-runs/:workflowRunId/files', () => {
       { $addToSet: { inputFileIds: fileId }, $set: expect.objectContaining({ updatedAt: expect.any(Date) }) }
     );
   });
+
+  // RF007 AC5, V2E-0476 (#1321): the file side records the WorkflowRun too.
+  it('adds the WorkflowRun to the linked file\'s linkedEntityRefs, in the collection it was found in', async () => {
+    const fileId = new ObjectId().toString();
+    const fileUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const findOneSeq = vi.fn()
+      .mockResolvedValueOnce(workflowRunDoc)
+      .mockResolvedValueOnce({ ...workflowRunDoc, outputFileIds: [fileId] });
+
+    app.locals.db = createDbMock({
+      workflowRuns: createCollectionMock({ findOne: findOneSeq, updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) }),
+      sample_files: createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) }),
+      assayFiles: createCollectionMock({
+        findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(fileId) }),
+        updateOne: fileUpdateOne,
+      }),
+      datasetFiles: createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) }),
+      ...rbacCollectionsAdmin,
+    });
+
+    const res = await request(app)
+      .post(`/api/workflow-runs/${workflowRunId}/files`)
+      .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+      .send({ fileId, direction: 'output' });
+
+    expect(res.status).toBe(200);
+    expect(fileUpdateOne).toHaveBeenCalledWith(
+      { _id: new ObjectId(fileId) },
+      { $addToSet: { linkedEntityRefs: { entityType: 'WorkflowRun', entityId: workflowRunId } } }
+    );
+    const [, update] = fileUpdateOne.mock.calls[0];
+    expect(Object.keys(update.$addToSet.linkedEntityRefs)).toEqual(['entityType', 'entityId']);
+  });
 });

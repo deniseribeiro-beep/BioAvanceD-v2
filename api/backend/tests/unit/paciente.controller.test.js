@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -7,9 +7,11 @@ const controller = require('../../src/controllers/paciente.controller');
 const patientService = require('../../src/services/patient.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
 const auditLogger = require('../../src/utils/auditLogger');
+const securityService = require('../../src/services/security.service');
 const sampleComplianceSync = require('../../src/services/sampleComplianceSync.service');
 const { createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 const controllerPath = require.resolve('../../src/controllers/paciente.controller');
 
@@ -46,6 +48,38 @@ function createReq(overrides = {}) {
     // exercising org-scope enforcement itself override this explicitly.
     organizationScope: { scope: 'global', organizationIds: [] },
     ...overrides
+  };
+}
+
+// #1383 (RF010 AC5): consent histories for four participants -- one revoked
+// whole, one revoked by permission, one whose older consent was revoked but
+// whose newer consent stands, and one with no consent at all.
+function consentStatusCollections() {
+  const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const responses = { storage: true, contact: true };
+  const consent = (consentId, participantId, signedAt) => ({
+    consentId, participantId, status: 'ACTIVE', responses, signedAt: new Date(signedAt), createdAt: new Date(signedAt)
+  });
+  const revocation = (consentId, scope) => ({ consentId, scope, effectiveAt: anHourAgo });
+  return {
+    patients: createMatchingCollection([
+      { participantId: '10000001', status: 'ACTIVE' },
+      { participantId: '10000002', status: 'ACTIVE' },
+      { participantId: '10000003', status: 'ACTIVE' },
+      { participantId: '10000004', status: 'PENDING_CONSENT' }
+    ]),
+    patientConsents: createMatchingCollection([
+      consent('c-p1', '10000001', '2026-01-01T00:00:00Z'),
+      consent('c-p2', '10000002', '2026-01-01T00:00:00Z'),
+      consent('c-p3-old', '10000003', '2025-01-01T00:00:00Z'),
+      consent('c-p3-new', '10000003', '2026-02-01T00:00:00Z')
+    ]),
+    consentDecisionEvents: createMatchingCollection([]),
+    consentRevocations: createMatchingCollection([
+      revocation('c-p1', ['all']),
+      revocation('c-p2', ['contact']),
+      revocation('c-p3-old', ['all'])
+    ])
   };
 }
 
@@ -256,7 +290,7 @@ describe('paciente.controller', () => {
         find: vi.fn().mockReturnValue({
           limit: vi.fn().mockReturnThis(),
           skip: vi.fn().mockReturnThis(),
-          toArray: vi.fn().mockResolvedValue([{ patientID: '1', status: 'ACTIVE' }])
+          toArray: vi.fn().mockResolvedValue([{ participantId: '12345678', status: 'ACTIVE' }])
         }),
         countDocuments: vi.fn().mockResolvedValue(1)
       };
@@ -272,7 +306,10 @@ describe('paciente.controller', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
-          data: expect.objectContaining({ total: 1 })
+          data: expect.objectContaining({
+            total: 1,
+            patients: [{ participantId: '12345678', status: 'ACTIVE', consentNotifiedAt: null, consentTokenExpiresAt: null, consentStatus: null }]
+          })
         })
       );
     });
@@ -297,14 +334,37 @@ describe('paciente.controller', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            patients: [{ participantId: '12345678', status: 'PENDING_CONSENT', consentNotifiedAt: null, consentTokenExpiresAt: null }]
+            patients: [{ participantId: '12345678', status: 'PENDING_CONSENT', consentNotifiedAt: null, consentTokenExpiresAt: null, consentStatus: null }]
           })
         })
       );
     });
 
+    it('derives each operational row consentStatus from the newest consent history in one batched read (#1383)', async () => {
+      const collections = consentStatusCollections();
+      const db = createDbMock(collections);
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({ app: { locals: { db } }, user: { accessType: 1, userID: 'operational-user' } });
+      const res = createRes();
+
+      await controller.listar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const rows = res.json.mock.calls[0][0].data.patients;
+      expect(rows.map((row) => [row.participantId, row.status, row.consentStatus])).toEqual([
+        ['10000001', 'ACTIVE', 'revoked'],
+        ['10000002', 'ACTIVE', 'partially_revoked'],
+        ['10000003', 'ACTIVE', 'active'],
+        ['10000004', 'PENDING_CONSENT', null]
+      ]);
+      expect(collections.patientConsents.find).toHaveBeenCalledTimes(1);
+      expect(collections.consentDecisionEvents.find).toHaveBeenCalledTimes(1);
+      expect(collections.consentRevocations.find).toHaveBeenCalledTimes(1);
+    });
+
     it('returns full patient data for cadastro role (has createPatient permission)', async () => {
-      vi.spyOn(patientService, 'listPatients').mockResolvedValue({ patients: [{ patientID: '1' }], total: 1 });
+      vi.spyOn(patientService, 'listPatients').mockResolvedValue({ patients: [{ participantId: '12345678' }], total: 1 });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
       const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
@@ -420,7 +480,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns full patient data for cadastro role', async () => {
-      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ patientID: '12345678', name: 'Foo' });
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', name: 'Foo' });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
       const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
@@ -640,6 +700,42 @@ describe('paciente.controller', () => {
   });
 
   describe('deletar', () => {
+    // #1262: the delete reads lgpd.allowDataDeletion, and this file's db is a
+    // bare object that cannot answer it, so each case says it is allowed
+    // unless it tests the gate.
+    beforeEach(() => {
+      vi.spyOn(securityService, 'isDataDeletionAllowed').mockResolvedValue(true);
+    });
+
+    it('#1262: returns 403 and deletes nothing while lgpd.allowDataDeletion is false', async () => {
+      securityService.isDataDeletionAllowed.mockResolvedValue(false);
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678' });
+      const deleteSpy = vi.spyOn(patientService, 'deletePatient').mockResolvedValue(true);
+      const req = createReq({ params: { id: '12345678' } });
+      const res = createRes();
+
+      await controller.deletar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Eliminação desabilitada' }));
+      expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('#1262: the organization scope answers before the setting does', async () => {
+      securityService.isDataDeletionAllowed.mockResolvedValue(false);
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const req = createReq({
+        params: { id: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.deletar(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Este paciente pertence a outra organização' }));
+      expect(securityService.isDataDeletionAllowed).not.toHaveBeenCalled();
+    });
+
     it('returns 503 when db is missing', async () => {
       const req = createReq({ app: { locals: {} }, params: { id: '1' } });
       const res = createRes();
@@ -819,6 +915,42 @@ describe('paciente.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
     });
+
+    // #1185: buscar/atualizar/deletar all 403 a patient outside the caller's
+    // organization scope (#340/#626); findForEdit returned it for editing.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' }) };
+      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({
+        app: { locals: { db } },
+        body: { participantId: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.findForEdit(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('CONTROL: returns a patient in the caller organization', async () => {
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-1' }) };
+      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({
+        app: { locals: { db } },
+        body: { participantId: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.findForEdit(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
   });
 
   describe('search', () => {
@@ -862,6 +994,23 @@ describe('paciente.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
+    it('gives a revoked participant found by search consentStatus revoked (#1383)', async () => {
+      vi.spyOn(patientService, 'searchPatients').mockResolvedValue({ patients: [{ participantId: '10000001', status: 'ACTIVE' }], total: 1 });
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const db = createDbMock(consentStatusCollections());
+      const req = createReq({ app: { locals: { db } }, query: { q: '10000001' } });
+      const res = createRes();
+
+      await controller.search(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: { patients: [{ participantId: '10000001', status: 'ACTIVE', consentStatus: 'revoked' }], total: 1 }
+      });
+    });
+
     it('returns 500 and logs error when user is set and service fails', async () => {
       vi.spyOn(patientService, 'searchPatients').mockRejectedValue(new Error('boom'));
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -901,7 +1050,7 @@ describe('paciente.controller', () => {
 
     it('strips extra fields for operational role', async () => {
       vi.spyOn(biomarkerObservationService, 'listPatientObservations').mockResolvedValue({
-        observations: [{ _id: '1', patientID: '12345678', biomarkerType: 'X', collectedAt: 'd', status: 's', unit: 'u', extra: 'secret' }],
+        observations: [{ _id: '1', participantId: '12345678', biomarkerType: 'X', collectedAt: 'd', status: 's', unit: 'u', extra: 'secret' }],
         total: 1,
         limit: 50,
         skip: 0
@@ -923,11 +1072,12 @@ describe('paciente.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
       const jsonArg = res.json.mock.calls[0][0];
       expect(jsonArg.data.observations[0].extra).toBeUndefined();
+      expect(jsonArg.data.observations[0].participantId).toBe('12345678');
     });
 
     it('returns full observations for cadastro role', async () => {
       vi.spyOn(biomarkerObservationService, 'listPatientObservations').mockResolvedValue({
-        observations: [{ _id: '1', patientID: '12345678', extra: 'secret' }],
+        observations: [{ _id: '1', participantId: '12345678', extra: 'secret' }],
         total: 1,
         limit: 50,
         skip: 0

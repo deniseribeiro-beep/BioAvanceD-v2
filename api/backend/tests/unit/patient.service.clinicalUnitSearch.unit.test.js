@@ -97,7 +97,14 @@ describe('clinicalUnit free-text search/filter paths stay consistent with Organi
       { participantId: '11111111', patientName: 'Ana', clinicalUnit: snapshot.clinicalUnit, unitAcronym: snapshot.unitAcronym },
       { participantId: '22222222', patientName: 'Bruno', clinicalUnit: 'Oncologia', unitAcronym: 'ONC' },
     ]);
-    db.collection = vi.fn((name) => (name === 'patients' ? patients : organizations));
+    // #1386: searchPatients also matches the term as a record number on
+    // ParticipantIdentity, which holds none here.
+    const participantIdentities = makeInMemoryPatientsCollection([]);
+    db.collection = vi.fn((name) => {
+      if (name === 'patients') return patients;
+      if (name === 'participantIdentities') return participantIdentities;
+      return organizations;
+    });
 
     const result = await patientService.searchPatients(db, 'genética');
 

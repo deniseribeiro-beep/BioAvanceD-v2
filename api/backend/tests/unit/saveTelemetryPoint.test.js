@@ -59,6 +59,30 @@ describe('saveTelemetryPoint', () => {
     expect(flush).toHaveBeenCalledTimes(1);
   });
 
+  // #1317: the point carries the reading contract's id, clock status,
+  // datastream (V2E-0546) and location (V2E-0547).
+  it('writes the reading id as a field and clockStatus, datastreamId and storageLocationId as tags when given an identity', async () => {
+    const writePoint = vi.fn();
+    const flush = vi.fn().mockResolvedValue(undefined);
+    const { saveTelemetryPoint } = loadServiceWithMocks({
+      connectInfluxDB: vi.fn().mockResolvedValue(undefined),
+      getInfluxWriteApi: vi.fn().mockReturnValue({ writePoint, flush }),
+    });
+
+    await saveTelemetryPoint('sensor-1', 4, new Date('2026-10-10T12:00:00.000Z'), {
+      telemetryReadingId: 'tr-9', clockStatus: 'drift', datastreamId: 'ds-1', storageLocationId: 'loc-1',
+    });
+    const line = writePoint.mock.calls[0][0].toLineProtocol();
+    expect(line).toContain('clockStatus=drift');
+    expect(line).toContain('telemetryReadingId="tr-9"');
+    expect(line).toContain('datastreamId=ds-1');
+    expect(line).toContain('storageLocationId=loc-1');
+    expect(line).not.toContain('telemetryDatastreamId');
+
+    await saveTelemetryPoint('sensor-1', 4, new Date('2026-10-10T12:00:00.000Z'));
+    expect(writePoint.mock.calls[1][0].toLineProtocol()).not.toContain('telemetryReadingId');
+  });
+
   it('rejects when sensorId is undefined without touching influx', async () => {
     const writePoint = vi.fn();
     const flush = vi.fn().mockResolvedValue(undefined);

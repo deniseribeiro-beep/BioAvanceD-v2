@@ -3,6 +3,7 @@ const crypto = require('crypto');
 
 const mqttIngestionAuditService = require('../../src/services/mqtt-ingestion-audit.service');
 const logger = require('../../src/utils/logger');
+const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 function sha256Hex(input) {
   return crypto.createHash('sha256').update(String(input)).digest('hex');
@@ -108,6 +109,21 @@ describe('mqtt-ingestion-audit.service', () => {
         previousHash: 'prev-hash-value'
       });
       expect(doc.chainHash).toBe(sha256Hex(expectedPayload));
+    });
+
+    // #841: makeCollection's next() returns its one document whatever sort
+    // it gets, so it cannot tell the newest entry from the first one stored.
+    // This store sorts, and holds the entries out of order.
+    it('chains off the newest entry by timestamp among entries stored out of order', async () => {
+      const db = createFakeDb();
+      const entries = db.collection('mqtt_ingestion_audit');
+      for (const at of ['2026-07-02T05:00:00.000Z', '2026-07-02T05:20:00.000Z', '2026-07-02T04:00:00.000Z']) {
+        await entries.insertOne({ timestamp: new Date(at), chainHash: `hash-${at}` });
+      }
+
+      const result = await mqttIngestionAuditService.append(db, { topic: 'sensors/temp', timestamp: '2026-07-02T05:30:00.000Z' });
+
+      expect(result.chainPrevHash).toBe('hash-2026-07-02T05:20:00.000Z');
     });
 
     it('defaults status to "processed" and coerces a non-numeric temperatureValue to null', async () => {

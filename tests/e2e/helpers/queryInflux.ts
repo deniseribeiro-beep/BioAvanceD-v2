@@ -52,3 +52,42 @@ export async function queryTemperaturePoints(
   const rows = await queryApi.collectRows<{ _time: string; _value: number }>(flux);
   return rows.map((row) => ({ time: row._time, value: row._value }));
 }
+
+/**
+ * #1317: the telemetryReadingId of every `freezer_temperature` point the
+ * temperature reading route wrote for `sensorId`, with each point's time.
+ * #1392: `measurement: 'temperature'` reads the points POST
+ * /api/iot/telemetry wrote instead (saveTelemetryPoint.js).
+ */
+export async function queryFreezerReadingIds(
+  sensorId: string,
+  lookbackMinutes = 10,
+  measurement: 'freezer_temperature' | 'temperature' = 'freezer_temperature'
+): Promise<{ time: string; telemetryReadingId: string }[]> {
+  const queryApi = getClient().getQueryApi(org);
+  const flux = `from(bucket: "${bucket}")
+    |> range(start: -${lookbackMinutes}m)
+    |> filter(fn: (r) => r._measurement == "${measurement}")
+    |> filter(fn: (r) => r._field == "telemetryReadingId")
+    |> filter(fn: (r) => r.sensorId == "${sensorId}")`;
+
+  const rows = await queryApi.collectRows<{ _time: string; _value: string }>(flux);
+  return rows.map((row) => ({ time: row._time, telemetryReadingId: row._value }));
+}
+
+/**
+ * #1325: every point in the bucket, over the backup export's range. count()
+ * runs per series first: group() before count() would merge `_value`
+ * columns of different types into one table.
+ */
+export async function countAllPoints(): Promise<number> {
+  const queryApi = getClient().getQueryApi(org);
+  const flux = `from(bucket: "${bucket}")
+    |> range(start: 1678-01-01T00:00:00Z, stop: 2262-01-01T00:00:00Z)
+    |> count()
+    |> group()
+    |> sum()`;
+
+  const rows = await queryApi.collectRows<{ _value: number }>(flux);
+  return rows.length ? Number(rows[0]._value) : 0;
+}

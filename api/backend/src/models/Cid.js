@@ -16,7 +16,10 @@ const CidSchema = new mongoose.Schema(
     nameEs: { type: String, trim: true, default: null },
     translations: { type: mongoose.Schema.Types.Mixed, default: null },
     names: { type: mongoose.Schema.Types.Mixed, default: null },
-    active: { type: Boolean, default: true, index: true }
+    // #941: no `index: true` -- inert, and HARMFUL if built: explain() showed
+    // the planner picks { active: 1 } for cid.service.js's active-search
+    // $or and examines ~2x the documents a COLLSCAN does.
+    active: { type: Boolean, default: true }
   },
   {
     collection: 'cids',

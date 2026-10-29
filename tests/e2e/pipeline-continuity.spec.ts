@@ -3,11 +3,34 @@ import { MongoClient } from 'mongodb';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
-import { createRealParticipant, seedRawSpecimen, seedStudy, seedAssay, closeSeedDb } from './helpers/seedParticipant';
-import { waitForEthicalConsentStatus, waitForTerminologyConceptNode, waitForTerminologyRelation, closeNeo4jDriver } from './helpers/queryNeo4j';
+import {
+  createRealParticipant,
+  seedRawSpecimen,
+  seedStudy,
+  seedAssay,
+  seedStorageBoxLocation,
+  cleanupStorageBoxLocation,
+  closeSeedDb,
+  type SeededStorageBox,
+} from './helpers/seedParticipant';
+import {
+  waitForEthicalConsentStatus,
+  waitForTerminologyConceptNode,
+  waitForTerminologyRelation,
+  waitForSampleGovernedBy,
+  countSampleNodes,
+  countGraph,
+  closeNeo4jDriver,
+} from './helpers/queryNeo4j';
+import { countAllPoints } from './helpers/queryInflux';
 import {
   countEssentialReferenceDocs,
+  essentialReferenceImportRuns,
   countFoundationDataRuns,
+  latestFoundationDataRun,
+  latestReadinessReport,
+  governanceRegistry,
+  indexNamesOf,
   countReferenceDatasetReleases,
   countTerminologyConcepts,
   countReferenceDatasetReleasesByDatasetCode,
@@ -104,11 +127,88 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
 
     await waitForEthicalConsentStatus(consentId, 'REVOKED');
   });
+
+  // #1225: LineageRepository's consent gate reads
+  // (sample)-[:GOVERNED_BY]->(consent), MERGEing the sample under its Mongo
+  // _id. The consent projection used to fall back to the consent's own id for
+  // the missing specimenId, so every GOVERNED_BY edge landed on a phantom
+  // Sample keyed by the consent id and no real sample was ever governed.
+  // Both orders are covered: consent first, then sample, and the reverse.
+  const seededBoxes: SeededStorageBox[] = [];
+  test.afterAll(async () => {
+    await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+  });
+
+  async function signConsent(request: any, token: string, participant: { participantId: string; consentTemplateId: string }) {
+    const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        participantId: participant.participantId,
+        consentTemplateId: participant.consentTemplateId,
+        responses: {},
+        ...signatureFields(),
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const consentId = String((await response.json())?.data?._id || '');
+    expect(consentId).toBeTruthy();
+    return consentId;
+  }
+
+  async function createSampleMongoId(request: any, token: string, participantId: string) {
+    const box = await seedStorageBoxLocation();
+    seededBoxes.push(box);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'RF023 #1225 consent-governance e2e fixture',
+        registeredAt: new Date().toISOString(),
+        boxId: box.boxId,
+        positionCode: box.positionCode,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId;
+    const read = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(read.status()).toBe(200);
+    return String((await read.json()).data._id);
+  }
+
+  test('a sample created after its donor consented is GOVERNED_BY that consent, and no phantom Sample carries the consent id (#1225)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const consentId = await signConsent(request, admin.token, participant);
+    await waitForEthicalConsentStatus(consentId, 'ACTIVE');
+
+    const sampleMongoId = await createSampleMongoId(request, admin.token, participant.participantId);
+
+    await waitForSampleGovernedBy(sampleMongoId, consentId);
+    expect(await countSampleNodes(consentId)).toBe(0);
+  });
+
+  test('a sample created before its donor consented becomes GOVERNED_BY the consent once it is signed (#1225)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const sampleMongoId = await createSampleMongoId(request, admin.token, participant.participantId);
+
+    const consentId = await signConsent(request, admin.token, participant);
+
+    await waitForSampleGovernedBy(sampleMongoId, consentId);
+    expect(await countSampleNodes(consentId)).toBe(0);
+  });
 });
 
 // RF028 AC9 ("Persistir primeiro no MongoDB e projetar no Neo4j
-// exclusivamente pelo outbox", #552): reference-imports/pipeline.js's
-// promote() now appends a TERMINOLOGY_CONCEPT_PROMOTED/
+// exclusivamente pelo outbox", #552): services/referenceRelease.service.js's
+// promoteRelease now appends a TERMINOLOGY_CONCEPT_PROMOTED/
 // TERMINOLOGY_RELATION_PROMOTED event to graph_projection_outbox on the same
 // write that inserts a TerminologyConcept/TerminologyRelation, same pattern
 // RF023 uses above — the generic neo4jProjection.worker.js drains both. HPO
@@ -134,7 +234,7 @@ test.describe('Outbox → Neo4j projection (RF028 AC9) — real backend', () => 
 });
 
 // dict-07/dict-08 (#329, "Gap crítico"): the target Foundation Data Pipeline
-// is a one-shot, idempotent bootstrap of the full 929-element dictionary
+// is a one-shot, idempotent bootstrap of the full canonical dictionary
 // across six technical entities, executed automatically after the stack's
 // healthchecks pass — not a script a human has to remember to run.
 // api/backend/scripts/seed-essential-reference-data.js is wired as exactly
@@ -150,14 +250,118 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     await closeFoundationDb();
   });
 
-  test('reference data is populated automatically, without running the manual seed script', async () => {
-    const count = await countEssentialReferenceDocs();
-    expect(count).toBeGreaterThan(0);
+  // RF022 AC7: Foundation prepares the reference loaders and populates none
+  // of them; the Phase 2 job loads the essential set before the API, one
+  // ReferenceImportRun per entry, each naming the Foundation run that let it.
+  test('the essential reference set is loaded by the Phase 2 job, not by Foundation', async () => {
+    expect(await countEssentialReferenceDocs()).toBeGreaterThan(0);
+
+    const foundationRun = await latestFoundationDataRun();
+    const miabisStep = foundationRun!.steps.find((step: any) => step.step === 'miabis-minimal');
+    expect(miabisStep).toMatchObject({ status: 'prepared', keyless: 0 });
+    expect(miabisStep.checkpoint).toBeUndefined();
+
+    const runs = await essentialReferenceImportRuns();
+    for (const key of ['miabis-minimal', 'sprec-minimal', 'rcs-gov-1.0']) {
+      expect(runs.find((run) => run.datasetCode === key)).toMatchObject({
+        importMode: 'full',
+        runStatus: 'completed',
+        foundationDataRunId: foundationRun!.foundationDataRunId,
+        referenceDatasetReleaseId: expect.any(String),
+      });
+      expect(await countActiveReferenceDatasetReleasesByDatasetCode(key)).toBe(1);
+    }
   });
 
   test('the bootstrap records an idempotent FoundationDataRun, not just ad-hoc upserts', async () => {
     const runs = await countFoundationDataRuns();
     expect(runs).toBeGreaterThan(0);
+  });
+
+  // RF022 AC1 (Requisitos v4.0.0): Foundation validates the approved v2.0.0
+  // dictionary, 1644 elements including the 929 historical ones.
+  test('the bootstrap run validated the v2.0.0 dictionary: 1644 elements, 929 historical', async () => {
+    const run = await latestFoundationDataRun();
+    expect(run).not.toBeNull();
+    expect(run!.dictionaryVersion).toBe('2.0.0');
+    expect(run!.validationSummary.dictionaryCompleteness).toMatchObject({
+      dictionaryVersion: '2.0.0',
+      loadedTotal: 1644,
+      uniqueTotal: 1644,
+      historicalTotal: 929,
+      missingHistoricalIds: [],
+      verified: true,
+    });
+  });
+
+  // RF022 AC5, RNF031 C4: one apply run does dry-run, apply and verify, and
+  // records each result with the v2.0.0 run fields.
+  test('the bootstrap run recorded dry-run, apply and verify, each passing', async () => {
+    const run = await latestFoundationDataRun();
+    expect(run).toMatchObject({
+      executionMode: 'apply',
+      runStatus: 'completed',
+      dryRunResult: 'pass',
+      applyResult: 'pass',
+      verifyResult: 'pass',
+      rollbackResult: 'not_required',
+      canonicalModelReleaseId: 'release-2.0.0',
+      migrationPlanId: 'migration-1.3.0-to-2.0.0',
+    });
+    expect(run!.reportUri).toMatch(/^urn:bioavanced:foundation-data-run:[0-9a-f-]{36}#sha256=[0-9a-f]{64}$/);
+  });
+
+  // RF022 AC4/AC9, RNF014 C6/C7: the job ran before the API and wrote a
+  // ready ReadinessReport for that run. backend-app-test starts only on it
+  // (FOUNDATION_READINESS_REQUIRED), so this suite running at all is the API
+  // having passed that gate.
+  test('a ready ReadinessReport for the bootstrap run gates the API', async () => {
+    const run = await latestFoundationDataRun();
+    const report = await latestReadinessReport('test');
+    expect(report).toMatchObject({
+      status: 'ready',
+      blockers: [],
+      foundationDataRunId: run!.foundationDataRunId,
+      canonicalModelReleaseId: 'release-2.0.0',
+    });
+    const results = Object.fromEntries(report!.gateResults.map((gate: any) => [gate.gate, gate.result]));
+    expect(results).toMatchObject({
+      version: 'pass',
+      schemas: 'pass',
+      'reference-mechanisms': 'pass',
+      'storage-constraints': 'pass',
+      'zero-operational-data': 'pass',
+      'zero-reference-data': 'pass',
+      'governance-registry': 'pass',
+      configuration: 'pass',
+    });
+    expect(report!.p0Coverage).toBeGreaterThan(0);
+    expect(report!.p0Coverage).toBeLessThan(1);
+  });
+
+  // #1304, plano §4 F1.2: the job registered the release this build follows,
+  // once, with the invariant catalog bound to it (RF014 AC6, CFG-003).
+  test('the bootstrap registered the CanonicalModelRelease and its invariant catalog', async () => {
+    const { release, catalogs } = await governanceRegistry('release-2.0.0');
+    expect(release).toMatchObject({ semanticVersion: '2.0.0', releaseStatus: 'active' });
+    expect(release!.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(release!.artifactManifest.map((entry: any) => entry.artifact)).toContain('catalog.2.0.0.json');
+    expect(catalogs).toHaveLength(1);
+    expect(catalogs[0]).toMatchObject({ semanticVersion: '1.0.0', status: 'active' });
+    expect(catalogs[0].invariants.map((invariant: any) => invariant.invariantId)).toEqual(
+      expect.arrayContaining(['INV-AUDIT-001', 'INV-CONSENT-001', 'INV-SCOPE-001']),
+    );
+  });
+
+  // RF022 AC2: Foundation builds the model indexes before the API serves its
+  // first request, and they are on the real collections.
+  test('the bootstrap built the model indexes on the real collections', async () => {
+    const report = await latestReadinessReport('test');
+    const constraints = report!.gateResults.find((gate: any) => gate.gate === 'storage-constraints');
+    expect(constraints.evidence.built).toBeGreaterThan(0);
+    expect(constraints.evidence.failed).toEqual([]);
+    expect(await indexNamesOf('samples')).toContain('samples_barcode_unique_v2');
+    expect(await indexNamesOf('sessions')).toContain('sessions_accessTokenHash_v1');
   });
 });
 
@@ -1025,6 +1229,8 @@ test.describe('Ingestion gateway — workflows, omics data (RF029 slice 6/6) —
         createdBy: 'User/e2e-suite',
         startedAt: new Date().toISOString(),
         runStatus: 'succeeded',
+        hardwareProfile: { cpu: 'synthetic' },
+        environmentManifestUri: 'object://synthetic/environment.json',
       },
       provenance: provenance(),
     });
@@ -1042,6 +1248,8 @@ test.describe('Ingestion gateway — workflows, omics data (RF029 slice 6/6) —
         workflowVersion: '2.3.1',
         startedAt: new Date().toISOString(),
         runStatus: 'succeeded',
+        hardwareProfile: { cpu: 'synthetic' },
+        environmentManifestUri: 'object://synthetic/environment.json',
       },
       provenance: provenance(),
     });
@@ -1148,6 +1356,10 @@ test.describe('Ingestion gateway — workflows, omics data (RF029 slice 6/6) —
 // (`--build`) for this block to pass, and a `json-fallback` mode here is a
 // real signal that it wasn't.
 test.describe('Backup and restore (RF013) — real backend', () => {
+  test.afterAll(async () => {
+    await closeNeo4jDriver();
+  });
+
   async function listDatabaseNames(): Promise<string[]> {
     const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
     try {
@@ -1274,6 +1486,58 @@ test.describe('Backup and restore (RF013) — real backend', () => {
     }
   });
 
+  // #1325 (RNF010 C1): the same run exports Neo4j and InfluxDB beside the
+  // MongoDB dump, encrypted, and the folder's checksum covers their files,
+  // so a restore test of it still verifies. Other writers may run during the
+  // backup, so the counts are bounds, never equalities. The restore test
+  // also decrypts and parses both exports (RNF010 C5), and its counts must
+  // equal the backup run's exactly.
+  test('a backup also exports Neo4j and InfluxDB, encrypted and covered by the checksum, and a restore test verifies them (#1325)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const graphBefore = await countGraph();
+    const pointsBefore = await countAllPoints();
+    const run = await performBackup(request, admin.token);
+    const graphAfter = await countGraph();
+    const pointsAfter = await countAllPoints();
+
+    const { neo4j, influxdb } = run.stores;
+    expect(neo4j.status).toBe('exported');
+    expect(neo4j.nodes).toBeGreaterThanOrEqual(graphBefore.nodes);
+    expect(neo4j.nodes).toBeLessThanOrEqual(graphAfter.nodes);
+    expect(neo4j.relationships).toBeGreaterThanOrEqual(graphBefore.relationships);
+    expect(neo4j.relationships).toBeLessThanOrEqual(graphAfter.relationships);
+    expect(influxdb.status).toBe('exported');
+    expect(influxdb.points).toBeGreaterThanOrEqual(pointsBefore);
+    expect(influxdb.points).toBeLessThanOrEqual(pointsAfter);
+
+    const files = [...neo4j.files, ...influxdb.files];
+    expect(files.map((entry: { file: string }) => entry.file)).toEqual([
+      'neo4j/nodes.ndjson',
+      'neo4j/relationships.ndjson',
+      'neo4j/schema.json',
+      'influxdb/points.ndjson',
+    ]);
+    for (const entry of files) {
+      expect(entry.encrypted, entry.file).toBe(true);
+    }
+
+    const restoreTest = await request.post(`${apiBaseURL}/api/backup/restore-test/${run.fileName}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(restoreTest.status(), await restoreTest.text()).toBe(200);
+    const result = (await restoreTest.json()).data;
+    expect(result.success, result.error).toBe(true);
+    expect(result.checksumVerified).toBe(true);
+    expect(result.stores.neo4j.status, result.stores.neo4j.error).toBe('verified');
+    expect(result.stores.neo4j.nodes).toBe(neo4j.nodes);
+    expect(result.stores.neo4j.relationships).toBe(neo4j.relationships);
+    expect(result.stores.influxdb.status, result.stores.influxdb.error).toBe('verified');
+    expect(result.stores.influxdb.points).toBe(influxdb.points);
+  });
+
   // AC#2's "autorizada": every backup operation is behind the manageBackup
   // permission (#632) and the policy behind hierarchyLevel 4 (#728) -- a
   // real Técnico session, not just a missing token, is refused by the
@@ -1285,7 +1549,7 @@ test.describe('Backup and restore (RF013) — real backend', () => {
     expect(unauthenticated.status()).toBe(401);
 
     const username = `tecnico.rf013.${Date.now()}`;
-    const password = 'Tecnico@123';
+    const password = 'Tecnico@123-forte';
     const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {

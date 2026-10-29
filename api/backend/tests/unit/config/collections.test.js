@@ -11,7 +11,17 @@ const ENV_KEYS = [
   'COLL_CLINICAL_UNITS',
   'COLL_DISEASE_DICTIONARY',
   'COLL_MEDICATION_DICTIONARY',
-  'COLL_REFERENCE_SEED_RUNS'
+  'COLL_REFERENCE_SEED_RUNS',
+  'COLL_READINESS_REPORTS',
+  'COLL_CONFIGURATION_PROFILES',
+  'COLL_CONFIGURATION_RELEASES',
+  'COLL_CONFIGURATION_CHANGE_EVENTS',
+  'COLL_CONFIGURATION_VALIDATION_RUNS',
+  'COLL_CANONICAL_MODEL_RELEASES',
+  'COLL_GOVERNANCE_INVARIANT_CATALOGS',
+  'COLL_RCS_INPUT_SNAPSHOTS',
+  'COLL_RCS_GOVERNANCE_EVIDENCE_SNAPSHOTS',
+  'COLL_RCS_RULE_PACKAGES'
 ];
 
 const DEFAULTS = {
@@ -28,12 +38,24 @@ const DEFAULTS = {
   medicationDictionary: 'medication_dictionary',
   referenceSeedRuns: 'referenceSeedRuns',
   foundationDataRuns: 'foundationDataRuns',
+  readinessReports: 'readinessReports',
+  configurationProfiles: 'configurationProfiles',
+  configurationReleases: 'configurationReleases',
+  configurationChangeEvents: 'configurationChangeEvents',
+  configurationValidationRuns: 'configurationValidationRuns',
+  canonicalModelReleases: 'canonicalModelReleases',
+  governanceInvariantCatalogs: 'governanceInvariantCatalogs',
+  invariantViolations: 'invariantViolations',
   participantIdentities: 'participantIdentities',
   rcsAssessments: 'rcsAssessments',
+  rcsInputSnapshots: 'rcsInputSnapshots',
+  rcsGovernanceEvidenceSnapshots: 'rcsGovernanceEvidenceSnapshots',
+  rcsRulePackages: 'rcsRulePackages',
   encounters: 'encounters',
   conditions: 'conditions',
   phenotypeObservations: 'phenotypeObservations',
   clinicalObservations: 'clinicalObservations',
+  diagnosticReports: 'diagnosticReports',
   clinicalOutcomes: 'clinicalOutcomes',
   derivedScores: 'derivedScores',
   allergyIntolerances: 'allergyIntolerances',
@@ -42,6 +64,21 @@ const DEFAULTS = {
   procedures: 'procedures',
   specimenPreanalytics: 'specimenPreanalytics',
   quarantineActions: 'quarantineActions',
+  containers: 'containers',
+  specimenContainerAssignments: 'specimenContainerAssignments',
+  containerPositionAssignments: 'containerPositionAssignments',
+  rackLocationAssignments: 'rackLocationAssignments',
+  telemetryExposureSummaries: 'telemetryExposureSummaries',
+  storageLocations: 'storageLocations',
+  operationalStateDecisions: 'operationalStateDecisions',
+  labelIdentifiers: 'labelIdentifiers',
+  scanEvents: 'scanEvents',
+  custodianshipAssignments: 'custodianshipAssignments',
+  shipments: 'shipments',
+  devices: 'devices',
+  deviceLifecycleEvents: 'deviceLifecycleEvents',
+  deviceRegistrations: 'deviceRegistrations',
+  telemetryDatastreams: 'telemetryDatastreams',
   referenceDatasetReleases: 'referenceDatasetReleases',
   referenceImportRuns: 'referenceImportRuns',
   referenceImportIssues: 'referenceImportIssues',
@@ -56,12 +93,24 @@ const DEFAULTS = {
   notifications: 'notifications',
   labelGenerations: 'labelGenerations',
   accessRequests: 'accessRequests',
+  accessPolicies: 'accessPolicies',
+  collectionGovernanceApprovals: 'collectionGovernanceApprovals',
+  collectionGovernanceEvents: 'collectionGovernanceEvents',
+  consentDecisionEvents: 'consentDecisionEvents',
+  consentRevocations: 'consentRevocations',
+  consentAuthorizationDecisions: 'consentAuthorizationDecisions',
+  consentPermissions: 'consentPermissions',
+  consentCommunicationEvents: 'consentCommunicationEvents',
   reagentLots: 'reagentLots',
   nonconformances: 'nonconformances',
   legalHolds: 'legalHolds',
   dispositionActions: 'dispositionActions',
+  dataFileVersions: 'dataFileVersions',
   ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
-  ingestionQuarantineRecords: 'ingestionQuarantineRecords'
+  ingestionQuarantineRecords: 'ingestionQuarantineRecords',
+  missingDataReasons: 'missingDataReasons',
+  dataQualityAssessments: 'dataQualityAssessments',
+  referenceCoverageManifests: 'referenceCoverageManifests'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -131,8 +180,19 @@ describe('config/collections', () => {
       medicationDictionary: 'custom_coll_medication_dictionary',
       referenceSeedRuns: 'custom_coll_reference_seed_runs',
       foundationDataRuns: 'foundationDataRuns',
+      readinessReports: 'custom_coll_readiness_reports',
+      configurationProfiles: 'custom_coll_configuration_profiles',
+      configurationReleases: 'custom_coll_configuration_releases',
+      configurationChangeEvents: 'custom_coll_configuration_change_events',
+      configurationValidationRuns: 'custom_coll_configuration_validation_runs',
+      canonicalModelReleases: 'custom_coll_canonical_model_releases',
+      governanceInvariantCatalogs: 'custom_coll_governance_invariant_catalogs',
+      invariantViolations: 'invariantViolations',
       participantIdentities: 'participantIdentities',
       rcsAssessments: 'rcsAssessments',
+      rcsInputSnapshots: 'custom_coll_rcs_input_snapshots',
+      rcsGovernanceEvidenceSnapshots: 'custom_coll_rcs_governance_evidence_snapshots',
+      rcsRulePackages: 'custom_coll_rcs_rule_packages',
       // COLL_ENCOUNTERS/COLL_CONDITIONS/COLL_PHENOTYPE_OBSERVATIONS/
       // COLL_CLINICAL_OBSERVATIONS/COLL_CLINICAL_OUTCOMES/
       // COLL_DERIVED_SCORES/COLL_ALLERGY_INTOLERANCES/
@@ -143,6 +203,7 @@ describe('config/collections', () => {
       conditions: 'conditions',
       phenotypeObservations: 'phenotypeObservations',
       clinicalObservations: 'clinicalObservations',
+      diagnosticReports: 'diagnosticReports',
       clinicalOutcomes: 'clinicalOutcomes',
       derivedScores: 'derivedScores',
       allergyIntolerances: 'allergyIntolerances',
@@ -151,6 +212,21 @@ describe('config/collections', () => {
       procedures: 'procedures',
       specimenPreanalytics: 'specimenPreanalytics',
       quarantineActions: 'quarantineActions',
+      containers: 'containers',
+      specimenContainerAssignments: 'specimenContainerAssignments',
+      containerPositionAssignments: 'containerPositionAssignments',
+      rackLocationAssignments: 'rackLocationAssignments',
+      telemetryExposureSummaries: 'telemetryExposureSummaries',
+      storageLocations: 'storageLocations',
+      operationalStateDecisions: 'operationalStateDecisions',
+      labelIdentifiers: 'labelIdentifiers',
+      scanEvents: 'scanEvents',
+      custodianshipAssignments: 'custodianshipAssignments',
+      shipments: 'shipments',
+      devices: 'devices',
+      deviceLifecycleEvents: 'deviceLifecycleEvents',
+      deviceRegistrations: 'deviceRegistrations',
+      telemetryDatastreams: 'telemetryDatastreams',
       referenceDatasetReleases: 'referenceDatasetReleases',
       referenceImportRuns: 'referenceImportRuns',
       referenceImportIssues: 'referenceImportIssues',
@@ -167,6 +243,14 @@ describe('config/collections', () => {
       notifications: 'notifications',
       labelGenerations: 'labelGenerations',
       accessRequests: 'accessRequests',
+      accessPolicies: 'accessPolicies',
+      collectionGovernanceApprovals: 'collectionGovernanceApprovals',
+      collectionGovernanceEvents: 'collectionGovernanceEvents',
+      consentDecisionEvents: 'consentDecisionEvents',
+      consentRevocations: 'consentRevocations',
+      consentAuthorizationDecisions: 'consentAuthorizationDecisions',
+      consentPermissions: 'consentPermissions',
+      consentCommunicationEvents: 'consentCommunicationEvents',
       // COLL_REAGENT_LOTS/COLL_NONCONFORMANCES/COLL_LEGAL_HOLDS/
       // COLL_DISPOSITION_ACTIONS aren't in ENV_KEYS/read by env.js either,
       // same hardcoded-default reasoning as cids/etc. above.
@@ -174,10 +258,16 @@ describe('config/collections', () => {
       nonconformances: 'nonconformances',
       legalHolds: 'legalHolds',
       dispositionActions: 'dispositionActions',
-      // COLL_INGESTION_IDEMPOTENCY_KEYS/COLL_INGESTION_QUARANTINE_RECORDS
-      // aren't in ENV_KEYS/read by env.js either, same reasoning.
+      dataFileVersions: 'dataFileVersions',
+      // COLL_INGESTION_IDEMPOTENCY_KEYS/COLL_INGESTION_QUARANTINE_RECORDS/
+      // COLL_MISSING_DATA_REASONS/COLL_DATA_QUALITY_ASSESSMENTS/
+      // COLL_REFERENCE_COVERAGE_MANIFESTS aren't in ENV_KEYS/read by env.js
+      // either, same reasoning.
       ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
-      ingestionQuarantineRecords: 'ingestionQuarantineRecords'
+      ingestionQuarantineRecords: 'ingestionQuarantineRecords',
+      missingDataReasons: 'missingDataReasons',
+      dataQualityAssessments: 'dataQualityAssessments',
+      referenceCoverageManifests: 'referenceCoverageManifests'
     });
   });
 

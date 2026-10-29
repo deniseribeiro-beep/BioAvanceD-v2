@@ -1,0 +1,64 @@
+{
+  "release": "BioAvanceD Canonical Data Model v2.0.0",
+  "releaseStatus": "approved",
+  "documentaryState": "final",
+  "approvedOn": "2026-09-12",
+  "approvalScope": "documentary_release",
+  "approvalStatement": "A aprovação documental da release não constitui execução, aprovação de resultado ou homologação do ensaio ex ante.",
+  "physicalIdentificationProtocol": {
+    "version": "1.0.0",
+    "status": "approved_for_execution",
+    "executionStatus": "not_executed",
+    "result": null
+  },
+  "dsr": {
+    "modifiedInThisRelease": false
+  },
+  "artifacts": [
+    {
+      "file": "BioAvanceD_Modelo_Persistencia_Poliglota_v2.0.0.docx",
+      "sha256": "d060dcb18900775a959b6894ba58ebb8120e548be850a5c57fef35e026fe52a5",
+      "bytes": 82283
+    },
+    {
+      "file": "BioAvanceD_Pacote_Exemplos_JSON_Persistencia_Poliglota_v2.0.0.zip",
+      "sha256": "5f73f7eb2f1c9af4fa2613bbad0c2ac9d5886a2d069ee07891833b41503263be",
+      "bytes": 5906
+    },
+    {
+      "file": "BioAvanceD_Protocolo_Avaliacao_Ex_Ante_Identificacao_Fisica_v1.0.0.docx",
+      "sha256": "6ce782d763976a8ec4a106e6a212d13b2e838a0bd5b19db146418472a7c787f1",
+      "bytes": 46050
+    },
+    {
+      "file": "BioAvanceD_Exemplos_Registros_Sinteticos_v2.0.0.json",
+      "sha256": "e3b1df13cdfb7fe54f46597be9397b1bb26be520aa0418e144bd770ac30456de",
+      "bytes": 36970
+    },
+    {
+      "file": "BioAvanceD_Requisitos_Funcionais_Nao_Funcionais_v4.0.0.docx",
+      "sha256": "305004fe176518e781875f5d99b93ca8c8084517b2f8fc416a8b3dcf63dda614",
+      "bytes": 94791
+    },
+    {
+      "file": "BioAvanceD_Relatorio_Consistencia_Modelo_v2.0.0.docx",
+      "sha256": "f26e21fc53d76a734179fe8c273a8dbdd7d44b27ddb6a781d6874bd3a447121c",
+      "bytes": 51155
+    },
+    {
+      "file": "BioAvanceD_Plano_Integrado_Foundation_Data_Pipeline_v2.0.0.docx",
+      "sha256": "139b678f60125ff11836c304cdb80a2717d64db837e6c39d3fc579e438a43f39",
+      "bytes": 45200
+    },
+    {
+      "file": "BioAvanceD_Matriz_Rastreabilidade_Modelo_v2.0.0.xlsx",
+      "sha256": "db70cdbe0607bb59a948b8c009fc944163e47551e9a0a696e3e817bf9f114656",
+      "bytes": 115355
+    },
+    {
+      "file": "BioAvanceD_Dicionario_Dados_Consolidado_v2.0.0.xlsx",
+      "sha256": "b25535b757b0e30283b2b8781a60f82c8cb176a2d2e736fe6986ecfb7380721d",
+      "bytes": 407401
+    }
+  ]
+}

@@ -312,3 +312,22 @@
 		padding: 0.55rem 0.65rem;
 	}
 }
+
+/* RF014 AC4: the configuration release history. */
+.security-releases-table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.security-releases-table th,
+.security-releases-table td {
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+	color: var(--text);
+}
+
+.security-releases-table th {
+	color: var(--text-secondary);
+	font-weight: 600;
+}

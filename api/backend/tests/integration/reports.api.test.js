@@ -3,10 +3,32 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const express = require('express');
 const request = require('supertest');
 const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
+const { createFakeDb } = require('../unit/foundation/helpers/fake-db');
+// RF009 AC1 (#1317): the temperature report reads InfluxDB through this
+// singleton; every case spies it so none reaches a real connection.
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
+
+// A row as InfluxTelemetryReadRepository.temperatureReport returns it.
+function temperatureRow(overrides = {}) {
+  return {
+    logId: 'T-1',
+    telemetryReadingId: 'T-1',
+    timestamp: new Date('2026-01-15T10:00:00Z'),
+    sensorId: 'SEN-1',
+    measurement: 'freezer_temperature',
+    temperatureValue: -80,
+    temperatureUnit: '°C',
+    temperatureCelsius: -80,
+    ...overrides,
+  };
+}
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
   rbac: require.resolve('../../src/infrastructure/middleware/rbac'),
+  // #1266: the export gate reads security_config, which these db mocks
+  // cannot answer; it is stubbed open here and tested on its own.
+  exportGate: require.resolve('../../src/infrastructure/middleware/lgpdExportGate'),
   controller: require.resolve('../../src/interface/routes/reports.routes'),
 };
 
@@ -202,9 +224,11 @@ describe('Reports API integration', () => {
     next();
   };
   const requirePermission = () => (_req, _res, next) => next();
+  let temperatureReport;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    temperatureReport = vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue({ rows: [], total: 0 });
 
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
@@ -228,7 +252,8 @@ describe('Reports API integration', () => {
     ]);
 
     setCachedModule(modulePaths.auth, { authenticate });
-    setCachedModule(modulePaths.rbac, { requirePermission });
+    setCachedModule(modulePaths.rbac, { requirePermission, requireRole: () => (_req, _res, next) => next() });
+    setCachedModule(modulePaths.exportGate, { requireDataExportAllowed: (_req, _res, next) => next() });
     delete require.cache[modulePaths.controller];
 
     const reportsRouter = require(modulePaths.controller);
@@ -243,6 +268,7 @@ describe('Reports API integration', () => {
   });
 
   afterEach(() => {
+    temperatureReport.mockRestore();
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
     }
@@ -275,7 +301,8 @@ describe('Reports API integration', () => {
   // filters -- a date range, and nothing else, because handleAccessLogs
   // reads nothing else off `filters`.
   it('GET /api/reports/:type/filters devolve o catálogo do handler do tipo', async () => {
-    const response = await request(app).get('/api/reports/audit/filters');
+    // #733: `access_logs`; `audit` has its own handler now, pinned below.
+    const response = await request(app).get('/api/reports/access_logs/filters');
 
     expect(response.status).toBe(200);
     expect(response.body.handlerKey).toBe('accessLogs');
@@ -283,6 +310,29 @@ describe('Reports API integration', () => {
       { name: 'startDate', label: 'Data inicial', type: 'date' },
       { name: 'endDate', label: 'Data final', type: 'date' },
     ]);
+  });
+
+  // #1215: the page renders a freezer-then-box picker for this type, not a
+  // free-text field for a 24-hex id.
+  it('GET /api/reports/samples/filters declares storageBoxId as a storageBox picker', async () => {
+    const response = await request(app).get('/api/reports/samples/filters');
+
+    expect(response.status).toBe(200);
+    expect(response.body.filters.find((entry) => entry.name === 'storageBoxId')).toEqual({
+      name: 'storageBoxId',
+      label: 'Caixa de armazenamento',
+      type: 'storageBox',
+    });
+  });
+
+  // #735: a custom template has no frontend definition, so the query page
+  // takes its title and description from here.
+  it('GET /api/reports/:type/filters names the template, for a page that has no definition of it', async () => {
+    const response = await request(app).get('/api/reports/access_logs/filters');
+
+    expect(response.status).toBe(200);
+    expect(response.body.name).toBe('Logs de Acesso');
+    expect(response.body).toHaveProperty('description');
   });
 
   it('GET /api/reports/:id resolve por reportID numérico', async () => {
@@ -332,11 +382,11 @@ describe('Reports API integration', () => {
   });
 
   it('POST /api/reports/:type/preview retorna envelope de sucesso com dados', async () => {
-    const response = await request(app).post('/api/reports/audit/preview').send({ filters: {} });
+    const response = await request(app).post('/api/reports/access_logs/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
-    expect(response.body.reportType).toBe('audit');
+    expect(response.body.reportType).toBe('access_logs');
     expect(typeof response.body.generatedAt).toBe('string');
     expect(response.body.data).toEqual({ total: 0, logs: [], previewLimited: false });
   });
@@ -350,7 +400,7 @@ describe('Reports API integration', () => {
   });
 
   it('GET /api/reports/:type/export/pdf retorna envelope PDF', async () => {
-    const response = await request(app).get('/api/reports/audit/export/pdf');
+    const response = await request(app).get('/api/reports/access_logs/export/pdf');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
@@ -436,7 +486,10 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(2);
-      const semId = response.body.data.patients.find((p) => p.patientName === 'Sem ID');
+      // #1077: located by its missing participantId. patientName is civil
+      // identity and is no longer in the preview at all.
+      const semId = response.body.data.patients.find((p) => p.participantId === undefined);
+      expect(semId.patientName).toBeUndefined();
       expect(semId.sampleCount).toBe(0);
       expect(semId.samples).toEqual([]);
       const semAmostras = response.body.data.patients.find((p) => p.participantId === 'P9');
@@ -482,23 +535,25 @@ describe('Reports API integration', () => {
       );
     });
 
-    // #864: readingStatus's whole vocabulary is valid|invalid|suspicious
-    // (Temperature.js) and no writer of the temperature collection ever
-    // sets `severity` -- so a doc whose only "critical" signal is
-    // readingStatus (verified never true in production) must NOT count
-    // toward statistics.alerts. What does count: a threshold breach
-    // (minThreshold/maxThreshold both non-null and temperatureValue outside
-    // them) and a faulty/maintenance sensorStatus. A null-threshold doc,
-    // the honest majority state today since no bulk writer persists
-    // thresholds (they live on Policy), must not count either.
-    it('temperatura: calcula estatísticas e conta alertas críticos via limiar de threshold e sensorStatus, não readingStatus (#864)', async () => {
-      const { db, capturedQueries } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 2.5, readingStatus: 'normal', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
-          { temperatureValue: 10, readingStatus: 'critical', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
-          { temperatureValue: 15, readingStatus: 'valid', sensorStatus: 'normal', minThreshold: 2, maxThreshold: 8 },
-          { temperatureValue: 5, readingStatus: 'valid', sensorStatus: 'faulty', minThreshold: null, maxThreshold: null },
+    // RF009 AC1 (#1317): the readings come from InfluxDB, and a point carries
+    // neither thresholds nor a sensor status. A breach is judged in Celsius
+    // against the sensor's temperature policy, and a sensor flagged
+    // maintenance|error in `sensors` counts as critical; a reading whose
+    // sensor has no policy and no flag never counts.
+    it('temperatura: calcula estatísticas em Celsius e conta alertas pela política do sensor e pelo sensor sinalizado (#1317)', async () => {
+      temperatureReport.mockResolvedValue({
+        rows: [
+          temperatureRow({ logId: 'T-1', sensorId: 'S-NOPOL', temperatureValue: 2.5, temperatureCelsius: 2.5 }),
+          temperatureRow({ logId: 'T-2', sensorId: 'S-NOPOL', temperatureValue: 10, temperatureCelsius: 10 }),
+          temperatureRow({ logId: 'T-3', sensorId: 'S1', temperatureValue: 59, temperatureUnit: '°F', temperatureCelsius: 15 }),
+          temperatureRow({ logId: 'T-4', sensorId: 'S-FLAG', temperatureValue: 5, temperatureCelsius: 5 }),
         ],
+        total: 4,
+      });
+      const { db } = buildCollectionDb({
+        sensorMetadata: [{ sensorId: 'S1', temperaturePolicy: 'pol-1' }],
+        temperaturePolicies: [{ _id: 'pol-1', minTemp: 2, maxTemp: 8 }],
+        sensors: [{ sensorId: 'S-FLAG', maintenanceStatus: 'error' }, { sensorId: 'S1', maintenanceStatus: 'operational' }],
       });
 
       const testApp = appWithDb(db);
@@ -507,18 +562,20 @@ describe('Reports API integration', () => {
         .send({ filters: { criticalAlertsOnly: 'true', startDate: '2026-01-01', endDate: '2026-01-31' } });
 
       expect(response.status).toBe(200);
-      // Only the threshold-breach doc and the faulty-sensor doc count; the
-      // readingStatus:'critical' doc (dead leg, removed) does not.
+      // Only the S1 breach (15 °C over 8) and the flagged-sensor reading count.
       expect(response.body.data.statistics).toEqual({ average: (2.5 + 10 + 15 + 5) / 4, min: 2.5, max: 15, alerts: 2 });
 
-      // The impossible readingStatus/severity regex legs are gone; the $or
-      // now carries only the sensorStatus leg and the two non-null-guarded
-      // threshold-breach $and legs.
-      expect(capturedQueries.temperature.$and[1].$or).toEqual([
-        { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
-        { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
-        { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
-      ]);
+      // The Flux range stop is exclusive, so it sits 1 ms after endDate's
+      // 23:59:59.999.
+      const endOfDay = new Date('2026-01-31');
+      endOfDay.setHours(23, 59, 59, 999);
+      expect(temperatureReport).toHaveBeenCalledWith({
+        start: new Date('2026-01-01'),
+        stop: new Date(endOfDay.getTime() + 1),
+        sensorIds: null,
+        critical: { boundsBySensor: new Map([['S1', { min: 2, max: 8 }]]), flaggedSensorIds: ['S-FLAG'] },
+        limit: 100,
+      });
     });
 
     // #620: withdrawalhistory reads from sample_movements (type: 'withdraw'
@@ -573,12 +630,15 @@ describe('Reports API integration', () => {
     // #539: this used to read the legacy currentStatus/status fields
     // (`sample.currentStatus || sample.status || null`), which
     // canonical-data-contract-v1.md's "Legacy Fields Prohibited" list bans —
-    // derives from the canonical specimenStatus (dict-02 ELM-0123) instead.
+    // derives from the canonical specimenStatus (V2E-0544) instead.
     it('sampleanalysis: deriva status de specimenStatus, ignorando currentStatus/status legados', async () => {
       const { db } = buildCollectionDb({
         samples: [
-          { specimenId: 'S1', specimenStatus: 'depleted', currentStatus: 'Available', status: 'AVAILABLE' },
+          { specimenId: 'S1', specimenStatus: 'quarantined', currentStatus: 'Available', status: 'AVAILABLE' },
           { specimenId: 'S2', currentStatus: 'Available', status: 'AVAILABLE' },
+          // RF006 AC2/AC3: a not-yet-migrated v1.3.0 `depleted` reads as
+          // available, with the depletion in quantityStatus.
+          { specimenId: 'S3', specimenStatus: 'depleted', initialQuantity: 10, currentQuantity: 0 },
         ],
       });
       const testApp = appWithDb(db);
@@ -586,7 +646,8 @@ describe('Reports API integration', () => {
       const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').status).toBe('depleted');
+      expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').status).toBe('quarantined');
+      expect(response.body.data.analysis.find((item) => item.sampleID === 'S3')).toMatchObject({ status: 'available', quantityStatus: 'depleted' });
       // No specimenStatus recorded: falls back to the schema default
       // ('available'), not the stale legacy fields.
       expect(response.body.data.analysis.find((item) => item.sampleID === 'S2').status).toBe('available');
@@ -831,7 +892,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/access_logs/export');
 
       expect(response.status).toBe(200);
-      expect(response.text).toContain('alice');
+      expect(response.text).toContain('LOGIN');
     });
 
     it('CONTROL: um auditor continua exportando access_logs', async () => {
@@ -841,12 +902,66 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/access_logs/export');
 
       expect(response.status).toBe(200);
-      expect(response.text).toContain('alice');
+      expect(response.text).toContain('LOGIN');
     });
 
-    it('CONTROL: um usuário externo continua exportando um relatório NÃO-auditoria', async () => {
+    // #1076: /api/logs anonymizes on read (log.service#getLogs ->
+    // anonymizeLogs) while this handler returned the raw documents, so a row
+    // whose stored userName is a real name -- a pre-anonymization row, or one
+    // written by a caller that bypasses auditLogger -- left through the
+    // preview JSON, the CSV, /export/pdf and the persisted Report. dict-04
+    // P-033 names "nomes reais em exportações de log" as an anti-pattern.
+    describe('#1076: the access-log report anonymizes the actor like /api/logs does', () => {
+      const saltBefore = process.env.USER_ANON_SALT;
+      beforeEach(() => { process.env.USER_ANON_SALT = 'test-user-anon-salt'; });
+      afterEach(() => {
+        if (saltBefore === undefined) delete process.env.USER_ANON_SALT;
+        else process.env.USER_ANON_SALT = saltBefore;
+      });
+
+      const RAW_ROWS = [{
+        logId: 'L-7',
+        userId: 'user-7',
+        userName: 'Alice Real Name',
+        action: 'LOGIN_SUCCESS',
+        metadata: { user: { userName: 'Alice Real Name', email: 'alice@example.org', userRole: 'Tecnico' } },
+        payload: { email: 'alice@example.org' },
+      }];
+
+      it('the CSV export carries the USR- pseudonym, not the stored name', async () => {
+        const { generateAnonId } = require('../../src/utils/userAnonymization');
+        const { db } = buildCollectionDb({ ...rbacFor('administrator', 4), logs: RAW_ROWS });
+
+        const response = await request(appWithDb(db)).get('/api/reports/access_logs/export');
+
+        expect(response.status).toBe(200);
+        // CONTROL: the row is genuinely exported.
+        expect(response.text).toContain('LOGIN_SUCCESS');
+        expect(response.text).toContain(generateAnonId('user-7'));
+        expect(response.text).not.toContain('Alice Real Name');
+      });
+
+      it('the preview JSON carries no real name or email anywhere in the row', async () => {
+        const { db } = buildCollectionDb({ ...rbacFor('administrator', 4), logs: RAW_ROWS });
+
+        const response = await request(appWithDb(db)).post('/api/reports/access_logs/preview').send({ filters: {} });
+
+        expect(response.status).toBe(200);
+        const body = JSON.stringify(response.body);
+        expect(body).toContain('LOGIN_SUCCESS');
+        expect(body).not.toContain('Alice Real Name');
+        expect(body).not.toContain('alice@example.org');
+      });
+    });
+
+    // RF002 AC4: an external user builds only a report type a grant names,
+    // so the controls below hold an active grant for `equipment`.
+    const EQUIPMENT_GRANT = [{ userId: 'user-1', resourceType: 'report', reportID: 9, reportType: 'equipment', grantStatus: 'active', expiresAt: null, revokedAt: null }];
+
+    it('CONTROL: um usuário externo com concessão continua exportando um relatório NÃO-auditoria', async () => {
       const { db } = buildCollectionDb({
         ...rbacFor('external_user', 1),
+        access: EQUIPMENT_GRANT,
         equipment: [{ id: '1', name: 'Freezer A' }],
       });
       const testApp = appWithDb(db);
@@ -857,6 +972,19 @@ describe('Reports API integration', () => {
       expect(response.text).toContain('Freezer A');
     });
 
+    it('RF002 AC4: sem concessão, um usuário externo recebe 403 no export NÃO-auditoria', async () => {
+      const { db } = buildCollectionDb({
+        ...rbacFor('external_user', 1),
+        equipment: [{ id: '1', name: 'Freezer A' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/equipment/export');
+
+      expect(response.status).toBe(403);
+      expect(response.text).not.toContain('Freezer A');
+    });
+
     it('usuário externo recebe 403 em GET /access_logs/export e nenhuma linha da trilha', async () => {
       const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), logs: AUDIT_ROWS });
       const testApp = appWithDb(db);
@@ -864,7 +992,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/access_logs/export');
 
       expect(response.status).toBe(403);
-      expect(response.text).not.toContain('alice');
+      expect(response.text).not.toContain('LOGIN');
       expect(response.text).not.toContain('deadbeef');
     });
 
@@ -877,7 +1005,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/audit/export');
 
       expect(response.status).toBe(403);
-      expect(response.text).not.toContain('alice');
+      expect(response.text).not.toContain('LOGIN');
     });
 
     it('técnico recebe 403 no preview da trilha de auditoria', async () => {
@@ -887,7 +1015,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).post('/api/reports/access_logs/preview').send({ filters: {} });
 
       expect(response.status).toBe(403);
-      expect(JSON.stringify(response.body)).not.toContain('alice');
+      expect(JSON.stringify(response.body)).not.toContain('LOGIN');
     });
 
     // The PDF route returns previewData verbatim as JSON with no CSV layer,
@@ -899,11 +1027,11 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/audit/export/pdf');
 
       expect(response.status).toBe(403);
-      expect(JSON.stringify(response.body)).not.toContain('alice');
+      expect(JSON.stringify(response.body)).not.toContain('LOGIN');
     });
 
     it('CONTROL: POST /generate de um relatório NÃO-auditoria continua sendo persistido', async () => {
-      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), equipment: [{ id: '1', name: 'Freezer A' }] });
+      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), access: EQUIPMENT_GRANT, equipment: [{ id: '1', name: 'Freezer A' }] });
       const testApp = appWithDb(withReportInsert(db));
 
       const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'equipment' });
@@ -918,7 +1046,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'audit' });
 
       expect(response.status).toBe(403);
-      expect(JSON.stringify(response.body)).not.toContain('alice');
+      expect(JSON.stringify(response.body)).not.toContain('LOGIN');
     });
   });
 
@@ -948,12 +1076,15 @@ describe('Reports API integration', () => {
       patients: { patients: [{ participantId: 'P-1', status: 'active' }] },
       samples: { samples: [{ specimenId: 'S-1', sampleType: 'blood' }] },
       sample_analysis: { samples: [{ specimenId: 'S-1', barcode: 'B-1' }], results: [{ specimenId: 'S-1', resultID: 'R-1' }] },
-      temperature: { temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80 }] },
-      temperature_control: { temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80 }] },
+      // RF009 AC1 (#1317): these two read InfluxDB; the case below hands
+      // them a row through the repository spy instead of a collection.
+      temperature: {},
+      temperature_control: {},
       sensors: { sensors: [{ sensorId: 'SEN-1', sensorType: 'temperature' }] },
       equipment: { equipment: [{ equipmentID: 'EQ-1', name: 'Freezer A' }] },
       results: { results: [{ resultID: 'R-1', specimenId: 'S-1' }] },
-      audit: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
+      // #733: `audit` reads the AuditEvent trail, `access_logs` the `logs` collection.
+      audit: { audit_events: [{ eventId: 'E-1', action: 'LOGIN', occurredAt: '2026-01-01T00:00:00.000Z' }] },
       access_logs: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
       withdrawal_history: { sample_movements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal' }] },
       tissue_origin_history: { samples: [{ specimenId: 'S-1', sampleType: 'tissue' }] },
@@ -978,6 +1109,9 @@ describe('Reports API integration', () => {
     });
 
     it.each(Object.entries(SEEDS))('%s exports rows rather than the no-data fallback', async (code, collections) => {
+      if (code === 'temperature' || code === 'temperature_control') {
+        temperatureReport.mockResolvedValue({ rows: [temperatureRow()], total: 1 });
+      }
       const { db } = buildCollectionDb(collections);
       const response = await request(appWithDb(db)).get(`/api/reports/${code}/export`);
 
@@ -1016,13 +1150,13 @@ describe('Reports API integration', () => {
     });
 
     it('#1058: temperature exports real rows instead of "Sem dados"', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80, temperatureUnit: 'C' }],
-      });
+      temperatureReport.mockResolvedValue({ rows: [temperatureRow()], total: 1 });
+      const { db } = buildCollectionDb({});
       const response = await request(appWithDb(db)).get('/api/reports/temperature/export');
 
       expect(response.status).toBe(200);
       expect(response.text.split('\n')[0]).not.toBe('total,message');
+      expect(response.text.split('\n')[0]).toContain('temperatureCelsius');
       expect(response.text).toContain('SEN-1');
     });
 
@@ -1129,6 +1263,337 @@ describe('Reports API integration', () => {
       expect(response.status).toBe(200);
       expect(response.text.split('\n')[0].split(',')).toContain('consentTokenExpiresAt');
       expect(response.text).toContain('2026-12-31');
+    });
+  });
+
+  // #1077: EXPORT_CATALOG bounded the CSV only. The preview, the "PDF" branch
+  // (which answers JSON) and the Report document POST /generate persists all
+  // carried the raw handler output, so the columns the catalog excludes still
+  // left through three surfaces. The catalog now applies where
+  // buildPreviewData returns, so every surface inherits it.
+  describe('#1077: preview, PDF and the stored Report are bounded by the export catalog', () => {
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    // Captures the document POST /generate persists, which buildCollectionDb's
+    // generic collection cannot insert.
+    function withCapturedInsert(db) {
+      const inner = db.collection.bind(db);
+      const inserted = [];
+      return {
+        inserted,
+        db: {
+          collection(name) {
+            if (name === 'reports') {
+              return { ...inner(name), insertOne: async (doc) => { inserted.push(doc); return { insertedId: 'r-1' }; } };
+            }
+            return inner(name);
+          },
+        },
+      };
+    }
+
+    const LEDGER_ROW = {
+      movementId: 'M-1',
+      specimenId: 'S-1',
+      type: 'withdraw',
+      quantity: 2,
+      userId: 'user-9',
+      userName: 'Alice Operator',
+      responsible: 'Alice Operator',
+      ipAddress: '203.0.113.7',
+      userAgent: 'Mozilla/5.0 leaky-agent',
+      hash: 'deadbeefcafe',
+      previousHash: 'feedfacebeef',
+    };
+    const LEDGER_LEAKS = ['Alice Operator', '203.0.113.7', 'leaky-agent', 'deadbeefcafe', 'feedfacebeef', 'user-9'];
+
+    const SAMPLE_ROW = {
+      specimenId: 'S-1',
+      participantId: 'P-1',
+      sampleType: 'blood',
+      clinicalData: { note: 'CLINICAL-SHOULD-NOT-LEAK' },
+      pharmacologyData: { drug: 'PHARMA-SHOULD-NOT-LEAK' },
+      merkleRoot: 'MERKLE-SHOULD-NOT-LEAK',
+    };
+    const SAMPLE_LEAKS = ['CLINICAL-SHOULD-NOT-LEAK', 'PHARMA-SHOULD-NOT-LEAK', 'MERKLE-SHOULD-NOT-LEAK'];
+
+    function expectBounded(body, keep, leaks) {
+      const text = JSON.stringify(body);
+      // CONTROL inside the case: the row is really there, so the negatives
+      // below cannot pass against an empty result.
+      expect(text).toContain(keep);
+      for (const leaked of leaks) {
+        expect(text).not.toContain(leaked);
+      }
+    }
+
+    it('POST /:type/preview omits the custody ledger\'s operator identity, network identifiers and hashes', async () => {
+      const { db } = buildCollectionDb({ sample_movements: [LEDGER_ROW] });
+      const response = await request(appWithDb(db)).post('/api/reports/withdrawal_history/preview').send({});
+
+      expect(response.status).toBe(200);
+      expectBounded(response.body.data, 'M-1', LEDGER_LEAKS);
+    });
+
+    it('GET /:type/export/pdf omits the custody ledger\'s operator identity, network identifiers and hashes', async () => {
+      const { db } = buildCollectionDb({ sample_movements: [LEDGER_ROW] });
+      const response = await request(appWithDb(db)).get('/api/reports/withdrawal_history/export/pdf');
+
+      expect(response.status).toBe(200);
+      expectBounded(response.body.data, 'M-1', LEDGER_LEAKS);
+    });
+
+    it('POST /generate persists a Report whose reportData omits the custody ledger\'s excluded columns', async () => {
+      const { db: base } = buildCollectionDb({ sample_movements: [LEDGER_ROW] });
+      const { db, inserted } = withCapturedInsert(base);
+      const response = await request(appWithDb(db)).post('/api/reports/generate').send({ reportType: 'withdrawal_history' });
+
+      expect(response.status).toBe(201);
+      expect(inserted).toHaveLength(1);
+      expectBounded(JSON.parse(inserted[0].reportData), 'M-1', LEDGER_LEAKS);
+      expectBounded(response.body, 'M-1', LEDGER_LEAKS);
+    });
+
+    it('POST /:type/preview omits Sample clinicalData, pharmacologyData and seal internals', async () => {
+      const { db } = buildCollectionDb({ samples: [SAMPLE_ROW] });
+      const response = await request(appWithDb(db)).post('/api/reports/samples/preview').send({});
+
+      expect(response.status).toBe(200);
+      expectBounded(response.body.data, 'S-1', SAMPLE_LEAKS);
+    });
+
+    // samples_by_patient nests each patient's samples inside the patient row.
+    // The CSV never exported that nested array, but the preview and the stored
+    // Report do, so it is bounded by the Sample column list too.
+    it('POST /generate bounds the samples nested under each patient in samples_by_patient', async () => {
+      const { db: base } = buildCollectionDb({
+        patients: [{ participantId: 'P-1', status: 'active', representative: { name: 'REP-SHOULD-NOT-LEAK' } }],
+        samples: [SAMPLE_ROW],
+      });
+      const { db, inserted } = withCapturedInsert(base);
+      const response = await request(appWithDb(db)).post('/api/reports/generate').send({ reportType: 'samples_by_patient' });
+
+      expect(response.status).toBe(201);
+      const stored = JSON.parse(inserted[0].reportData);
+      expect(stored.patients[0].samples[0].specimenId).toBe('S-1');
+      expectBounded(stored, 'P-1', [...SAMPLE_LEAKS, 'REP-SHOULD-NOT-LEAK']);
+    });
+
+    // CONTROLS: unchanged by this fix, green before and after (#695).
+    it('CONTROL: the non-row keys of a preview are kept (total, statistics, mode, previewLimited)', async () => {
+      temperatureReport.mockResolvedValue({ rows: [temperatureRow()], total: 1 });
+      const { db } = buildCollectionDb({});
+      const response = await request(appWithDb(db)).post('/api/reports/temperature/preview').send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({ total: 1, mode: 'report', previewLimited: false });
+      expect(response.body.data.statistics).toMatchObject({ average: -80, min: -80, max: -80 });
+      expect(response.body.data.temperatures[0]).toMatchObject({ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80 });
+    });
+
+    it('CONTROL: an unknown report type still answers the no-preview shape', async () => {
+      const { db } = buildCollectionDb({});
+      const response = await request(appWithDb(db)).post('/api/reports/no_such_type/preview').send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({ total: 0, type: 'no_such_type' });
+    });
+  });
+
+  // #733: RF008 (requisitos v4.0.0) names AuditEvent as the audit report's
+  // contract. `audit` and `access_logs` were two menu entries over one
+  // `logs` query; `audit` now reads the hash-chained `audit_events` trail.
+  describe('#733: the Auditoria report reads audit_events, not the access logs', () => {
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    const saltBefore = process.env.USER_ANON_SALT;
+    beforeEach(() => { process.env.USER_ANON_SALT = 'test-user-anon-salt'; });
+    afterEach(() => {
+      if (saltBefore === undefined) delete process.env.USER_ANON_SALT;
+      else process.env.USER_ANON_SALT = saltBefore;
+    });
+
+    const LOG_ROWS = [{ logId: 'L-1', userName: 'USR-AAAAAAAA', action: 'ONLY_IN_LOGS', timestamp: '2026-01-01' }];
+    const EVENT_ROWS = [{
+      eventId: 'E-1',
+      logId: 'L-9',
+      sequenceNumber: 3,
+      occurredAt: '2026-01-02T10:00:00.000Z',
+      recordedAt: '2026-01-02T10:00:01.000Z',
+      actorPseudonym: 'Alice Real Name',
+      action: 'ONLY_IN_AUDIT_EVENTS',
+      entityType: 'Sample',
+      entityId: 'SPEC-SECRET-1',
+      result: 'success',
+      source: 'Amostras',
+      payloadDigest: 'digest-secret',
+      eventHash: 'hash-secret',
+      previousEventHash: 'prev-hash-secret',
+      canonicalLeaf: { eventHash: 'hash-secret' },
+      inclusionProof: ['proof-secret'],
+    }];
+
+    it('POST /audit/preview returns the audit_events rows, not the logs rows', async () => {
+      const { db } = buildCollectionDb({ logs: LOG_ROWS, audit_events: EVENT_ROWS });
+
+      const response = await request(appWithDb(db)).post('/api/reports/audit/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      const body = JSON.stringify(response.body);
+      expect(body).toContain('ONLY_IN_AUDIT_EVENTS');
+      expect(body).not.toContain('ONLY_IN_LOGS');
+    });
+
+    it('CONTROL: POST /access_logs/preview still returns the logs rows', async () => {
+      const { db } = buildCollectionDb({ logs: LOG_ROWS, audit_events: EVENT_ROWS });
+
+      const response = await request(appWithDb(db)).post('/api/reports/access_logs/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      const body = JSON.stringify(response.body);
+      expect(body).toContain('ONLY_IN_LOGS');
+      expect(body).not.toContain('ONLY_IN_AUDIT_EVENTS');
+    });
+
+    // Nested here for appWithDb and the salt the audit export needs.
+    describe('#1332: ordered reads, against a store that sorts', () => {
+      // buildCollectionDb's sort returns the rows as stored. Here the read
+      // collection is the sorting fake DB, holding rows out of order.
+      function withSortingStore(name, rows) {
+        const { db } = buildCollectionDb();
+        const store = createFakeDb().collection(name);
+        rows.forEach((row) => store.docs.push(row));
+        return { collection: (requested) => (requested === name ? store : db.collection(requested)) };
+      }
+
+      const exportedColumn = (text) => text.trim().split('\n').slice(1).map((line) => line.split(',')[0].replace(/"/g, ''));
+
+      it('GET /audit/export lists events newest first, by sequence within one instant', async () => {
+        const at = (iso, eventId, sequenceNumber) => ({ ...EVENT_ROWS[0], eventId, sequenceNumber, occurredAt: iso });
+        const db = withSortingStore('audit_events', [
+          at('2026-01-02T10:00:00.000Z', 'E-mid-1', 4),
+          at('2026-01-03T10:00:00.000Z', 'E-new', 6),
+          at('2026-01-01T10:00:00.000Z', 'E-old', 1),
+          at('2026-01-02T10:00:00.000Z', 'E-mid-2', 5),
+        ]);
+
+        const response = await request(appWithDb(db)).get('/api/reports/audit/export');
+
+        expect(response.status).toBe(200);
+        expect(exportedColumn(response.text)).toEqual(['E-new', 'E-mid-2', 'E-mid-1', 'E-old']);
+      });
+
+      // RF009 AC1 (#1317): the readings come from InfluxDB, and the
+      // repository returns them newest first (its own unit case pins that);
+      // the export keeps the order it is handed.
+      it('GET /temperature/export keeps the repository\'s order', async () => {
+        temperatureReport.mockResolvedValue({
+          rows: [
+            temperatureRow({ logId: 'R-new', temperatureValue: -79, temperatureCelsius: -79, timestamp: new Date('2026-01-03T00:00:00Z') }),
+            temperatureRow({ logId: 'R-mid', temperatureValue: -80, temperatureCelsius: -80, timestamp: new Date('2026-01-02T00:00:00Z') }),
+            temperatureRow({ logId: 'R-old', temperatureValue: -81, temperatureCelsius: -81, timestamp: new Date('2026-01-01T00:00:00Z') }),
+          ],
+          total: 3,
+        });
+        const { db } = buildCollectionDb();
+
+        const response = await request(appWithDb(db)).get('/api/reports/temperature/export');
+
+        expect(response.status).toBe(200);
+        expect(exportedColumn(response.text)).toEqual(['R-new', 'R-mid', 'R-old']);
+      });
+
+      // The harness's buildDb sorts reports by reportID whatever spec it is
+      // handed, so it cannot see either read's sort.
+      it('GET / lists saved reports newest first, by creation within one generation time', async () => {
+        const db = withSortingStore('reports', [
+          { reportID: 1, reportType: 'equipment', generatedAt: new Date('2026-01-02'), createdAt: new Date('2026-01-02T01:00:00Z') },
+          { reportID: 2, reportType: 'equipment', generatedAt: new Date('2026-01-03'), createdAt: new Date('2026-01-03') },
+          { reportID: 3, reportType: 'equipment', generatedAt: new Date('2026-01-01'), createdAt: new Date('2026-01-01') },
+          { reportID: 4, reportType: 'equipment', generatedAt: new Date('2026-01-02'), createdAt: new Date('2026-01-02T05:00:00Z') },
+        ]);
+
+        const response = await request(appWithDb(db)).get('/api/reports');
+
+        expect(response.status).toBe(200);
+        expect(response.body.map((report) => report.reportID)).toEqual([2, 4, 1, 3]);
+      });
+
+      it('POST /generate numbers a new report one past the highest reportID stored', async () => {
+        const db = withSortingStore('reports', [
+          { reportID: 7, reportType: 'equipment' },
+          { reportID: 12, reportType: 'equipment' },
+          { reportType: 'equipment' },
+          { reportID: 3, reportType: 'equipment' },
+        ]);
+
+        const response = await request(appWithDb(db)).post('/api/reports/generate').send({ reportType: 'equipment' });
+
+        expect(response.status).toBe(201);
+        expect(response.body.reportID).toBe(13);
+      });
+    });
+
+    it('GET /audit/export declares the AuditEvent columns and omits entity ids and the hash chain', async () => {
+      const { db } = buildCollectionDb({ audit_events: EVENT_ROWS });
+
+      const response = await request(appWithDb(db)).get('/api/reports/audit/export');
+
+      expect(response.status).toBe(200);
+      const [header] = response.text.split('\n');
+      expect(header).toBe('eventId,sequenceNumber,occurredAt,recordedAt,actorPseudonym,action,entityType,result,source');
+      expect(response.text).toContain('ONLY_IN_AUDIT_EVENTS');
+      for (const secret of ['SPEC-SECRET-1', 'digest-secret', 'hash-secret', 'prev-hash-secret', 'proof-secret']) {
+        expect(response.text).not.toContain(secret);
+      }
+    });
+
+    it('masks an actor stored as a real name, and keeps a stored USR- pseudonym as is', async () => {
+      const { generateAnonId } = require('../../src/utils/userAnonymization');
+      const rows = [...EVENT_ROWS, { ...EVENT_ROWS[0], eventId: 'E-2', actorPseudonym: 'USR-1234ABCD' }];
+      const { db } = buildCollectionDb({ audit_events: rows });
+
+      const response = await request(appWithDb(db)).get('/api/reports/audit/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text).not.toContain('Alice Real Name');
+      expect(response.text).toContain(generateAnonId('Alice Real Name'));
+      expect(response.text).toContain('USR-1234ABCD');
+    });
+
+    it('filters the period on occurredAt as ISO strings, the type the trail stores', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ audit_events: EVENT_ROWS });
+
+      const response = await request(appWithDb(db))
+        .post('/api/reports/audit/preview')
+        .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
+
+      expect(response.status).toBe(200);
+      const range = capturedQueries.audit_events.occurredAt;
+      expect(typeof range.$gte).toBe('string');
+      expect(typeof range.$lte).toBe('string');
+      expect(range.$gte).toBe(new Date('2026-01-01').toISOString());
+      expect(range.$lte.startsWith('2026-01-31') || range.$lte.startsWith('2026-02-01')).toBe(true);
     });
   });
 });

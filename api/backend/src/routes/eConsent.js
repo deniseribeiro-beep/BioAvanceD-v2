@@ -10,7 +10,16 @@ const { requireRole, requirePermission } = require('../infrastructure/middleware
 const consentController = require('../controllers/consent.controller');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
+const { effectivePermissionsOf } = require('../services/consentHistory.service');
+const consentQuarantineService = require('../services/consentQuarantine.service');
 const CONSENT_EXPIRATION = 60 * 60 * 2; // 2h
+// RF010 AC4: a manifestation through the signed consent link is the
+// participant's own, authenticated by the link's token.
+const PARTICIPANT_LINK_ACTOR = Object.freeze({
+  channel: 'electronic_link',
+  signerRole: 'participant',
+  authenticationLevel: 'token'
+});
 
 /**
  * #1097: read the secret at CALL time, not at module load.
@@ -70,14 +79,24 @@ function resolveConsentSecretOr500(res) {
 }
 
 // Gera link seguro para o paciente
-router.post('/generate-link', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.post('/generate-link', authenticate, requirePermission('requestConsent'), async (req, res) => {
   const { participantId, email } = req.body;
   if (!participantId || !email) return res.status(400).json({ error: 'participantId e email obrigatórios' });
 
   const db = req.app.locals.db;
   const patient = await db.collection('patients').findOne({ participantId });
   if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
-  if (patient.email !== email) {
+
+  // #1166: the address on file is identity data (dict-02 P1X-0352), so the
+  // check reads the decrypted ParticipantIdentity record, its only home since
+  // slice 4. Compared case-insensitively because every writer canonicalizes
+  // the address to lowercase before encrypting it, so only the caller's
+  // spelling can differ in case.
+  const rawIdentity = await db.collection('participantIdentities').findOne({ participantId });
+  const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
+  const emailOnFile = participantIdentityService.withIdentityContact(patient, identity).email;
+  const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+  if (!emailOnFile || normalizeEmail(emailOnFile) !== normalizeEmail(email)) {
     return res.status(403).json({ error: 'Email não corresponde ao paciente' });
   }
 
@@ -97,7 +116,7 @@ router.post('/generate-link', authenticate, requirePermission('createPatient'), 
     // was the more dangerous of the two: had the strict path not thrown, it
     // would have emailed a real participant a link to their own localhost.
     const link = `${notificationService.getFrontendUrl()}/patient/e-consent/${token}`;
-    await notificationService.sendConsentEmail({ participantId, email }, link);
+    await notificationService.sendConsentEmail({ participantId, email: emailOnFile }, link);
     return res.json({ success: true, link });
   } catch (error) {
     logger.error('Erro ao gerar link de consentimento:', error);
@@ -125,9 +144,9 @@ router.get('/validate/:token', async (req, res) => {
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
 
     // RF005/RNF007 (#562/#574): patientName/birthDate/identityDocument are civil
-    // identity — resolved via ParticipantIdentity, not trusted from Patient's
-    // own (soon to be removed) copy of the fields. decryptIdentity falls back
-    // to the ciphertext sibling once the plaintext field is dropped (#566).
+    // identity — resolved via ParticipantIdentity, never from the Patient
+    // document (#575). All three are ciphertext-only there (#1104), so
+    // decryptIdentity is what recovers them.
     const rawIdentity = await db.collection('participantIdentities').findOne({ participantId: payload.participantId });
     const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
     const patientWithIdentity = identity
@@ -140,7 +159,8 @@ router.get('/validate/:token', async (req, res) => {
       : patient;
 
     const consentService = require('../services/consent.service');
-    const template = await consentService.getActiveTemplate(db);
+    // #1181: the active term of the participant's own lineage.
+    const template = await consentService.getActiveTemplateForParticipant(db, payload.participantId);
     const currentConsent = await consentService.getPatientConsent(db, payload.participantId);
 
     res.json({
@@ -152,7 +172,8 @@ router.get('/validate/:token', async (req, res) => {
       template: template
         ? { id: String(template._id), title: template.title, permissions: template.permissions || [] }
         : null,
-      responses: currentConsent && currentConsent.status === 'ACTIVE' ? (currentConsent.responses || {}) : {},
+      // RF010 AC6: what the consent still permits, less any scoped revocation.
+      responses: currentConsent && currentConsent.status === 'ACTIVE' ? effectivePermissionsOf(currentConsent) : {},
     });
   } catch (err) {
     res.status(401).json({ error: 'Token inválido ou expirado' });
@@ -195,10 +216,10 @@ router.post('/update', async (req, res) => {
       if (isFullRevocation) {
         const currentConsent = await consentService.getPatientConsent(db, participantId);
         if (currentConsent && currentConsent.status === 'ACTIVE') {
-          await consentService.revokeConsent(db, String(currentConsent._id));
+          await consentService.revokeConsent(db, String(currentConsent._id), {}, PARTICIPANT_LINK_ACTOR);
         }
       } else {
-        const template = await consentService.getActiveTemplate(db);
+        const template = await consentService.getActiveTemplateForParticipant(db, participantId);
         if (!template) {
           return res.status(409).json({ error: 'Nenhum template de consentimento ativo' });
         }
@@ -208,33 +229,14 @@ router.post('/update', async (req, res) => {
           responses,
           ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
           userAgent: req.headers['user-agent'],
-        });
+        }, PARTICIPANT_LINK_ACTOR);
       }
     }
 
     // Se algum consentimento foi revogado, coloca amostras em quarentena
     if (consents.some(c => c.status === 'REVOKED')) {
       if (db) {
-        const { SampleModel } = require('../models/Sample');
-        const { getCollection } = require('../utils/collectionResolver');
-        const quarantineActionService = require('../services/quarantine-action.service');
-        const samplesCollection = await getCollection(db, 'samples');
-        const specimenStatus = 'quarantined';
-        const samples = await samplesCollection.find({ participantId }).toArray();
-
-        for (const sample of samples) {
-          const wasQuarantined = SampleModel.resolveSpecimenStatus(sample) === 'quarantined';
-          await samplesCollection.updateOne(
-            { _id: sample._id },
-            { $set: { specimenStatus, updatedAt: new Date() } }
-          );
-          if (!wasQuarantined) {
-            await quarantineActionService.recordAction(db, {
-              specimenIds: [String(sample._id)],
-              reasonCodes: ['CONSENT_REVOKED'],
-            });
-          }
-        }
+        await consentQuarantineService.quarantineForRevocation(db, participantId, { req });
       }
       // Emite evento BullMQ/Socket.IO (mock)
       const io = req.app.get('io');
@@ -243,26 +245,8 @@ router.post('/update', async (req, res) => {
     // Se todos os consentimentos necessários foram aceitos, libera amostras de quarentena
     else if (consents.every(c => c.status === 'ACTIVE' || c.status === 'GRANTED')) {
       if (db) {
-        const { SampleModel } = require('../models/Sample');
-        const { getCollection } = require('../utils/collectionResolver');
-        const quarantineActionService = require('../services/quarantine-action.service');
-        const samplesCollection = await getCollection(db, 'samples');
-        const specimenStatus = 'available';
-        // #540: filters on the canonical specimenStatus field, not the
-        // legacy status field (no longer written above either — a
-        // stale-status filter would silently stop matching anything).
-        const samples = await samplesCollection.find({ participantId, specimenStatus: 'quarantined' }).toArray();
-
-        for (const sample of samples) {
-          const wasQuarantined = SampleModel.resolveSpecimenStatus(sample) === 'quarantined';
-          await samplesCollection.updateOne(
-            { _id: sample._id },
-            { $set: { specimenStatus, updatedAt: new Date() } }
-          );
-          if (wasQuarantined) {
-            await quarantineActionService.releaseActiveAction(db, String(sample._id), 'SYSTEM');
-          }
-        }
+        // Only the quarantines consent opened are lifted (RF019 AC5).
+        await consentQuarantineService.releaseForConsent(db, participantId, { req });
       }
       // Emite evento de liberação
       const io = req.app.get('io');
@@ -314,12 +298,14 @@ router.post('/import/fhir/consent/:token/accept', async (req, res) => {
 
 // List all patients with PENDING_CONSENT for a given TCLE (policy/template ID)
 router.get('/consent-policies/:id/pending-patients', authenticate, requireRole(3, 4), consentController.getPendingPatientsForPolicy.bind(consentController));
-router.post('/consent-templates', authenticate, requireRole(4), consentController.createTemplate.bind(consentController));
+router.post('/consent-templates', authenticate, requireRole(3, 4), consentController.createTemplate.bind(consentController));
 router.get('/consent-templates', authenticate, requireRole(3, 4), consentController.getAllTemplates.bind(consentController));
+// #1349: the builder's purpose select, read by whoever may list terms.
+router.get('/purpose-codes', authenticate, requireRole(3, 4), consentController.listPurposeCodes.bind(consentController));
 router.get('/consent-templates/current', authenticate, consentController.getCurrentTemplate.bind(consentController));
 router.get('/consent-templates/active', authenticate, consentController.getActiveTemplate.bind(consentController));
-router.get('/consent-templates/:id', authenticate, requireRole(4), consentController.getTemplateById.bind(consentController));
-router.put('/consent-templates/:id', authenticate, requireRole(4), consentController.updateTemplate.bind(consentController));
+router.get('/consent-templates/:id', authenticate, requireRole(3, 4), consentController.getTemplateById.bind(consentController));
+router.put('/consent-templates/:id', authenticate, requireRole(3, 4), consentController.updateTemplate.bind(consentController));
 
 router.post('/consent-policies', authenticate, requireRole(3, 4), consentController.createPolicy.bind(consentController));
 router.put('/consent-policies/:id', authenticate, requireRole(3, 4), consentController.updatePolicy.bind(consentController));
@@ -328,7 +314,7 @@ router.get('/consent-policies/active-with-caae', authenticate, consentController
 router.get('/consent-policies/history', authenticate, requireRole(3, 4), consentController.getPoliciesHistory.bind(consentController));
 router.get('/consent-policies', authenticate, requireRole(3, 4), consentController.getAllPolicies.bind(consentController));
 
-router.post('/consents', authenticate, consentController.createPatientConsent.bind(consentController));
+router.post('/consents', authenticate, requireRole(3, 4), consentController.createPatientConsent.bind(consentController));
 // #684: was authenticate-only, while every neighbouring consent-policy
 // route gates on requireRole(3, 4) -- so any authenticated user of any
 // role could revoke any patient's consent by guessing a Mongo _id.
@@ -341,6 +327,8 @@ router.post('/consents', authenticate, consentController.createPatientConsent.bi
 // into `users`, never a participantId, so there is nothing on this route
 // to compare against the consent's owner.
 router.post('/consents/:id/revoke', authenticate, requireRole(3, 4), consentController.revokeConsent.bind(consentController));
+// RF010 AC5: the decision events and revocations a consent's state derives from.
+router.get('/consents/:id/history', authenticate, requireRole(3, 4), consentController.getConsentHistory.bind(consentController));
 router.get('/patients/:participantId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
 // Consent token validation/acceptance (public)

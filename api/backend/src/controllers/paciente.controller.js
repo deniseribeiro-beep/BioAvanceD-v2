@@ -1,4 +1,5 @@
 const patientService = require('../services/patient.service');
+const consentHistory = require('../services/consentHistory.service');
 const biomarkerObservationService = require('../services/biomarker-observation.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
@@ -83,6 +84,15 @@ class PacienteController {
       const pacienteData = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(pacienteData);
 
+      // #1185: #1071's create rule. An organization-scoped caller registers
+      // into its own organization whatever unit the body names -- by id or
+      // by clinicalUnit name, since createPatient resolves the id first. A
+      // global caller keeps the body's value, name-only lookup included.
+      if (req.organizationScope?.scope !== 'global') {
+        const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+        pacienteData.clinicalUnitId = resolveOrganizationIdForCreate(req.organizationScope, pacienteData.clinicalUnitId);
+      }
+
       // Validação básica
       if (!pacienteData || Object.keys(pacienteData).length === 0) {
         return res.status(400).json({
@@ -157,9 +167,20 @@ class PacienteController {
       return res.status(statusCode).json({
         success: false,
         error: req.t('errors.serverError'),
-        message: error.message || req.t('errors.generic')
+        message: error.message || req.t('errors.generic'),
+        details: error.details
       });
     }
+  }
+
+  /** #1383 (RF010 AC5): each listed patient with its newest consent's derived state. */
+  async withConsentStatus(db, result) {
+    const patients = (result && result.patients) || [];
+    const consentStates = await consentHistory.consentStatesOf(db, patients.map((p) => p.participantId));
+    return {
+      ...result,
+      patients: patients.map((p) => ({ ...p, consentStatus: consentStates.get(String(p.participantId)) || null }))
+    };
   }
 
   async listar(req, res) {
@@ -202,6 +223,9 @@ class PacienteController {
           .toArray();
 
         const total = await patientsCollection.countDocuments(scopeQuery);
+        // #1383 (RF010 AC5): the consent state shown is derived from the
+        // consent's history; Patient.status is the participant gate's field.
+        const consentStates = await consentHistory.consentStatesOf(db, patients.map((p) => p.participantId));
 
         // Registra log de consulta (módulo operacional - apenas IDs + status)
         const auditLogger = require('../utils/auditLogger');
@@ -220,7 +244,7 @@ class PacienteController {
         return res.status(200).json({
           success: true,
           data: {
-            patients: patients.map(p => ({ participantId: p.participantId, status: p.status || 'PENDING_CONSENT', consentNotifiedAt: p.consentNotifiedAt || null, consentTokenExpiresAt: p.consentTokenExpiresAt || null })),
+            patients: patients.map(p => ({ participantId: p.participantId, status: p.status || 'PENDING_CONSENT', consentNotifiedAt: p.consentNotifiedAt || null, consentTokenExpiresAt: p.consentTokenExpiresAt || null, consentStatus: consentStates.get(String(p.participantId)) || null })),
             total,
             limit: filters.limit,
             skip: filters.skip
@@ -237,6 +261,7 @@ class PacienteController {
         };
 
         const result = await patientService.listPatients(db, filters);
+        const withConsentStatus = await this.withConsentStatus(db, result);
 
         // Registra log de consulta (módulo de cadastro - dados completos)
         const auditLogger = require('../utils/auditLogger');
@@ -254,7 +279,7 @@ class PacienteController {
 
         return res.status(200).json({
           success: true,
-          data: result
+          data: withConsentStatus
         });
       }
     } catch (error) {
@@ -564,6 +589,21 @@ class PacienteController {
         });
       }
 
+      // #1281: the consent lifecycle's fields and the timestamps are written
+      // by the server only, never through this route.
+      const serverManaged = PatientModel.SERVER_MANAGED_FIELDS.filter((field) =>
+        Object.prototype.hasOwnProperty.call(req.body || {}, field));
+      if (serverManaged.length > 0) {
+        return res.status(422).json({
+          success: false,
+          error: 'Campos gerenciados pelo servidor',
+          message: `Não é permitido alterar: ${serverManaged.join(', ')}`,
+          code: 'SERVER_MANAGED_FIELD',
+          fields: serverManaged,
+          details: serverManaged.map((field) => `${field}: campo gerenciado pelo servidor`)
+        });
+      }
+
       // #626: mirrors sample.routes.js's PUT /:id out-of-scope 403
       // pattern — the scope check runs before the mutation, not just
       // before a read.
@@ -579,6 +619,16 @@ class PacienteController {
 
       const updatePayload = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(updatePayload);
+
+      // #1053: the check above proves the patient is CURRENTLY the caller's.
+      // clinicalUnitId is the field this module scopes on, and the payload
+      // can rewrite it directly or through a clinicalUnit name, so the
+      // destination is checked on the value updatePatient would resolve.
+      if (existingPatient && (updatePayload.clinicalUnitId !== undefined || updatePayload.clinicalUnit !== undefined)) {
+        const { assertOrganizationFieldNotReparented } = require('../services/rbac-assignment.service');
+        const destination = await patientService.resolveClinicalUnitSnapshot(db, updatePayload);
+        assertOrganizationFieldNotReparented(req.organizationScope, existingPatient.clinicalUnitId, destination?.clinicalUnitId ?? null, 'clinicalUnitId');
+      }
 
       const result = await patientService.updatePatient(db, id, updatePayload, {
         neo4jDriver: req.app.locals.neo4jDriver || null
@@ -653,6 +703,18 @@ class PacienteController {
           success: false,
           error: 'Acesso negado',
           message: 'Este paciente pertence a outra organização'
+        });
+      }
+
+      // #1262: lgpd.allowDataDeletion switches the elimination off. Checked
+      // after the scope check, so a caller outside the scope learns nothing
+      // about the setting.
+      const securityService = require('../services/security.service');
+      if (!(await securityService.isDataDeletionAllowed(db))) {
+        return res.status(403).json({
+          success: false,
+          error: 'Eliminação desabilitada',
+          message: 'A eliminação de dados está desabilitada na configuração LGPD'
         });
       }
 
@@ -840,6 +902,17 @@ class PacienteController {
         });
       }
 
+      // #1185: buscar's #340 check. This handler returns the full patient
+      // for editing and had no scope test at all.
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       // Registra log de busca para edição (sanitizado)
       const auditLogger = require('../utils/auditLogger');
       auditLogger.init(db);
@@ -892,7 +965,10 @@ class PacienteController {
         });
       }
 
-      const result = await patientService.searchPatients(db, searchTerm, req.organizationScope);
+      const result = await this.withConsentStatus(
+        db,
+        await patientService.searchPatients(db, searchTerm, req.organizationScope)
+      );
 
       // Registra log de busca (sanitizado)
       const auditLogger = require('../utils/auditLogger');

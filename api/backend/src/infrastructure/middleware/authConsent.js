@@ -11,6 +11,7 @@ const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 const { sanitizeInput, sanitizeSensitiveData } = require('../../utils/security');
 const { getCollection } = require('../../utils/collectionResolver');
+const { effectivePermissionsOf } = require('../../services/consentHistory.service');
 
 /**
  * Middleware que valida consentimento ético antes de permitir operações
@@ -131,7 +132,8 @@ function authConsent(options = {}) {
 
         // 4. VALIDAR ESCOPOS DE CONSENTIMENTO (se especificados)
         if (allowedScopes && allowedScopes.length > 0) {
-          const responses = activeConsent.responses || {};
+          // RF010 AC6: a scoped revocation narrows what the consent permits.
+          const responses = effectivePermissionsOf(activeConsent);
           const hasRequiredScope = allowedScopes.some(scope => responses[scope] === true);
 
           if (!hasRequiredScope) {
@@ -251,7 +253,7 @@ function authConsent(options = {}) {
         consentID: activeConsent?._id.toString() || null,
         status: activeConsent?.status || null,
         signedAt: activeConsent?.signedAt || null,
-        scopes: activeConsent?.responses || {},
+        scopes: effectivePermissionsOf(activeConsent),
         validated: true,
         validatedAt: new Date()
       };

@@ -1,4 +1,12 @@
-const { Neo4jOutboxService, hashPayload, stableStringify } = require('../../src/services/neo4jOutbox.service');
+const {
+  Neo4jOutboxService,
+  hashPayload,
+  stableStringify,
+  buildIdempotencyKey,
+  MAX_RETRY_BACKOFF_MS,
+} = require('../../src/services/neo4jOutbox.service');
+const { CANONICAL_MODEL_RELEASE_ID } = require('../../src/foundation/readiness');
+const { runWithRequestId } = require('../../src/utils/requestContext');
 
 describe('Neo4jOutboxService', () => {
   beforeEach(() => {
@@ -17,6 +25,7 @@ describe('Neo4jOutboxService', () => {
     const collection = {
       createIndex: async (...args) => { indexes.push(args); },
       updateOne: async (...args) => { updates.push(args); },
+      findOneAndUpdate: async () => ({ version: 1 }),
       find: () => ({ sort: () => ({ limit: () => ({ toArray: async () => [] }) }) }),
       updateMany: async () => ({ modifiedCount: 0 }),
     };
@@ -41,7 +50,30 @@ describe('Neo4jOutboxService', () => {
     // #941: appendEvent now ensures the outbox indexes (including the
     // eventId unique index) on its own write path, not only from the
     // manual rebuild script.
-    expect(indexes.length).toBe(3);
+    expect(indexes.length).toBe(4);
+    // No session given: the append is its own write.
+    expect(updates[0][2]).toEqual({ upsert: true });
+  });
+
+  // #1313 (RF023 AC3, RNF019 C1): the event commits with its aggregate.
+  it('appends inside the caller transaction when given its session', async () => {
+    const updates = [];
+    const collection = {
+      createIndex: async () => {},
+      updateOne: async (...args) => { updates.push(args); },
+      findOneAndUpdate: async () => ({ version: 1 }),
+    };
+    const session = { id: 'session-1' };
+    const service = new Neo4jOutboxService({ collectionName: 'outbox_session_case' });
+
+    await service.appendEvent({ collection: () => collection }, {
+      eventId: 'evt-s',
+      eventType: 'CONSENT_UPSERTED',
+      aggregateType: 'EthicalConsent',
+      aggregateId: 'consent-1',
+    }, { session });
+
+    expect(updates[0][2]).toEqual({ upsert: true, session });
   });
 
   it('reschedules abandoned processing events back to retrying', async () => {
@@ -99,7 +131,7 @@ describe('Neo4jOutboxService', () => {
     const result = await service.ensureIndexes(db);
 
     expect(result).toBe(true);
-    expect(indexes).toHaveLength(3);
+    expect(indexes).toHaveLength(4);
     expect(indexes[0][0]).toEqual({ eventId: 1 });
     expect(indexes[0][1]).toMatchObject({ unique: true, name: 'graph_projection_outbox_eventId_unique' });
     expect(indexes[1][1]).toMatchObject({ name: 'graph_projection_outbox_status_aggregate_idx' });
@@ -126,23 +158,30 @@ describe('Neo4jOutboxService', () => {
           indexes.push(args);
         },
         updateOne: async (...args) => { updates.push(args); },
+        findOneAndUpdate: async () => ({ version: 1 }),
       };
     }
 
-    it('builds the eventId unique index (and the other two) via appendEvent, pinned by value', async () => {
+    it('builds the eventId unique index (and the other three) via appendEvent, pinned by value', async () => {
       const collection = makeCollection();
       const db = { collection: () => collection };
       const service = new Neo4jOutboxService({ collectionName: '941_wiring_value_pin' });
 
       await service.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
 
-      expect(collection.indexes).toHaveLength(3);
+      expect(collection.indexes).toHaveLength(4);
       expect(collection.indexes[0][0]).toEqual({ eventId: 1 });
       expect(collection.indexes[0][1]).toEqual({ unique: true, name: 'graph_projection_outbox_eventId_unique' });
       expect(collection.indexes[1][0]).toEqual({ status: 1, aggregateType: 1, aggregateId: 1, occurredAt: 1 });
       expect(collection.indexes[1][1]).toEqual({ name: 'graph_projection_outbox_status_aggregate_idx' });
       expect(collection.indexes[2][0]).toEqual({ leaseUntil: 1, status: 1, occurredAt: 1 });
       expect(collection.indexes[2][1]).toEqual({ name: 'graph_projection_outbox_lease_idx' });
+      expect(collection.indexes[3][0]).toEqual({ idempotencyKey: 1 });
+      expect(collection.indexes[3][1]).toEqual({
+        unique: true,
+        name: 'graph_projection_outbox_idempotencyKey_unique',
+        partialFilterExpression: { idempotencyKey: { $type: 'string' } },
+      });
     });
 
     it('builds the indexes only once per process across multiple appendEvent calls and service instances', async () => {
@@ -157,7 +196,7 @@ describe('Neo4jOutboxService', () => {
       await first.appendEvent(db, { eventId: 'e2', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
       await second.appendEvent(db, { eventId: 'e3', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
 
-      expect(collection.indexes).toHaveLength(3);
+      expect(collection.indexes).toHaveLength(4);
       expect(collection.updates).toHaveLength(3);
     });
 
@@ -171,7 +210,7 @@ describe('Neo4jOutboxService', () => {
       await serviceA.appendEvent(db, { eventId: 'e1', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
       await serviceB.appendEvent(db, { eventId: 'e2', eventType: 'T', aggregateType: 'A', aggregateId: '1', payload: {} });
 
-      expect(collection.indexes).toHaveLength(6);
+      expect(collection.indexes).toHaveLength(8);
     });
 
     // #941: appendEvent must NOT propagate an index-build failure. The index
@@ -202,7 +241,10 @@ describe('Neo4jOutboxService', () => {
 
     it('survives a collection with no createIndex at all (the pipeline.test.js fake)', async () => {
       const updates = [];
-      const collection = { updateOne: async (...args) => { updates.push(args); return { upsertedCount: 1 }; } };
+      const collection = {
+        updateOne: async (...args) => { updates.push(args); return { upsertedCount: 1 }; },
+        findOneAndUpdate: async () => ({ version: 1 }),
+      };
       const db = { collection: () => collection };
       const service = new Neo4jOutboxService({ collectionName: '941_no_createIndex' });
 
@@ -318,5 +360,316 @@ describe('Neo4jOutboxService', () => {
     expect(recovered).toBe(3);
     expect(updateManyCalls[0][0]).toMatchObject({ status: 'PROCESSING' });
     expect(updateManyCalls[0][1].$set.status).toBe('RETRYING');
+  });
+
+  // #1313 (RF023 AC1/AC2, RNF019 C2): every event carries its type's
+  // version, its aggregate's version, a replay key and the canonical release.
+  describe('#1313 versioned events', () => {
+    function makeVersionedDb() {
+      const versions = new Map();
+      const counterCalls = [];
+      const updates = [];
+      const collection = {
+        createIndex: async () => {},
+        updateOne: async (...args) => { updates.push(args); },
+        findOneAndUpdate: async (filter, update, options) => {
+          counterCalls.push({ filter, update, options });
+          const version = (versions.get(filter._id) || 0) + update.$inc.version;
+          versions.set(filter._id, version);
+          return { _id: filter._id, version };
+        },
+      };
+      const names = [];
+      return { db: { collection: (name) => { names.push(name); return collection; } }, counterCalls, updates, names };
+    }
+
+    it('stamps eventTypeVersion, aggregateVersion, idempotencyKey and canonicalModelReleaseId', async () => {
+      const { db, counterCalls, updates, names } = makeVersionedDb();
+      const service = new Neo4jOutboxService({ collectionName: '1313_versioned_fields' });
+      const session = { id: 'tx-1' };
+
+      const event = await service.appendEvent(db, {
+        eventType: 'CONSENT_UPSERTED',
+        aggregateType: 'EthicalConsent',
+        aggregateId: 'consent-1',
+        payload: { status: 'ACTIVE' },
+      }, { session });
+
+      expect(event.eventTypeVersion).toBe('1');
+      expect(event.aggregateVersion).toBe(1);
+      expect(event.canonicalModelReleaseId).toBe(CANONICAL_MODEL_RELEASE_ID);
+      expect(event.idempotencyKey).toBe(buildIdempotencyKey({
+        aggregateType: 'EthicalConsent',
+        aggregateId: 'consent-1',
+        aggregateVersion: 1,
+        eventType: 'CONSENT_UPSERTED',
+        eventTypeVersion: '1',
+        payloadHash: hashPayload({ status: 'ACTIVE' }),
+      }));
+      expect(updates[0][1].$setOnInsert).toMatchObject({
+        eventTypeVersion: '1',
+        aggregateVersion: 1,
+        idempotencyKey: event.idempotencyKey,
+        canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID,
+        nextAttemptAt: null,
+      });
+      // The version is taken in the aggregate's own transaction.
+      expect(names).toContain('1313_versioned_fields_aggregate_versions');
+      expect(counterCalls).toHaveLength(1);
+      expect(counterCalls[0].filter).toEqual({ _id: 'EthicalConsent:consent-1' });
+      expect(counterCalls[0].update.$inc).toEqual({ version: 1 });
+      expect(counterCalls[0].options).toMatchObject({ upsert: true, returnDocument: 'after', session });
+    });
+
+    it('gives each append to one aggregate the next version and its own replay key, even with the same payload', async () => {
+      const { db } = makeVersionedDb();
+      const service = new Neo4jOutboxService({ collectionName: '1313_versioned_sequence' });
+      const append = (aggregateId) => service.appendEvent(db, {
+        eventType: 'SPECIMEN_UPSERTED', aggregateType: 'Sample', aggregateId, payload: { specimenId: aggregateId },
+      });
+
+      const first = await append('s-1');
+      const second = await append('s-1');
+      const other = await append('s-2');
+
+      expect([first.aggregateVersion, second.aggregateVersion, other.aggregateVersion]).toEqual([1, 2, 1]);
+      expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+      expect(second.payloadHash).toBe(first.payloadHash);
+    });
+
+    it('keeps a caller-supplied aggregateVersion, eventTypeVersion and release without taking a counter version', async () => {
+      const { db, counterCalls } = makeVersionedDb();
+      const service = new Neo4jOutboxService({ collectionName: '1313_versioned_supplied' });
+
+      const event = await service.appendEvent(db, {
+        eventType: 'T', eventTypeVersion: '2', aggregateType: 'A', aggregateId: '1',
+        aggregateVersion: 7, canonicalModelReleaseId: 'release-x', payload: {},
+      });
+
+      expect(counterCalls).toHaveLength(0);
+      expect(event).toMatchObject({ aggregateVersion: 7, eventTypeVersion: '2', canonicalModelReleaseId: 'release-x' });
+    });
+  });
+
+  // #1313 (RNF019 C5): exponential backoff between attempts.
+  describe('#1313 retry backoff', () => {
+    it('doubles the delay per attempt from the base and caps it', () => {
+      const service = new Neo4jOutboxService();
+      expect(service.retryDelayMs(1, { backoffBaseMs: 1000 })).toBe(1000);
+      expect(service.retryDelayMs(2, { backoffBaseMs: 1000 })).toBe(2000);
+      expect(service.retryDelayMs(4, { backoffBaseMs: 1000 })).toBe(8000);
+      expect(service.retryDelayMs(30, { backoffBaseMs: 1000 })).toBe(MAX_RETRY_BACKOFF_MS);
+    });
+
+    it('sets nextAttemptAt on a retry', async () => {
+      const updates = [];
+      const db = { collection: () => ({ updateOne: async (...args) => { updates.push(args); } }) };
+      const service = new Neo4jOutboxService();
+      const before = Date.now();
+
+      await service.markRetrying(db, 'evt-r', new Error('neo4j offline'), { attempts: 3, backoffBaseMs: 1000 });
+
+      const nextAttemptAt = updates[0][1].$set.nextAttemptAt.getTime();
+      expect(nextAttemptAt).toBeGreaterThanOrEqual(before + 4000);
+      expect(nextAttemptAt).toBeLessThanOrEqual(Date.now() + 4000);
+      expect(updates[0][1].$set.status).toBe('RETRYING');
+    });
+
+    it('leases only events whose backoff has passed, in aggregate version order', async () => {
+      let query;
+      let sort;
+      const collection = {
+        updateMany: async () => ({ modifiedCount: 0 }),
+        find: (q) => {
+          query = q;
+          return { sort: (s) => { sort = s; return { limit: () => ({ toArray: async () => [] }) }; } };
+        },
+      };
+      const service = new Neo4jOutboxService();
+
+      await service.leaseNextBatch({ collection: () => collection }, { batchSize: 5 });
+
+      expect(query.$or[0]).toEqual({ nextAttemptAt: null });
+      expect(query.$or[1].nextAttemptAt.$lte).toBeInstanceOf(Date);
+      expect(Object.keys(sort)).toEqual(['aggregateType', 'aggregateId', 'aggregateVersion', 'occurredAt', '_id']);
+    });
+  });
+
+  // #1313 (RF023 AC4, RNF019 C4): ordering and the projection checkpoint.
+  describe('#1313 ordering and checkpoint', () => {
+    it('finds an earlier unprojected version of the same aggregate, a dead letter included', async () => {
+      let query;
+      const blocker = { eventId: 'evt-0', status: 'DEAD_LETTER' };
+      const db = { collection: () => ({ findOne: async (q) => { query = q; return blocker; } }) };
+      const service = new Neo4jOutboxService();
+
+      const found = await service.findEarlierUnprojectedVersion(db, { aggregateType: 'Sample', aggregateId: 's-1', aggregateVersion: 3 });
+
+      expect(found).toBe(blocker);
+      expect(query).toEqual({
+        aggregateType: 'Sample',
+        aggregateId: 's-1',
+        aggregateVersion: { $lt: 3 },
+        status: { $in: ['PENDING', 'RETRYING', 'PROCESSING', 'DEAD_LETTER'] },
+      });
+    });
+
+    it('holds an event behind a dead letter for the longest backoff', async () => {
+      const updates = [];
+      const db = { collection: () => ({ updateOne: async (...args) => { updates.push(args); } }) };
+      const before = Date.now();
+
+      await new Neo4jOutboxService().markDeferred(db, 'evt-h', { blockedByDeadLetter: true });
+
+      expect(updates[0][1].$set.lastError).toBe('awaiting_dead_letter_repair');
+      expect(updates[0][1].$set.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(before + MAX_RETRY_BACKOFF_MS);
+    });
+
+    it('defers an event and gives its lease attempt back', async () => {
+      const updates = [];
+      const db = { collection: () => ({ updateOne: async (...args) => { updates.push(args); } }) };
+
+      await new Neo4jOutboxService().markDeferred(db, 'evt-d');
+
+      expect(updates[0][0]).toEqual({ eventId: 'evt-d' });
+      expect(updates[0][1].$set).toMatchObject({ status: 'RETRYING', lastError: 'awaiting_earlier_aggregate_version' });
+      expect(updates[0][1].$inc).toEqual({ attempts: -1 });
+    });
+
+    it('records the checkpoint per projector and aggregate, never moving it backwards', async () => {
+      const updates = [];
+      const names = [];
+      const db = { collection: (name) => { names.push(name); return { updateOne: async (...args) => { updates.push(args); } }; } };
+      const service = new Neo4jOutboxService();
+
+      await service.recordCheckpoint(db, 'projector-a', {
+        eventId: 'evt-5', aggregateType: 'Sample', aggregateId: 's-1', aggregateVersion: 5, schemaVersion: 1,
+      });
+
+      expect(names).toEqual(['graph_projection_checkpoints']);
+      expect(updates[0][0]).toEqual({ _id: 'projector-a:Sample:s-1' });
+      expect(updates[0][1].$max).toEqual({ lastAggregateVersion: 5 });
+      expect(updates[0][1].$setOnInsert).toMatchObject({ projectorName: 'projector-a', partitionKey: 'Sample:s-1' });
+      expect(updates[0][2]).toEqual({ upsert: true });
+      // Only the event that holds the version names itself on it.
+      expect(updates[1][0]).toEqual({ _id: 'projector-a:Sample:s-1', lastAggregateVersion: 5 });
+      expect(updates[1][1].$set).toMatchObject({ lastEventId: 'evt-5', projectionSchemaVersion: '1' });
+    });
+
+    it('reads the checkpoint by projector and partition', async () => {
+      let query;
+      const db = { collection: () => ({ findOne: async (q) => { query = q; return null; } }) };
+
+      await new Neo4jOutboxService().getCheckpoint(db, 'projector-a', 'Sample:s-1');
+
+      expect(query).toEqual({ _id: 'projector-a:Sample:s-1' });
+    });
+  });
+
+  // #1313 (RNF019 C7): detecting and repairing stalled projections.
+  describe('#1313 reconciliation', () => {
+    // In-memory collections matching the filter shapes the reconciliation
+    // issues: equality, $in, $gt and $lt.
+    function matches(doc, filter) {
+      return Object.entries(filter).every(([key, cond]) => {
+        if (cond && typeof cond === 'object' && !Array.isArray(cond)) {
+          if ('$in' in cond) return cond.$in.includes(doc[key]);
+          if ('$gt' in cond) return doc[key] > cond.$gt;
+          if ('$lt' in cond) return doc[key] < cond.$lt;
+        }
+        return doc[key] === cond;
+      });
+    }
+    function makeCollection(docs) {
+      return {
+        docs,
+        find: (filter) => ({ toArray: async () => docs.filter((doc) => matches(doc, filter)) }),
+        findOne: async (filter) => docs.find((doc) => matches(doc, filter)) || null,
+        updateMany: async (filter, update) => {
+          const hit = docs.filter((doc) => matches(doc, filter));
+          hit.forEach((doc) => Object.assign(doc, update.$set));
+          return { modifiedCount: hit.length };
+        },
+      };
+    }
+    function makeDb({ counters, checkpoints, events }) {
+      const collections = {
+        graph_projection_outbox: makeCollection(events),
+        graph_projection_outbox_aggregate_versions: makeCollection(counters),
+        graph_projection_checkpoints: makeCollection(checkpoints),
+      };
+      return { collections, collection: (name) => collections[name] };
+    }
+    const counter = (aggregateId, version) => ({ _id: `Sample:${aggregateId}`, aggregateType: 'Sample', aggregateId, version });
+    const checkpoint = (aggregateId, lastAggregateVersion) => ({ _id: `p:Sample:${aggregateId}`, lastAggregateVersion });
+    const event = (eventId, aggregateId, aggregateVersion, status, extra = {}) => ({
+      eventId, aggregateType: 'Sample', aggregateId, aggregateVersion, status, attempts: 8, ...extra,
+    });
+
+    it('reports a stalled aggregate with its dead letters, and passes one caught up or still queued', async () => {
+      const db = makeDb({
+        counters: [counter('caught-up', 2), counter('queued', 3), counter('stalled', 3), counter('gap', 2)],
+        checkpoints: [checkpoint('caught-up', 2), checkpoint('queued', 2), checkpoint('stalled', 1), checkpoint('gap', 1)],
+        events: [
+          event('q-3', 'queued', 3, 'RETRYING'),
+          event('s-2', 'stalled', 2, 'DEAD_LETTER'),
+          event('s-3', 'stalled', 3, 'RETRYING'),
+        ],
+      });
+
+      const found = await new Neo4jOutboxService().findUnprojectedAggregates(db, 'p');
+
+      expect(found).toEqual([
+        { aggregateType: 'Sample', aggregateId: 'stalled', aggregateVersion: 3, checkpointVersion: 1, deadLetterEventIds: ['s-2'] },
+        { aggregateType: 'Sample', aggregateId: 'gap', aggregateVersion: 2, checkpointVersion: 1, deadLetterEventIds: [] },
+      ]);
+    });
+
+    it('requeues dead letters with their attempts reset and releases the events they held', async () => {
+      const db = makeDb({
+        counters: [],
+        checkpoints: [],
+        events: [
+          event('s-2', 'stalled', 2, 'DEAD_LETTER', { lastError: 'neo4j offline' }),
+          event('s-3', 'stalled', 3, 'RETRYING', { lastError: 'awaiting_dead_letter_repair', nextAttemptAt: new Date(Date.now() + 60000) }),
+          event('other', 'other', 1, 'DEAD_LETTER'),
+        ],
+      });
+
+      const requeued = await new Neo4jOutboxService().requeueDeadLetters(db, ['s-2']);
+
+      const [deadLetter, held, other] = db.collections.graph_projection_outbox.docs;
+      expect(requeued).toBe(1);
+      expect(deadLetter).toMatchObject({ status: 'PENDING', attempts: 0, nextAttemptAt: null, lastError: 'neo4j offline' });
+      expect(held.nextAttemptAt).toBeNull();
+      expect(other.status).toBe('DEAD_LETTER');
+    });
+
+    it('requeues nothing when given no event ids', async () => {
+      const db = makeDb({ counters: [], checkpoints: [], events: [] });
+      expect(await new Neo4jOutboxService().requeueDeadLetters(db, [])).toBe(0);
+    });
+  });
+});
+
+// #1323: RNF015 C1 -- an outbox event appended during a request carries its
+// id as the P1X-0391 traceId, so the projection worker can tag its write.
+describe('Neo4jOutboxService.buildEvent traceId', () => {
+  const base = { eventType: 'SPECIMEN_UPSERTED', aggregateType: 'Specimen', aggregateId: 's-1', payload: {} };
+
+  it('#1323 takes the current request id as traceId inside a request', () => {
+    const event = runWithRequestId('req-outbox-0001', () => new Neo4jOutboxService().buildEvent(base));
+    expect(event.traceId).toBe('req-outbox-0001');
+  });
+
+  it('#1323 keeps the own traceId of the caller inside a request', () => {
+    const event = runWithRequestId('req-outbox-0001', () =>
+      new Neo4jOutboxService().buildEvent({ ...base, traceId: 't-own' })
+    );
+    expect(event.traceId).toBe('t-own');
+  });
+
+  it('#1323 leaves traceId null outside any request', () => {
+    expect(new Neo4jOutboxService().buildEvent(base).traceId).toBeNull();
   });
 });

@@ -42,6 +42,9 @@ const ResetPasswordPage = lazy(() => import('./views/ResetPasswordPage'));
 const SettingsParametersPage = lazy(() => import('./views/SettingsParametersPage'));
 const DataDictionaryPage = lazy(() => import('./views/DataDictionaryPage'));
 const TcleBuilderPage = lazy(() => import('./views/TcleBuilderPage'));
+const AccessRequestsPage = lazy(() => import('./views/AccessRequestsPage'));
+const ConsentHistoryPage = lazy(() => import('./views/ConsentHistoryPage'));
+const BiomarkerAssociationsPage = lazy(() => import('./views/BiomarkerAssociationsPage'));
 const FoundationApp = lazy(() => import('./foundation/FoundationApp'));
 const IntakeWizardPage = lazy(() => import('./pages/v2/intake/IntakeWizardPage'));
 
@@ -118,18 +121,18 @@ function App() {
                   <Route path="/users/new/success" element={<ProtectedRoute requiredRole="Administrador"><NewUserSuccessPage /></ProtectedRoute>} />
                   <Route path="/facility-management" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FacilityManagementPage /></ProtectedRoute>} />
                   <Route path="/equipment" element={<Navigate to="/facility-management?tab=equipment" replace />} />
-                  <Route path="/locations" element={<Navigate to="/facility-management?tab=locations" replace />} />
+                  <Route path="/locations" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/temperature" element={<Navigate to="/facility-management?tab=temperature" replace />} />
                   <Route path="/sensors" element={<Navigate to="/facility-management?tab=sensors" replace />} />
                   <Route path="/policies" element={<Navigate to="/facility-management?tab=policies" replace />} />
-                  <Route path="/logs" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><LogsPage /></ProtectedRoute>} />
-                  <Route path="/logs/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><LogDetailPage /></ProtectedRoute>} />
-                  <Route path="/reports" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportsPage /></ProtectedRoute>} />
+                  <Route path="/logs" element={<ProtectedRoute requireAuditReader><LogsPage /></ProtectedRoute>} />
+                  <Route path="/logs/:id" element={<ProtectedRoute requireAuditReader><LogDetailPage /></ProtectedRoute>} />
+                  <Route path="/reports" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportsPage /></ProtectedRoute>} />
                   {/* #726 (RF008 AC#6): template management is Coordenador+Administrador
                       only (manageReportTemplates), narrower than /reports' own view-only gate. */}
                   <Route path="/reports/templates" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplatesPage /></ProtectedRoute>} />
-                  <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
-                  <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
+                  <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
+                  <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
                   {/* #808: the LGPD import's own surface. `/import` posts to the
                       *async* importer; #813 landed, so that importer now
@@ -171,6 +174,11 @@ function App() {
                       </ProtectedRoute>
                     }
                   />
+                  {/* RF024 (#1350): the backend gates every access-request route on manageAccessRequests, which only Administrador holds. */}
+                  <Route path="/access-requests" element={<ProtectedRoute requiredRole="Administrador"><AccessRequestsPage /></ProtectedRoute>} />
+                  <Route path="/consents" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ConsentHistoryPage /></ProtectedRoute>} />
+                  {/* ELM-0275..0285 (#1402): BiomarkerAssociation entry, behind the backend's requireRole(3, 4). */}
+                  <Route path="/biomarker-associations" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><BiomarkerAssociationsPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/edit/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />

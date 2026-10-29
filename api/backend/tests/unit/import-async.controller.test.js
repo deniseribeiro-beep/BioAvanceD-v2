@@ -12,6 +12,7 @@ const controller = require('../../src/controllers/import-async.controller');
 const importAsyncService = require('../../src/services/import-async.service');
 const logger = require('../../src/utils/logger');
 const auditLogger = require('../../src/utils/auditLogger');
+const callerCreateOrganization = require('../../src/services/callerCreateOrganization.service');
 
 const uploadsDir = path.join(__dirname, '../../uploads/temp');
 
@@ -303,10 +304,39 @@ describe('import-async.controller', () => {
 
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
-      const body = res.json.mock.calls[0][0];
-      expect(body.success).toBe(false);
-      expect(body.error).toBe('Formato inválido para groupFields. Use JSON válido.');
-      expect(typeof body.message).toBe('string');
+      // #840: the full body, not just typeof message -- asserting only the
+      // type is exactly what let this endpoint's body drift from its three
+      // siblings unnoticed.
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'malformed',
+        message: 'groupFields deve ser um JSON válido',
+      });
+    });
+
+    it('cleans up and returns 400 with the "value" reason when groupFields has an operator-shaped key (#840)', async () => {
+      const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
+      const req = {
+        app: { locals: { db: {} } },
+        body: { dataType: 'patients', groupFields: '{"$ne": null}' },
+        file,
+      };
+      const res = createRes();
+      const cleanupSpy = vi
+        .spyOn(importAsyncService, 'cleanupFile')
+        .mockImplementation(() => {});
+
+      await controller.createImportJob(req, res);
+
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'value',
+        message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano',
+      });
     });
 
     it('derives userID from req.user.userID when present', async () => {
@@ -438,6 +468,10 @@ describe('import-async.controller', () => {
           user: { userID: 'u1' },
         };
         const res = createRes();
+        vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization').mockResolvedValue({
+          organizationId: 'org-a',
+          organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+        });
         vi.spyOn(importAsyncService, 'createImportJob').mockResolvedValue({
           jobID: 'job-map',
         });
@@ -534,6 +568,90 @@ describe('import-async.controller', () => {
       });
     });
 
+    describe('the uploader organization of a samples job (#1376)', () => {
+      it('puts the organizationId and organizationScope the helper resolves into the job options', async () => {
+        const db = {};
+        const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
+        const req = {
+          app: { locals: { db } },
+          body: { dataType: ' Samples ', organizationId: ' org-a ' },
+          file,
+          user: { userID: 'u1' },
+        };
+        const res = createRes();
+        const organizationScope = { scope: 'multi', organizationIds: ['org-a', 'org-b'] };
+        const resolveSpy = vi
+          .spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization')
+          .mockResolvedValue({ organizationId: 'org-a', organizationScope });
+        const createSpy = vi
+          .spyOn(importAsyncService, 'createImportJob')
+          .mockResolvedValue({ jobID: 'job-org' });
+        vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+        vi.spyOn(auditLogger, 'logImport').mockResolvedValue(undefined);
+
+        await controller.createImportJob(req, res);
+
+        expect(resolveSpy).toHaveBeenCalledWith(db, { userId: 'u1', requested: 'org-a' });
+        expect(createSpy).toHaveBeenCalledWith(
+          db,
+          'u1',
+          file,
+          ' Samples ',
+          expect.objectContaining({ organizationId: 'org-a', organizationScope })
+        );
+        expect(res.status).toHaveBeenCalledWith(202);
+      });
+
+      it('does not resolve an organization for a patients job', async () => {
+        const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
+        const req = {
+          app: { locals: { db: {} } },
+          body: { dataType: 'patients', organizationId: 'org-a' },
+          file,
+        };
+        const res = createRes();
+        const resolveSpy = vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization');
+        const createSpy = vi
+          .spyOn(importAsyncService, 'createImportJob')
+          .mockResolvedValue({ jobID: 'job-patients' });
+
+        await controller.createImportJob(req, res);
+
+        expect(resolveSpy).not.toHaveBeenCalled();
+        const options = createSpy.mock.calls[0][4];
+        expect(options).not.toHaveProperty('organizationId');
+        expect(options).not.toHaveProperty('organizationScope');
+      });
+
+      it('returns the helper refusal status, cleans up the file and creates no job', async () => {
+        const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
+        const req = {
+          app: { locals: { db: {} } },
+          body: { dataType: 'samples' },
+          file,
+          user: { userID: 'u1' },
+        };
+        const res = createRes();
+        const refusal = new Error('organizationId obrigatório');
+        refusal.statusCode = 400;
+        vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization').mockRejectedValue(refusal);
+        const cleanupSpy = vi
+          .spyOn(importAsyncService, 'cleanupFile')
+          .mockImplementation(() => {});
+        const createSpy = vi.spyOn(importAsyncService, 'createImportJob');
+
+        await controller.createImportJob(req, res);
+
+        expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+        expect(createSpy).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: 'organizationId obrigatório',
+        });
+      });
+    });
+
     it('returns 500 without cleanup call when req.file absent at throw time (defensive)', async () => {
       // dataType present branch requires file, so simulate throw from service with file present,
       // then verify cleanup is only invoked because req.file exists.
@@ -560,6 +678,10 @@ describe('import-async.controller', () => {
         file,
       };
       const res = createRes();
+      const organizationScope = { scope: 'organization', organizationIds: ['org-a'] };
+      const resolveSpy = vi
+        .spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization')
+        .mockResolvedValue({ organizationId: 'org-a', organizationScope });
       const createSpy = vi
         .spyOn(importAsyncService, 'createImportJob')
         .mockResolvedValue({ jobID: 'job-sample' });
@@ -568,12 +690,14 @@ describe('import-async.controller', () => {
 
       expect(req.body.dataType).toBe('samples');
       expect(req.body.extraField).toBe('keep-me');
+      // #1376: the forced samples dataType takes the organization branch.
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
       expect(createSpy).toHaveBeenCalledWith(
         {},
         null,
         file,
         'samples',
-        expect.any(Object)
+        expect.objectContaining({ organizationId: 'org-a', organizationScope })
       );
       expect(res.status).toHaveBeenCalledWith(202);
     });
@@ -582,6 +706,10 @@ describe('import-async.controller', () => {
       const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
       const req = { app: { locals: { db: {} } }, file };
       const res = createRes();
+      vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization').mockResolvedValue({
+        organizationId: null,
+        organizationScope: { scope: 'global' },
+      });
       vi.spyOn(importAsyncService, 'createImportJob').mockResolvedValue({
         jobID: 'job-sample-2',
       });
@@ -590,53 +718,6 @@ describe('import-async.controller', () => {
 
       expect(req.body.dataType).toBe('samples');
       expect(res.status).toHaveBeenCalledWith(202);
-    });
-  });
-
-  describe('getJobStatus', () => {
-    it('returns 503 when no db', async () => {
-      const req = { app: { locals: {} }, params: { jobID: 'j1' } };
-      const res = createRes();
-
-      await controller.getJobStatus(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(503);
-    });
-
-    it('delegates to service and returns 200 with data', async () => {
-      const db = {};
-      const req = { app: { locals: { db } }, params: { jobID: 'j1' } };
-      const res = createRes();
-      const spy = vi
-        .spyOn(importAsyncService, 'getJobStatus')
-        .mockResolvedValue({ jobID: 'j1', status: 'done' });
-
-      await controller.getJobStatus(req, res);
-
-      expect(spy).toHaveBeenCalledWith(db, 'j1');
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.json).toHaveBeenCalledWith({
-        success: true,
-        data: { jobID: 'j1', status: 'done' },
-      });
-    });
-
-    it('returns 500 when service throws', async () => {
-      const req = { app: { locals: { db: {} } }, params: { jobID: 'j1' } };
-      const res = createRes();
-      vi.spyOn(importAsyncService, 'getJobStatus').mockRejectedValue(
-        new Error('status boom')
-      );
-      vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-      await controller.getJobStatus(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'Erro ao obter status do job',
-        message: 'status boom',
-      });
     });
   });
 
@@ -696,8 +777,24 @@ describe('import-async.controller', () => {
       );
     });
 
-    it('returns 500 when service throws', async () => {
+    it('returns 403 and does not call the service when the caller has no id (#1384)', async () => {
       const req = { app: { locals: { db: {} } }, query: {} };
+      const res = createRes();
+      const spy = vi.spyOn(importAsyncService, 'listJobs').mockResolvedValue([]);
+
+      await controller.listJobs(req, res);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Este job pertence a outro usuário',
+      });
+    });
+
+    it('returns 500 when service throws', async () => {
+      const req = { app: { locals: { db: {} } }, query: {}, user: { userID: 'u1' } };
       const res = createRes();
       vi.spyOn(importAsyncService, 'listJobs').mockRejectedValue(
         new Error('list boom')
@@ -715,99 +812,117 @@ describe('import-async.controller', () => {
     });
   });
 
-  describe('cancelJob', () => {
-    it('returns 503 when no db', async () => {
-      const req = { app: { locals: {} }, params: { jobID: 'j1' } };
-      const res = createRes();
+  // #1384: a job route answers only the job's uploader. The db mock's
+  // importJobs.findOne returns the job the owner check reads.
+  function jobDb(job) {
+    const findOne = vi.fn().mockResolvedValue(job);
+    return { db: { collection: vi.fn(() => ({ findOne })) }, findOne };
+  }
 
-      await controller.cancelJob(req, res);
+  for (const { method, jobID, serviceMethod, ok, errorMessage, boom } of [
+    { method: 'getJobStatus', jobID: 'j1', serviceMethod: 'getJobStatus', ok: { jobID: 'j1', status: 'done' }, errorMessage: 'Erro ao obter status do job', boom: 'status boom' },
+    { method: 'cancelJob', jobID: 'j2', serviceMethod: 'cancelJob', ok: { jobID: 'j2', status: 'cancelled' }, errorMessage: 'Erro ao cancelar job', boom: 'cancel boom' },
+    { method: 'getJobReport', jobID: 'j3', serviceMethod: 'getJobReport', ok: { jobID: 'j3', report: {} }, errorMessage: 'Erro ao obter relatório do job', boom: 'report boom' },
+  ]) {
+    describe(method, () => {
+      it('returns 503 when no db', async () => {
+        const req = { app: { locals: {} }, params: { jobID } };
+        const res = createRes();
 
-      expect(res.status).toHaveBeenCalledWith(503);
-    });
+        await controller[method](req, res);
 
-    it('delegates to service and returns 200', async () => {
-      const db = {};
-      const req = { app: { locals: { db } }, params: { jobID: 'j2' } };
-      const res = createRes();
-      const spy = vi
-        .spyOn(importAsyncService, 'cancelJob')
-        .mockResolvedValue({ jobID: 'j2', status: 'cancelled' });
+        expect(res.status).toHaveBeenCalledWith(503);
+      });
 
-      await controller.cancelJob(req, res);
+      it('delegates to service and returns 200 with data for the job owner', async () => {
+        const { db, findOne } = jobDb({ userID: 'u1' });
+        const req = { app: { locals: { db } }, params: { jobID }, user: { userID: 'u1' } };
+        const res = createRes();
+        const spy = vi.spyOn(importAsyncService, serviceMethod).mockResolvedValue(ok);
 
-      expect(spy).toHaveBeenCalledWith(db, 'j2');
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.json).toHaveBeenCalledWith({
-        success: true,
-        data: { jobID: 'j2', status: 'cancelled' },
+        await controller[method](req, res);
+
+        expect(db.collection).toHaveBeenCalledWith('importJobs');
+        expect(findOne).toHaveBeenCalledWith({ jobID }, { projection: { userID: 1 } });
+        expect(spy).toHaveBeenCalledWith(db, jobID);
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith({ success: true, data: ok });
+      });
+
+      it('lets the owner through by req.user._id.toString() when userID is absent', async () => {
+        const { db } = jobDb({ userID: 'idstr' });
+        const req = { app: { locals: { db } }, params: { jobID }, user: { _id: { toString: () => 'idstr' } } };
+        const res = createRes();
+        const spy = vi.spyOn(importAsyncService, serviceMethod).mockResolvedValue(ok);
+
+        await controller[method](req, res);
+
+        expect(spy).toHaveBeenCalledWith(db, jobID);
+        expect(res.status).toHaveBeenCalledWith(200);
+      });
+
+      it('refuses 403 a caller who is not the job owner and does not call the service (#1384)', async () => {
+        const { db } = jobDb({ userID: 'u1' });
+        const req = { app: { locals: { db } }, params: { jobID }, user: { userID: 'u2' } };
+        const res = createRes();
+        const spy = vi.spyOn(importAsyncService, serviceMethod).mockResolvedValue(ok);
+
+        await controller[method](req, res);
+
+        expect(spy).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(403);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este job pertence a outro usuário',
+        });
+      });
+
+      it('refuses 403 when the job or the caller has no user id (#1384)', async () => {
+        for (const [job, user] of [[{}, { userID: 'u1' }], [{ userID: 'u1' }, undefined]]) {
+          const { db } = jobDb(job);
+          const req = { app: { locals: { db } }, params: { jobID }, user };
+          const res = createRes();
+          const spy = vi.spyOn(importAsyncService, serviceMethod).mockResolvedValue(ok);
+
+          await controller[method](req, res);
+
+          expect(spy).not.toHaveBeenCalled();
+          expect(res.status).toHaveBeenCalledWith(403);
+        }
+      });
+
+      it('returns 404 when the job does not exist and does not call the service (#1384)', async () => {
+        const { db } = jobDb(null);
+        const req = { app: { locals: { db } }, params: { jobID }, user: { userID: 'u1' } };
+        const res = createRes();
+        const spy = vi.spyOn(importAsyncService, serviceMethod).mockResolvedValue(ok);
+
+        await controller[method](req, res);
+
+        expect(spy).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(404);
+        expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Job não encontrado' });
+      });
+
+      it('returns 500 when service throws', async () => {
+        const { db } = jobDb({ userID: 'u1' });
+        const req = { app: { locals: { db } }, params: { jobID }, user: { userID: 'u1' } };
+        const res = createRes();
+        vi.spyOn(importAsyncService, serviceMethod).mockRejectedValue(new Error(boom));
+        vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+        await controller[method](req, res);
+
+        expect(res.status).toHaveBeenCalledWith(500);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: errorMessage,
+          message: boom,
+        });
       });
     });
-
-    it('returns 500 when service throws', async () => {
-      const req = { app: { locals: { db: {} } }, params: { jobID: 'j2' } };
-      const res = createRes();
-      vi.spyOn(importAsyncService, 'cancelJob').mockRejectedValue(
-        new Error('cancel boom')
-      );
-      vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-      await controller.cancelJob(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'Erro ao cancelar job',
-        message: 'cancel boom',
-      });
-    });
-  });
-
-  describe('getJobReport', () => {
-    it('returns 503 when no db', async () => {
-      const req = { app: { locals: {} }, params: { jobID: 'j3' } };
-      const res = createRes();
-
-      await controller.getJobReport(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(503);
-    });
-
-    it('delegates to service and returns 200', async () => {
-      const db = {};
-      const req = { app: { locals: { db } }, params: { jobID: 'j3' } };
-      const res = createRes();
-      const spy = vi
-        .spyOn(importAsyncService, 'getJobReport')
-        .mockResolvedValue({ jobID: 'j3', report: {} });
-
-      await controller.getJobReport(req, res);
-
-      expect(spy).toHaveBeenCalledWith(db, 'j3');
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.json).toHaveBeenCalledWith({
-        success: true,
-        data: { jobID: 'j3', report: {} },
-      });
-    });
-
-    it('returns 500 when service throws', async () => {
-      const req = { app: { locals: { db: {} } }, params: { jobID: 'j3' } };
-      const res = createRes();
-      vi.spyOn(importAsyncService, 'getJobReport').mockRejectedValue(
-        new Error('report boom')
-      );
-      vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-      await controller.getJobReport(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'Erro ao obter relatório do job',
-        message: 'report boom',
-      });
-    });
-  });
+  }
 
   describe('uploadMiddleware', () => {
     it('returns a multer single-file middleware function', () => {

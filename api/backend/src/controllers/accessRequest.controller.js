@@ -38,10 +38,11 @@ class AccessRequestController {
       });
     } catch (error) {
       logger.error('Erro ao registrar solicitação de acesso:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao registrar solicitação de acesso',
         message: error.message,
+        details: error.details,
       });
     }
   }
@@ -138,7 +139,12 @@ class AccessRequestController {
           status: 'success',
           severity: 'critical',
           message: `Solicitação de acesso vinculada à disponibilização (${accessRequest.accessRequestId})`,
-          payload: { distributionStatus: accessRequest.distributionStatus, distributedAt: accessRequest.distributedAt },
+          // RF024 AC7: the audited operation names the decision behind it.
+          payload: {
+            distributionStatus: accessRequest.distributionStatus,
+            distributedAt: accessRequest.distributedAt,
+            distributionDecisionId: accessRequest.distributionDecisionId,
+          },
           req,
           module: 'Acesso e distribuição',
         });

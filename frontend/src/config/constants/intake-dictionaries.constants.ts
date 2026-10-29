@@ -49,6 +49,25 @@ export const CLINICAL_COMORBIDITIES: Array<{ id: string; label: string }> = [
   { id: 'antibioticUse', label: 'Uso de antibiótico' },
   { id: 'insulinUse', label: 'Uso de insulina' },
   { id: 'antiviralUse', label: 'Uso de antiviral' },
+  // #715: the rest of the original 1987 Charlson index's 19 categories, so
+  // the CCI the backend derives (charlsonComorbidityIndex.js) can reach its
+  // full range. Slugs match its SLUG_TO_CATEGORY.
+  { id: 'myocardialInfarction', label: 'Infarto do miocárdio' },
+  { id: 'congestiveHeartFailure', label: 'Insuficiência cardíaca congestiva' },
+  { id: 'peripheralVascularDisease', label: 'Doença vascular periférica' },
+  { id: 'cerebrovascularDisease', label: 'Doença cerebrovascular' },
+  { id: 'dementia', label: 'Demência' },
+  { id: 'connectiveTissueDisease', label: 'Doença do tecido conjuntivo' },
+  { id: 'pepticUlcerDisease', label: 'Doença ulcerosa péptica' },
+  { id: 'mildLiverDisease', label: 'Doença hepática leve' },
+  { id: 'moderateSevereLiverDisease', label: 'Doença hepática moderada/grave' },
+  { id: 'hemiplegia', label: 'Hemiplegia' },
+  { id: 'diabetesWithEndOrganDamage', label: 'Diabetes com lesão de órgão-alvo' },
+  { id: 'solidTumor', label: 'Tumor sólido (não metastático)' },
+  { id: 'metastaticSolidTumor', label: 'Tumor sólido metastático' },
+  { id: 'leukemia', label: 'Leucemia' },
+  { id: 'lymphoma', label: 'Linfoma' },
+  { id: 'aids', label: 'AIDS' },
 ];
 
 export const BIOMARKER_DICTIONARY = BASE_BIOMARKER_DICTIONARY;

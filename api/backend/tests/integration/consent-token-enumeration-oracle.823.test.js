@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const { ObjectId } = require('mongodb');
+const { hashConsentToken } = require('../../src/utils/consentTokenHash');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -47,7 +48,7 @@ function patientDoc(overrides = {}) {
     participantId: PARTICIPANT_ID,
     status: 'PENDING_CONSENT',
     clinicalUnitId: 'unit-1',
-    consentToken: VALID_TOKEN,
+    consentTokenHash: hashConsentToken(VALID_TOKEN),
     consentTokenCreatedAt: new Date('2026-09-01T10:00:00.000Z'),
     consentTokenExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
     ...overrides,
@@ -77,7 +78,7 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
     vi.spyOn(auditLogger, 'logError').mockResolvedValue(undefined);
     // Keep the control case focused on the token check: an active TCLE is a
     // separate lookup whose absence would 503 before the 200 is reached.
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -180,11 +181,16 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
   });
 
   it('CONTROL: a valid token still accepts', async () => {
+    // #821: an accept now carries the manifestation and is recorded by the
+    // canonical recorder before the status write; stubbed so this case keeps
+    // exercising the token check and the write it guards.
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+    vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
     useDb(patientDoc());
 
     const response = await request(app)
       .post('/api/e-consent/consent-tokens/accept')
-      .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN });
+      .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN, consentTemplateId: 'tpl-1', responses: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);

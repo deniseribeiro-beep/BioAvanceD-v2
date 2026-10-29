@@ -72,6 +72,18 @@ rbacModule.requirePermission = (...args) => (req, res, next) =>
 // swappable.
 rbacModule.requireRole = (...args) => (req, res, next) =>
   currentRequireRole(...args)(req, res, next);
+// #1211: the mutations now carry requireOrganizationScope too, destructured
+// at require-time like the two above. The default mirrors defaultAuth's
+// Administrador: a global scope, which the storage scope checks pass without
+// a lookup -- the cross-organization cases live in
+// tests/integration/storage-allocation.api.test.js, against the real gate.
+let currentRequireOrganizationScope = globalScope;
+function globalScope(req, res, next) {
+  req.organizationScope = { scope: 'global', organizationIds: [] };
+  next();
+}
+rbacModule.requireOrganizationScope = (req, res, next) =>
+  currentRequireOrganizationScope(req, res, next);
 
 // #856 slice 2: the mutation controllers (allocate/move/release) and the
 // auto-assign controller each construct their use case / StorageService
@@ -363,6 +375,8 @@ describe('storage.routes', () => {
             ],
           },
           { specimenStatus: { $in: ['available', 'reserved'] } },
+          // RF006 AC3: a depleted specimen has no material to place.
+          { quantityStatus: { $ne: 'depleted' } },
           {
             $or: [
               { 'storageLocation.boxId': { $exists: false } },
@@ -780,7 +794,7 @@ describe('storage.routes', () => {
         sampleLocation: { specimenId: 'sample-1', boxId: 'box-1', position: 'A1' },
       });
       const { router } = loadRoute({ allocateExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/allocate')
@@ -794,6 +808,25 @@ describe('storage.routes', () => {
       );
     });
 
+    it('#1216: resolves a specimenId in the body to the sample\'s _id before the use case sees it', async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        sampleLocation: { specimenId: '3116768', boxId: 'box-1', position: 'A1' },
+      });
+      const { router } = loadRoute({ allocateExecute: executeMock });
+      const sampleObjectId = '507f1f77bcf86cd799439011';
+      const findOne = vi.fn(async (filter = {}) => (
+        filter.specimenId === '3116768' ? { _id: { toString: () => sampleObjectId }, specimenId: '3116768' } : null
+      ));
+      const app = buildApp(router, { collection: () => ({ findOne }) });
+
+      const res = await request(app)
+        .post('/api/storage/allocate')
+        .send({ sampleId: '3116768', boxId: 'box-1', position: 'A1' });
+
+      expect(res.status).toBe(201);
+      expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({ specimenId: sampleObjectId }));
+    });
+
     // AllocateSampleUseCase.validateCommand's own rejection message (confirmed
     // against the source) doesn't match STORAGE_COLLISION or "não encontrada",
     // so the controller's catch-block ternary falls to its else branch: 400.
@@ -802,7 +835,7 @@ describe('storage.routes', () => {
         new Error('specimenId, boxId e position são obrigatórios')
       );
       const { router } = loadRoute({ allocateExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app).post('/api/storage/allocate').send({});
 
@@ -816,7 +849,7 @@ describe('storage.routes', () => {
         new Error('STORAGE_COLLISION: posição já ocupada')
       );
       const { router } = loadRoute({ allocateExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/allocate')
@@ -848,7 +881,7 @@ describe('storage.routes', () => {
         graphPersisted: true,
       });
       const { router } = loadRoute({ autoAssignSampleToBox: autoAssign });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/allocate/auto')
@@ -864,7 +897,7 @@ describe('storage.routes', () => {
     it('returns 400 INVALID_INPUT for an empty body without calling the service (issue #856)', async () => {
       const autoAssign = vi.fn();
       const { router } = loadRoute({ autoAssignSampleToBox: autoAssign });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app).post('/api/storage/allocate/auto').send({});
 
@@ -878,7 +911,7 @@ describe('storage.routes', () => {
         success: false, error: 'BOX_NOT_FOUND', message: 'Caixa não encontrada',
       });
       const { router } = loadRoute({ autoAssignSampleToBox: autoAssign });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/allocate/auto')
@@ -893,7 +926,7 @@ describe('storage.routes', () => {
         success: false, error: 'BOX_FULL', message: 'Caixa cheia',
       });
       const { router } = loadRoute({ autoAssignSampleToBox: autoAssign });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/allocate/auto')
@@ -923,7 +956,7 @@ describe('storage.routes', () => {
         specimenId: 'sample-1', boxId: 'box-2', position: 'B2',
       });
       const { router } = loadRoute({ moveExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/move')
@@ -939,7 +972,7 @@ describe('storage.routes', () => {
         new Error('targetPosition deve seguir formato Letra+Número')
       );
       const { router } = loadRoute({ moveExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/move')
@@ -953,7 +986,7 @@ describe('storage.routes', () => {
         new Error('StorageBox box-2 está retirada de uso (status: RETIRED)')
       );
       const { router } = loadRoute({ moveExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/move')
@@ -970,7 +1003,7 @@ describe('storage.routes', () => {
     it('answers 500 (not 400) for an error message matching none of the known patterns (issue #856)', async () => {
       const executeMock = vi.fn().mockRejectedValue(new Error('unexpected infrastructure failure'));
       const { router } = loadRoute({ moveExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .post('/api/storage/move')
@@ -1000,7 +1033,7 @@ describe('storage.routes', () => {
         releasedFrom: { specimenId: 'sample-1', boxId: 'box-1', position: 'A1' },
       });
       const { router } = loadRoute({ releaseExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app).delete('/api/storage/release/sample-1');
 
@@ -1012,7 +1045,7 @@ describe('storage.routes', () => {
     it('maps a "não encontrada" message to 404 (issue #856)', async () => {
       const executeMock = vi.fn().mockRejectedValue(new Error('Amostra não encontrada'));
       const { router } = loadRoute({ releaseExecute: executeMock });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app).delete('/api/storage/release/sample-1');
 
@@ -1039,7 +1072,9 @@ describe('storage.routes', () => {
     // constructed by the controller itself, neither one doubled) against
     // createMatchingCollection, so the filter actually sent to
     // storageAssignments can be captured and asserted instead of assumed.
-    it('queries storageAssignments by specimenId as a STRING via the real repository (issue #856 key-shape hazard)', async () => {
+    // #1374: the read consults the physical chain first, by the same string
+    // key, and falls back to the open legacy row; release writes neither.
+    it('queries the chain and storageAssignments by specimenId as a STRING via the real repository (issue #856 key-shape hazard)', async () => {
       const { router } = loadRoute({ useRealRelease: true });
       const { capturedFilters } = createFilterCaptureStore();
       const samples = createMatchingCollection([
@@ -1054,10 +1089,12 @@ describe('storage.routes', () => {
       // also having to fake db.client.startSession/MongoAuditRepository/
       // LineageRepository.
       const storageAssignments = createMatchingCollection([], { capturedFilters, key: 'storageAssignments' });
+      const specimenContainerAssignments = createMatchingCollection([], { capturedFilters, key: 'specimenContainerAssignments' });
       const app = buildApp(router, {
         collection: (name) => {
           if (name === 'samples') return samples;
           if (name === 'storageAssignments') return storageAssignments;
+          if (name === 'specimenContainerAssignments') return specimenContainerAssignments;
           return null;
         },
       });
@@ -1069,6 +1106,10 @@ describe('storage.routes', () => {
       // falls to its else branch: 400. That status is incidental to this
       // test -- the load-bearing assertion is the filter shape below.
       expect(res.status).toBe(400);
+      expect(capturedFilters.specimenContainerAssignments).toEqual({
+        specimenId: 'sample-1',
+        assignmentStatus: 'active',
+      });
       expect(capturedFilters.storageAssignments).toEqual({
         specimenId: 'sample-1',
         removedAt: null,
@@ -1090,7 +1131,7 @@ describe('storage.routes', () => {
           return (req, res) => res.status(403).json({ success: false, error: 'Acesso negado' });
         },
       });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .patch('/api/storage/freezer/507f1f77bcf86cd799439011/room')
@@ -1105,7 +1146,7 @@ describe('storage.routes', () => {
 
     it('returns 400 for a non-ObjectId freezerId (issue #856)', async () => {
       const { router } = loadRoute();
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)
         .patch('/api/storage/freezer/not-an-object-id/room')
@@ -1115,7 +1156,9 @@ describe('storage.routes', () => {
       expect(res.body.error).toBe('ID inválido');
     });
 
-    it('returns 400 for a non-ObjectId roomId in the body (issue #856)', async () => {
+    // #1379: a roomId string need not be an ObjectId (a location id is a
+    // uuid), so #856's case is now a roomId that is not a string at all.
+    it('returns 400 for a non-string roomId in the body (issue #856)', async () => {
       const { router } = loadRoute();
       const storageContainers = createMatchingCollection([
         { _id: '507f1f77bcf86cd799439011', containerType: 'FREEZER', name: 'Freezer 1' },
@@ -1126,35 +1169,36 @@ describe('storage.routes', () => {
 
       const res = await request(app)
         .patch('/api/storage/freezer/507f1f77bcf86cd799439011/room')
-        .send({ roomId: 'not-an-object-id' });
+        .send({ roomId: 123 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('roomId inválido');
     });
 
-    it('returns 200 and issues the expected storageContainers.updateOne on success (issue #856)', async () => {
+    it('returns 200 and parents the freezer location under the room location on success (issue #856, #1379)', async () => {
       const { router } = loadRoute();
-      const storageContainers = createMatchingCollection([
-        { _id: '507f1f77bcf86cd799439011', containerType: 'FREEZER', name: 'Freezer 1' },
-      ]);
-      const rooms = createMatchingCollection([
-        { _id: '507f1f77bcf86cd799439012', deletedAt: null, name: 'Room A' },
-      ]);
-      const app = buildApp(router, {
-        collection: (name) => (name === 'storageContainers' ? storageContainers : name === 'rooms' ? rooms : null),
-      });
+      const collections = {
+        storageContainers: createMatchingCollection([
+          { _id: '507f1f77bcf86cd799439011', containerType: 'FREEZER', containerID: 4201, name: 'Freezer 1' },
+        ]),
+        equipment: createMatchingCollection([{ equipmentID: 4201, organizationId: 'org-1', deletedAt: null }]),
+        organizations: createMatchingCollection([{ organizationId: 'org-1' }]),
+        storageLocations: createMatchingCollection([
+          { storageLocationId: 'loc-room-1', code: 'legacy-room:507f1f77bcf86cd799439012', locationType: 'room', organizationId: 'org-1', parentLocationId: null },
+        ]),
+      };
+      const app = buildApp(router, { collection: (name) => collections[name] || null });
 
       const res = await request(app)
         .patch('/api/storage/freezer/507f1f77bcf86cd799439011/room')
-        .send({ roomId: '507f1f77bcf86cd799439012' });
+        .send({ roomId: 'loc-room-1' });
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(storageContainers.updateOne).toHaveBeenCalledTimes(1);
-      const [filter, update] = storageContainers.updateOne.mock.calls[0];
-      expect(String(filter._id)).toBe('507f1f77bcf86cd799439011');
-      expect(String(update.$set.roomId)).toBe('507f1f77bcf86cd799439012');
-      expect(update.$set.updatedAt).toBeInstanceOf(Date);
+      const freezerLocation = collections.storageLocations.docs.find((location) => location.locationType === 'freezer');
+      expect(freezerLocation).toMatchObject({ parentLocationId: 'loc-room-1', organizationId: 'org-1' });
+      expect(res.body.data).toMatchObject({ roomId: 'loc-room-1', storageLocationId: freezerLocation.storageLocationId });
+      expect(collections.storageContainers.updateOne).not.toHaveBeenCalled();
     });
   });
 });
@@ -1229,7 +1273,7 @@ describe('storage.routes authorization (#859)', () => {
     it(`refuses ${method.toUpperCase()} ${path} when the permission gate denies the caller`, async () => {
       const requirePermissionImpl = denyingRequirePermission();
       const { router } = loadRoute({ requirePermissionImpl });
-      const app = buildApp(router, { collection: () => ({}) });
+      const app = buildApp(router, { collection: () => ({ findOne: async () => null }) });
 
       const res = await request(app)[method](path).send({});
 

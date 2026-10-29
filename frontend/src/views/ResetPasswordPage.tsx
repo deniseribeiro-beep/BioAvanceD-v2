@@ -6,7 +6,8 @@ import Input from '../components/UI/Input';
 import { authService } from '../services/api';
 import { CheckCircle, AlertCircle, Lock } from 'lucide-react';
 import { validatePasswordAndGetError } from '../utils/passwordValidator';
-import { getPasswordIssues } from '../utils/passwordRules';
+import { getPasswordIssues, passwordRequirementItems } from '../utils/passwordRules';
+import { usePasswordPolicy } from '../hooks/usePasswordPolicy';
 import { useLanguage } from '../contexts/LanguageContext';
 import './ResetPasswordPage.css';
 
@@ -22,7 +23,9 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   
-  const passwordIssues = getPasswordIssues(newPassword);
+  // #1246: the server's passwordRules, not a fixed copy.
+  const passwordRules = usePasswordPolicy();
+  const passwordIssues = getPasswordIssues(newPassword, passwordRules);
   const confirmMismatch = newPassword && confirmPassword && newPassword !== confirmPassword;
 
   useEffect(() => {
@@ -41,7 +44,7 @@ export default function ResetPasswordPage() {
     }
 
     // Valida complexidade da senha
-    const passwordError = validatePasswordAndGetError(newPassword);
+    const passwordError = validatePasswordAndGetError(newPassword, passwordRules);
     if (passwordError) {
       setError(passwordError);
       return;
@@ -132,7 +135,7 @@ export default function ResetPasswordPage() {
               placeholder={t('password.requirements.placeholder') || 'Mínimo 8 caracteres com maiúscula, minúscula, número e símbolo'}
               required
               autoFocus
-              minLength={8}
+              minLength={passwordRules.minLength}
             />
 
             <Input
@@ -142,28 +145,13 @@ export default function ResetPasswordPage() {
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Digite a senha novamente"
               required
-              minLength={8}
+              minLength={passwordRules.minLength}
             />
 
             <div className="password-requirements">
               <p><strong>{t('password.requirements.title')}</strong></p>
               <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.35rem' }}>
-                {[{
-                  key: 'minLength',
-                  label: t('password.requirements.minLength')
-                }, {
-                  key: 'upper',
-                  label: t('password.requirements.upper')
-                }, {
-                  key: 'lower',
-                  label: t('password.requirements.lower')
-                }, {
-                  key: 'number',
-                  label: t('password.requirements.number')
-                }, {
-                  key: 'symbol',
-                  label: t('password.requirements.symbol')
-                }].map((item) => {
+                {passwordRequirementItems(passwordRules, t).map((item) => {
                   const ok = !passwordIssues.includes(item.key as any);
                   return (
                     <li key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: ok ? 'var(--success)' : 'var(--text)' }}>

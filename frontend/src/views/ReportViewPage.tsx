@@ -10,7 +10,7 @@ import { getPatientDisplayName } from '../utils/patientAnonymization';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import { resolveSpecimenStatus, translateSpecimenStatus } from '../utils/sampleHelpers';
-import { selectTemperatureRows, selectAccessLogRows, rowKey } from './ReportViewPage.helpers';
+import { selectTemperatureRows, selectAccessLogRows, selectAuditEventRows, rowKey } from './ReportViewPage.helpers';
 import './ReportViewPage.css';
 
 export default function ReportViewPage() {
@@ -22,10 +22,32 @@ export default function ReportViewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const reportDefinition = getReportTypeDefinition(report?.reportType || '');
+  // #1217: a custom template (#735) has no definition; GET /:type/filters
+  // names it, as ReportQueryPage reads it.
+  const [templateName, setTemplateName] = useState<string | null>(null);
 
   useEffect(() => {
     loadReport();
   }, [id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTemplateName(null);
+    if (!report?.reportType || reportDefinition) {
+      return undefined;
+    }
+    reportsService
+      .getFilters(report.reportType)
+      .then((response) => {
+        if (!cancelled && typeof response?.data?.name === 'string') {
+          setTemplateName(response.data.name);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [report?.reportType, reportDefinition]);
 
   const loadReport = async () => {
     if (!id) {
@@ -228,7 +250,7 @@ export default function ReportViewPage() {
         {/* #949: `temperatures` and `logs` are the keys handleTemperature and
             handleAccessLogs actually return; this gate read `recentReadings`/
             `recentLogs`, which no handler has ever emitted. */}
-        {(reportData.patients || reportData.samples || reportData.equipment || reportData.results || reportData.sensors || selectTemperatureRows(reportData).length > 0 || selectAccessLogRows(reportData).length > 0) && (
+        {(reportData.patients || reportData.samples || reportData.equipment || reportData.results || reportData.sensors || selectTemperatureRows(reportData).length > 0 || selectAccessLogRows(reportData).length > 0 || selectAuditEventRows(reportData).length > 0) && (
           <div className="report-details">
             {reportData.patients && reportData.patients.length > 0 && (
               <Card className="details-card">
@@ -245,8 +267,8 @@ export default function ReportViewPage() {
                     </thead>
                     <tbody>
                       {reportData.patients.slice(0, 50).map((p: any) => (
-                        <tr key={p.patientID}>
-                          <td>{p.patientID}</td>
+                        <tr key={p.participantId}>
+                          <td>{p.participantId}</td>
                           <td>{getPatientDisplayName(p, user)}</td>
                           <td>N/A</td>
                           <td>N/A</td>
@@ -276,11 +298,11 @@ export default function ReportViewPage() {
                     </thead>
                     <tbody>
                       {reportData.samples.slice(0, 50).map((s: any) => (
-                        <tr key={s.sampleID}>
-                          <td>{s.sampleID}</td>
+                        <tr key={s.specimenId}>
+                          <td>{s.specimenId}</td>
                           <td>{s.sampleType}</td>
                           <td>{translateSpecimenStatus(resolveSpecimenStatus(s))}</td>
-                          <td>{formatDate(s.registrationDate)}</td>
+                          <td>{formatDate(s.registeredAt)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -437,6 +459,40 @@ export default function ReportViewPage() {
                 </div>
               </Card>
             )}
+
+            {selectAuditEventRows(reportData).length > 0 && (
+              <Card className="details-card">
+                <h3 className="details-title">Eventos de Auditoria ({selectAuditEventRows(reportData).length})</h3>
+                <div className="details-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Data/Hora</th>
+                        <th>Ator</th>
+                        <th>Ação</th>
+                        <th>Recurso</th>
+                        <th>Resultado</th>
+                        <th>Origem</th>
+                        <th>Evento</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectAuditEventRows(reportData).map((e, i) => (
+                        <tr key={e.eventId || String(i)}>
+                          <td>{formatDate(e.occurredAt)}</td>
+                          <td>{e.actorPseudonym}</td>
+                          <td>{e.action}</td>
+                          <td>{e.entityType}</td>
+                          <td>{e.result}</td>
+                          <td>{e.source}</td>
+                          <td>{e.eventId}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )}
           </div>
         )}
       </div>
@@ -499,7 +555,7 @@ export default function ReportViewPage() {
             <FileText size={32} className="report-icon-header" />
             <div>
               <p className="report-view-eyebrow">{reportDefinition ? reportDefinition.fallbackType : 'Relatório'}</p>
-              <h1 className="page-title">{reportDefinition ? reportDefinition.fallbackType : report.reportType}</h1>
+              <h1 className="page-title">{reportDefinition ? reportDefinition.fallbackType : templateName || report.reportType}</h1>
               <p className="page-subtitle">
                 <Calendar size={16} style={{ marginRight: '0.5rem', verticalAlign: 'middle' }} />
                 Gerado em: {formatDate(report.generatedAt || report.createdAt)}

@@ -140,12 +140,12 @@ describe('PatientService.checkIdentifierConflict', () => {
     expect(result).toEqual({ field: 'identityDocument', value: '12345678900', existing: { identityDocument: '12345678900' } });
   });
 
-  it('reports a recordNumber conflict when the existing patient matches by recordNumber', async () => {
+  it('reports a recordNumber conflict when an existing identity holds the recordNumber (#1386: resolved via ParticipantIdentity)', async () => {
     const db = makeFakeDb({
-      patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ recordNumber: 'REC-1' }) })
+      participantIdentities: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ participantId: 'P-1' }) })
     });
     const result = await patientService.checkIdentifierConflict(db, { recordNumber: 'REC-1' });
-    expect(result).toEqual({ field: 'recordNumber', value: 'REC-1', existing: { recordNumber: 'REC-1' } });
+    expect(result).toEqual({ field: 'recordNumber', value: 'REC-1', existing: { participantId: 'P-1' } });
   });
 
   it('checks identityDocument (ParticipantIdentity) before recordNumber (Patient), matching the original priority', async () => {

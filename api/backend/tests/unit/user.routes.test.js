@@ -1,6 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
-import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 
@@ -41,6 +40,16 @@ const rbacModule = require(rbacPath);
 // the exact args that specific route registered with.
 rbacModule.requirePermission = (...args) => (req, res, next) =>
   currentRequirePermission(...args)(req, res, next);
+// #1384: requireOrganizationScope is a plain middleware, destructured at
+// require-time like requirePermission, so it is proxied the same way. The
+// default resolves a global scope, so every handler below runs as the
+// Administrador it runs as today.
+let currentRequireOrganizationScope = defaultRequireOrganizationScope;
+function defaultRequireOrganizationScope(req, res, next) {
+  req.organizationScope = { scope: 'global', organizationIds: [] };
+  next();
+}
+rbacModule.requireOrganizationScope = (req, res, next) => currentRequireOrganizationScope(req, res, next);
 
 // Required exactly once - see comments above. Every requirePermission-gated
 // route's own handler body (db access, service calls, etc.) is never
@@ -48,6 +57,14 @@ rbacModule.requirePermission = (...args) => (req, res, next) =>
 // answers 403 before the route callback runs -- so unlike
 // patient.routes.test.js, no controller/service stubbing is needed here.
 const router = require(routePath);
+
+// #1389: the first require of log.service costs about half a second
+// synchronously (exceljs, audit-v2.service, ...), so it is loaded here, at
+// import time, rather than inside a case's timeout. The GET /logs route reads
+// getLogs and isAuditReader off these exports at request time, so a per-case
+// vi.spyOn on them is still observed.
+const rbacService = require(require.resolve('../../src/services/rbac-assignment.service'));
+const logService = require(require.resolve('../../src/services/log.service'));
 
 function loadRoute({ authImpl, requirePermissionImpl } = {}) {
   currentAuth = authImpl || defaultAuth;
@@ -84,8 +101,9 @@ function denyingRequirePermission() {
 
 describe('user.routes authorization gates (issue #921)', () => {
   describe('requirePermission argument pinning', () => {
-    // One entry per requirePermission-gated registration -- all 12 of them
-    // (#1010 added the 12th), confirmed against user.routes.js line-by-line.
+    // One entry per requirePermission-gated registration -- all 16 of them
+    // (#1010 added the 12th, #1020 the 13th, #1241 the 14th and 15th, #1013 the 16th), confirmed
+    // with `grep -n "requirePermission(" user.routes.js`.
     // The per-case line numbers in the labels below have drifted since #921
     // wrote them and are indicative, not authoritative -- re-derive with
     // git grep rather than trusting them. Each pins the exact permission
@@ -118,7 +136,37 @@ describe('user.routes authorization gates (issue #921)', () => {
       // gate but is invisible to the RBAC catalogue, so the operation could
       // be neither granted to another role nor denied to an Administrador.
       { label: 'POST /:id/disable-mfa (disableMFA, UPDATE) :1083', method: 'post', path: '/u1/disable-mfa', expectedArgs: ['disableMFA', 'UPDATE'] },
+      // #1020: RF003 AC#5's administrator session revoke.
+      { label: 'POST /:id/revoke-sessions (revokeSessions, UPDATE)', method: 'post', path: '/u1/revoke-sessions', expectedArgs: ['revokeSessions', 'UPDATE'] },
+      // #1241: GET /:id had authenticate only, so any account could read any
+      // other user's record. It now carries the list's own gate.
+      { label: 'GET /:id (createUser)', method: 'get', path: '/u1', expectedArgs: ['createUser'] },
+      // #1241: likewise answered "does this id exist, and is it active" for
+      // any id to any account. Its one caller is the System Management screen.
+      { label: 'GET /:id/validate-status (createUser)', method: 'get', path: '/u1/validate-status', expectedArgs: ['createUser'] },
+      // #1013: the administrator's password set, off PUT /:id.
+      { label: 'POST /:id/set-password (setUserPassword, UPDATE)', method: 'post', path: '/u1/set-password', expectedArgs: ['setUserPassword', 'UPDATE'] },
     ];
+
+    // #1008: POST /register now carries a SECOND gate, assignRole, after
+    // createUser. The denying stub above stops at the first gate, so it
+    // cannot see the second; this stub passes createUser and denies the rest.
+    it('pins the second gate on POST /register: createUser, then assignRole', async () => {
+      const recordedCalls = [];
+      const requirePermissionImpl = (...args) => {
+        recordedCalls.push(args);
+        return (req, res, next) => (args[0] === 'createUser'
+          ? next()
+          : res.status(403).json({ success: false, gate: 'permission' }));
+      };
+      const { router } = loadRoute({ requirePermissionImpl });
+      const app = buildApp(router);
+
+      const res = await request(app).post('/api/users/register').send({});
+
+      expect(res.status).toBe(403);
+      expect(recordedCalls).toEqual([['createUser'], ['assignRole']]);
+    });
 
     for (const { label, method, path, expectedArgs } of CASES) {
       it(`pins requirePermission(${JSON.stringify(expectedArgs)}) for ${label}`, async () => {
@@ -139,14 +187,61 @@ describe('user.routes authorization gates (issue #921)', () => {
     }
   });
 
-  it('does not apply requireOrganizationScope anywhere on this router (confirmed absent)', () => {
-    // user.routes.js has no `requireOrganizationScope` seam at all -- unlike
-    // patient.routes.js, there is nothing to proxy or deny. The only way to
-    // pin "not applied anywhere" honestly is to assert its absence from the
-    // route module's own source, so this test fails the moment someone
-    // wires the middleware in without a corresponding update here.
-    const source = fs.readFileSync(routePath, 'utf8');
-    expect(source).not.toMatch(/requireOrganizationScope/);
+  // #1020: POST /:id/revoke-sessions -- 'risk' is the P1X-0267 member that had
+  // no writer; only admin_action and risk are the administrator's to claim.
+  describe('POST /:id/revoke-sessions', () => {
+    const sessionServicePath = require.resolve('../../src/services/session.service');
+
+    function appWithUser(user) {
+      const { router } = loadRoute();
+      return buildApp(router, { db: { collection: () => ({ findOne: async () => user }) } });
+    }
+
+    it.each([
+      [undefined, 'admin_action'],
+      ['risk', 'risk'],
+    ])('reason %s revokes every active session with reason %s, actor = the admin', async (sent, expected) => {
+      const sessionService = require(sessionServicePath);
+      const spy = vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(2);
+      try {
+        const body = sent === undefined ? {} : { reason: sent };
+        const res = await request(appWithUser({ _id: 'target-1' })).post('/api/users/target-1/revoke-sessions').send(body);
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual({ revoked: 2, reason: expected });
+        expect(spy).toHaveBeenCalledWith(expect.anything(), 'target-1', expected, 'user-1', { req: expect.anything() });
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it.each(['user_request', 'password_change', 'expiration', 'hacked'])('refuses reason %s with 422 before any write', async (reason) => {
+      const sessionService = require(sessionServicePath);
+      const spy = vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(0);
+      try {
+        const res = await request(appWithUser({ _id: 'target-1' })).post('/api/users/target-1/revoke-sessions').send({ reason });
+        expect(res.status).toBe(422);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('404 for an unknown user', async () => {
+      const res = await request(appWithUser(null)).post('/api/users/nobody/revoke-sessions').send({});
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // #1384: this pinned the gate's absence until user.routes.js joined the
+  // organization-scope sweep. Every registration but GET /logs (the audit
+  // trail, read across organizations as /api/logs reads it) now carries it.
+  it('applies requireOrganizationScope on every registration but GET /logs (#1384)', () => {
+    const gated = (layer) => layer.route.stack.some((entry) => entry.handle === rbacModule.requireOrganizationScope);
+    const routes = router.stack.filter((layer) => layer.route);
+    const key = (layer) => `${Object.keys(layer.route.methods)[0].toUpperCase()} ${layer.route.path}`;
+
+    expect(routes).toHaveLength(20);
+    expect(routes.filter((layer) => !gated(layer)).map(key)).toEqual(['GET /logs']);
   });
 
   // GET /logs (user.routes.js:823) is registered AFTER GET /:id
@@ -154,8 +249,9 @@ describe('user.routes authorization gates (issue #921)', () => {
   // under the router root. Express matches router.METHOD registrations in
   // registration order, not by literal-vs-param specificity, so a request
   // to /api/users/logs actually falls through GET /:id (id = 'logs') first
-  // and never reaches line 823's own registration. GET /:id carries no
-  // requirePermission gate at all (only authenticate), so this is not a
+  // and never reaches line 823's own registration. GET /:id carried no
+  // requirePermission gate at all then (only authenticate; #1241 added
+  // createUser), so this is not a
   // gate-args question -- but it does mean GET /logs's own registration
   // (and whatever the real logService.getLogs endpoint is meant to enforce)
   // is unreachable. Pinned here as observed; not fixed (out of this file's
@@ -179,5 +275,37 @@ describe('user.routes authorization gates (issue #921)', () => {
     // absence of the /:id shape rather than a specific success status keeps
     // this independent of whatever logService.getLogs does with a stub db.
     expect(res.body.error).not.toBe('users.notFound');
+  });
+
+  // #1241: once #926 made GET /logs reachable, it served the `logs`
+  // collection -- the RNF009 audit trail -- to any authenticated account,
+  // while /api/logs gates the same collection on isAuditReader (#1056).
+  describe('GET /logs follows the audit-reader rule (#1241)', () => {
+    async function getLogsAs(auditReader) {
+      const readerSpy = vi.spyOn(rbacService, 'isAuditReader').mockResolvedValue(auditReader);
+      const logsSpy = vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+      try {
+        const { router } = loadRoute();
+        const res = await request(buildApp(router)).get('/api/users/logs');
+        // Copied out before mockRestore() in finally, which clears mock.calls.
+        return { res, readerCalls: [...readerSpy.mock.calls], logsCalls: logsSpy.mock.calls.length };
+      } finally {
+        readerSpy.mockRestore();
+        logsSpy.mockRestore();
+      }
+    }
+
+    it('refuses an account that is not an audit reader, before reading any log', async () => {
+      const { res, readerCalls, logsCalls } = await getLogsAs(false);
+      expect(res.status).toBe(403);
+      expect(readerCalls).toEqual([[expect.anything(), 'user-1']]);
+      expect(logsCalls).toBe(0);
+    });
+
+    it('control: an audit reader gets the logs', async () => {
+      const { res, logsCalls } = await getLogsAs(true);
+      expect(res.status).toBe(200);
+      expect(logsCalls).toBe(1);
+    });
   });
 });

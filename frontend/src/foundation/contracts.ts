@@ -1,8 +1,15 @@
+import {
+  BLOCKED_SPECIMEN_STATUSES,
+  resolveQuantityStatus,
+  resolveSpecimenStatus,
+  type SpecimenStatusLike,
+} from '../utils/sampleHelpers';
+
 export type RoleName = 'Administrador' | 'Coordenador' | 'Técnico' | 'Usuário Externo';
 
 export type UserStatus = 'active' | 'inactive' | 'blocked' | 'suspended';
 
-export type SampleLifecycleStatus = 'AVAILABLE' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
+export type SampleLifecycleStatus = 'AVAILABLE' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED';
 
 export type LegacySampleStatus =
   | 'Available'
@@ -10,7 +17,8 @@ export type LegacySampleStatus =
   | 'TotallyWithdrawn'
   | 'Withdrawn'
   | 'Destroyed'
-  | 'Unusable';
+  | 'Unusable'
+  | 'Closed';
 
 export type StorageBoxStatus = 'ACTIVE' | 'FULL' | 'RETIRED';
 
@@ -38,25 +46,29 @@ export const LEGACY_SAMPLE_STATUS_LABELS: Record<SampleLifecycleStatus, LegacySa
   PARTIAL: 'PartiallyWithdrawn',
   DEPLETED: 'TotallyWithdrawn',
   UNAVAILABLE: 'Unusable',
+  CLOSED: 'Closed',
 };
 
-// #539: buckets the canonical specimenStatus enum (dict-02 ELM-0123 — 9
-// states, lowercase) down to this file's narrower SampleLifecycleStatus (4
-// states), so LEGACY_SAMPLE_STATUS_LABELS can produce a value shaped like
-// the legacy `Sample.currentStatus` field for readers that still need that
-// vocabulary (e.g. an editable form bound to it). `reserved`/`checked_out`
-// have no dedicated legacy label — fold into AVAILABLE, same as
-// `quarantined`/`destroyed`/`disposed` fold into UNAVAILABLE.
-export function resolveSampleLifecycleStatus(specimenStatus: string | null | undefined): SampleLifecycleStatus {
-  const status = String(specimenStatus || 'available').toLowerCase();
-  if (status === 'partial') return 'PARTIAL';
-  if (status === 'depleted') return 'DEPLETED';
-  if (['quarantined', 'destroyed', 'unavailable', 'disposed'].includes(status)) return 'UNAVAILABLE';
+// #539: buckets a specimen down to this file's narrower SampleLifecycleStatus,
+// so LEGACY_SAMPLE_STATUS_LABELS can produce a value shaped like the legacy
+// `Sample.currentStatus` field for readers that still need that vocabulary.
+// RF006 AC2/AC3: the operational state comes from specimenStatus (closed ->
+// CLOSED; quarantined/unavailable -> UNAVAILABLE; reserved/checked_out fold
+// into AVAILABLE), and PARTIAL/DEPLETED come from quantityStatus, derived
+// from the quantities when a record carries none. specimenStatus no longer
+// carries partial or depleted.
+export function resolveSampleLifecycleStatus(sample: SpecimenStatusLike | null | undefined): SampleLifecycleStatus {
+  const status = resolveSpecimenStatus(sample);
+  if (status === 'closed') return 'CLOSED';
+  if (BLOCKED_SPECIMEN_STATUSES.includes(status)) return 'UNAVAILABLE';
+  const quantityStatus = resolveQuantityStatus(sample);
+  if (quantityStatus === 'depleted') return 'DEPLETED';
+  if (quantityStatus === 'partial') return 'PARTIAL';
   return 'AVAILABLE';
 }
 
-export function resolveLegacySampleStatus(specimenStatus: string | null | undefined): LegacySampleStatus {
-  return LEGACY_SAMPLE_STATUS_LABELS[resolveSampleLifecycleStatus(specimenStatus)];
+export function resolveLegacySampleStatus(sample: SpecimenStatusLike | null | undefined): LegacySampleStatus {
+  return LEGACY_SAMPLE_STATUS_LABELS[resolveSampleLifecycleStatus(sample)];
 }
 
 export const ROLE_DEFINITIONS: Array<ContractOption<RoleName> & { accessType: number; description: string }> = [
@@ -98,6 +110,7 @@ export const SAMPLE_LIFECYCLE_STATUSES: Array<ContractOption<SampleLifecycleStat
   { value: 'PARTIAL', label: 'Parcialmente retirada' },
   { value: 'DEPLETED', label: 'Esgotada' },
   { value: 'UNAVAILABLE', label: 'Indisponível' },
+  { value: 'CLOSED', label: 'Encerrada' },
 ];
 
 export const STORAGE_BOX_STATUSES: Array<ContractOption<StorageBoxStatus>> = [

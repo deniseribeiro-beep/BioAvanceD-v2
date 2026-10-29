@@ -45,11 +45,12 @@ function createFakeCollection(seedDocs = []) {
   };
 }
 
-function createFakeDb({ retentionPolicies = [], legalHolds = [] } = {}) {
+function createFakeDb({ retentionPolicies = [], legalHolds = [], ...others } = {}) {
   const collections = {
     dispositionActions: createFakeCollection(),
     retentionPolicies: createFakeCollection(retentionPolicies),
     legalHolds: createFakeCollection(legalHolds),
+    ...Object.fromEntries(Object.entries(others).map(([name, docs]) => [name, createFakeCollection(docs)])),
   };
   return {
     collection(name) {
@@ -138,6 +139,25 @@ describe('dispositionAction.service', () => {
       expect(action.legalHold).toBe(true);
     });
 
+    it('blocks each action the policy\'s own legalHoldRules name while a hold is active, and only then (#1315, RF026 AC2)', async () => {
+      const db = createFakeDb();
+      const policyId = new ObjectId();
+      db.collection('retentionPolicies').docs.push({
+        _id: policyId, version: 'v1', active: true,
+        legalHoldRules: [{ when: 'legalHold=true', block: 'transfer' }],
+      });
+      const transfer = basePayload(policyId.toString(), { dispositionAction: 'transfer' });
+      expect((await dispositionActionService.recordDisposition(db, transfer)).legalHold).toBe(false);
+
+      await legalHoldService.imposeHold(db, {
+        targetEntityType: 'Log',
+        targetEntityIds: ['log-1'],
+        reason: 'Investigação em andamento',
+        imposedBy: 'user-2',
+      });
+      await expect(dispositionActionService.recordDisposition(db, transfer)).rejects.toThrow(/bloqueio legal ou ético ativo/);
+    });
+
     it('allows destroy again once the hold has been released', async () => {
       const db = createFakeDb();
       const policyId = await seedPolicyId(db);
@@ -219,12 +239,182 @@ describe('dispositionAction.service', () => {
       db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true });
       const action = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), { dispositionMethod: 'shredding' }));
 
+      // #1315: no certificate before execution.
+      await expect(dispositionActionService.getCertificate(db, action.dispositionActionId)).rejects.toMatchObject({ statusCode: 409 });
+      await dispositionActionService.approve(db, action.dispositionActionId, { authorizedBy: 'admin-1' });
+      await dispositionActionService.execute(db, action.dispositionActionId, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+
       const certificate = await dispositionActionService.getCertificate(db, action.dispositionActionId);
 
       expect(certificate.dispositionActionId).toBe(action.dispositionActionId);
       expect(certificate.dispositionMethod).toBe('shredding');
       expect(certificate.performedBy).toBe('user-1');
+      expect(certificate).toMatchObject({ actionStatus: 'executed', authorizedBy: 'admin-1', executedBy: 'user-1', evidenceIds: ['file-1'] });
       expect(certificate.generatedAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe('lifecycle (#1315, RF026 AC4/AC5)', () => {
+    async function recorded(policyFields = {}, payload = {}) {
+      const db = createFakeDb();
+      const policyId = new ObjectId();
+      db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true, ...policyFields });
+      const action = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), payload));
+      return { db, id: action.dispositionActionId };
+    }
+
+    it('records planned, approves with an authorizationId, and executes with executor, instant and evidence', async () => {
+      const { db, id } = await recorded();
+      expect((await dispositionActionService.getById(db, id)).actionStatus).toBe('planned');
+
+      const approved = await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      expect(approved).toMatchObject({ actionStatus: 'approved', authorizedBy: 'admin-1' });
+      expect(approved.authorizationId).toBeTruthy();
+      expect(approved.authorizedAt).toBeInstanceOf(Date);
+
+      const executed = await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+      expect(executed).toMatchObject({ actionStatus: 'executed', executedBy: 'user-1', evidenceIds: ['file-1'] });
+      expect(executed.executedAt).toBeInstanceOf(Date);
+      expect(executed.dispositionDateTime).toEqual(executed.executedAt);
+    });
+
+    it('refuses execution without approval, without evidence, or twice', async () => {
+      const { db, id } = await recorded();
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toMatchObject({ statusCode: 409 });
+      await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: [] })).rejects.toMatchObject({ statusCode: 422 });
+      await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toMatchObject({ statusCode: 409 });
+      await expect(dispositionActionService.cancel(db, id, { cancelledBy: 'user-1', reason: 'late' })).rejects.toMatchObject({ statusCode: 409 });
+    });
+
+    it('lets a policy with reviewRequired false execute a planned action directly (RF026 AC2)', async () => {
+      const { db, id } = await recorded({ reviewRequired: false });
+      const executed = await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+      expect(executed.actionStatus).toBe('executed');
+      expect(executed.authorizationId).toBeNull();
+    });
+
+    it('blocks an approved execution a hold now covers, and lets it be re-approved and executed once released', async () => {
+      const { db, id } = await recorded();
+      await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      const hold = await legalHoldService.imposeHold(db, {
+        targetEntityType: 'Log', targetEntityIds: ['log-1'], reason: 'Ordem judicial', imposedBy: 'user-2',
+      });
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toThrow(/bloqueio legal ou ético ativo/);
+      expect((await dispositionActionService.getById(db, id)).actionStatus).toBe('blocked');
+
+      await legalHoldService.releaseHold(db, hold.legalHoldId, 'user-2', 'Encerrado');
+      await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      expect((await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).actionStatus).toBe('executed');
+    });
+
+    it('refuses executing a specimen destruction with no custody holding it, keeps it approved, and executes it once custody holds (#1363, RF026 AC6)', async () => {
+      const db = createFakeDb({
+        samples: [{ specimenId: 'SP-1' }],
+        custodianshipAssignments: [],
+        collectionGovernanceApprovals: [{ approvalId: 'APR-1', status: 'active', effectivePeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null } }],
+        // RF026 AC7: the executed destruction closes SP-1 and records it.
+        operationalStateDecisions: [],
+      });
+      const policyId = new ObjectId();
+      db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true });
+      const { dispositionActionId: id } = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), {
+        entityType: 'Specimen', affectedRecordIds: ['SP-1'],
+      }));
+      await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'DISPOSITION_INCOMPATIBLE',
+        unsatisfied: [expect.objectContaining({ specimenId: 'SP-1', rule: 'custody' })],
+      });
+      expect((await dispositionActionService.getById(db, id)).actionStatus).toBe('approved');
+
+      db.collection('custodianshipAssignments').docs.push({
+        custodianshipAssignmentId: 'CUS-1', specimenId: 'SP-1', assignmentStatus: 'active',
+        effectivePeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null }, authorizationId: 'APR-1',
+      });
+      expect((await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).actionStatus).toBe('executed');
+    });
+
+    // RF026 AC7 (dictionary RULE-006): an executed destroy or transfer of
+    // specimens closes each one, with an OperationalStateDecision triggered
+    // by the action.
+    describe('closing the specimens an executed disposition ends (RF026 AC7)', () => {
+      async function executedOn(dispositionAction, samples, affectedRecordIds) {
+        const db = createFakeDb({
+          samples,
+          custodianshipAssignments: affectedRecordIds.map((specimenId, index) => ({
+            custodianshipAssignmentId: `CUS-${index}`, specimenId, assignmentStatus: 'active',
+            effectivePeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null }, authorizationId: 'APR-1',
+          })),
+          collectionGovernanceApprovals: [{ approvalId: 'APR-1', status: 'active', effectivePeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null } }],
+          patientConsents: [{ participantId: 'P-1', status: 'ACTIVE', consentId: 'C-1' }],
+          consentPermissions: [],
+          operationalStateDecisions: [],
+        });
+        const policyId = new ObjectId();
+        db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true });
+        const { dispositionActionId: id } = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), {
+          entityType: 'Specimen', affectedRecordIds, dispositionAction,
+        }));
+        await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+        await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+        return { db, id };
+      }
+
+      it.each(['destroy', 'transfer'])('a %s closes each affected specimen and records the decision', async (verb) => {
+        const { db, id } = await executedOn(verb, [
+          { _id: 'oid-1', specimenId: 'SP-1', participantId: 'P-1', specimenStatus: 'available' },
+          { _id: 'oid-2', specimenId: 'SP-2', participantId: 'P-1', specimenStatus: 'depleted' },
+        ], ['SP-1', 'SP-2']);
+
+        expect(db.collection('samples').docs.map((doc) => doc.specimenStatus)).toEqual(['closed', 'closed']);
+        const decisions = db.collection('operationalStateDecisions').docs;
+        expect(decisions).toHaveLength(2);
+        expect(decisions[0]).toMatchObject({
+          specimenId: 'SP-1', previousStatus: 'available', newStatus: 'closed', triggerEventId: id,
+          rulesApplied: ['rf026_ac7_disposition_executed'], reasonCodes: [verb],
+        });
+        // A not-yet-migrated v1.3.0 value is recorded from its v2 reading.
+        expect(decisions[1]).toMatchObject({ specimenId: 'SP-2', previousStatus: 'available', newStatus: 'closed' });
+      });
+
+      it('leaves an already closed specimen without a second decision', async () => {
+        const { db } = await executedOn('destroy', [{ _id: 'oid-1', specimenId: 'SP-1', specimenStatus: 'closed' }], ['SP-1']);
+        expect(db.collection('operationalStateDecisions').docs).toHaveLength(0);
+      });
+
+      it('does not close for preserve, nor for a non-specimen entity', async () => {
+        const { db } = await executedOn('preserve', [{ _id: 'oid-1', specimenId: 'SP-1', specimenStatus: 'available' }], ['SP-1']);
+        expect(db.collection('samples').docs[0].specimenStatus).toBe('available');
+        expect(db.collection('operationalStateDecisions').docs).toHaveLength(0);
+
+        expect(dispositionActionService.closesSpecimens({ entityType: 'Log', dispositionAction: 'destroy' })).toBe(false);
+        expect(dispositionActionService.closesSpecimens({ entityType: 'Sample', dispositionAction: 'transfer' })).toBe(true);
+        expect(dispositionActionService.closesSpecimens({ entityType: 'Specimen', dispositionAction: 'return' })).toBe(false);
+      });
+
+      it('closes nothing while the execution is refused', async () => {
+        const db = createFakeDb({ samples: [{ _id: 'oid-1', specimenId: 'SP-1', specimenStatus: 'available' }], custodianshipAssignments: [], operationalStateDecisions: [] });
+        const policyId = new ObjectId();
+        db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true });
+        const { dispositionActionId: id } = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), {
+          entityType: 'Specimen', affectedRecordIds: ['SP-1'],
+        }));
+        await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+        await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toMatchObject({ statusCode: 409 });
+        expect(db.collection('samples').docs[0].specimenStatus).toBe('available');
+      });
+    });
+
+    it('cancels with a reason, and refuses a missing reason or an unknown action', async () => {
+      const { db, id } = await recorded();
+      await expect(dispositionActionService.cancel(db, id, { cancelledBy: 'user-1' })).rejects.toMatchObject({ statusCode: 422 });
+      expect(await dispositionActionService.cancel(db, id, { cancelledBy: 'user-1', reason: 'Política revista' })).toMatchObject({ actionStatus: 'cancelled', cancellationReason: 'Política revista' });
+      await expect(dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' })).rejects.toMatchObject({ statusCode: 409 });
+      await expect(dispositionActionService.approve(db, 'missing', { authorizedBy: 'admin-1' })).rejects.toMatchObject({ statusCode: 404 });
     });
   });
 });

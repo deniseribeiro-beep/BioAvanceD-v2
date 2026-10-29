@@ -2,12 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-const StagingImport = require('../models/StagingImport');
-const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
+const StagingImport = require('./stagingImport.store');
 const { getQueue } = require('../config/queue');
 const logger = require('../utils/logger');
+const { withRequestId } = require('../utils/requestContext');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
-const { ensureStagingImportIndexes } = require('../utils/stagingImportIndexes');
 
 class StagingImportService {
   getStagingDirectory() {
@@ -49,21 +48,15 @@ class StagingImportService {
     };
   }
 
-  async createStagingImport(file) {
-    await connectMongoDB();
-
-    // #941: build the jobId index the schema has always declared. Mongoose
-    // connects with autoIndex:false and nothing calls syncIndexes(), so
-    // `unique: true` on StagingImport.js never reaches Mongo on its own.
-    // Un-awaited and best-effort, the same terms collectionResolver.js uses
-    // for ensureSampleIndexes: the helper never rejects, index creation is
-    // idempotent and latched, and a first insert racing the build is
-    // harmless -- jobId is a uuidv4 from this single writer, so the index is
-    // the lookup path these rows are read by, not the uniqueness mechanism.
-    ensureStagingImportIndexes(StagingImport.collection);
-
+  async createStagingImport(file, { organizationId = null } = {}) {
+    // #830: the store is on the native driver and builds the jobId index
+    // itself (#941), so there is no Mongoose connection to open first.
     const jobId = uuidv4();
-    const rawData = await this.persistRawFile(file, jobId);
+    const persisted = await this.persistRawFile(file, jobId);
+    // #1376: the organization is resolved at upload, when the caller is
+    // known, because the worker that persists the rows has no request. The
+    // store keeps only known top-level fields, so it rides inside rawData.
+    const rawData = { ...persisted, organizationId: organizationId ? String(organizationId) : null };
 
     const stagingImport = await StagingImport.create({
       jobId,
@@ -75,7 +68,7 @@ class StagingImportService {
       rawData,
     });
 
-    return stagingImport.toObject();
+    return stagingImport;
   }
 
   async dispatchBatchJob(stagingImport) {
@@ -87,11 +80,11 @@ class StagingImportService {
 
     const queueJob = await queue.add(
       'batch-import',
-      {
+      withRequestId({
         jobId: stagingImport.jobId,
         stagingImportId: stagingImport.jobId,
         fileName: stagingImport.fileName,
-      },
+      }),
       {
         jobId: stagingImport.jobId,
         removeOnComplete: true,
@@ -124,11 +117,11 @@ class StagingImportService {
     return queueJob;
   }
 
-  async createBatchImportJob(file) {
+  async createBatchImportJob(file, { organizationId = null } = {}) {
     let stagingImport = null;
 
     try {
-      stagingImport = await this.createStagingImport(file);
+      stagingImport = await this.createStagingImport(file, { organizationId });
       const queueJob = await this.dispatchBatchJob(stagingImport);
 
       return {

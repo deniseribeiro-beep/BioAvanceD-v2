@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const importLGPDController = require('../../controllers/import-lgpd.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 
 /**
  * Rotas de Importação LGPD
@@ -14,6 +14,7 @@ const { requirePermission } = require('../../infrastructure/middleware/rbac');
 router.post('/pacientes',
   authenticate,
   requirePermission('createPatient'),
+  requireOrganizationScope,
   importLGPDController.uploadMiddleware(),
   importLGPDController.importPatients.bind(importLGPDController)
 );
@@ -21,6 +22,7 @@ router.post('/pacientes',
 router.post('/pacientes/smart-import',
   authenticate,
   requirePermission('createPatient'),
+  requireOrganizationScope,
   importLGPDController.uploadMiddleware(),
   importLGPDController.importPatientsSmart.bind(importLGPDController)
 );
@@ -28,6 +30,7 @@ router.post('/pacientes/smart-import',
 router.get('/pacientes/smart-import/reports',
   authenticate,
   requirePermission('createPatient'),
+  requireOrganizationScope,
   importLGPDController.listSmartImportReports.bind(importLGPDController)
 );
 
@@ -38,9 +41,13 @@ router.get('/pacientes/smart-import/metadata',
 );
 
 // Importação de amostras (valida IDs de pacientes)
+// #1353: as importacoes gravam amostras e participantes de uma organizacao,
+// entao passam por requireOrganizationScope, e o controller carimba a
+// organizacao resolvida em collectionSite / clinicalUnitId.
 router.post('/amostras',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   importLGPDController.uploadMiddleware(),
   importLGPDController.importSamples.bind(importLGPDController)
 );
@@ -57,13 +64,24 @@ router.post('/amostras',
 router.get('/batches',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   importLGPDController.listQuarantineBatches.bind(importLGPDController)
 );
 
 router.get('/batches/:batchId',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   importLGPDController.getQuarantineBatch.bind(importLGPDController)
+);
+
+// Correcao e reenvio de uma linha em quarentena (#1352, RNF011 AC#4). Mesma
+// permissao da importacao de amostras: reenviar e importar uma linha.
+router.post('/batches/:batchId/records/:recordId/resubmit',
+  authenticate,
+  requirePermission('createSample'),
+  requireOrganizationScope,
+  importLGPDController.resubmitQuarantinedRow.bind(importLGPDController)
 );
 
 // Download de templates - Pacientes CSV (#815: the fourth combination, missing

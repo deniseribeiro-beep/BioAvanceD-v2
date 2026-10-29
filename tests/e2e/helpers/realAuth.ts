@@ -28,7 +28,7 @@ export async function realLogin(request: APIRequestContext): Promise<RealAuthSes
   }
 
   const testUser = process.env.TEST_USER || 'admin';
-  const testPass = process.env.TEST_PASS || 'Admin@123';
+  const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
   const response = await request.post(`${apiBaseURL}/api/auth/login`, {
     data: { username: testUser, password: testPass },

@@ -37,7 +37,10 @@ function statefulRetentionPoliciesMock() {
   const docs = [];
   const matches = (doc, query = {}) =>
     Object.entries(query).every(([key, cond]) => {
-      if (cond && typeof cond === 'object' && '$in' in cond) return cond.$in.includes(doc[key]);
+      if (cond && typeof cond === 'object' && '$in' in cond) {
+        // Mongo's $in on an array field matches when any element is listed.
+        return Array.isArray(doc[key]) ? doc[key].some((value) => cond.$in.includes(value)) : cond.$in.includes(doc[key]);
+      }
       if (cond instanceof ObjectId || doc[key] instanceof ObjectId) {
         return String(doc[key]) === String(cond);
       }
@@ -116,6 +119,10 @@ const VALID_PAYLOAD = {
   postRetentionAction: 'archive',
   retentionPeriod: 'P365D',
   effectivePeriod: { start: '2026-01-01T00:00:00.000Z' },
+  jurisdiction: 'BR',
+  retentionBasis: ['Resolução CNS nº 441/2011, item 11, I'],
+  legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+  reviewRequired: true,
 };
 
 describe('POST /api/retention-policies', () => {
@@ -226,5 +233,35 @@ describe('POST /api/retention-policies', () => {
     expect(activeRes.status).toBe(200);
     expect(activeRes.body.data.version).toBe('v2');
     expect(activeRes.body.data._id).not.toBe(firstId);
+  });
+
+  // #1365 (RF026 AC1): a specimen policy is accepted and keeps its own active
+  // revision, so it never switches off the audit trail's retention.
+  it('accepts a Specimen policy without deactivating the audit-trail policy', async () => {
+    const policies = statefulRetentionPoliciesMock();
+    app.locals.db = createDbMock({
+      retentionPolicies: policies,
+      logs: statefulLogsMock().mock,
+      audit_events: statefulAuditEventsMock().mock,
+      ...rbacFor(4),
+    });
+
+    const auditRes = await request(app)
+      .post('/api/retention-policies')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send(VALID_PAYLOAD);
+    const specimenRes = await request(app)
+      .post('/api/retention-policies')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ ...VALID_PAYLOAD, applicableEntityTypes: ['Specimen'], postRetentionAction: 'destroy' });
+
+    expect(specimenRes.status).toBe(201);
+    expect(specimenRes.body.data.active).toBe(true);
+
+    const activeRes = await request(app)
+      .get('/api/retention-policies/active')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(activeRes.body.data._id).toBe(auditRes.body.data._id);
+    expect(activeRes.body.data.active).toBe(true);
   });
 });

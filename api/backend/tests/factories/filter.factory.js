@@ -26,6 +26,7 @@
  * dotted paths). It is deliberately NOT a Mongo query engine; see the
  * documented limits on `matchesFilter`.
  */
+const { ObjectId } = require('mongodb');
 const { createCursorMock } = require('./cursor.factory');
 
 function requireVi() {
@@ -121,6 +122,12 @@ function matchesCondition(value, condition) {
  * `$not`, `$nor`, `$elemMatch`, and array-contains semantics (Mongo matches a
  * scalar against an array field; this compares the array itself).
  */
+function assignDriverId(doc) {
+  if (doc && typeof doc === 'object' && doc._id === undefined) {
+    doc._id = new ObjectId();
+  }
+}
+
 function matchesFilter(doc, filter = {}) {
   return Object.entries(filter).every(([key, condition]) => {
     if (key === '$or') {
@@ -188,13 +195,23 @@ function createMatchingCollection(seed = [], options = {}) {
       recordFilter(filter);
       return docs.filter((doc) => matchesFilter(doc, filter)).length;
     }),
+    // #1336: the Node driver gives a document without an `_id` a fresh
+    // ObjectId, on the document the caller passed, and returns it as
+    // `insertedId`. Without that, code reading `insertedId.toString()` threw
+    // here and never did against Mongo.
     insertOne: v.fn(async (doc) => {
+      assignDriverId(doc);
       docs.push(doc);
       return { acknowledged: true, insertedId: doc && doc._id };
     }),
     insertMany: v.fn(async (newDocs = []) => {
-      newDocs.forEach((doc) => docs.push(doc));
-      return { acknowledged: true, insertedCount: newDocs.length };
+      const insertedIds = {};
+      newDocs.forEach((doc, index) => {
+        assignDriverId(doc);
+        insertedIds[index] = doc && doc._id;
+        docs.push(doc);
+      });
+      return { acknowledged: true, insertedCount: newDocs.length, insertedIds };
     }),
     updateOne: v.fn(async (filter = {}, update = {}) => {
       recordFilter(filter);

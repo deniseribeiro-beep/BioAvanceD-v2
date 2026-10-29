@@ -9,13 +9,6 @@ let svc = require('../../src/services/terminologySync.service');
 const Terminology = require('../../src/models/Terminology');
 const logger = require('../../src/utils/logger');
 
-function freshRequireWithEnv(envMutator) {
-  // Per repo gotcha: vi.resetModules() alone does not reliably clear require.cache.
-  envMutator();
-  delete require.cache[MODULE_PATH];
-  return require('../../src/services/terminologySync.service');
-}
-
 describe('terminologySync.service', () => {
   const originalEnv = { ...process.env };
 
@@ -195,6 +188,46 @@ describe('terminologySync.service', () => {
   });
 
   describe('#941 ensureTerminologyIndexes', () => {
+    // #941's measured DELETEs. Terminology.js declared `index: true` on both,
+    // inert under autoIndex:false. explain() on mongo:7: { ativo: 1 } is
+    // picked for dictionary.js's `ativo: { $ne: false }` and walks ~98% of
+    // the collection through the index -- slower than the COLLSCAN it
+    // replaces. { codigo: 1 } wins only the sync upsert, and only because
+    // the compound unique index is ineligible for that filter; that is
+    // fixed at the compound, not by adding a second index.
+    it.each([[{ ativo: 1 }], [{ codigo: 1 }]])('does NOT build %o', async (keys) => {
+      const createIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex }, `941-not-built-${Object.keys(keys)[0]}`);
+
+      expect(createIndex).toHaveBeenCalled();
+      const built = createIndex.mock.calls.map(([k]) => JSON.stringify(k));
+      expect(built).not.toContain(JSON.stringify(keys));
+    });
+
+    // #1164: v2's `$type: 'string'` filter made the index a constraint only --
+    // the planner cannot use it for the upsert's plain `{ sistema, codigo }`
+    // equality, so every synced record paid a COLLSCAN. v3 is built first,
+    // then v2 dropped, so uniqueness never has a gap.
+    it('drops the superseded terminologies_sistema_codigo_unique_v2 only AFTER building v3', async () => {
+      const createIndex = vi.fn(async () => {});
+      const dropIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex, dropIndex }, '1164-drop-v2');
+
+      expect(dropIndex).toHaveBeenCalledWith('terminologies_sistema_codigo_unique_v2');
+      expect(createIndex.mock.invocationCallOrder[0]).toBeLessThan(dropIndex.mock.invocationCallOrder[0]);
+    });
+
+    it('keeps terminologies_sistema_codigo_unique_v2 when building v3 fails', async () => {
+      const createIndex = vi.fn(async () => { throw new Error('boom'); });
+      const dropIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex, dropIndex }, '1164-keep-v2');
+
+      expect(dropIndex).not.toHaveBeenCalled();
+    });
+
     it('creates a unique index on { sistema: 1, codigo: 1 }, pinned by value', async () => {
       const createIndex = vi.fn(async () => {});
       const collection = { createIndex };
@@ -205,16 +238,18 @@ describe('terminologySync.service', () => {
       const [keys, options] = createIndex.mock.calls[0];
       expect(keys).toEqual({ sistema: 1, codigo: 1 });
       expect(options).toEqual({
-        name: 'terminologies_sistema_codigo_unique_v2',
+        name: 'terminologies_sistema_codigo_unique_v3',
         unique: true,
-        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+        partialFilterExpression: { sistema: { $gt: '' }, codigo: { $gt: '' } },
       });
     });
 
     // The index shipped by a936d385 was plain-unique with no partial filter,
     // and `terminologies` has a THIRD writer nobody counted: the essential
-    // seed. `scripts/seed-essential-reference-data.js`'s `sprec-minimal` entry
-    // writes SPREC axis rows carrying `code`, never `codigo`. Under a plain
+    // reference load. Its `sprec-minimal` entry (the loader in
+    // `src/foundation/essential-references.js`, run by
+    // `scripts/load-essential-references.js`) writes SPREC axis rows carrying
+    // `code`, never `codigo`. Under a plain
     // unique index Mongo treats the missing field as null, so all four rows
     // share the key { 'SPREC', null } and collide with each other.
     //
@@ -223,17 +258,8 @@ describe('terminologySync.service', () => {
     // about, and then LATCHES anyway -- so the index never exists and never
     // retries. Index-then-seed fails the seed run instead.
     it('does not collide with the SPREC rows the essential seed writes to the same collection', async () => {
-      const sprecSeed = require('../../src/reference-data/sprec.min.json');
-
-      // Exactly the mapping scripts/seed-essential-reference-data.js applies.
-      const seededDocs = sprecSeed.axes.map((axis) => ({
-        sistema: sprecSeed.sistema,
-        fonte: sprecSeed.fonte,
-        axis: axis.axis,
-        code: axis.code,
-        label: axis.label,
-        descricao: axis.descricao,
-      }));
+      // The loader's own output, so a change to its mapping reaches this test.
+      const seededDocs = require('../../src/foundation/essential-references').loadByKey('sprec-minimal').docsByCollection.terminologies;
 
       // The premise: more than one row, none of them carrying `codigo`.
       expect(seededDocs.length).toBeGreaterThan(1);
@@ -247,9 +273,11 @@ describe('terminologySync.service', () => {
       // one, `unique: true` indexes them as four identical { SPREC, null }.
       expect(options.partialFilterExpression).toBeDefined();
 
+      // #1164: the filter is `{ $gt: '' }` per field -- Mongo's comparisons are
+      // type-bracketed, so it admits exactly the non-empty strings.
       const matchesFilter = (doc) =>
         Object.entries(options.partialFilterExpression).every(
-          ([field, cond]) => typeof doc[field] === (cond.$type === 'string' ? 'string' : typeof doc[field])
+          ([field, cond]) => (cond.$gt === '' ? typeof doc[field] === 'string' && doc[field] > '' : false)
         );
 
       expect(seededDocs.filter(matchesFilter)).toEqual([]);
@@ -266,7 +294,7 @@ describe('terminologySync.service', () => {
 
       const realRow = { sistema: 'ORPHA', codigo: 'ORPHA:558', descricao: 'Marfan' };
       const matchesFilter = Object.entries(options.partialFilterExpression).every(
-        ([field, cond]) => cond.$type !== 'string' || typeof realRow[field] === 'string'
+        ([field, cond]) => cond.$gt === '' && typeof realRow[field] === 'string' && realRow[field] > ''
       );
 
       expect(matchesFilter).toBe(true);
@@ -299,14 +327,14 @@ describe('terminologySync.service', () => {
       const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const collection = {
         createIndex: vi.fn(async () => {
-          throw new Error('E11000 duplicate key error collection: bio.terminologies index: terminologies_sistema_codigo_unique_v2');
+          throw new Error('E11000 duplicate key error collection: bio.terminologies');
         }),
       };
 
       await expect(svc.ensureTerminologyIndexes(collection, '941-fails')).resolves.toBeUndefined();
 
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][0]).toContain('terminologies_sistema_codigo_unique_v2');
+      expect(warn.mock.calls[0][0]).toContain('terminologies_sistema_codigo_unique_v3');
       expect(warn.mock.calls[0][0]).toContain('E11000');
     });
 
@@ -414,9 +442,9 @@ describe('terminologySync.service', () => {
       const [keys, options] = createIndex.mock.calls[0];
       expect(keys).toEqual({ sistema: 1, codigo: 1 });
       expect(options).toEqual({
-        name: 'terminologies_sistema_codigo_unique_v2',
+        name: 'terminologies_sistema_codigo_unique_v3',
         unique: true,
-        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+        partialFilterExpression: { sistema: { $gt: '' }, codigo: { $gt: '' } },
       });
       expect(createIndex.mock.invocationCallOrder[0]).toBeLessThan(updateOne.mock.invocationCallOrder[0]);
     });
@@ -488,290 +516,7 @@ describe('terminologySync.service', () => {
     });
   });
 
-  describe('syncFromOrphadata', () => {
-    it('returns disabled early result when external sync is not enabled', async () => {
-      delete process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC;
-      delete process.env.ALLOW_CLOUD_INTEGRATIONS;
-      const fetchMock = vi.fn();
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await svc.syncFromOrphadata();
-      expect(result).toEqual({
-        success: true,
-        disabled: true,
-        attempted: [],
-        upserted: 0,
-        skipped: 0,
-        source: 'local-only',
-      });
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('returns disabled early result when ORPHADATA_BASE_URL is empty, even if sync is enabled', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = '';
-      });
-      const fetchMock = vi.fn();
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-      expect(result.disabled).toBe(true);
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('falls through to the next endpoint when the first fails, and stops at the first endpoint yielding records', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-      });
-      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
-
-      const fetchMock = vi.fn()
-        .mockRejectedValueOnce(new Error('network down')) // endpoint 1 fails
-        .mockResolvedValueOnce({ // endpoint 2 succeeds with one record
-          ok: true,
-          status: 200,
-          statusText: 'OK',
-          headers: { get: () => 'application/json' },
-          text: async () => JSON.stringify([{ ORPHAcode: '1', descricao: 'Disease One' }]),
-        });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(warnSpy).toHaveBeenCalled();
-      expect(result.success).toBe(true);
-      expect(result.attempted).toBe('/rd-phenotypes/orphacodes?limit=1000');
-      expect(result.upserted).toBe(1);
-      expect(result.skipped).toBe(0);
-      // issue #115: surface which endpoint(s) were actually consulted and how
-      // many records each yielded, so a small/partial result from an earlier
-      // endpoint isn't silently indistinguishable from a complete one.
-      expect(result.consulted).toEqual([
-        { endpoint: '/rd-cross-referencing/orphacodes?limit=1000', recordCount: 0, error: 'network down' },
-        { endpoint: '/rd-phenotypes/orphacodes?limit=1000', recordCount: 1 },
-      ]);
-    });
-
-    it('does not try the third endpoint once the second one already yielded records', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-      });
-      vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
-
-      const jsonResponse = (body) => ({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        headers: { get: () => 'application/json' },
-        text: async () => JSON.stringify(body),
-      });
-
-      const fetchMock = vi.fn()
-        .mockResolvedValueOnce(jsonResponse([])) // endpoint 1: empty -> continue
-        .mockResolvedValueOnce(jsonResponse([{ ORPHAcode: '1', descricao: 'D1' }])) // endpoint 2: success
-        .mockResolvedValueOnce(jsonResponse([{ ORPHAcode: '2', descricao: 'D2' }])); // endpoint 3, should not be called
-
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      // issue #115: the third endpoint is never consulted, and that's visible
-      // in the report rather than silently indistinguishable from "checked but empty".
-      expect(result.consulted).toEqual([
-        { endpoint: '/rd-cross-referencing/orphacodes?limit=1000', recordCount: 0 },
-        { endpoint: '/rd-phenotypes/orphacodes?limit=1000', recordCount: 1 },
-      ]);
-    });
-
-    it('returns success:false with all endpoints attempted when every endpoint fails or is empty', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-      });
-      vi.spyOn(logger, 'warn').mockImplementation(() => {});
-
-      const fetchMock = vi.fn().mockRejectedValue(new Error('always fails'));
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(result).toEqual({
-        success: false,
-        attempted: [
-          '/rd-cross-referencing/orphacodes?limit=1000',
-          '/rd-phenotypes/orphacodes?limit=1000',
-          '/rd-classification/orphacodes?limit=1000',
-        ],
-        upserted: 0,
-        skipped: 0,
-        // issue #115: every attempted endpoint is reported, all failed here.
-        consulted: [
-          { endpoint: '/rd-cross-referencing/orphacodes?limit=1000', recordCount: 0, error: 'always fails' },
-          { endpoint: '/rd-phenotypes/orphacodes?limit=1000', recordCount: 0, error: 'always fails' },
-          { endpoint: '/rd-classification/orphacodes?limit=1000', recordCount: 0, error: 'always fails' },
-        ],
-      });
-    });
-
-    it('warns and falls through consistently on malformed JSON, regardless of the content-type header (issue #30)', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-      });
-      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
-
-      const malformedResponse = (contentType) => ({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        headers: { get: () => contentType },
-        text: async () => '<html>not json</html>',
-      });
-
-      const fetchMock = vi.fn()
-        // endpoint 1: malformed body mislabeled as application/json
-        .mockResolvedValueOnce(malformedResponse('application/json'))
-        // endpoint 2: same malformed body with no/other content-type
-        .mockResolvedValueOnce(malformedResponse('text/html'))
-        // endpoint 3: succeeds so the loop terminates with a clear result
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          statusText: 'OK',
-          headers: { get: () => 'application/json' },
-          text: async () => JSON.stringify([{ ORPHAcode: '1', descricao: 'Disease One' }]),
-        });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      // Both malformed responses should be warned about identically, not just the
-      // application/json-labeled one (which previously threw instead of warning).
-      const malformedWarnings = warnSpy.mock.calls.filter(([msg]) => msg.includes('não é JSON válido'));
-      expect(malformedWarnings).toHaveLength(2);
-      expect(result.success).toBe(true);
-      expect(result.attempted).toBe('/rd-classification/orphacodes?limit=1000');
-    });
-
-    it('propagates a Timeout error message when fetch aborts (exercised through the endpoint-failure/warn path)', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-      });
-      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-
-      const abortError = new Error('The operation was aborted');
-      abortError.name = 'AbortError';
-      const fetchMock = vi.fn().mockRejectedValue(abortError);
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-
-      expect(result.success).toBe(false);
-      const warnMessages = warnSpy.mock.calls.map((c) => c[0]);
-      expect(warnMessages.some((m) => /Timeout ap.s \d+ms/.test(m))).toBe(true);
-    });
-
-    it('extracts records from a response body shaped as {data: [...]}, {items: [...]}, or {results: [...]}', async () => {
-      vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
-      const shapes = [
-        { data: [{ ORPHAcode: '1', descricao: 'D1' }] },
-        { items: [{ ORPHAcode: '1', descricao: 'D1' }] },
-        { results: [{ ORPHAcode: '1', descricao: 'D1' }] },
-      ];
-      for (const body of shapes) {
-        const freshSvc = freshRequireWithEnv(() => {
-          process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-          process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-        });
-        const fetchMock = vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          statusText: 'OK',
-          headers: { get: () => 'application/json' },
-          text: async () => JSON.stringify(body),
-        });
-        vi.stubGlobal('fetch', fetchMock);
-
-        const result = await freshSvc.syncFromOrphadata();
-        expect(result.upserted).toBe(1);
-      }
-    });
-
-    it('normalizes a bare string/number record entry into an ORPHA stub before upserting', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-      });
-      const updateOneSpy = vi.spyOn(Terminology, 'findOneAndUpdate').mockResolvedValue({});
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        headers: { get: () => 'application/json' },
-        text: async () => JSON.stringify([558]),
-      });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-      expect(result.upserted).toBe(1);
-      expect(updateOneSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ sistema: 'ORPHA', codigo: 'ORPHA:558' }),
-        expect.anything(),
-        expect.anything()
-      );
-    });
-
-    it('surfaces the response body\'s error/message field in the thrown error when an endpoint responds non-OK', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-      });
-      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 503,
-        statusText: 'Service Unavailable',
-        headers: { get: () => 'application/json' },
-        text: async () => JSON.stringify({ error: 'orphadata is down' }),
-      });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-      expect(result.success).toBe(false);
-      const warnMessages = warnSpy.mock.calls.map((c) => c[0]);
-      expect(warnMessages.some((m) => m.includes('orphadata is down'))).toBe(true);
-    });
-
-    it('falls back to a plain HTTP status message when a non-OK response has no error/message field', async () => {
-      const freshSvc = freshRequireWithEnv(() => {
-        process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
-        process.env.ORPHADATA_BASE_URL = 'https://orphadata.example.com';
-      });
-      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-        headers: { get: () => 'application/json' },
-        text: async () => '',
-      });
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await freshSvc.syncFromOrphadata();
-      expect(result.success).toBe(false);
-      const warnMessages = warnSpy.mock.calls.map((c) => c[0]);
-      expect(warnMessages.some((m) => m.includes('HTTP 500 Internal Server Error'))).toBe(true);
-    });
+  it('does not export syncFromOrphadata: the Orphadata bulk sync is retired (#115)', () => {
+    expect(svc.syncFromOrphadata).toBeUndefined();
   });
 });

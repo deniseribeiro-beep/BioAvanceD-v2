@@ -62,9 +62,66 @@ describe('import-lgpd.controller', () => {
     });
   });
 
+  describe('resubmitQuarantinedRow (#1352)', () => {
+    function makeReq(body = { row: { sampleType: 'PLASMA' } }) {
+      return {
+        organizationScope: { scope: 'global' }, app: { locals: { db: {}, neo4jDriver: 'driver' } },
+        params: { batchId: 'b1', recordId: 'r1' },
+        body,
+        user: { userID: 'u1', name: 'Ana', role: 'Tecnico' },
+        ip: '10.0.0.1',
+        get: () => 'agent',
+      };
+    }
+
+    it('passes the ids, the row and the caller as actor, and answers 200 with the result', async () => {
+      const spy = vi.spyOn(importLGPDService, 'resubmitQuarantinedSampleRow')
+        .mockResolvedValue({ sampleId: 's1', recordStatus: 'RESUBMITTED', batchStatus: 'RESOLVED' });
+      const res = createRes();
+
+      await controller.resubmitQuarantinedRow(makeReq(), res);
+
+      const [, batchId, recordId, row, options] = spy.mock.calls[0];
+      expect([batchId, recordId, row]).toEqual(['b1', 'r1', { sampleType: 'PLASMA' }]);
+      expect(options.neo4jDriver).toBe('driver');
+      expect(options.actor).toMatchObject({ userID: 'u1', userId: 'u1', userName: 'Ana', userRole: 'Tecnico' });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: { sampleId: 's1', recordStatus: 'RESUBMITTED', batchStatus: 'RESOLVED' } });
+    });
+
+    it('answers a rejected correction with 422 and its row errors', async () => {
+      const error = Object.assign(new Error('A linha corrigida foi rejeitada novamente.'), {
+        statusCode: 422,
+        errors: ['atcCode inválido: X'],
+      });
+      vi.spyOn(importLGPDService, 'resubmitQuarantinedSampleRow').mockRejectedValue(error);
+      const res = createRes();
+
+      await controller.resubmitQuarantinedRow(makeReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'A linha corrigida foi rejeitada novamente.',
+        errors: ['atcCode inválido: X'],
+      });
+    });
+
+    it('hides an unexpected error behind a generic 500', async () => {
+      vi.spyOn(importLGPDService, 'resubmitQuarantinedSampleRow').mockRejectedValue(new Error('mongo down'));
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.resubmitQuarantinedRow(makeReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Erro ao reenviar linha de quarentena' });
+    });
+  });
+
   describe('listSmartImportReports', () => {
     it('returns 503 when no db', async () => {
-      const req = { app: { locals: {} }, query: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} }, query: {} };
       const res = createRes();
 
       await controller.listSmartImportReports(req, res);
@@ -77,7 +134,7 @@ describe('import-lgpd.controller', () => {
       const db = createDb();
       db.__collection.toArray.mockResolvedValue([{ a: 1 }]);
       db.__collection.countDocuments.mockResolvedValue(1);
-      const req = { app: { locals: { db } }, query: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: {} };
       const res = createRes();
 
       await controller.listSmartImportReports(req, res);
@@ -92,7 +149,7 @@ describe('import-lgpd.controller', () => {
 
     it('clamps limit > 100 down to 100', async () => {
       const db = createDb();
-      const req = { app: { locals: { db } }, query: { limit: '500' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: { limit: '500' } };
       const res = createRes();
 
       await controller.listSmartImportReports(req, res);
@@ -103,7 +160,7 @@ describe('import-lgpd.controller', () => {
 
     it('defaults limit to 20 when NaN', async () => {
       const db = createDb();
-      const req = { app: { locals: { db } }, query: { limit: 'not-a-number' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: { limit: 'not-a-number' } };
       const res = createRes();
 
       await controller.listSmartImportReports(req, res);
@@ -114,7 +171,7 @@ describe('import-lgpd.controller', () => {
 
     it('clamps limit < 1 up to 1', async () => {
       const db = createDb();
-      const req = { app: { locals: { db } }, query: { limit: '0' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: { limit: '0' } };
       const res = createRes();
 
       await controller.listSmartImportReports(req, res);
@@ -126,7 +183,7 @@ describe('import-lgpd.controller', () => {
     it('clamps page < 1 up to 1 and computes skip/totalPages correctly', async () => {
       const db = createDb();
       db.__collection.countDocuments.mockResolvedValue(45);
-      const req = { app: { locals: { db } }, query: { page: '-3', limit: '10' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: { page: '-3', limit: '10' } };
       const res = createRes();
 
       await controller.listSmartImportReports(req, res);
@@ -140,7 +197,7 @@ describe('import-lgpd.controller', () => {
     it('computes skip and totalPages for a mid-range page', async () => {
       const db = createDb();
       db.__collection.countDocuments.mockResolvedValue(45);
-      const req = { app: { locals: { db } }, query: { page: '3', limit: '10' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: { page: '3', limit: '10' } };
       const res = createRes();
 
       await controller.listSmartImportReports(req, res);
@@ -153,7 +210,7 @@ describe('import-lgpd.controller', () => {
     it('returns totalPages 1 minimum even when total is 0', async () => {
       const db = createDb();
       db.__collection.countDocuments.mockResolvedValue(0);
-      const req = { app: { locals: { db } }, query: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: {} };
       const res = createRes();
 
       await controller.listSmartImportReports(req, res);
@@ -165,7 +222,7 @@ describe('import-lgpd.controller', () => {
     it('returns 500 when db throws', async () => {
       const db = createDb();
       db.__collection.toArray.mockRejectedValue(new Error('boom'));
-      const req = { app: { locals: { db } }, query: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: {} };
       const res = createRes();
       const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 
@@ -184,7 +241,7 @@ describe('import-lgpd.controller', () => {
   describe('getPatientsSmartImportMetadata', () => {
     it('returns 200 with consentTemplates.available false when no db', async () => {
       vi.spyOn(importLGPDService, 'getPatientsSmartImportMetadata').mockReturnValue({ foo: 'bar' });
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.getPatientsSmartImportMetadata(req, res);
@@ -203,7 +260,7 @@ describe('import-lgpd.controller', () => {
         { _id: 'abc123', title: 'TCLE 1', version: '1.0', caae: '12345', active: true },
         { _id: 'def456' } // missing title/version/caae/active
       ]);
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.getPatientsSmartImportMetadata(req, res);
@@ -232,7 +289,7 @@ describe('import-lgpd.controller', () => {
       vi.spyOn(importLGPDService, 'getPatientsSmartImportMetadata').mockImplementation(() => {
         throw new Error('meta boom');
       });
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
       const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 
@@ -250,7 +307,7 @@ describe('import-lgpd.controller', () => {
 
   describe('importPatients', () => {
     it('returns 503 when no db', async () => {
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.importPatients(req, res);
@@ -260,7 +317,7 @@ describe('import-lgpd.controller', () => {
 
     it('returns 400 when no file', async () => {
       const db = createDb();
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.importPatients(req, res);
@@ -272,7 +329,7 @@ describe('import-lgpd.controller', () => {
     it('returns 400 and cleans up when format invalid', async () => {
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(false);
@@ -292,7 +349,31 @@ describe('import-lgpd.controller', () => {
     it('returns 400 and cleans up when groupFields is invalid JSON', async () => {
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: { groupFields: '{not json' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { groupFields: '{not json' } };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.importPatients(req, res);
+
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+      // #840: the full body -- error, reason token AND message -- not just
+      // typeof message, which is what let the four endpoints' bodies drift
+      // apart unnoticed in the first place.
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'malformed',
+        message: 'groupFields deve ser um JSON válido'
+      });
+    });
+
+    it('returns 400 with the "value" reason when groupFields has an operator-shaped key (#840)', async () => {
+      const db = createDb();
+      const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { groupFields: '{"$ne": null}' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -305,14 +386,15 @@ describe('import-lgpd.controller', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: 'groupFields inválido',
-        message: 'groupFields deve ser um JSON válido'
+        reason: 'value',
+        message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano'
       });
     });
 
     it('happy path with no errors returns 200 success message with count', async () => {
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -343,7 +425,7 @@ describe('import-lgpd.controller', () => {
     it('happy path with partial errors returns 200 with partial message', async () => {
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -369,7 +451,7 @@ describe('import-lgpd.controller', () => {
     it('happy path with all failures still returns 200 with "não realizada" message', async () => {
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -391,7 +473,7 @@ describe('import-lgpd.controller', () => {
     it('logs audit only when req.user present', async () => {
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -416,7 +498,7 @@ describe('import-lgpd.controller', () => {
     it('does not log audit when req.user is absent', async () => {
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -432,7 +514,7 @@ describe('import-lgpd.controller', () => {
     it('returns 500 and cleans up file when service throws', async () => {
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -466,7 +548,7 @@ describe('import-lgpd.controller', () => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
       const req = {
-        app: { locals: { db } },
+        organizationScope: { scope: 'global' }, app: { locals: { db } },
         file,
         body: {},
         // Exactly what auth.service.js#signAccessToken puts in the token.
@@ -494,7 +576,7 @@ describe('import-lgpd.controller', () => {
     });
 
     it('returns 503 when no db', async () => {
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.importSamples(req, res);
@@ -504,7 +586,7 @@ describe('import-lgpd.controller', () => {
 
     it('returns 400 when no file', async () => {
       const db = createDb();
-      const req = { app: { locals: { db } }, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, body: {} };
       const res = createRes();
 
       await controller.importSamples(req, res);
@@ -516,7 +598,7 @@ describe('import-lgpd.controller', () => {
     it('returns 400 and cleans up when format invalid', async () => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(false);
@@ -531,7 +613,29 @@ describe('import-lgpd.controller', () => {
     it('returns 400 and cleans up when groupFields is invalid JSON', async () => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: { groupFields: '{bad' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { groupFields: '{bad' } };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.importSamples(req, res);
+
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+      // #840: full body, not just typeof message.
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'malformed',
+        message: 'groupFields deve ser um JSON válido'
+      });
+    });
+
+    it('returns 400 with the "value" reason when groupFields has a dotted key (#840)', async () => {
+      const db = createDb();
+      const file = { path: '/tmp/s.csv', originalname: 's.csv' };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { groupFields: '{"a.b": 1}' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -544,7 +648,8 @@ describe('import-lgpd.controller', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: 'groupFields inválido',
-        message: 'groupFields deve ser um JSON válido'
+        reason: 'value',
+        message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano'
       });
     });
 
@@ -559,7 +664,7 @@ describe('import-lgpd.controller', () => {
     ])('parses autoIncrement %p as %p', async (input, expected) => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: { autoIncrement: input } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { autoIncrement: input } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -576,7 +681,7 @@ describe('import-lgpd.controller', () => {
     it('happy path returns 200 with errorsDetails mapped to row/errors/participantId', async () => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: { boxId: 'box-3' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { boxId: 'box-3' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -629,7 +734,7 @@ describe('import-lgpd.controller', () => {
     it('returns 500 when service throws, opens a FAILED batch instead of cleaning up if req.file present', async () => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -660,7 +765,7 @@ describe('import-lgpd.controller', () => {
       const db = createDb();
       db.__collection.insertOne.mockRejectedValue(new Error('db unavailable'));
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -686,7 +791,7 @@ describe('import-lgpd.controller', () => {
       const db = createDb();
       db.__collection.insertOne.mockResolvedValue({ insertedId: 'report-999' });
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1', name: 'Tester' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1', name: 'Tester' } };
       const res = createRes();
 
       const fileBuffer = Buffer.from('test-content');
@@ -738,7 +843,7 @@ describe('import-lgpd.controller', () => {
     });
 
     it('returns 503 when no db', async () => {
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.importPatientsSmart(req, res);
@@ -748,7 +853,7 @@ describe('import-lgpd.controller', () => {
 
     it('returns 400 when no file', async () => {
       const db = createDb();
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.importPatientsSmart(req, res);
@@ -893,7 +998,7 @@ describe('import-lgpd.controller', () => {
 
   describe('downloadSampleTemplateCSV', () => {
     it('sends a CSV with default values when no db is available', async () => {
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.downloadSampleTemplateCSV(req, res);
@@ -913,7 +1018,7 @@ describe('import-lgpd.controller', () => {
         toArray: vi.fn().mockResolvedValue([{ id: 'CUSTOM_TYPE', description: 'Custom' }]),
       };
       const db = { collection: vi.fn().mockReturnValue(collection) };
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.downloadSampleTemplateCSV(req, res);
@@ -932,7 +1037,7 @@ describe('import-lgpd.controller', () => {
       };
       const db = { collection: vi.fn().mockReturnValue(collection) };
       const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.downloadSampleTemplateCSV(req, res);
@@ -946,7 +1051,7 @@ describe('import-lgpd.controller', () => {
       vi.spyOn(csvSync, 'stringify').mockImplementation(() => {
         throw new Error('csv error');
       });
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.downloadSampleTemplateCSV(req, res);
@@ -962,7 +1067,7 @@ describe('import-lgpd.controller', () => {
 
   describe('downloadSampleTemplateExcel', () => {
     it('builds a workbook with default values when no db is available', async () => {
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.downloadSampleTemplateExcel(req, res);
@@ -993,7 +1098,7 @@ describe('import-lgpd.controller', () => {
       };
       const db = { collection: vi.fn().mockReturnValue(collection) };
       const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.downloadSampleTemplateExcel(req, res);
@@ -1007,7 +1112,7 @@ describe('import-lgpd.controller', () => {
       vi.spyOn(ExcelJS.Workbook.prototype, 'addWorksheet').mockImplementation(() => {
         throw new Error('workbook error');
       });
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.downloadSampleTemplateExcel(req, res);

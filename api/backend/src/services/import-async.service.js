@@ -3,7 +3,9 @@ const ImportJob = require('../models/ImportJob');
 const ImportMetrics = require('../models/ImportMetrics');
 const fhirService = require('./fhir.service');
 const fhirValidator = require('./fhir-validator.service');
+const { loadConformanceRegistry } = require('./identifierNamespaceRegistry.service');
 const logger = require('../utils/logger');
+const { withRequestId } = require('../utils/requestContext');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
@@ -20,7 +22,7 @@ class ImportAsyncService {
   /**
    * Valida arquivo e retorna metadata
    */
-  async validateFile(file, dataType) {
+  async validateFile(file, dataType, { db } = {}) {
     const errors = [];
     const metadata = {
       fileName: file.originalname,
@@ -71,7 +73,9 @@ class ImportAsyncService {
         const payload = JSON.parse(raw);
 
         if (fhirValidator.isFhirResource(payload)) {
-          const fhirValidation = fhirValidator.validatePayload(payload, ['Patient', 'Specimen', 'Observation', 'Organization', 'Bundle']);
+          // RF011 AC3 (#1322): the stored identifier namespaces join the base registry.
+          const registry = await loadConformanceRegistry(db);
+          const fhirValidation = fhirValidator.validatePayload(payload, ['Patient', 'Specimen', 'Observation', 'Organization', 'Bundle'], { registry });
           metadata.fhir = true;
           metadata.fhirResourcesValidated = fhirValidation.resourcesValidated || 0;
 
@@ -261,7 +265,7 @@ class ImportAsyncService {
       const jobID = uuidv4();
 
       // Valida arquivo
-      const validation = await this.validateFile(file, dataType);
+      const validation = await this.validateFile(file, dataType, { db });
       if (!validation.valid) {
         // Notifica falha imediata com jobID gerado, sem enfileirar
         await notificationService.notifyJobFailed(userID, {
@@ -306,7 +310,7 @@ class ImportAsyncService {
       // Adiciona job na fila
       const queueJob = await queue.add(
         'import',
-        {
+        withRequestId({
           jobID,
           userID,
           dataType,
@@ -314,7 +318,7 @@ class ImportAsyncService {
           fileName: file.originalname,
           fileSize: file.size,
           options,
-        },
+        }),
         {
           jobId: jobID,
           priority: options.priority || 0,

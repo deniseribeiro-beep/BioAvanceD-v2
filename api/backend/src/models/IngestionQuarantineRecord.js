@@ -6,8 +6,9 @@
  * ReferenceImportIssue (RF028), mas com seu próprio vocabulário: este
  * registro não pertence a uma ReferenceImportRun/ReferenceDatasetRelease,
  * pertence a uma ingestão de entidade operacional/científica (Fase 3)
- * qualquer — ver `bioavanced-v2-conventions`' local-env sobre a decisão de
+ * qualquer — ver as convenções do projeto sobre a decisão de
  * não reaproveitar ReferenceImportIssue nem StagingImport (FHIR) diretamente.
+ * RF029 AC7 (#1318): missingDataReasons guarda a declaração do cliente como recebida, ao lado de payload.
  */
 const crypto = require('crypto');
 
@@ -42,6 +43,7 @@ class IngestionQuarantineRecordModel {
       sourceRecordId: data.sourceRecordId || null,
       idempotencyKey: data.idempotencyKey || null,
       payload: data.payload !== undefined ? data.payload : null,
+      missingDataReasons: data.missingDataReasons !== undefined ? data.missingDataReasons : null,
       violations: Array.isArray(data.violations) ? data.violations : [],
       severity: data.severity || 'error',
       provenance: data.provenance || null,

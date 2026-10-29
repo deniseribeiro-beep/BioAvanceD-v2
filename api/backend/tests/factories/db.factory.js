@@ -83,6 +83,11 @@ function createCollectionMock(overrides = {}) {
     // purpose -- see createContendedCollectionMock, not this default, for
     // the compare-and-set-contended case.
     updateOne: v.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    // #1336: deliberately NOT filter-honouring. A null answer to every filter
+    // cannot make a lookup on the wrong key pass; it only drives the
+    // not-found path. The blind stub is the override that answers a document
+    // whatever the filter, and a test needing a document should seed one with
+    // filter.factory's createMatchingCollection instead.
     findOne: v.fn().mockResolvedValue(null),
     findOneAndUpdate: v.fn().mockResolvedValue({ seq: 1 }),
     find: v.fn().mockImplementation(() => createCursor([])),

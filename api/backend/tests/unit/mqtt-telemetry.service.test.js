@@ -4,6 +4,7 @@ const iotStreamingService = require('../../src/services/iot-streaming.service');
 const mqttSignatureService = require('../../src/services/mqtt-signature.service');
 const mqttIngestionAuditService = require('../../src/services/mqtt-ingestion-audit.service');
 const mqttTelemetryService = require('../../src/services/mqtt-telemetry.service');
+const influxTelemetryWriteRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 
 function makeFakeClient() {
   const handlers = {};
@@ -267,6 +268,74 @@ describe('mqtt-telemetry.service', () => {
         temperatureValue: 4.5,
         temperatureDataId: 'inserted-id-1'
       }));
+    });
+
+    // #1317 (RF009 AC7): MQTT no longer stands in the receipt time for a
+    // missing device time, so the reading's clock reads as unknown.
+    it('passes a payload without a timestamp on with a null one, and a sent one as a Date', async () => {
+      vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue('id');
+      vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
+
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify({ sensorId: 'S1', temperatureValue: 4.5 }), 'utf8'), false);
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify({ sensorId: 'S1', temperatureValue: 4.5, timestamp: '2026-10-10T12:00:00.000Z' }), 'utf8'), false);
+
+      expect(processSpy.mock.calls[0][1].timestamp).toBeNull();
+      expect(processSpy.mock.calls[1][1].timestamp).toEqual(new Date('2026-10-10T12:00:00.000Z'));
+    });
+
+    // RF009 AC7 (#1317): the client's contract fields reach the reading, so
+    // its idempotencyKey replays instead of being replaced by a derived one.
+    it("passes a payload's idempotencyKey, deviceMessageId and sequenceNumber on to the reading", async () => {
+      vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue('id');
+      vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
+
+      const payload = { sensorId: 'S1', temperatureValue: 4.5, idempotencyKey: 'k-1', deviceMessageId: 'm-1', sequenceNumber: 7 };
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify(payload), 'utf8'), false);
+
+      expect(processSpy).toHaveBeenCalledWith(db, expect.objectContaining({ idempotencyKey: 'k-1', deviceMessageId: 'm-1', sequenceNumber: 7 }));
+    });
+
+    // A contract field the reading contract refuses is dropped, so the
+    // reading is still stored and audited as processed, without it.
+    it.each([
+      ['a numeric deviceMessageId', { deviceMessageId: 12345 }, 'deviceMessageId'],
+      ['a string sequenceNumber', { sequenceNumber: '7' }, 'sequenceNumber'],
+      ['a blank idempotencyKey', { idempotencyKey: '  ' }, 'idempotencyKey'],
+    ])('stores a reading carrying %s, with that field absent', async (_label, extra, field) => {
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const auditSpy = vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
+      const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const others = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'other-id' }) };
+      const storeDb = { collection: vi.fn(() => others) };
+
+      const payload = { sensorId: 'S1', temperatureValue: 4.5, ...extra };
+      await mqttTelemetryService.handleMessage(storeDb, 'topic', Buffer.from(JSON.stringify(payload), 'utf8'), false);
+
+      // #1391 (RF009 AC1): InfluxDB is the reading's only store.
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(storeDb.collection).not.toHaveBeenCalledWith('temperatures');
+      const stored = write.mock.calls[0][0];
+      expect(stored[field] ?? null).not.toEqual(extra[field]);
+      expect(stored.idempotencyKeySource).toBe('derived');
+      expect(auditSpy).toHaveBeenCalledWith(storeDb, expect.objectContaining({ status: 'processed', temperatureDataId: stored.telemetryReadingId }));
+    });
+
+    it('control: a payload without them, or with a null idempotencyKey, passes neither key on', async () => {
+      vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue('id');
+      vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
+
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify({ sensorId: 'S1', temperatureValue: 4.5 }), 'utf8'), false);
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify({ sensorId: 'S1', temperatureValue: 4.5, idempotencyKey: null }), 'utf8'), false);
+
+      for (const [, temperatureData] of processSpy.mock.calls) {
+        expect(temperatureData).not.toHaveProperty('idempotencyKey');
+        expect(temperatureData).not.toHaveProperty('deviceMessageId');
+      }
+      expect(processSpy).toHaveBeenCalledTimes(2);
     });
 
     it('processes a fully valid payload with a verified signature', async () => {

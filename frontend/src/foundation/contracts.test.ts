@@ -1,47 +1,63 @@
 import { describe, expect, it } from 'vitest';
 import { resolveLegacySampleStatus, resolveSampleLifecycleStatus } from './contracts';
 
-// #539: bucketing from the canonical specimenStatus enum (dict-02
-// ELM-0123, 9 states) down to the legacy `Sample.currentStatus` vocabulary,
-// used by readers that still need that shape (e.g. an editable form field).
+// #539: bucketing a specimen down to the legacy `Sample.currentStatus`
+// vocabulary, used by readers that still need that shape. RF006 AC2/AC3:
+// the operational state reads specimenStatus, and PARTIAL/DEPLETED read
+// quantityStatus (or the quantities when a record carries none).
 describe('resolveSampleLifecycleStatus', () => {
-  it('buckets available/reserved/checked_out into AVAILABLE', () => {
-    expect(resolveSampleLifecycleStatus('available')).toBe('AVAILABLE');
-    expect(resolveSampleLifecycleStatus('reserved')).toBe('AVAILABLE');
-    expect(resolveSampleLifecycleStatus('checked_out')).toBe('AVAILABLE');
+  it('buckets available/reserved/checked_out with a full quantity into AVAILABLE', () => {
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available', quantityStatus: 'full' })).toBe('AVAILABLE');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'reserved', quantityStatus: 'full' })).toBe('AVAILABLE');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'checked_out', quantityStatus: 'full' })).toBe('AVAILABLE');
   });
 
-  it('buckets partial and depleted onto their own states', () => {
-    expect(resolveSampleLifecycleStatus('partial')).toBe('PARTIAL');
-    expect(resolveSampleLifecycleStatus('depleted')).toBe('DEPLETED');
+  it('reads PARTIAL and DEPLETED from quantityStatus, not specimenStatus', () => {
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available', quantityStatus: 'partial' })).toBe('PARTIAL');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available', quantityStatus: 'depleted' })).toBe('DEPLETED');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available', quantityStatus: 'DEPLETED' })).toBe('DEPLETED');
   });
 
-  it('buckets quarantined/destroyed/unavailable/disposed into UNAVAILABLE', () => {
-    expect(resolveSampleLifecycleStatus('quarantined')).toBe('UNAVAILABLE');
-    expect(resolveSampleLifecycleStatus('destroyed')).toBe('UNAVAILABLE');
-    expect(resolveSampleLifecycleStatus('unavailable')).toBe('UNAVAILABLE');
-    expect(resolveSampleLifecycleStatus('disposed')).toBe('UNAVAILABLE');
+  it('derives the quantity from initialQuantity/currentQuantity when quantityStatus is absent', () => {
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available', initialQuantity: 100, currentQuantity: 40 })).toBe('PARTIAL');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available', initialQuantity: 100, currentQuantity: 0 })).toBe('DEPLETED');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available', initialQuantity: 100, currentQuantity: 100 })).toBe('AVAILABLE');
   });
 
-  it('defaults to AVAILABLE when specimenStatus is absent, matching the backend default', () => {
+  it('reads a v1.3.0 partial/depleted specimenStatus as available, its quantity coming from quantityStatus', () => {
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'depleted', quantityStatus: 'full' })).toBe('AVAILABLE');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'partial', quantityStatus: 'full' })).toBe('AVAILABLE');
+  });
+
+  it('buckets quarantined/unavailable (and v1.3.0 destroyed/disposed) into UNAVAILABLE, whatever the quantity', () => {
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'quarantined', quantityStatus: 'depleted' })).toBe('UNAVAILABLE');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'unavailable', quantityStatus: 'partial' })).toBe('UNAVAILABLE');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'destroyed' })).toBe('UNAVAILABLE');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'disposed' })).toBe('UNAVAILABLE');
+  });
+
+  it('buckets closed into CLOSED, whatever the quantity', () => {
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'closed', quantityStatus: 'depleted' })).toBe('CLOSED');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'CLOSED' })).toBe('CLOSED');
+  });
+
+  it('defaults to AVAILABLE when nothing is present, matching the backend default', () => {
     expect(resolveSampleLifecycleStatus(null)).toBe('AVAILABLE');
     expect(resolveSampleLifecycleStatus(undefined)).toBe('AVAILABLE');
-  });
-
-  it('case-folds whatever value is present', () => {
-    expect(resolveSampleLifecycleStatus('DEPLETED')).toBe('DEPLETED');
+    expect(resolveSampleLifecycleStatus({})).toBe('AVAILABLE');
   });
 });
 
 describe('resolveLegacySampleStatus', () => {
   it('maps every bucket onto the legacy currentStatus vocabulary', () => {
-    expect(resolveLegacySampleStatus('available')).toBe('Available');
-    expect(resolveLegacySampleStatus('partial')).toBe('PartiallyWithdrawn');
-    expect(resolveLegacySampleStatus('depleted')).toBe('TotallyWithdrawn');
-    expect(resolveLegacySampleStatus('quarantined')).toBe('Unusable');
+    expect(resolveLegacySampleStatus({ specimenStatus: 'available', quantityStatus: 'full' })).toBe('Available');
+    expect(resolveLegacySampleStatus({ specimenStatus: 'available', quantityStatus: 'partial' })).toBe('PartiallyWithdrawn');
+    expect(resolveLegacySampleStatus({ specimenStatus: 'available', quantityStatus: 'depleted' })).toBe('TotallyWithdrawn');
+    expect(resolveLegacySampleStatus({ specimenStatus: 'quarantined' })).toBe('Unusable');
+    expect(resolveLegacySampleStatus({ specimenStatus: 'closed', quantityStatus: 'depleted' })).toBe('Closed');
   });
 
-  it('defaults to Available when specimenStatus is absent', () => {
+  it('defaults to Available when the specimen is absent', () => {
     expect(resolveLegacySampleStatus(undefined)).toBe('Available');
   });
 });

@@ -5,6 +5,10 @@ const require = createRequire(import.meta.url);
 const jwt = require('jsonwebtoken');
 const { ObjectId } = require('mongodb');
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');
+// #1191: staged records are sealed at rest; a test that reads or edits one
+// directly goes through the same reveal/seal the service uses.
+const { sealStagedRecord, revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
+const FHIR_STAGING_SEALED_FIELDS = ['row', 'normalized', 'fhir', 'consentTracking'];
 const notificationService = require('../../src/services/NotificationService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const fhirImportStagingController = require('../../src/controllers/fhir-import-staging.controller');
@@ -56,7 +60,7 @@ function createCollection() {
         docs.push(doc);
       }
       if (!doc) return { matchedCount: 0, modifiedCount: 0 };
-      Object.assign(doc, update.$setOnInsert || {}, update.$set || {});
+      Object.assign(doc, isUpsertedInsert ? (update.$setOnInsert || {}) : {}, update.$set || {});
       return isUpsertedInsert
         ? { matchedCount: 0, modifiedCount: 0, upsertedId: doc._id, upsertedCount: 1 }
         : { matchedCount: 1, modifiedCount: 1 };
@@ -207,6 +211,25 @@ describe('FHIR import staging', () => {
     expect(result.records[1].validationErrors.some((error) => error.field === 'patientName')).toBe(true);
   });
 
+  // #1191: normalized carries patientName/patientDocument/patientBirthDate/
+  // patientEmail and fhir carries the whole Patient resource, so the staged
+  // record is sealed at rest like the LGPD quarantine (#807). The service's
+  // own result is read back through the same reveal every reader uses.
+  it('#1191: stores no civil identity in plaintext, and hands it back revealed', async () => {
+    const result = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+
+    const atRest = JSON.stringify(db.collections.import_staging_records.docs);
+    expect(atRest).not.toContain('Paciente Staging');
+    expect(atRest).not.toContain('13360378652');
+    expect(atRest).not.toContain('paciente@example.org');
+    expect(atRest).not.toContain('1990-01-01');
+    expect(db.collections.import_staging_records.docs[0].sealedPayload).toBeTruthy();
+
+    expect(result.records[0].normalized.patientName).toBe('Paciente Staging');
+    expect(result.records[0].normalized.patientEmail).toBe('paciente@example.org');
+    expect(result.records[0].fhir.patient.id).toBe('P-001');
+  });
+
   it('aceita Bundle mínimo com Patient + Specimen e cria batch/staging sem persistir definitivo', async () => {
     const minimalBundle = {
       resourceType: 'Bundle',
@@ -246,6 +269,170 @@ describe('FHIR import staging', () => {
     expect(db.collections.import_staging_records.docs).toHaveLength(1);
     expect(db.collections.patients.docs).toHaveLength(0);
     expect(db.collections.samples.docs).toHaveLength(0);
+  });
+
+  // RF011 AC6, RNF024 C6 (#1322): staging records its round-trip loss.
+  it('registra roundTripLoss no registro e no batch: campos não mapeados e recursos não anexados', async () => {
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-RT',
+            name: [{ text: 'Paciente Round Trip' }],
+            identifier: [{ value: 'DOC-RT' }],
+            telecom: [{ system: 'email', value: 'rt@example.org' }],
+          },
+        },
+        { resource: { resourceType: 'Organization', name: 'Biobanco RT' } },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-RT',
+            subject: { reference: 'Patient/P-RT' },
+            type: { text: 'SANGUE' },
+            collection: { quantity: { value: 5, unit: 'mL' } },
+          },
+        },
+      ],
+    };
+
+    const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'round-trip.json' });
+
+    const expectedRecordLoss = {
+      unmappedCount: 2,
+      unmapped: [
+        { source: 'specimen', path: 'Specimen.collection.quantity.unit' },
+        { source: 'specimen', path: 'Specimen.collection.quantity.value' },
+      ],
+      truncated: false,
+    };
+    const expectedBatchLoss = {
+      unattachedResourceCount: 1,
+      unattached: [{ resourceIndex: 1, resourceType: 'Organization' }],
+    };
+    expect(db.collections.import_staging_records.docs[0].roundTripLoss).toMatchObject(expectedRecordLoss);
+    expect(db.collections.import_staging_records.docs[0].roundTripLoss.limitations.length).toBeGreaterThan(0);
+    expect(db.collections.import_batches.docs[0].roundTripLoss).toEqual(expectedBatchLoss);
+    expect(result.batch.roundTripLoss).toEqual(expectedBatchLoss);
+    expect(result.records[0].roundTripLoss).toMatchObject(expectedRecordLoss);
+  });
+
+  // RF011 AC4 (#1322): a Provenance and a ResearchStudy are mapped on the
+  // batch as field names and paths only, and are not unattached.
+  it('registra mappedResources no batch para Provenance e ResearchStudy, sem valores, e não os lista como não anexados', async () => {
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-RT',
+            name: [{ text: 'Paciente Round Trip' }],
+            identifier: [{ value: 'DOC-RT' }],
+            telecom: [{ system: 'email', value: 'rt@example.org' }],
+          },
+        },
+        { resource: { resourceType: 'Organization', name: 'Biobanco RT' } },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-RT',
+            subject: { reference: 'Patient/P-RT' },
+            type: { text: 'SANGUE' },
+            collection: { quantity: { value: 5, unit: 'mL' } },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Provenance',
+            id: 'WR-PROVENIENCIA-RT',
+            target: [{ reference: 'DocumentReference/F-RT' }],
+            recorded: '2026-10-01T09:00:00.000Z',
+          },
+        },
+        {
+          resource: {
+            resourceType: 'ResearchStudy',
+            id: 'ST-RT',
+            title: 'Estudo Titulo Distintivo RT',
+            status: 'active',
+          },
+        },
+      ],
+    };
+
+    const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'mapped.json' });
+
+    expect(result.batch.roundTripLoss).toEqual({
+      unattachedResourceCount: 1,
+      unattached: [{ resourceIndex: 1, resourceType: 'Organization' }],
+    });
+    expect(result.batch.mappedResources).toMatchObject({
+      mappedResourceCount: 2,
+      truncated: false,
+      mappedResources: [
+        { resourceIndex: 3, resourceType: 'Provenance', mappingId: 'MAP-V2-008', canonicalEntity: 'WorkflowRun', canonicalFields: ['createdAt', 'outputFileIds', 'workflowRunId'], unmappedCount: 0 },
+        { resourceIndex: 4, resourceType: 'ResearchStudy', mappingId: 'MAP-V2-009', canonicalEntity: 'Study', canonicalFields: ['studyId', 'studyStatus', 'studyTitle'], unmappedCount: 0 },
+      ],
+    });
+    const serialized = JSON.stringify(result.batch.mappedResources);
+    expect(serialized).not.toContain('Estudo Titulo Distintivo RT');
+    expect(serialized).not.toContain('WR-PROVENIENCIA-RT');
+    const stored = db.collections.import_batches.docs[0];
+    expect(stored.mappedResources).toEqual(result.batch.mappedResources);
+    expect(stored.roundTripLoss).toEqual(result.batch.roundTripLoss);
+    // A ResearchStudy with no relatedArtifact has no ethicsApprovalId, so no
+    // Study candidate.
+    expect(stored.studyCandidates).toEqual([]);
+    expect(result.records).toHaveLength(1);
+    expect(db.collections.import_staging_records.docs).toHaveLength(1);
+    expect(result.batch.counts.total).toBe(1);
+  });
+
+  // #1322: a large Bundle stores a bounded roundTripLoss on each staged record.
+  it('limita roundTripLoss a 50 caminhos por registro num Bundle com 2000 Observations', async () => {
+    const observations = Array.from({ length: 2000 }, (_, i) => ({
+      resource: {
+        resourceType: 'Observation',
+        subject: { reference: 'Patient/P-BIG' },
+        category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'laboratory' }] }],
+        code: { coding: [{ system: 'http://loinc.org', code: `LAB-${i}`, display: 'Exame' }] },
+        valueQuantity: { value: i, unit: 'mg/dL', system: 'http://unitsofmeasure.org' },
+      },
+    }));
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-BIG',
+            name: [{ text: 'Paciente Grande' }],
+            identifier: [{ value: 'DOC-BIG' }],
+            telecom: [{ system: 'email', value: 'grande@example.org' }],
+          },
+        },
+        { resource: { resourceType: 'Specimen', id: 'S-BIG-1', subject: { reference: 'Patient/P-BIG' }, type: { text: 'SANGUE' } } },
+        { resource: { resourceType: 'Specimen', id: 'S-BIG-2', subject: { reference: 'Patient/P-BIG' }, type: { text: 'SANGUE' } } },
+        ...observations,
+      ],
+    };
+
+    await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'big.json' });
+
+    const staged = db.collections.import_staging_records.docs;
+    expect(staged).toHaveLength(2);
+    staged.forEach((doc) => {
+      // Per Observation: category coding system and code, code.coding[0].system, valueQuantity.system.
+      expect(doc.roundTripLoss.unmappedCount).toBe(8000);
+      expect(doc.roundTripLoss.unmapped.length).toBeLessThanOrEqual(50);
+      expect(doc.roundTripLoss.truncated).toBe(true);
+      // The sealed fhir payload of 2000 Observations is itself about 1 MB per
+      // record; what roundTripLoss adds stays small.
+      expect(Buffer.byteLength(JSON.stringify(doc.roundTripLoss))).toBeLessThan(16 * 1024);
+    });
   });
 
   it('mapeia Patient, Specimen, Condition, Observation e Consent para staging', async () => {
@@ -406,7 +593,7 @@ describe('FHIR import staging', () => {
     await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
 
     expect(spy).toHaveBeenCalled();
-    expect(db.collections.import_staging_records.docs[0].normalized.rcsPreview.final_grade).toBe('A');
+    expect(revealStagedRecord(db.collections.import_staging_records.docs[0]).normalized.rcsPreview.final_grade).toBe('A');
   });
 
   it('controller retorna 400 controlado, nunca 500, para erro de validação', async () => {
@@ -414,6 +601,8 @@ describe('FHIR import staging', () => {
       app: { locals: { db } },
       body: { resourceType: 'Patient', id: 'P-INVALID' },
       user: { id: 'admin' },
+      // #1385: what requireOrganizationScope sets for a global caller.
+      organizationScope: { scope: 'global', organizationIds: [] },
     };
     const res = createJsonRes();
 
@@ -602,9 +791,11 @@ describe('FHIR import staging', () => {
 
     const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
     await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
-    const record = db.collections.import_staging_records.docs[0];
+    const stored = db.collections.import_staging_records.docs[0];
+    const record = revealStagedRecord(stored);
     record.normalized.consentSigned = true;
     record.consentTracking.signedAt = new Date();
+    Object.assign(stored, sealStagedRecord(record, { fields: FHIR_STAGING_SEALED_FIELDS }));
 
     const committed = await fhirImportStagingService.commitBatch(db, staged.batch._id);
     expect(committed.committed).toBe(1);
@@ -665,6 +856,67 @@ describe('FHIR import staging', () => {
     expect(db.collections.samples.docs[0].calculation_trace.axes.length).toBeGreaterThan(0);
   });
 
+  describe('ResearchStudy commit (RF011 AC4, #1322)', () => {
+    const researchStudy = {
+      resourceType: 'ResearchStudy',
+      id: 'ST-FHIR-1',
+      title: 'Estudo Importado',
+      status: 'active',
+      description: 'objetivo não guardado',
+      relatedArtifact: [{ type: 'documentation', label: 'CEP-1' }],
+    };
+    const bundleWithStudy = { ...signedBundle, entry: [...signedBundle.entry, { resource: researchStudy }] };
+
+    it('creates the Study with its four fields and audits it, for a caller who can create one', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, bundleWithStudy, { fileName: 'bundle.json' });
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+
+      expect(result.committed).toBe(1);
+      expect(result.studies).toEqual({ created: 1, existing: 0, notCreatedReason: null });
+      expect(db.collections.studies.docs).toHaveLength(1);
+      expect(db.collections.studies.docs[0]).toMatchObject({
+        studyId: 'ST-FHIR-1',
+        studyTitle: 'Estudo Importado',
+        studyStatus: 'active',
+        ethicsApprovalId: ['CEP-1'],
+      });
+      expect(db.collections.studies.docs[0]).not.toHaveProperty('studyObjective');
+      expect(db.collections.studies.docs[0]).not.toHaveProperty('resourceIndex');
+      expect(db.collections.audit_logs.docs.filter((doc) => doc.action === 'FHIR_IMPORT_STUDY_COMMITTED')).toEqual([
+        expect.objectContaining({ batchId: staged.batch._id, studyId: 'ST-FHIR-1' }),
+      ]);
+    });
+
+    it('a second commit of the batch counts the Study as existing and creates no other', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, bundleWithStudy, { fileName: 'bundle.json' });
+      await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+      const again = await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+
+      expect(again.studies).toEqual({ created: 0, existing: 1, notCreatedReason: null });
+      expect(db.collections.studies.docs).toHaveLength(1);
+    });
+
+    it('never changes an existing Study with the same studyId', async () => {
+      db.collection('studies').docs.push({ _id: 'st-existing', studyId: 'ST-FHIR-1', studyTitle: 'Título Original', studyStatus: 'active', ethicsApprovalId: ['CEP-0'] });
+      const staged = await fhirImportStagingService.stageBundle(db, bundleWithStudy, { fileName: 'bundle.json' });
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+
+      expect(result.studies).toEqual({ created: 0, existing: 1, notCreatedReason: null });
+      expect(db.collections.studies.docs).toHaveLength(1);
+      expect(db.collections.studies.docs[0]).toMatchObject({ studyTitle: 'Título Original', ethicsApprovalId: ['CEP-0'] });
+    });
+
+    it('without canCreateStudy creates no Study, reports ROLE and still commits the record', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, bundleWithStudy, { fileName: 'bundle.json' });
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+      expect(result.committed).toBe(1);
+      expect(result.studies).toEqual({ created: 0, existing: 0, notCreatedReason: 'ROLE' });
+      expect(db.collections.studies?.docs ?? []).toHaveLength(0);
+      expect(db.collections.samples.docs).toHaveLength(1);
+    });
+  });
+
   it('#526: registra RcsAssessment e SpecimenPreanalytics referenciados ao comitar amostra nova', async () => {
     const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
     const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
@@ -697,6 +949,31 @@ describe('FHIR import staging', () => {
 
     expect(db.collections.rcsAssessments.docs).toHaveLength(1);
     expect(db.collections.specimenPreanalytics.docs).toHaveLength(1);
+  });
+
+  it('RF006 AC7 (#1315): a re-commit that changes an existing specimen\'s status appends an OperationalStateDecision; a first commit and an unchanged re-commit append none', async () => {
+    const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+    await fhirImportStagingService.commitBatch(db, staged.batch._id);
+    const decisions = () => db.collections.operationalStateDecisions?.docs ?? [];
+    expect(decisions()).toHaveLength(0);
+
+    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'S-001');
+    const committedStatus = sample.specimenStatus;
+    const restaged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle-2.json' });
+    await fhirImportStagingService.commitBatch(db, restaged.batch._id);
+    expect(decisions()).toHaveLength(0);
+
+    const flippedStatus = committedStatus === 'available' ? 'quarantined' : 'available';
+    sample.specimenStatus = flippedStatus;
+    const third = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle-3.json' });
+    await fhirImportStagingService.commitBatch(db, third.batch._id);
+    expect(decisions()).toHaveLength(1);
+    expect(decisions()[0]).toMatchObject({
+      specimenId: 'S-001',
+      previousStatus: flippedStatus,
+      newStatus: committedStatus,
+      rulesApplied: ['fhir_import_commit'],
+    });
   });
 
   it('#527: registra campos de eixo não nulos no snapshot SpecimenPreanalytics de amostra sólida (tecido)', async () => {
@@ -822,6 +1099,166 @@ describe('FHIR import staging', () => {
 
   it('getBatch rejeita lote inexistente com 404', async () => {
     await expect(fhirImportStagingService.getBatch(db, 'lote-inexistente')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  // #1385: a FHIR batch carries the organization it was staged under, and
+  // every read and write of it checks that against the caller's scope. An
+  // unstamped batch (legacy, or staged by a global caller who named none)
+  // only global scope reaches; no scope argument is an internal caller.
+  describe('#1385 organization scope', () => {
+    const ORG_A = { scope: 'organization', organizationIds: ['org-a'] };
+    const ORG_B = { scope: 'organization', organizationIds: ['org-b'] };
+    const GLOBAL = { scope: 'global', organizationIds: [] };
+    const emailBundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-ORG',
+            name: [{ text: 'Paciente Organização' }],
+            identifier: [{ value: 'DOC-ORG' }],
+            telecom: [{ system: 'email', value: 'org@example.org' }],
+          },
+        },
+        { resource: { resourceType: 'Specimen', id: 'S-ORG', subject: { reference: 'Patient/P-ORG' }, type: { text: 'SANGUE' } } },
+      ],
+    };
+
+    function stagingStatuses() {
+      return db.collections.import_staging_records.docs.map((doc) => doc.status);
+    }
+
+    it('#1385: stageBundle stamps the batch and every staged record with its organizationId, and null when none is given', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      expect(staged.batch.organizationId).toBe('org-a');
+      expect(db.collections.import_batches.docs[0].organizationId).toBe('org-a');
+      expect(db.collections.import_staging_records.docs).toHaveLength(2);
+      for (const doc of db.collections.import_staging_records.docs) {
+        expect(doc.organizationId).toBe('org-a');
+      }
+
+      const unstamped = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json' });
+      expect(unstamped.batch.organizationId).toBeNull();
+    });
+
+    it('#1385: an org-a scope reads its own org-a batch', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      const result = await fhirImportStagingService.getBatch(db, staged.batch._id, { organizationScope: ORG_A });
+      expect(String(result.batch._id)).toBe(String(staged.batch._id));
+      expect(result.records).toHaveLength(2);
+    });
+
+    it('#1385: getBatch refuses an org-b scope on an org-a batch with 403', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      await expect(
+        fhirImportStagingService.getBatch(db, staged.batch._id, { organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+    });
+
+    it('#1385: validateBatch refuses an org-b scope with 403 and moves no record', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      const before = stagingStatuses();
+      db.collections.import_staging_records.updateOne.mockClear();
+
+      await expect(
+        fhirImportStagingService.validateBatch(db, staged.batch._id, { organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.collections.import_staging_records.updateOne).not.toHaveBeenCalled();
+      expect(stagingStatuses()).toEqual(before);
+    });
+
+    it('#1385: sendConsents refuses an org-b scope with 403 and sends no email', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      expect(staged.records[0].status).toBe('VALID');
+
+      await expect(
+        fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin', organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(notificationService.sendConsentEmail).not.toHaveBeenCalled();
+    });
+
+    it('#1385: getConsentStatus refuses an org-b scope with 403', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      await expect(
+        fhirImportStagingService.getConsentStatus(db, staged.batch._id, { organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+    });
+
+    it('#1385: commitBatch refuses an org-b scope with 403, writes no sample and moves no record', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      expect(staged.records[0].status).toBe('READY_TO_COMMIT');
+      const before = stagingStatuses();
+      db.collections.import_staging_records.updateOne.mockClear();
+
+      await expect(
+        fhirImportStagingService.commitBatch(db, staged.batch._id, { organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.samples.docs).toHaveLength(0);
+      expect(db.collections.patients.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.import_staging_records.updateOne).not.toHaveBeenCalled();
+      expect(stagingStatuses()).toEqual(before);
+    });
+
+    it('#1385: attachExternalDocument refuses an org-b scope with 403 and releases nothing', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      const recordId = db.collections.import_staging_records.docs[0]._id;
+      db.collections.samples.docs.push({ _id: 'sample-org', specimenId: 'S-ORG' });
+      const before = stagingStatuses();
+      db.collections.import_staging_records.updateOne.mockClear();
+
+      await expect(
+        fhirImportStagingService.attachExternalDocument(db, staged.batch._id, recordId, { userID: 'admin', organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.collections.import_staging_records.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(stagingStatuses()).toEqual(before);
+    });
+
+    it('#1385: an unstamped (legacy) batch is refused 403 to an organization scope and read by global scope', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+      delete db.collections.import_batches.docs[0].organizationId;
+
+      await expect(
+        fhirImportStagingService.getBatch(db, staged.batch._id, { organizationScope: ORG_A })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      await expect(
+        fhirImportStagingService.getBatch(db, staged.batch._id, { organizationScope: GLOBAL })
+      ).resolves.toMatchObject({ batch: { _id: staged.batch._id } });
+    });
+
+    it('#1385: with no scope argument the caller is internal and unfiltered', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      await expect(fhirImportStagingService.getBatch(db, staged.batch._id)).resolves.toMatchObject({
+        batch: { _id: staged.batch._id },
+      });
+    });
+
+    it('#1385: validateImportConsentToken still resolves the token of a stamped batch', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      const consentResult = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+      const token = consentResult.records[0].consentTracking.token;
+
+      const validated = await fhirImportStagingService.validateImportConsentToken(db, token);
+      expect(validated.batch.organizationId).toBe('org-a');
+      expect(String(validated.record._id)).toBe(String(db.collections.import_staging_records.docs[0]._id));
+    });
+
+    it('#1385: commitBatch gives a new sample the batch organizationId', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      const committed = await fhirImportStagingService.commitBatch(db, staged.batch._id, { organizationScope: ORG_A });
+      expect(committed.committed).toBe(1);
+      const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'S-001');
+      expect(sample).toBeTruthy();
+      expect(sample.organizationId).toBe('org-a');
+    });
   });
 
   describe('getConsentStatus', () => {

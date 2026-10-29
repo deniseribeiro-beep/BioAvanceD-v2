@@ -134,6 +134,46 @@ describe('condition.service', () => {
     });
   });
 
+  describe('createCondition diagnosisEvidence (#695, ELM-0209)', () => {
+    const base = { participantId: 'PART-1', conditionCoding: [{ systemUri: SYSTEM_URI, code: CODE }] };
+
+    it('persists a typed DiagnosticReport/ entry that resolves to a real report', async () => {
+      const db = createFakeDb(activeConceptAndRelease({ diagnosticReports: [{ diagnosticReportId: 'dr-1' }] }));
+
+      const stored = await createCondition(db, { ...base, diagnosisEvidence: ['DiagnosticReport/dr-1'] });
+
+      expect(stored.diagnosisEvidence).toEqual(['DiagnosticReport/dr-1']);
+      expect(db.collections.conditions.docs).toHaveLength(1);
+    });
+
+    it('rejects a typed DiagnosticReport/ entry that does not resolve, without persisting anything', async () => {
+      const db = createFakeDb(activeConceptAndRelease({ diagnosticReports: [] }));
+
+      await expect(createCondition(db, { ...base, diagnosisEvidence: ['DiagnosticReport/dr-unknown'] })).rejects.toThrow(
+        /Referência inexistente.*diagnosisEvidence\[0\]/
+      );
+      expect(db.collections.conditions?.docs || []).toHaveLength(0);
+    });
+
+    it('rejects a typed entry with leading whitespace that does not resolve, without persisting anything', async () => {
+      const db = createFakeDb(activeConceptAndRelease({ diagnosticReports: [] }));
+
+      await expect(createCondition(db, { ...base, diagnosisEvidence: [' DiagnosticReport/ghost'] })).rejects.toThrow(
+        /Referência inexistente.*diagnosisEvidence\[0\]="ghost"/
+      );
+      expect(db.collections.conditions?.docs || []).toHaveLength(0);
+    });
+
+    it('persists an untyped entry unchecked', async () => {
+      const db = createFakeDb(activeConceptAndRelease({ diagnosticReports: [] }));
+
+      const stored = await createCondition(db, { ...base, diagnosisEvidence: ['Practitioner/p-1'] });
+
+      expect(stored.diagnosisEvidence).toEqual(['Practitioner/p-1']);
+      expect(db.collections.conditions.docs).toHaveLength(1);
+    });
+  });
+
   describe('getConditionsForParticipant', () => {
     it('scopes results to the requested participantId only', async () => {
       const db = createFakeDb(activeConceptAndRelease());

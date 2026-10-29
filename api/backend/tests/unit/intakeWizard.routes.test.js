@@ -4,6 +4,7 @@ import express from 'express';
 import request from 'supertest';
 
 const require = createRequire(import.meta.url);
+const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 const notificationServicePath = require.resolve('../../src/services/notification.service');
 const patientIdentityServicePath = require.resolve('../../src/services/PatientIdentityService');
@@ -41,6 +42,14 @@ function makeCursor(rows) {
 function clearCache() {
   for (const p of allPaths) delete require.cache[p];
 }
+
+// #1394: the first require of these modules' trees costs seconds under load
+// (the route's services, and notification.service's, which the route does
+// not reach), so it is paid here, at import time, as #1389 did, rather than
+// inside the first case's timeout. clearCache() drops only allPaths, so each
+// loadRoute() re-requires just those ten.
+for (const p of allPaths) require(p);
+clearCache();
 
 function loadRoute({
   buildConsentMetadata,
@@ -102,6 +111,9 @@ function buildApp(router, db = {}) {
   const app = express();
   app.use(express.json());
   app.locals.db = db;
+  // #1355: the scope requireOrganizationScope supplies in front of this
+  // router (intakeWizard.routes.js); global, as the fixtures' caller.
+  app.use((req, _res, next) => { req.organizationScope = req.organizationScope || { scope: 'global', organizationIds: [] }; next(); });
   app.use('/api/intake-wizard', router);
   return app;
 }
@@ -158,7 +170,7 @@ describe('intakeWizard routes', () => {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
           if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
@@ -224,6 +236,293 @@ describe('intakeWizard routes', () => {
       );
     });
 
+    // #1371: a derivative names its parents as specimen.parentSpecimenIds
+    // (dict-02 ELM-0120), and the wizard hands them to createSample, which
+    // validates them and registers the lineage.
+    describe('parentSpecimenIds (#1371)', () => {
+      function parentsFixture() {
+        const samplesCollection = {
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
+          findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+        };
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+          if (key === 'consents') return { findOne: vi.fn().mockResolvedValue(null) };
+          throw new Error(`unexpected key ${key}`);
+        });
+        const db = {
+          collection: (name) => {
+            if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
+            if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+            if (name === 'storageBoxes') {
+              return {
+                find: () => makeCursor([{
+                  _id: 'box-1',
+                  name: 'Box A',
+                  status: 'ACTIVE',
+                  dimension: { rows: 1, cols: 1 },
+                  currentOccupancy: 0,
+                  occupancyGrid: {},
+                  parent_id: 'rack-1',
+                }]),
+              };
+            }
+            if (name === 'storageContainers') return { findOne: vi.fn(async (query) => defaultStorageContainersFindOne(query)) };
+            throw new Error(`unexpected collection ${name}`);
+          },
+        };
+
+        const { router } = loadRoute({ getCollectionImpl });
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        return { app: buildApp(router, db), sampleServiceModule };
+      }
+
+      it('hands the named parents to createSample and answers 200', async () => {
+        const { app, sampleServiceModule } = parentsFixture();
+
+        const res = await request(app).post('/api/intake-wizard').send({
+          ...VALID_PAYLOAD,
+          specimen: { ...VALID_PAYLOAD.specimen, parentSpecimenIds: ['SPC-PARENT'] },
+        });
+
+        expect(res.status).toBe(200);
+        expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
+        expect(sampleServiceModule.createSample.mock.calls[0][1].parentSpecimenIds).toEqual(['SPC-PARENT']);
+      });
+
+      it('returns 422 NON_CANONICAL_FIELD for a single string instead of a list, and creates nothing', async () => {
+        const { app, sampleServiceModule } = parentsFixture();
+
+        const res = await request(app).post('/api/intake-wizard').send({
+          ...VALID_PAYLOAD,
+          specimen: { ...VALID_PAYLOAD.specimen, parentSpecimenIds: 'SPC-PARENT' },
+        });
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+        expect(res.body.fields).toContain('specimen.parentSpecimenIds');
+        expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
+      });
+    });
+
+    // #1355: the intake stamps the caller's organization on the sample and on
+    // a participant it creates, resolved before anything is written.
+    describe('organization scope (#1355)', () => {
+      function scopedApp(router, db, organizationScope) {
+        const app = express();
+        app.use(express.json());
+        app.locals.db = db;
+        app.use((req, _res, next) => { req.organizationScope = organizationScope; next(); });
+        app.use('/api/intake-wizard', router);
+        return app;
+      }
+
+      function placementDb() {
+        return {
+          collection: (name) => {
+            if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
+            if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+            if (name === 'storageBoxes') return { find: () => makeCursor([{ _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' }]) };
+            if (name === 'storageContainers') {
+              return {
+                findOne: vi.fn(async ({ _id }) => ({
+                  'rack-1': { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' },
+                  'shelf-1': { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' },
+                  'freezer-1': { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' },
+                })[_id] || null),
+              };
+            }
+            throw new Error(`unexpected collection ${name}`);
+          },
+        };
+      }
+
+      it("stamps a single-organization caller's organization as collectionSite and on the participant match", async () => {
+        const patients = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const getCollectionImpl = vi.fn(async (_db, key) => ({
+          samples: { findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          patients,
+          consents: { findOne: vi.fn().mockResolvedValue(null) },
+        })[key]);
+        const { router, patientIdentityServiceModule } = loadRoute({ getCollectionImpl });
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+        const scope = { scope: 'organization', organizationIds: ['org-a'] };
+
+        const res = await request(scopedApp(router, placementDb(), scope)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(sampleServiceModule.createSample.mock.calls[0][1].collectionSite).toBe('org-a');
+        expect(sampleServiceModule.createSample.mock.calls[0][2].organizationId).toBe('org-a');
+        const [, payload, options] = patientIdentityServiceModule.matchOrUpsertParticipant.mock.calls[0];
+        expect(payload.clinicalUnitId).toBe('org-a');
+        expect(options).toEqual({ organizationScope: scope });
+        // The participant is in the caller's scope, so it is updated.
+        expect(patients.updateOne).toHaveBeenCalledTimes(1);
+      });
+
+      it("links the sample to a participant matched outside the caller's scope but writes nothing on that participant (#1356)", async () => {
+        const patients = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const getCollectionImpl = vi.fn(async (_db, key) => ({
+          samples: { findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          patients,
+          consents: { findOne: vi.fn().mockResolvedValue(null) },
+        })[key]);
+        const { router } = loadRoute({
+          getCollectionImpl,
+          matchOrUpsertParticipant: vi.fn().mockResolvedValue({
+            created: false,
+            matchType: 'participantId',
+            outOfScope: true,
+            patient: { _id: 'patient-b', participantId: '12345678' },
+          }),
+        });
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+        const scope = { scope: 'organization', organizationIds: ['org-a'] };
+
+        const res = await request(scopedApp(router, placementDb(), scope)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
+        expect(sampleServiceModule.createSample.mock.calls[0][1].participantId).toBe('12345678');
+        expect(patients.updateOne).not.toHaveBeenCalled();
+      });
+
+      it('refuses a multi-organization caller who names no organizationId, writing nothing', async () => {
+        const { router, patientIdentityServiceModule } = loadRoute();
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample');
+
+        const res = await request(scopedApp(router, placementDb(), { scope: 'organization', organizationIds: ['org-a', 'org-b'] }))
+          .post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(400);
+        expect(patientIdentityServiceModule.matchOrUpsertParticipant).not.toHaveBeenCalled();
+        expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
+      });
+
+      // #1376: the organization is named in the intake's top-level
+      // organizationId only; specimen.collectionSite (ELM-0128) is data.
+      async function postMultiOrganization(payload) {
+        const getCollectionImpl = vi.fn(async (_db, key) => ({
+          samples: { findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          patients: { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          consents: { findOne: vi.fn().mockResolvedValue(null) },
+        })[key]);
+        const { router } = loadRoute({ getCollectionImpl });
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+        const res = await request(scopedApp(router, placementDb(), { scope: 'organization', organizationIds: ['org-a', 'org-b'] }))
+          .post('/api/intake-wizard').send(payload);
+        return { res, createSample: sampleServiceModule.createSample };
+      }
+
+      it('takes a top-level organizationId as the pick (#1376)', async () => {
+        const { res, createSample } = await postMultiOrganization({ ...VALID_PAYLOAD, organizationId: 'org-b' });
+
+        expect(res.status).toBe(200);
+        expect(createSample.mock.calls[0][2].organizationId).toBe('org-b');
+        expect(createSample.mock.calls[0][1].collectionSite).toBe('org-b');
+      });
+
+      it('refuses a multi-organization caller who names only specimen.collectionSite, as one naming nothing (#1376)', async () => {
+        const { res, createSample } = await postMultiOrganization({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, collectionSite: 'org-b' } });
+
+        expect(res.status).toBe(400);
+        expect(createSample).not.toHaveBeenCalled();
+      });
+
+      it('lets organizationId win over specimen.collectionSite and keeps the site (#1376)', async () => {
+        const { res, createSample } = await postMultiOrganization({
+          ...VALID_PAYLOAD,
+          organizationId: 'org-a',
+          specimen: { ...VALID_PAYLOAD.specimen, collectionSite: 'partner-x' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(createSample.mock.calls[0][2].organizationId).toBe('org-a');
+        expect(createSample.mock.calls[0][1].collectionSite).toBe('partner-x');
+        expect(createSample.mock.calls[0][1]).not.toHaveProperty('organizationId');
+      });
+    });
+
+    // #1332: the consent decision names one consent; with several, it must
+    // be the newest. The consents sit out of order in a store that sorts.
+    async function postIntakeWithConsents(consentRows) {
+      const consents = createFakeDb().collection('consents');
+      consentRows.forEach((row) => consents.docs.push(row));
+      const samplesCollection = {
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
+        findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }),
+        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      };
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        if (key === 'consents') return consents;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const db = {
+        collection: (name) => {
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
+          if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+          if (name === 'storageBoxes') {
+            return { find: () => makeCursor([{ _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' }]) };
+          }
+          if (name === 'storageContainers') {
+            return {
+              findOne: vi.fn(async ({ _id }) => {
+                if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+                if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+                if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+                return null;
+              }),
+            };
+          }
+          throw new Error(`unexpected collection ${name}`);
+        },
+      };
+      const { router } = loadRoute({ getCollectionImpl });
+      vi.spyOn(require(sampleServicePath), 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(require(storageServicePath).prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+      return request(buildApp(router, db)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+    }
+
+    it('names the newest active consent of the participant (#1332)', async () => {
+      const res = await postIntakeWithConsents([
+        { _id: 'c-mid', participantId: '12345678', status: 'ACTIVE', signedAt: new Date('2026-01-02') },
+        { _id: 'c-new', participantId: '12345678', status: 'ACTIVE', signedAt: new Date('2026-01-03') },
+        { _id: 'c-old', participantId: '12345678', status: 'ACTIVE', signedAt: new Date('2026-01-01') },
+      ]);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent).toEqual(expect.objectContaining({ active: true, consentId: 'c-new' }));
+    });
+
+    it('names the newest revoked consent when none is active (#1332)', async () => {
+      const res = await postIntakeWithConsents([
+        { _id: 'r-mid', participantId: '12345678', status: 'REVOKED', revokedAt: new Date('2026-01-02') },
+        { _id: 'r-new', participantId: '12345678', status: 'REVOKED', revokedAt: new Date('2026-01-03') },
+        { _id: 'r-old', participantId: '12345678', status: 'REVOKED', revokedAt: new Date('2026-01-01') },
+      ]);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent).toEqual(expect.objectContaining({ active: false, status: 'REVOKED', consentId: 'r-new' }));
+    });
+
     // #511: sample.service.js#createSample (#510) additively exposes the
     // canonical StorageAssignment on its return value alongside the legacy
     // storageLocation field. intakeWizard's own response builder (lines
@@ -246,7 +545,7 @@ describe('intakeWizard routes', () => {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
           if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
@@ -424,6 +723,24 @@ describe('intakeWizard routes', () => {
       expect(res.body.fields).toContain('patientID');
     });
 
+    // #1368: dict-02 ELM-0120 is the plural parentSpecimenIds; either
+    // singular name is refused by name, as POST /api/samples refuses it.
+    it.each(['parentSpecimenId', 'parentSampleId'])('returns 422 NON_CANONICAL_FIELD naming the singular parent name %s', async (alias) => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const payload = {
+        ...VALID_PAYLOAD,
+        specimen: { ...VALID_PAYLOAD.specimen, [alias]: 'SPC-PARENT' },
+      };
+
+      const res = await request(app).post('/api/intake-wizard').send(payload);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toEqual([alias]);
+    });
+
     it('returns 422 NON_CANONICAL_FIELD when the payload fails canonical schema validation', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
@@ -457,7 +774,7 @@ function defaultStorageContainersFindOne({ _id }) {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ locationId: 'EQ-1', status: 'ok' }])) };
+          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }])) };
           if (name === 'equipment') return { findOne: equipmentFindOne || vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
@@ -1073,6 +1390,73 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.body.patient.status).toBe('ACTIVE');
       expect(res.body.patient.patientID).toBe('');
       expect(res.body.patient.patientName).toBe('');
+    });
+
+    // #1377: the lookup applies the scope rule matchOrUpsertParticipant
+    // applies (#1356) to the Patient record's clinicalUnitId. A match outside
+    // the caller's organizations answers as a non-match, so neither its civil
+    // fields nor its existence reach the caller; the audit keeps the truth.
+    describe('organization scope (#1377)', () => {
+      function scopedApp(router, organizationScope) {
+        const app = express();
+        app.use(express.json());
+        app.locals.db = {};
+        app.use((req, _res, next) => { req.organizationScope = organizationScope; next(); });
+        app.use('/api/intake-wizard', router);
+        return app;
+      }
+
+      const SCOPED = { scope: 'organization', organizationIds: ['ORG-A'] };
+
+      function matchIn(clinicalUnitId) {
+        return makeIdentityCollectionRouter({
+          identityFindOne: vi.fn().mockResolvedValue({ participantId: '12345678', patientName: 'Paciente Teste', birthDate: '2000-01-01' }),
+          patientRecord: { status: 'ACTIVE', clinicalUnitId },
+        });
+      }
+
+      it('answers a scoped caller as a non-match when the matched patient belongs to another organization', async () => {
+        const { getCollectionImpl, patientsFindOne } = matchIn('ORG-B');
+        const { router, auditLoggerModule } = loadRoute({ getCollectionImpl });
+        const app = scopedApp(router, SCOPED);
+
+        const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ success: true, matched: false, patient: null, message: '' });
+        expect(JSON.stringify(res.body)).not.toMatch(/Paciente Teste|2000-01-01/);
+        expect(patientsFindOne.mock.calls[0][1].projection).toEqual(expect.objectContaining({ clinicalUnitId: 1 }));
+        const audit = auditLoggerModule.log.mock.calls[0][0];
+        expect(audit.payload).toEqual(expect.objectContaining({ matched: false, outOfScope: true }));
+      });
+
+      it('returns the match to a scoped caller when the matched patient belongs to its organization', async () => {
+        const { getCollectionImpl } = matchIn('ORG-A');
+        const { router } = loadRoute({ getCollectionImpl });
+        const app = scopedApp(router, SCOPED);
+
+        const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.matched).toBe(true);
+        expect(res.body.patient).toEqual(
+          expect.objectContaining({ patientID: '12345678', patientName: 'Paciente Teste', status: 'ACTIVE' })
+        );
+      });
+
+      it('returns another organization\'s match to a global caller', async () => {
+        const { getCollectionImpl } = matchIn('ORG-B');
+        const { router } = loadRoute({ getCollectionImpl });
+        const app = scopedApp(router, { scope: 'global', organizationIds: [] });
+
+        const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.matched).toBe(true);
+        expect(res.body.patient).toEqual(
+          expect.objectContaining({ patientID: '12345678', patientName: 'Paciente Teste' })
+        );
+      });
     });
   });
 });

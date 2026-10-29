@@ -1,9 +1,8 @@
 const crypto = require('crypto');
 const Terminology = require('../models/Terminology');
 const logger = require('../utils/logger');
-
-const DEFAULT_TIMEOUT_MS = 15000;
-const ORPHADATA_BASE_URL = process.env.ORPHADATA_BASE_URL || '';
+const { dropLegacyIndex } = require('../utils/legacyIndex');
+const { buildLookupIndex } = require('../utils/lookupIndex');
 
 // #941: `Terminology.js:44` declares `{ sistema: 1, codigo: 1 }, { unique:
 // true }`, but the mongoose connection opens with `autoIndex: false`
@@ -11,13 +10,13 @@ const ORPHADATA_BASE_URL = process.env.ORPHADATA_BASE_URL || '';
 // anywhere, so that declaration never reaches Mongo. Two independent
 // writers upsert into `terminologies` keyed on the same `{ sistema,
 // codigo }` pair -- this file's own `upsertTerminology` (native db path,
-// reached via `syncFromOrphadata`) and
+// which has no caller in `src/` since #115 retired the Orphadata bulk
+// sync) and
 // `terminologies.routes.js` (`bulkUpsertTerminologies`) -- so the pair
 // races with no database-level protection. This is the native-driver
 // equivalent, latched per collection name like `cid.service.js`'s
 // `ensureIndexes`. BOTH writers call it; the original fix wired only the
-// first, which is the env-gated one, so the index was not built on the
-// default offline path at all.
+// first, so the index was not built on the default offline path at all.
 //
 // A `partialFilterExpression` IS required, and the `_v1` index that shipped
 // without one was broken. The reasoning it replaced said "both writers
@@ -49,20 +48,57 @@ async function ensureTerminologyIndexes(collection, collectionName = 'terminolog
   if (!collection || typeof collection.createIndex !== 'function' || !collectionName) return;
   if (indexedTerminologyCollections.has(collectionName)) return;
 
+  // #1164: `$gt: ''`, not `$type: 'string'`. Both keep missing/null rows
+  // out (comparisons are type-bracketed, so `$gt: ''` means "a non-empty
+  // string"), but the planner cannot prove a plain equality implies a
+  // `$type` filter, so the `$type` version enforced uniqueness while never
+  // serving a single lookup. The new name is built FIRST, then the
+  // superseded one dropped, so the constraint never has a gap.
+  // Here that lookup is the sync upsert's own `{ sistema, codigo }` filter,
+  // run once per synced record.
   try {
     await collection.createIndex(
       { sistema: 1, codigo: 1 },
       {
-        name: 'terminologies_sistema_codigo_unique_v2',
+        name: 'terminologies_sistema_codigo_unique_v3',
         unique: true,
-        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+        partialFilterExpression: { sistema: { $gt: '' }, codigo: { $gt: '' } },
       }
     );
+    // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'terminologies_sistema_codigo_unique_v2', 'TERMINOLOGIES');
   } catch (error) {
-    logger.warn(`Não foi possível criar índice terminologies_sistema_codigo_unique_v2 em ${collectionName}: ${error.message}`);
+    logger.warn(`Não foi possível criar índice terminologies_sistema_codigo_unique_v3 em ${collectionName}: ${error.message}`);
   }
 
   indexedTerminologyCollections.add(collectionName);
+}
+
+// #1163: the plain, non-unique { sistema, codigo } LOOKUP behind
+// `GET /api/terminologies`, which runs find(filter).sort({ sistema: 1,
+// codigo: 1 }).limit(n) with at most a `sistema` equality. The unique index
+// above cannot serve it: its partial filter constrains `codigo` too, so a
+// query that does not mention `codigo` is ineligible. Measured on mongo:7
+// with 20k rows, the default listing went from a 20,000-document COLLSCAN
+// to 100 examined, because the index serves the sort and `limit` stops the
+// scan. It supersedes the model's inert field-level `sistema` index.
+//
+// Kept apart from `ensureTerminologyIndexes` because the two are wired at
+// different places for different reasons: the unique one where the
+// collection is written, this one where the list is read (utils/lookupIndex.js).
+const terminologyLookupIndexed = new Set();
+
+async function ensureTerminologyLookupIndexes(collection) {
+  if (!collection || typeof collection.createIndex !== 'function') return;
+
+  const name = collection.collectionName;
+  if (terminologyLookupIndexed.has(name)) return;
+  terminologyLookupIndexed.add(name);
+
+  await buildLookupIndex(
+    collection, { sistema: 1, codigo: 1 },
+    'terminologies_sistema_codigo_idx_v1', 'TERMINOLOGIES'
+  );
 }
 
 function isExternalTerminologySyncEnabled() {
@@ -277,135 +313,6 @@ async function upsertTerminology(record, db = null) {
   return { skipped: false, record: result };
 }
 
-function extractRecords(responseData) {
-  if (Array.isArray(responseData)) return responseData;
-  if (Array.isArray(responseData?.data)) return responseData.data;
-  if (Array.isArray(responseData?.items)) return responseData.items;
-  if (Array.isArray(responseData?.results)) return responseData.results;
-  return [];
-}
-
-async function fetchJsonWithTimeout(url, timeoutMs) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-      },
-      signal: controller.signal,
-    });
-
-    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-    const responseText = await response.text();
-
-    let data;
-    if (responseText) {
-      try {
-        data = JSON.parse(responseText);
-      } catch (_error) {
-        logger.warn(`Resposta não é JSON válido (content-type: "${contentType || 'desconhecido'}") de ${url}`);
-        data = responseText;
-      }
-    } else {
-      data = null;
-    }
-
-    if (!response.ok) {
-      const statusMessage = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
-      const error = new Error(
-        typeof data === 'object' && data && (data.error || data.message)
-          ? String(data.error || data.message)
-          : statusMessage
-      );
-      error.status = response.status;
-      throw error;
-    }
-
-    return data;
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new Error(`Timeout após ${timeoutMs}ms`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function syncFromOrphadata(db = null) {
-  if (!isExternalTerminologySyncEnabled()) {
-    logger.info('Sincronização externa Orphadata desabilitada neste ambiente');
-    return {
-      success: true,
-      disabled: true,
-      attempted: [],
-      upserted: 0,
-      skipped: 0,
-      source: 'local-only',
-    };
-  }
-
-  if (!ORPHADATA_BASE_URL) {
-    return { success: true, disabled: true, attempted: [], upserted: 0, skipped: 0, source: 'local-only' };
-  }
-
-  // Endpoints públicos válidos conforme OpenAPI da Orphadata.
-  const endpoints = [
-    '/rd-cross-referencing/orphacodes?limit=1000',
-    '/rd-phenotypes/orphacodes?limit=1000',
-    '/rd-classification/orphacodes?limit=1000',
-  ];
-
-  const consulted = [];
-
-  for (const endpoint of endpoints) {
-    try {
-      const url = `${ORPHADATA_BASE_URL.replace(/\/$/, '')}${endpoint}`;
-      const responseData = await fetchJsonWithTimeout(url, DEFAULT_TIMEOUT_MS);
-      const records = extractRecords(responseData?.data?.results ?? responseData);
-      if (!records.length) {
-        consulted.push({ endpoint, recordCount: 0 });
-        continue;
-      }
-      consulted.push({ endpoint, recordCount: records.length });
-
-      const stats = { attempted: endpoint, upserted: 0, skipped: 0 };
-      for (const record of records) {
-        const normalizedInput = (typeof record === 'string' || typeof record === 'number')
-          ? {
-            ORPHAcode: String(record),
-            system: 'ORPHA',
-            'Preferred term': `ORPHA ${String(record)}`,
-          }
-          : record;
-
-        const normalized = normalizeRecord(
-          normalizedInput,
-          normalizedInput.sistema || normalizedInput.system || (normalizedInput.ORPHAcode || normalizedInput.orphaCode ? 'ORPHA' : 'OUTRO')
-        );
-        if (!normalized.codigo || !normalized.sistema || !normalized.descricao) {
-          stats.skipped += 1;
-          continue;
-        }
-        await upsertTerminology(normalized, db);
-        stats.upserted += 1;
-      }
-
-      return { success: true, ...stats, consulted };
-    } catch (error) {
-      consulted.push({ endpoint, recordCount: 0, error: error.message });
-      logger.warn(`Falha ao sincronizar terminologias via ${endpoint}: ${error.message}`);
-    }
-  }
-
-  return { success: false, attempted: endpoints, upserted: 0, skipped: 0, consulted };
-}
-
 async function seedTerminologies(records = []) {
   let upserted = 0;
   let skipped = 0;
@@ -428,10 +335,10 @@ async function seedTerminologies(records = []) {
 }
 
 module.exports = {
-  syncFromOrphadata,
   seedTerminologies,
   upsertTerminology,
   normalizeRecord,
   isExternalTerminologySyncEnabled,
   ensureTerminologyIndexes,
+  ensureTerminologyLookupIndexes,
 };

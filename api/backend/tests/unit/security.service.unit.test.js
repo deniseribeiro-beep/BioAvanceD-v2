@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const securityService = require('../../src/services/security.service');
 const logger = require('../../src/utils/logger');
 const auditLogger = require('../../src/utils/auditLogger');
+const { seedRolesAndPermissions, PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
 
 describe('SecurityService.getDefaultConfig', () => {
   it('returns object with authentication section', () => {
@@ -117,6 +118,30 @@ describe('SecurityService.validateConfig', () => {
     })).toThrow('inválidas');
   });
 
+  // #1249: TOTP is the only method implemented.
+  it('throws for sms and email, which no code implements', () => {
+    for (const mfaMethod of ['sms', 'email']) {
+      expect(() => securityService.validateConfig({ authentication: { mfaMethod } })).toThrow('inválidas');
+    }
+  });
+
+  // #1255: ipAttempt.service reads blockIPAfterAttempts; 0 tracks without blocking.
+  it('accepts blockIPAfterAttempts 0..100 as an integer and refuses anything else', () => {
+    for (const ok of [0, 1, 10, 100]) {
+      expect(() => securityService.validateConfig({ loginAttempts: { blockIPAfterAttempts: ok } })).not.toThrow();
+    }
+    for (const bad of [-1, 101, 2.5, '10']) {
+      expect(() => securityService.validateConfig({ loginAttempts: { blockIPAfterAttempts: bad } })).toThrow('inválidas');
+    }
+  });
+
+  // #1253: NIST SP 800-63B §5.1.1.2 floor.
+  it('throws for a passwordRules.minLength below 8, and accepts 8', () => {
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 7 } })).toThrow('inválidas');
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 6 } })).toThrow('inválidas');
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 8 } })).not.toThrow();
+  });
+
   it('throws for invalid mfaMethod', () => {
     expect(() => securityService.validateConfig({
       authentication: { mfaMethod: 'fingerprint' },
@@ -133,6 +158,20 @@ describe('SecurityService.validateConfig', () => {
     expect(() => securityService.validateConfig({
       passwordRules: { expirationDays: 400 },
     })).toThrow('inválidas');
+  });
+
+  // #1244: password.service reads this depth, so the config refuses what the
+  // page's own 1..20 input would refuse.
+  it.each([0, 21, 2.5, '5'])('throws for passwordRules.maxReuseHistory %j', (value) => {
+    expect(() => securityService.validateConfig({
+      passwordRules: { maxReuseHistory: value },
+    })).toThrow('inválidas');
+  });
+
+  it.each([1, 5, 20])('accepts passwordRules.maxReuseHistory %j', (value) => {
+    expect(() => securityService.validateConfig({
+      passwordRules: { maxReuseHistory: value },
+    })).not.toThrow();
   });
 
   it('throws for invalid session.maxSessionDurationHours', () => {
@@ -157,6 +196,76 @@ describe('SecurityService.validateConfig', () => {
     expect(() => securityService.validateConfig({
       passwordRules: { minLength: 12, expirationDays: 90 },
     })).not.toThrow();
+  });
+
+  // #909: the schema over getDefaultConfig()'s groups.
+  it('accepts the whole default document, the shape SecurityPage sends back', () => {
+    expect(() => securityService.validateConfig(securityService.getDefaultConfig())).not.toThrow();
+  });
+
+  it('refuses a key the group does not declare, naming its path', () => {
+    expect(() => securityService.validateConfig({ authentication: { maxLoginAtempts: 3 } }))
+      .toThrow('authentication.maxLoginAtempts não é uma configuração conhecida');
+  });
+
+  it.each([
+    ['authentication', 'maxLoginAttempts', '5', 'um número'],
+    ['session', 'timeoutMinutes', null, 'um número'],
+    ['session', 'timeoutMinutes', Number.NaN, 'um número'],
+    ['enhancedSecurity', 'enabled', 'true', 'verdadeiro ou falso'],
+    ['lgpd', 'allowDataExport', 1, 'verdadeiro ou falso'],
+    ['logging', 'level', 3, 'um texto'],
+  ])('refuses %s.%s = %j as not %s', (group, key, value, typeName) => {
+    expect(() => securityService.validateConfig({ [group]: { [key]: value } }))
+      .toThrow(`${group}.${key} deve ser ${typeName}`);
+  });
+
+  it.each([['x'], [[]], [null], [5]])('refuses a group that is not an object: %j', (value) => {
+    expect(() => securityService.validateConfig({ session: value })).toThrow('session deve ser um objeto');
+  });
+
+  it('range-checks 0, which the truthiness guards used to skip', () => {
+    expect(() => securityService.validateConfig({ authentication: { maxLoginAttempts: 0 } })).toThrow('maxLoginAttempts deve estar entre 1 e 10');
+    expect(() => securityService.validateConfig({ session: { timeoutMinutes: 0 } })).toThrow('timeoutMinutes deve estar entre 5 e 480');
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 0 } })).toThrow('minLength deve estar entre 8 e 128');
+    expect(() => securityService.validateConfig({ passwordRules: { expirationDays: 0 } })).not.toThrow();
+  });
+
+  // #1257: the MFA floor is a known key, 8..128, and never above minLength,
+  // whether minLength arrives in the same request or is the stored one.
+  it('#1257: range-checks minLengthWithMFA and refuses one above minLength', () => {
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 15, minLengthWithMFA: 8 } })).not.toThrow();
+    expect(() => securityService.validateConfig({ passwordRules: { minLengthWithMFA: 7 } })).toThrow('minLengthWithMFA deve estar entre 8 e 128');
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 10, minLengthWithMFA: 12 } }))
+      .toThrow('minLengthWithMFA não pode exceder minLength');
+    expect(() => securityService.validateConfig({ passwordRules: { minLengthWithMFA: 12 } }, { passwordRules: { minLength: 10 } }))
+      .toThrow('minLengthWithMFA não pode exceder minLength');
+    expect(() => securityService.validateConfig({ passwordRules: { minLengthWithMFA: 12 } }, { passwordRules: { minLength: 15 } })).not.toThrow();
+  });
+
+  it('#1257: a new deployment stores the NIST SP 800-63B-4 defaults', () => {
+    expect(securityService.getDefaultConfig().passwordRules).toMatchObject({
+      minLength: 15, minLengthWithMFA: 8,
+      requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
+      expirationDays: 0,
+    });
+  });
+
+  it('lets an unchanged echo of the stored document through, and nothing else', () => {
+    const stored = { authentication: { legacyFlag: true }, session: { timeoutMinutes: null } };
+    expect(() => securityService.validateConfig(
+      { authentication: { legacyFlag: true, maxLoginAttempts: 4 }, session: { timeoutMinutes: null } },
+      stored
+    )).not.toThrow();
+    // Control: the same keys with a new value are the caller's own.
+    expect(() => securityService.validateConfig({ authentication: { legacyFlag: false } }, stored))
+      .toThrow('authentication.legacyFlag não é uma configuração conhecida');
+    expect(() => securityService.validateConfig({ session: { timeoutMinutes: '30' } }, stored))
+      .toThrow('session.timeoutMinutes deve ser um número');
+  });
+
+  it('ignores top-level keys outside the eight groups, which updateConfig never stores', () => {
+    expect(() => securityService.validateConfig({ configVersion: 'x', governedBy: {}, updatedAt: 'y' })).not.toThrow();
   });
 });
 
@@ -231,7 +340,16 @@ describe('SecurityService.getConfig', () => {
   });
 });
 
+// RF014 AC2: the release step is tested in configurationRelease.service's
+// own tests; the db doubles below model only the security_config document.
+function stubRelease() {
+  return vi.spyOn(securityService, 'activateRelease').mockResolvedValue({ configurationReleaseId: 'rel-test', effectivePeriod: { start: new Date(), end: null } });
+}
+
 describe('SecurityService.updateConfig', () => {
+  beforeEach(() => {
+    stubRelease();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -276,6 +394,28 @@ describe('SecurityService.updateConfig', () => {
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0][0].resourceType).toBe('SecurityConfiguration');
+  });
+
+  // #1249: loginAttempts.maxAttempts/lockoutDurationMinutes duplicate the
+  // authentication pair the lockout reads; the stored copy follows it.
+  it('stores the loginAttempts duplicate pair equal to the enforced authentication pair', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    const currentConfig = {
+      authentication: { maxLoginAttempts: 5, lockoutDurationMinutes: 30 },
+      loginAttempts: { maxAttempts: 5, lockoutDurationMinutes: 30, trackIP: true },
+      configVersion: 1,
+    };
+    const result = await securityService.updateConfig(db, {
+      authentication: { maxLoginAttempts: 3, lockoutDurationMinutes: 60 },
+      loginAttempts: { maxAttempts: 9 },
+    }, currentConfig, {});
+
+    expect(result.loginAttempts).toEqual({ maxAttempts: 3, lockoutDurationMinutes: 60, trackIP: true });
+    expect(updateOne.mock.calls[0][1].$set.loginAttempts).toEqual({ maxAttempts: 3, lockoutDurationMinutes: 60, trackIP: true });
   });
 
   it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {
@@ -366,14 +506,34 @@ describe('SecurityService.exportLogs', () => {
     return { db: { collection: vi.fn(() => ({ find })) }, find };
   }
 
-  it('returns raw logs array (not CSV) when format is not csv', async () => {
+  // #1267: both formats go through the read-time anonymisation getLogs
+  // applies (RNF007 AC 5); before it the JSON export was the raw documents.
+  it('returns the anonymised logs array (not CSV) when format is not csv', async () => {
     const logs = [{ action: 'CREATE', entity: 'Sample' }];
     const { db } = makeDbWithLogs(logs);
 
     const result = await securityService.exportLogs(db, {}, 'json');
 
     expect(Array.isArray(result)).toBe(true);
-    expect(result).toEqual(logs);
+    expect(result[0]).toEqual(expect.objectContaining({ action: 'CREATE', entity: 'Sample', userName: 'USR-SYSTEM' }));
+  });
+
+  it('#1267: a row stored with a real user id, a name and personal metadata leaves pseudonymised', async () => {
+    const logs = [{
+      action: 'UPDATE',
+      userID: 'u-real-1',
+      userName: 'Maria Silva',
+      metadata: { user: { userName: 'Maria Silva', email: 'maria@example.org', userRole: 'Administrador' } },
+    }];
+    const { db } = makeDbWithLogs(logs);
+
+    const [row] = await securityService.exportLogs(db, {}, 'json');
+
+    expect(row.userName).toMatch(/^USR-/);
+    expect(row.userID).toBe(row.userName);
+    expect(JSON.stringify(row)).not.toContain('Maria Silva');
+    expect(JSON.stringify(row)).not.toContain('maria@example.org');
+    expect(JSON.stringify(row)).not.toContain('u-real-1');
   });
 
   it('returns CSV header-only string for empty result set', async () => {
@@ -441,180 +601,94 @@ describe('SecurityService.getPermissions', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns default permissions when no custom permissions are stored', async () => {
-    const findOne = vi.fn().mockResolvedValue(null);
-    const db = { collection: vi.fn(() => ({ findOne })) };
+  // #1341: the roles and permissions come from the collections the RBAC seed
+  // writes, through the real seed, so the payload is what enforcement reads.
+  function createSeedDb() {
+    const store = {};
+    const matches = (doc, filter) => Object.keys(filter).every((k) => doc[k] === filter[k]);
+    const collectionOf = (name) => {
+      if (!store[name]) {
+        const docs = [];
+        store[name] = {
+          docs,
+          async insertOne(doc) { docs.push(doc); return { insertedId: docs.length }; },
+          async findOne(filter = {}) { return docs.find((d) => matches(d, filter)) || null; },
+          async updateOne(filter, update) {
+            const doc = docs.find((d) => matches(d, filter));
+            if (doc && update.$set) Object.assign(doc, update.$set);
+            return { matchedCount: doc ? 1 : 0 };
+          },
+          find(filter = {}) { return { toArray: async () => docs.filter((d) => matches(d, filter)) }; },
+        };
+      }
+      return store[name];
+    };
+    return { store, collection: vi.fn(collectionOf) };
+  }
 
-    const result = await securityService.getPermissions(db);
+  async function seededDb() {
+    const db = createSeedDb();
+    await seedRolesAndPermissions(db);
+    return db;
+  }
 
-    expect(result['4'].manageSystem).toBe(true);
-    expect(result['1'].createUser).toBeUndefined();
+  it('#1341: lists every seeded role, the additive auditor included, with its displayName', async () => {
+    const db = await seededDb();
+
+    const { roles } = await securityService.getPermissions(db);
+
+    expect(roles.map((r) => r.roleCode)).toEqual(['administrator', 'coordinator', 'technician', 'external_user', 'auditor']);
+    const auditor = roles.find((r) => r.roleCode === 'auditor');
+    expect(auditor.hierarchyLevel).toBeNull();
+    expect(auditor.permissionCodes).toEqual(['viewAuditLogs']);
+    for (const role of roles) expect(typeof role.displayName).toBe('string');
   });
 
-  // #1110: was profile 1, which had exactly two defaults -- viewReports and
-  // useAssistant. With useAssistant removed as assistant scaffolding, profile
-  // 1 has one default and this test overrides it, leaving no witness for the
-  // 'untouched default retained' assertion. Profile 2 has five defaults, so
-  // the case keeps all four of its original intents: override wins, added key
-  // appears, untouched default survives, unrelated profile is not merged into.
-  it('merges custom permissions over defaults for the matching profile only', async () => {
-    const findOne = vi.fn().mockResolvedValue({ permissions: { '2': { viewReports: false, createUser: true } } });
-    const db = { collection: vi.fn(() => ({ findOne })) };
+  it("#1341: a role's codes are the ones its stored permissionIds name, not a hardcoded map", async () => {
+    const db = await seededDb();
+    const idOf = (code) => db.store.permissions.docs.find((p) => p.permissionCode === code).permissionId;
+    const technician = db.store.roles.docs.find((r) => r.roleCode === 'technician');
+    technician.permissionIds = [idOf('viewReports'), idOf('manageBackup')];
 
-    const result = await securityService.getPermissions(db);
+    const { roles } = await securityService.getPermissions(db);
 
-    expect(result['2'].viewReports).toBe(false);
-    expect(result['2'].createUser).toBe(true);
-    expect(result['2'].uploadFiles).toBe(true); // untouched default retained
-    expect(result['4'].manageSystem).toBe(true); // unrelated profile untouched
+    expect(roles.find((r) => r.roleCode === 'technician').permissionCodes).toEqual(['manageBackup', 'viewReports']);
   });
 
-  // #1110: Usuario Externo was granted useAssistant: true by default. It
-  // appeared nowhere else in the tracked tree -- no gate read it, no caller
-  // sent it -- so it granted nothing while the UI told the user they had
-  // assistant access. RF012 AC#10 excludes the feature from this scope.
-  it('#1110: grants no useAssistant permission to any profile', async () => {
-    const findOne = vi.fn().mockResolvedValue(null);
-    const db = { collection: vi.fn(() => ({ findOne })) };
+  // The old map listed manageSecurity, which the catalog does not have, and
+  // #1110 removed useAssistant, which nothing gated.
+  it('#1341: lists every stored permission with its catalog displayName, and no code the catalog lacks', async () => {
+    const db = await seededDb();
 
-    const result = await securityService.getPermissions(db);
+    const { roles, permissions } = await securityService.getPermissions(db);
 
-    for (const profile of Object.values(result)) {
-      expect(profile).not.toHaveProperty('useAssistant');
+    expect(permissions).toHaveLength(db.store.permissions.docs.length);
+    for (const p of permissions) {
+      expect(PERMISSION_CATALOG[p.permissionCode]).toBeDefined();
+      expect(p.displayName).toBe(PERMISSION_CATALOG[p.permissionCode].displayName);
     }
-    // control: profile 1 still carries its one real grant
-    expect(result['1'].viewReports).toBe(true);
+    const granted = new Set(roles.flatMap((r) => r.permissionCodes));
+    expect(granted.has('manageSecurity')).toBe(false);
+    expect(granted.has('useAssistant')).toBe(false);
   });
 
-  it('logs and rethrows when db access fails', async () => {
-    const error = new Error('db unreachable');
-    const findOne = vi.fn().mockRejectedValue(error);
-    const db = { collection: vi.fn(() => ({ findOne })) };
-    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+  // #1149: the `security_permissions` overlay the removed PUT wrote is
+  // never read, since no enforcement path read it.
+  it('#1149: never reads the security_permissions collection', async () => {
+    const db = await seededDb();
 
-    await expect(securityService.getPermissions(db)).rejects.toThrow('db unreachable');
-    expect(errSpy).toHaveBeenCalled();
-  });
-});
+    await securityService.getPermissions(db);
 
-describe('SecurityService.updatePermissions', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('normalizes numeric profile keys to strings, persists and logs audit per changed permission', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
-
-    const newPermissions = { 2: { createSample: false } };
-    const currentPermissions = { '2': { createSample: true } };
-
-    const result = await securityService.updatePermissions(db, newPermissions, currentPermissions, { user: { userID: 'admin1' } });
-
-    expect(Object.keys(result)).toEqual(['2']);
-    expect(updateOne).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy.mock.calls[0][0].severity).toBe('critical');
-  });
-
-  it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-    vi.spyOn(auditLogger, 'log').mockResolvedValue({});
-
-    await securityService.updatePermissions(db, { '2': { createSample: true } }, {}, {});
-
-    const setArg = updateOne.mock.calls[0][1].$set;
-    expect(setArg.lastUpdatedBy).toBe('SYSTEM');
-  });
-
-  it('rejects with invalid profile and does not write to db', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-    await expect(securityService.updatePermissions(db, { '9': { viewReports: true } }, {}, {}))
-      .rejects.toThrow('Perfil inválido');
-    expect(updateOne).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalled();
-  });
-
-  it('rejects with invalid permission key even though profile is valid', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-    await expect(securityService.updatePermissions(db, { '1': { notARealPermission: true } }, {}, {}))
-      .rejects.toThrow('Permissão inválida');
-    expect(updateOne).not.toHaveBeenCalled();
-  });
-
-  it('rejects with non-boolean permission value', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-    await expect(securityService.updatePermissions(db, { '1': { viewReports: 'yes' } }, {}, {}))
-      .rejects.toThrow('deve ser booleano');
-    expect(updateOne).not.toHaveBeenCalled();
+    expect(db.collection.mock.calls.map(([name]) => name)).not.toContain('security_permissions');
   });
 });
 
-describe('SecurityService.detectPermissionChanges', () => {
-  it('reports every permission as changed (oldValue=false) for a brand new profile', () => {
-    const changes = securityService.detectPermissionChanges({}, { '1': { viewReports: true, uploadFiles: false } });
-
-    expect(changes).toHaveLength(2);
-    expect(changes.every(c => c.profile === '1')).toBe(true);
-    const viewReportsChange = changes.find(c => c.permission === 'viewReports');
-    expect(viewReportsChange.oldValue).toBe(false);
-    expect(viewReportsChange.newValue).toBe(true);
-  });
-
-  it('only reports permissions whose value actually changed for an existing profile', () => {
-    const oldPermissions = { '2': { createSample: true, viewReports: true } };
-    const newPermissions = { '2': { createSample: true, viewReports: false } };
-
-    const changes = securityService.detectPermissionChanges(oldPermissions, newPermissions);
-
-    expect(changes).toHaveLength(1);
-    expect(changes[0].permission).toBe('viewReports');
-    expect(changes[0].oldValue).toBe(true);
-    expect(changes[0].newValue).toBe(false);
-  });
-
-  it('treats a missing old permission as false when comparing', () => {
-    const changes = securityService.detectPermissionChanges({ '2': {} }, { '2': { createSample: true } });
-
-    expect(changes).toHaveLength(1);
-    expect(changes[0].oldValue).toBe(false);
-    expect(changes[0].newValue).toBe(true);
-  });
-});
-
-describe('SecurityService.validatePermissions', () => {
-  it('does not throw for valid profiles and boolean permission values', () => {
-    expect(() => securityService.validatePermissions({ '1': { viewReports: true }, '4': { manageSystem: false } })).not.toThrow();
-  });
-
-  it('throws for an invalid profile key', () => {
-    expect(() => securityService.validatePermissions({ '5': { viewReports: true } })).toThrow('Perfil inválido');
-  });
-
-  it('throws for an unknown permission key', () => {
-    expect(() => securityService.validatePermissions({ '1': { flyToTheMoon: true } })).toThrow('Permissão inválida');
-  });
-
-  it('throws when a permission value is not a boolean', () => {
-    expect(() => securityService.validatePermissions({ '1': { viewReports: 1 } })).toThrow('deve ser booleano');
-  });
-
-  it('does not throw for a profile with no permissions at all', () => {
-    expect(() => securityService.validatePermissions({ '1': {} })).not.toThrow();
-  });
+// #1149: updatePermissions, detectPermissionChanges and validatePermissions
+// were removed with PUT /api/security/permissions, their only caller.
+it('#1149: the permission write methods no longer exist', () => {
+  expect(securityService.updatePermissions).toBeUndefined();
+  expect(securityService.detectPermissionChanges).toBeUndefined();
+  expect(securityService.validatePermissions).toBeUndefined();
 });
 
 // #649 / RF014 AC#8: "Revogar sessoes quando a alteracao exigir." The predicate is
@@ -623,6 +697,10 @@ describe('SecurityService.validatePermissions', () => {
 // the predicate itself, which is the part that will be wrong if anyone widens the
 // list without thinking about direction.
 describe('SecurityService.updateConfig session revocation (#649)', () => {
+  beforeEach(() => {
+    stubRelease();
+  });
+
   function makeDb() {
     const sessions = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 4 }) };
     const config = { updateOne: vi.fn().mockResolvedValue({}), insertOne: vi.fn().mockResolvedValue({}) };
@@ -666,6 +744,26 @@ describe('SecurityService.updateConfig session revocation (#649)', () => {
     expect(sessions.updateMany).not.toHaveBeenCalled();
   });
 
+  it('#914: revokes when the absolute session cap is TIGHTENED, not when it is loosened', async () => {
+    const tightened = makeDb();
+    await securityService.updateConfig(
+      tightened.db,
+      { session: { maxSessionDurationHours: 4 } },
+      { session: { maxSessionDurationHours: 12 } },
+      req
+    );
+    expect(tightened.sessions.updateMany).toHaveBeenCalled();
+
+    const loosened = makeDb();
+    await securityService.updateConfig(
+      loosened.db,
+      { session: { maxSessionDurationHours: 24 } },
+      { session: { maxSessionDurationHours: 12 } },
+      req
+    );
+    expect(loosened.sessions.updateMany).not.toHaveBeenCalled();
+  });
+
   it('does NOT revoke on requireMFA, which is still inert -- it would readmit everyone WITHOUT MFA', async () => {
     const { db, sessions } = makeDb();
 
@@ -677,5 +775,87 @@ describe('SecurityService.updateConfig session revocation (#649)', () => {
     );
 
     expect(sessions.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+// #1254: a stored allowMultipleSessions false that no audit row shows an
+// administrator setting is the old code default, and is rewritten to true once.
+describe('SecurityService.reconcileAllowMultipleSessions (#1254)', () => {
+  let auditSpy;
+  beforeEach(() => {
+    auditSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  function makeDb({ marker = null, config = null, liveRow = null, archivedRow = null } = {}) {
+    const collections = {
+      systemBootstrap: { findOne: vi.fn().mockResolvedValue(marker), updateOne: vi.fn().mockResolvedValue({}) },
+      security_config: { findOne: vi.fn().mockResolvedValue(config), updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }) },
+      logs: { findOne: vi.fn().mockResolvedValue(liveRow) },
+      logs_archive: { findOne: vi.fn().mockResolvedValue(archivedRow) },
+    };
+    return { db: { collection: vi.fn((name) => collections[name]) }, ...collections };
+  }
+
+  it('rewrites an unchosen false to true, audits it, and marks the rewrite done', async () => {
+    const { db, security_config, systemBootstrap, logs } = makeDb({ config: { _id: 'main', session: { allowMultipleSessions: false } } });
+
+    await expect(securityService.reconcileAllowMultipleSessions(db)).resolves.toEqual({ status: 'rewritten' });
+
+    expect(logs.findOne).toHaveBeenCalledWith({
+      resourceType: { $in: ['SecurityConfiguration', 'SecurityConfig'] },
+      'payload.path': 'session.allowMultipleSessions',
+    });
+    expect(security_config.updateOne).toHaveBeenCalledWith(
+      { _id: 'main', 'session.allowMultipleSessions': false },
+      { $set: expect.objectContaining({ 'session.allowMultipleSessions': true }) }
+    );
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      resourceType: 'SecurityConfiguration',
+      payload: expect.objectContaining({ path: 'session.allowMultipleSessions', oldValue: false, newValue: true }),
+    }));
+    expect(systemBootstrap.updateOne).toHaveBeenCalledWith(
+      { _id: 'allow_multiple_sessions_default_v1' },
+      { $set: expect.objectContaining({ status: 'rewritten' }) },
+      { upsert: true }
+    );
+  });
+
+  it.each([
+    ['the live trail', { liveRow: { _id: 'l1' } }],
+    ['the archive', { archivedRow: { _id: 'a1' } }],
+  ])('keeps a false an administrator set, found in %s', async (_where, rows) => {
+    const { db, security_config } = makeDb({ config: { _id: 'main', session: { allowMultipleSessions: false } }, ...rows });
+
+    await expect(securityService.reconcileAllowMultipleSessions(db)).resolves.toEqual({ status: 'kept_administrator_choice' });
+    expect(security_config.updateOne).not.toHaveBeenCalled();
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('runs once: with the marker present it reads and writes nothing else', async () => {
+    const { db, security_config, systemBootstrap } = makeDb({
+      marker: { _id: 'allow_multiple_sessions_default_v1' },
+      config: { _id: 'main', session: { allowMultipleSessions: false } },
+    });
+
+    await expect(securityService.reconcileAllowMultipleSessions(db)).resolves.toEqual({ status: 'already_reconciled' });
+    expect(security_config.findOne).not.toHaveBeenCalled();
+    expect(systemBootstrap.updateOne).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['true', { _id: 'main', session: { allowMultipleSessions: true } }, 'kept'],
+    ['no document (a new deployment)', null, 'no_document'],
+  ])('leaves %s alone and still marks it done', async (_label, config, status) => {
+    const { db, security_config, systemBootstrap } = makeDb({ config });
+
+    await expect(securityService.reconcileAllowMultipleSessions(db)).resolves.toEqual({ status });
+    expect(security_config.updateOne).not.toHaveBeenCalled();
+    expect(systemBootstrap.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new deployment stores true', () => {
+    expect(securityService.getDefaultConfig().session.allowMultipleSessions).toBe(true);
   });
 });

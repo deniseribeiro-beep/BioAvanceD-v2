@@ -5,6 +5,8 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const logger = require("./src/utils/logger");
 const env = require("./src/config/env");
+const { skipAuthBudget } = require("./src/infrastructure/middleware/authLimiterSkip");
+const dependencyHealth = require("./src/infrastructure/health/dependencyHealth");
 
 const app = express();
 
@@ -89,6 +91,12 @@ const normalizedAllowed = new Set(allowedOrigins.map(normalizeOrigin));
 app.set("allowedOrigins", allowedOrigins);
 app.set("allowAllCors", allowAllCors);
 
+// #1308: first, so every later middleware's log line and audit event carries
+// the request's id (RNF020 C6, RF012 AC1's correlationId).
+app.use(require("./src/utils/requestContext").middleware);
+// RNF015 C1/C2 (#1323): before helmet, cors and the limiters, so their refusals count too.
+app.use(require("./src/infrastructure/metrics/httpMetrics").middleware);
+
 app.use(
   helmet({
     hsts: {
@@ -159,7 +167,8 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Request-Id"],
+    exposedHeaders: ["X-Request-Id"],
   })
 );
 
@@ -221,6 +230,8 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false,
+  // #1253: the public password-policy read verifies no secret; see authLimiterSkip.
+  skip: skipAuthBudget,
 });
 
 // #823/#832: six routes on the e-consent router carry no `authenticate` --
@@ -240,6 +251,11 @@ const consentLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
+// #1230: every limiter mounts AFTER auditRequest (above), deliberately, so a
+// 429 is itself an audited request. RF012 records every AuditEvent with its
+// result, and the binding principle bars configuration from disabling audit,
+// so rows are neither aggregated nor skipped. Their volume is retention's
+// job (RF026, #667). Pinned by rateLimitAudit.composition.test.js.
 if (!isTest) {
   app.use(globalLimiter);
   app.use("/api/auth", authLimiter);
@@ -259,6 +275,7 @@ app.use("/api/hpo", require("./src/interface/routes/hpo.routes"));
 app.use("/api/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/v1/patients", require("./src/interface/routes/patient.routes"));
 app.use("/api/samples", require("./src/interface/routes/sample.routes"));
+app.use("/api/file-access", require("./src/interface/routes/file-access.routes"));
 app.use("/api/quality", require("./src/interface/routes/quality.routes"));
 app.use("/api/import", require("./src/interface/routes/import.routes"));
 app.use("/api/results", require("./src/interface/routes/result.routes"));
@@ -278,7 +295,7 @@ app.use("/api/measurement-units", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -293,7 +310,7 @@ app.use("/api/quality-descriptions", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -308,7 +325,7 @@ app.use("/api/sample-types", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -323,7 +340,7 @@ app.use("/api/sample-origins", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -334,6 +351,7 @@ app.use("/api/extraction-protocols", createMasterDataRouter({
   idField: "id",
   model: require("./src/models/ExtractionProtocol")
 }));
+// #1403: no scopeField on purpose: dict-02 gives Study no owning organization (ELM-0066 is 0..*); docs/decisions/2026-10-25-study-and-workflow-run-organization-scope.md.
 app.use("/api/studies", createMasterDataRouter({
   collectionName: "studies",
   idField: "studyId",
@@ -377,7 +395,9 @@ app.use("/api/assays", createMasterDataRouter({
   collectionName: "assays",
   idField: "assayId",
   model: require("./src/models/Assay"),
-  validateReferences: require("./src/services/assayReferenceValidator").validateAssayReferences
+  validateReferences: require("./src/services/assayReferenceValidator").validateAssayReferences,
+  // #1182: Assay is the one mount with an organization field of its own.
+  scopeField: "laboratoryId"
 }));
 app.use("/api/reagent-lots", createMasterDataRouter({
   collectionName: "reagentLots",
@@ -391,16 +411,81 @@ app.use("/api/datasets", createMasterDataRouter({
   idField: "datasetId",
   model: require("./src/models/Dataset")
 }));
+// RF004 AC3-AC5, RF020 AC2-AC4: approvals, the governance context and the
+// events that set or convert it. Mounted before /api/collections.
+app.use("/api/collections/:collectionId/governance", require("./src/interface/routes/collection-governance.routes"));
 app.use("/api/collections", createMasterDataRouter({
   collectionName: "collections",
   idField: "collectionId",
-  model: require("./src/models/Collection")
+  model: require("./src/models/Collection"),
+  // RF020 AC4: a regime conversion needs an event and an approval, not an edit.
+  immutableFields: ["governanceRegime"]
+}));
+// RF020 AC5-AC7 (#1322): the MIABIS export of Biobank and Collection, its
+// national extensions and its round-trip loss report. Mounted before
+// /api/biobanks so its GET /:id does not take the path.
+app.use("/api/biobanks/miabis", require("./src/interface/routes/miabis-export.routes"));
+// RF011 AC4 (#1322): a sample file as a FHIR DocumentReference, behind the sample-file FHIR export's gates.
+app.use("/api/export/fhir/samples/:specimenId/files/:fileID", require("./src/interface/routes/fhir-document-reference-export.routes"));
+// RF011 AC4 (#1322): a WorkflowRun, a Study and an audit event as FHIR Provenance, ResearchStudy and AuditEvent.
+app.use("/api/export/fhir", require("./src/interface/routes/fhir-export.routes"));
+// RF020 AC1 (#1322): Network and Biobank, entered by a Coordenador or
+// Administrador; the MIABIS export reads them.
+app.use("/api/biobanks", createMasterDataRouter({
+  collectionName: "biobanks",
+  idField: "biobankId",
+  model: require("./src/models/Biobank"),
+  validateReferences: require("./src/services/institutionalReferenceValidator").validateBiobankReferences
+}));
+app.use("/api/networks", createMasterDataRouter({
+  collectionName: "networks",
+  idField: "networkId",
+  model: require("./src/models/Network"),
+  validateReferences: require("./src/services/institutionalReferenceValidator").validateNetworkReferences
+}));
+// ELM-0275..0285 (#1206): BiomarkerAssociation reference data, entered by a
+// Coordenador or Administrador; each association names its evidence (1..*).
+app.use("/api/biomarker-associations", createMasterDataRouter({
+  collectionName: "biomarkerAssociations",
+  idField: "biomarkerId",
+  model: require("./src/models/BiomarkerAssociation"),
+  validateReferences: require("./src/services/biomarkerAssociation.service").validateBiomarkerAssociationReferences
+}));
+// RF011 AC3, RNF024 C2, RULE-036 (#1322): the identifier namespaces a
+// Coordenador or Administrador enters; the FHIR import validation reads
+// them for identifier.system. A namespaceKey keeps its systemUri.
+app.use("/api/identifier-namespaces", createMasterDataRouter({
+  collectionName: "identifierNamespaceRegistries",
+  idField: "identifierNamespaceRegistryId",
+  model: require("./src/models/IdentifierNamespaceRegistry"),
+  validateReferences: require("./src/services/identifierNamespaceRegistry.service").validateNamespaceReferences,
+  immutableFields: ["namespaceKey", "systemUri"]
+}));
+// RF011 AC2 (#1322): mapping releases; a new mappingVersion is a new row naming the old one in supersedesReleaseId.
+app.use("/api/interoperability-mapping-releases", createMasterDataRouter({
+  collectionName: "interoperabilityMappingReleases",
+  idField: "interoperabilityMappingReleaseId",
+  model: require("./src/models/InteroperabilityMappingRelease"),
+  validateReferences: require("./src/services/interoperabilityMappingRelease.service").validateMappingReleaseReferences,
+  immutableFields: ["mappingVersion"]
+}));
+// RF011 AC2 (#1322): FHIR profiles under a stored release; the FHIR import validation reads them for meta.profile.
+app.use("/api/fhir-profiles", createMasterDataRouter({
+  collectionName: "fhirProfileRegistries",
+  idField: "fhirProfileRegistryId",
+  model: require("./src/models/FHIRProfileRegistry"),
+  validateReferences: require("./src/services/interoperabilityMappingRelease.service").validateProfileReferences,
+  immutableFields: ["canonicalUrl", "profileVersion"]
 }));
 app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
+app.use("/api/workflow-runs/:workflowRunId/lineage", require("./src/interface/routes/workflow-run-lineage.routes"));
+// #1403: no scopeField on purpose: dict-02 gives WorkflowRun no organization field (ELM-0326..0336, V2E-0477..0480); docs/decisions/2026-10-25-study-and-workflow-run-organization-scope.md.
 app.use("/api/workflow-runs", createMasterDataRouter({
   collectionName: "workflowRuns",
   idField: "workflowRunId",
-  model: require("./src/models/WorkflowRun")
+  model: require("./src/models/WorkflowRun"),
+  // RF027 AC6 (#1322): resumesWorkflowRunId names a stored failed run on create, never edited.
+  validateReferences: require("./src/services/workflowRun.service").validateWorkflowRunReferences
 }));
 app.use("/api/omics-qualifications", createMasterDataRouter({
   collectionName: "omicsQualifications",
@@ -412,24 +497,45 @@ app.use("/api/omics-runs", createMasterDataRouter({
   idField: "omicsRunId",
   model: require("./src/models/OmicsRun")
 }));
+// ImagingDerivedData, segmentation and feature sets (ELM-0355/0356, #721).
+app.use("/api/imaging-derived-data", createMasterDataRouter({
+  collectionName: "imagingDerivedData",
+  idField: "imagingDerivedDataId",
+  model: require("./src/models/ImagingDerivedData")
+}));
+// ImagingStudy, DICOM study and series metadata (ELM-0353/0354, #721).
+app.use("/api/imaging-studies", createMasterDataRouter({
+  collectionName: "imagingStudies",
+  idField: "imagingStudyId",
+  model: require("./src/models/ImagingStudy")
+}));
+app.use("/api/diagnostic-reports", require("./src/interface/routes/diagnostic-report.routes"));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));
-app.use("/api/facilities", require("./src/interface/routes/facility.routes"));
-app.use("/api/rooms", require("./src/interface/routes/room.routes"));
+app.use("/api/physical-chain", require("./src/interface/routes/physical-chain.routes"));
+app.use("/api/devices", require("./src/interface/routes/device.routes"));
+app.use("/api/device-registrations", require("./src/interface/routes/deviceRegistration.routes"));
+app.use("/api/telemetry-datastreams", require("./src/interface/routes/telemetryDatastream.routes"));
 app.use("/api/policies", require("./src/interface/routes/policy.routes"));
 app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
 app.use("/api/iot", require("./src/interface/routes/iot.routes"));
 // RF029 slice 1/6 (#669): test-support-only ingestion gateway probe, same
 // NODE_ENV+shared-secret gating as iot.routes.js's telemetry-monitor routes.
 app.use("/api/_test-support/ingestion", require("./src/interface/routes/ingestionTestSupport.routes"));
+// RF029 (#1318): the production ingestion route; it persists and audits.
+app.use("/api/ingestion", require("./src/interface/routes/ingestion.routes"));
 app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));
 app.use("/api/incidents", require("./src/interface/routes/incident.routes"));
 app.use("/api/e-consent", require("./src/routes/eConsent.js"));
 app.use("/api/retention-policies", require("./src/routes/retentionPolicy.js"));
 app.use("/api/legal-holds", require("./src/routes/legalHold.js"));
 app.use("/api/disposition-actions", require("./src/routes/dispositionAction.js"));
+app.use("/api/shipments", require("./src/routes/shipment.js"));
 app.use("/api/access-requests", require("./src/routes/accessRequest.js"));
+app.use("/api/access-policies", require("./src/routes/accessPolicy.js"));
+app.use("/api/reference-releases", require("./src/interface/routes/referenceRelease.routes"));
+app.use("/api/monitoring", require("./src/interface/routes/monitoring.routes"));
 app.use("/api/notification-rules", require("./src/routes/notificationRule.js"));
 app.use("/api/notifications", require("./src/routes/notification.js"));
 app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));
@@ -447,8 +553,18 @@ app.use("/api/cids", require("./src/interface/routes/cid.routes"));
 app.use("/api/phone-codes", require("./src/interface/routes/phone-codes.routes"));
 app.use("/api/dictionary", require("./src/interface/routes/dictionary.routes"));
 
-app.get("/api/health", (req, res) => {
-  res.json({ status: "OK", db: !!req.app.locals.db });
+// RNF003 AC3 (#1323): 503 only when a check the server cannot serve without is
+// down -- MongoDB always, Neo4j only under fail-closed/NEO4J_REQUIRED, matching
+// the boot posture. Redis and InfluxDB down give degraded: true under 200, so a
+// compose healthcheck never restarts the backend over them (#977).
+app.get("/api/health", async (req, res) => {
+  const report = await dependencyHealth.checkDependencies(dependencyHealth.inputsFrom(req.app));
+  res.status(report.critical ? 503 : 200).json({
+    status: report.critical ? "UNAVAILABLE" : "OK",
+    db: report.checks.mongodb.status === "up",
+    degraded: report.degraded,
+    checks: report.checks,
+  });
 });
 
 module.exports = app;

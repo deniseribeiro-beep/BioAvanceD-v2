@@ -4,11 +4,12 @@ import {
   getPendingReturnQuantity,
   getSpecimenStatusColor,
   getStorageLabel,
+  isRcsGradeShown,
   resolveInitialTab,
   resolveSpecimenStatus,
   translateSpecimenStatus,
 } from './SampleWithdrawalReturnPage';
-import type { SampleStorageLocationDTO } from '../types/models';
+import type { Sample, SampleStorageLocationDTO } from '../types/models';
 
 function makeLocation(overrides: Partial<SampleStorageLocationDTO> = {}): SampleStorageLocationDTO {
   return {
@@ -50,8 +51,9 @@ describe('getStorageLabel', () => {
 
 // #538: the withdraw/return gates used to read `sample.currentStatus`, a
 // field the real withdraw/return write path (sample.service.js) never
-// sets — these cover the fix, deriving from `specimenStatus` instead
-// (dict-02 ELM-0123, the field Sample.js#computeStatus actually writes).
+// sets. RF006 AC2/AC3: the operational gate reads specimenStatus, and how
+// much is left reads quantityStatus; withdraw and return no longer move
+// specimenStatus.
 describe('resolveSpecimenStatus', () => {
   it('defaults to available when specimenStatus is absent, matching the backend default', () => {
     expect(resolveSpecimenStatus(null)).toBe('available');
@@ -59,22 +61,25 @@ describe('resolveSpecimenStatus', () => {
   });
 
   it('lowercases whatever specimenStatus carries', () => {
-    expect(resolveSpecimenStatus({ specimenStatus: 'DEPLETED' as any })).toBe('depleted');
+    expect(resolveSpecimenStatus({ specimenStatus: 'CLOSED' })).toBe('closed');
   });
 });
 
 describe('canWithdrawSample', () => {
-  it('allows withdrawal for available and partial samples', () => {
-    expect(canWithdrawSample({ specimenStatus: 'available' })).toBe(true);
-    expect(canWithdrawSample({ specimenStatus: 'partial' })).toBe(true);
+  it('allows withdrawal for an available specimen with a full or partial quantity', () => {
+    expect(canWithdrawSample({ specimenStatus: 'available', quantityStatus: 'full' })).toBe(true);
+    expect(canWithdrawSample({ specimenStatus: 'available', quantityStatus: 'partial' })).toBe(true);
   });
 
-  it('blocks withdrawal for depleted, quarantined, destroyed, unavailable, and disposed samples', () => {
-    expect(canWithdrawSample({ specimenStatus: 'depleted' })).toBe(false);
-    expect(canWithdrawSample({ specimenStatus: 'quarantined' })).toBe(false);
-    expect(canWithdrawSample({ specimenStatus: 'destroyed' })).toBe(false);
-    expect(canWithdrawSample({ specimenStatus: 'unavailable' })).toBe(false);
-    expect(canWithdrawSample({ specimenStatus: 'disposed' })).toBe(false);
+  it('blocks withdrawal when quantityStatus is depleted, though specimenStatus stays available', () => {
+    expect(canWithdrawSample({ specimenStatus: 'available', quantityStatus: 'depleted' })).toBe(false);
+    expect(canWithdrawSample({ specimenStatus: 'available', initialQuantity: 100, currentQuantity: 0 })).toBe(false);
+  });
+
+  it('blocks withdrawal for quarantined, unavailable and closed specimens', () => {
+    expect(canWithdrawSample({ specimenStatus: 'quarantined', quantityStatus: 'full' })).toBe(false);
+    expect(canWithdrawSample({ specimenStatus: 'unavailable', quantityStatus: 'full' })).toBe(false);
+    expect(canWithdrawSample({ specimenStatus: 'closed', quantityStatus: 'depleted' })).toBe(false);
   });
 
   it('blocks withdrawal when there is no sample', () => {
@@ -88,38 +93,45 @@ describe('getPendingReturnQuantity', () => {
   });
 
   it('returns totalWithdrawn minus totalReturned in the normal case', () => {
-    expect(getPendingReturnQuantity({ specimenStatus: 'partial', totalWithdrawn: 30, totalReturned: 10 })).toBe(20);
+    expect(getPendingReturnQuantity({ specimenStatus: 'available', quantityStatus: 'partial', totalWithdrawn: 30, totalReturned: 10 })).toBe(20);
   });
 
   it('falls back to the original quantity for legacy depleted samples with no ledger total', () => {
     expect(
-      getPendingReturnQuantity({ specimenStatus: 'depleted', totalWithdrawn: 0, totalReturned: 0, initialQuantity: 500 })
+      getPendingReturnQuantity({ specimenStatus: 'available', quantityStatus: 'depleted', totalWithdrawn: 0, totalReturned: 0, initialQuantity: 500 })
     ).toBe(500);
   });
 
   it('does not apply the legacy fallback once a ledger total exists', () => {
     expect(
-      getPendingReturnQuantity({ specimenStatus: 'depleted', totalWithdrawn: 500, totalReturned: 500, initialQuantity: 500 })
+      getPendingReturnQuantity({ specimenStatus: 'available', quantityStatus: 'depleted', totalWithdrawn: 500, totalReturned: 500, initialQuantity: 500 })
+    ).toBe(0);
+  });
+
+  it('offers no return for a closed specimen, whatever the ledger says', () => {
+    expect(
+      getPendingReturnQuantity({ specimenStatus: 'closed', quantityStatus: 'depleted', totalWithdrawn: 500, totalReturned: 0, initialQuantity: 500 })
     ).toBe(0);
   });
 });
 
 describe('resolveInitialTab', () => {
-  it('opens the return tab for partial and depleted samples', () => {
-    expect(resolveInitialTab({ specimenStatus: 'partial' })).toBe('return');
-    expect(resolveInitialTab({ specimenStatus: 'depleted' })).toBe('return');
+  it('opens the return tab when quantityStatus is partial or depleted', () => {
+    expect(resolveInitialTab({ specimenStatus: 'available', quantityStatus: 'partial' })).toBe('return');
+    expect(resolveInitialTab({ specimenStatus: 'available', quantityStatus: 'depleted' })).toBe('return');
   });
 
-  it('opens the withdraw tab for available samples and anything else', () => {
-    expect(resolveInitialTab({ specimenStatus: 'available' })).toBe('withdraw');
-    expect(resolveInitialTab({ specimenStatus: 'quarantined' })).toBe('withdraw');
+  it('opens the withdraw tab for a full quantity, a blocked or closed specimen, and no sample', () => {
+    expect(resolveInitialTab({ specimenStatus: 'available', quantityStatus: 'full' })).toBe('withdraw');
+    expect(resolveInitialTab({ specimenStatus: 'quarantined', quantityStatus: 'partial' })).toBe('withdraw');
+    expect(resolveInitialTab({ specimenStatus: 'closed', quantityStatus: 'depleted' })).toBe('withdraw');
     expect(resolveInitialTab(null)).toBe('withdraw');
   });
 });
 
 describe('getSpecimenStatusColor / translateSpecimenStatus', () => {
-  it('maps every canonical specimenStatus value to a color and a Portuguese label', () => {
-    const values = ['available', 'reserved', 'checked_out', 'partial', 'depleted', 'quarantined', 'destroyed', 'unavailable', 'disposed'];
+  it('maps every v2 specimenStatus value to a color and a Portuguese label', () => {
+    const values = ['available', 'reserved', 'checked_out', 'quarantined', 'unavailable', 'closed'];
     for (const value of values) {
       expect(getSpecimenStatusColor(value)).not.toBe('var(--text)');
       expect(translateSpecimenStatus(value)).not.toBe(value);
@@ -130,5 +142,21 @@ describe('getSpecimenStatusColor / translateSpecimenStatus', () => {
     expect(getSpecimenStatusColor('something-unknown')).toBe('var(--text)');
     expect(translateSpecimenStatus('something-unknown')).toBe('something-unknown');
     expect(translateSpecimenStatus(undefined)).toBe('-');
+  });
+});
+
+// RF018 AC11 (#1320): the scope notice follows the quality row only when it
+// shows an RCS grade.
+describe('isRcsGradeShown', () => {
+  it('is true when the sample carries an RCS final grade', () => {
+    expect(isRcsGradeShown({ final_grade: 'B' } as Sample)).toBe(true);
+    expect(isRcsGradeShown({ rcs_evaluation: { final_grade: 'A' } } as Sample)).toBe(true);
+  });
+
+  it('is false when no RCS grade is shown', () => {
+    expect(isRcsGradeShown(null)).toBe(false);
+    expect(isRcsGradeShown({} as Sample)).toBe(false);
+    expect(isRcsGradeShown({ final_grade: '  ' } as Sample)).toBe(false);
+    expect(isRcsGradeShown({ quality: '1' } as Sample)).toBe(false);
   });
 });

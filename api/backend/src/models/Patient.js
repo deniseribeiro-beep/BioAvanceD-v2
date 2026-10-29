@@ -4,8 +4,14 @@
 // previously duplicated identically between validate() and create(), plus
 // a third, payload-level copy in paciente.controller.js#rejectCanonicalAliases
 // that now builds its own allow-list off this same list).
+// #1166 slice 4: 'email' and 'phone' stay on this list as accepted, validated
+// INPUT only. create() no longer emits them: the contact is written to
+// ParticipantIdentity alone (dict-02 P1X-0352/P1X-0353). #1168: likewise the
+// four representative* fields (dict-02 P1X-0357..0360). #1386: and
+// 'recordNumber', the hospital record number (dict-02 P1X-0355), which is
+// stored enciphered on ParticipantIdentity as recordNumberCiphertext.
 const CANONICAL_FIELDS = [
-  'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
+  'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentTokenHash','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
 ];
 
 class ParticipantModel {
@@ -50,23 +56,27 @@ class ParticipantModel {
       throw error;
     }
 
+    // #1166 slice 4: validated here, persisted on ParticipantIdentity only.
+    const email = data.email ? String(data.email).trim().toLowerCase() : null;
+    if (email && !this.isValidEmail(email)) {
+      throw new Error('email inválido');
+    }
+    // #1168: same for the representative's address.
+    const representativeEmail = data.representativeEmail ? String(data.representativeEmail).trim().toLowerCase() : null;
+    if (representativeEmail && !this.isValidEmail(representativeEmail)) {
+      throw new Error('representativeEmail inválido');
+    }
+
     const normalized = {
       participantId: String(data.participantId || '').trim(),
       sex: String(data.sex || '').trim(),
-      email: data.email ? String(data.email).trim().toLowerCase() : null,
-      phone: this.normalizePhone(data.phone),
-      recordNumber: data.recordNumber ? String(data.recordNumber).trim() : null,
       clinicalUnitId: data.clinicalUnitId || null,
       clinicalUnit: data.clinicalUnit || null,
       unitAcronym: data.unitAcronym || null,
       isDeceased: Boolean(data.isDeceased),
-      representativeName: data.representativeName || null,
-      representativeEmail: data.representativeEmail ? String(data.representativeEmail).trim().toLowerCase() : null,
-      representativeIdentityDocument: data.representativeIdentityDocument || null,
-      representativePhone: this.normalizePhone(data.representativePhone),
       consentTemplateId: data.consentTemplateId || null,
       status: data.status || 'PENDING_CONSENT',
-      consentToken: data.consentToken || null,
+      consentTokenHash: data.consentTokenHash || null,
       consentTokenCreatedAt: data.consentTokenCreatedAt ? new Date(data.consentTokenCreatedAt) : null,
       consentTokenExpiresAt: data.consentTokenExpiresAt ? new Date(data.consentTokenExpiresAt) : null,
       consentNotifiedAt: data.consentNotifiedAt ? new Date(data.consentNotifiedAt) : null,
@@ -113,6 +123,101 @@ class ParticipantModel {
 
 ParticipantModel.CANONICAL_FIELDS = CANONICAL_FIELDS;
 
+// #1277: the value type each field an update may carry must hold. Every
+// CANONICAL_FIELDS entry is here, plus the three civil-identity fields the
+// update payload still routes on to ParticipantIdentity (#575). `nullable`
+// fields may be cleared with null; the others are required on create.
+// A date accepts a Date or a string that parses as one.
+const FIELD_TYPES = {
+  participantId: { type: 'string' },
+  sex: { type: 'string' },
+  email: { type: 'string', nullable: true },
+  phone: { type: 'string', nullable: true },
+  recordNumber: { type: 'string', nullable: true },
+  clinicalUnitId: { type: 'string', nullable: true },
+  clinicalUnit: { type: 'string', nullable: true },
+  unitAcronym: { type: 'string', nullable: true },
+  isDeceased: { type: 'boolean' },
+  representativeName: { type: 'string', nullable: true },
+  representativeEmail: { type: 'string', nullable: true },
+  representativeIdentityDocument: { type: 'string', nullable: true },
+  representativePhone: { type: 'string', nullable: true },
+  consentTemplateId: { type: 'string' },
+  status: { type: 'string' },
+  consentTokenHash: { type: 'string', nullable: true },
+  consentTokenCreatedAt: { type: 'date', nullable: true },
+  consentTokenExpiresAt: { type: 'date', nullable: true },
+  consentNotifiedAt: { type: 'date', nullable: true },
+  consentAcceptedAt: { type: 'date', nullable: true },
+  createdAt: { type: 'date' },
+  updatedAt: { type: 'date' },
+  anamneseGeral: { type: 'object', nullable: true },
+  dadosEspecificos: { type: 'array' },
+  studyId: { type: 'string', nullable: true },
+  patientName: { type: 'string', nullable: true },
+  birthDate: { type: 'date', nullable: true },
+  identityDocument: { type: 'string', nullable: true }
+};
+
+const TYPE_NAMES = {
+  string: 'um texto',
+  boolean: 'verdadeiro ou falso',
+  date: 'uma data',
+  object: 'um objeto',
+  array: 'uma lista'
+};
+
+function holdsType(value, type) {
+  switch (type) {
+    case 'string': return typeof value === 'string';
+    case 'boolean': return typeof value === 'boolean';
+    case 'date':
+      if (value instanceof Date) return !Number.isNaN(value.getTime());
+      return typeof value === 'string' && value.trim() !== '' && !Number.isNaN(new Date(value).getTime());
+    case 'object': return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date);
+    case 'array': return Array.isArray(value);
+    default: return false;
+  }
+}
+
+/**
+ * #1277: the type errors of an update patch, one per offending field, naming
+ * it. Only the keys FIELD_TYPES declares are checked; whether a key is
+ * allowed at all is the controller's allow-list (rejectCanonicalAliases).
+ * An undefined value is an absent key.
+ */
+ParticipantModel.validateUpdateTypes = function validateUpdateTypes(patch = {}) {
+  const errors = [];
+  for (const [field, value] of Object.entries(patch)) {
+    if (value === undefined || !Object.prototype.hasOwnProperty.call(FIELD_TYPES, field)) continue;
+    const { type, nullable } = FIELD_TYPES[field];
+    if (value === null) {
+      if (!nullable) errors.push(`${field} não pode ser nulo`);
+      continue;
+    }
+    if (!holdsType(value, type)) errors.push(`${field} deve ser ${TYPE_NAMES[type]}`);
+  }
+  return errors;
+};
+
+ParticipantModel.FIELD_TYPES = FIELD_TYPES;
+
+// #1281: canonical fields only the server writes. The consent flows set the
+// status and the consent* fields through their own service paths, and the
+// timestamps are the record's own. PUT /api/patients/:id refuses them: with
+// status, consentTokenHash and consentTokenExpiresAt writable there, a caller
+// could mint a token of its own and accept a consent for the participant.
+ParticipantModel.SERVER_MANAGED_FIELDS = [
+  'status',
+  'consentTokenHash',
+  'consentTokenCreatedAt',
+  'consentTokenExpiresAt',
+  'consentNotifiedAt',
+  'consentAcceptedAt',
+  'createdAt',
+  'updatedAt'
+];
+
 /**
  * #1045: removes the consent CREDENTIAL from a participant document on its way
  * out of the API.
@@ -131,21 +236,21 @@ ParticipantModel.CANONICAL_FIELDS = CANONICAL_FIELDS;
  * patient directory renders both and neither is a credential -- stripping the
  * whole consent block would break the badge and the resend flow instead.
  *
- * This is containment, not the fix. The token is still stored in plaintext and
- * still compared with `!==`; hashing it at rest is tracked separately, and it
- * is gated on `resendConsentNotification`, which READS the stored token back
- * to re-send the same link and so cannot work against a hash unchanged.
+ * #1049: the token is no longer stored at all -- only `consentTokenHash`
+ * (utils/consentTokenHash.js). The hash is stripped too: it is not a usable
+ * credential, but it is still nothing a response needs. A legacy row's
+ * plaintext `consentToken` is stripped until the migration has converted it.
  *
  * Applied at the RESPONSE boundary rather than in a query projection on
  * purpose: the same documents are read internally by paths that legitimately
- * need the token (validateConsentToken, acceptConsentToken,
- * resendConsentNotification), so a projection would break them.
+ * need the hash (validateConsentToken, acceptConsentToken), so a projection
+ * would break them.
  */
 ParticipantModel.stripConsentSecrets = function stripConsentSecrets(patient) {
   if (!patient || typeof patient !== 'object') return patient;
   if (Array.isArray(patient)) return patient.map(ParticipantModel.stripConsentSecrets);
 
-  const { consentToken, consentTokenCreatedAt, ...rest } = patient;
+  const { consentToken, consentTokenHash, consentTokenCreatedAt, ...rest } = patient;
   return rest;
 };
 

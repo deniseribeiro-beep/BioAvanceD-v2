@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // NOTE on mocking strategy: this repo's Vitest setup does not let vi.mock()
-// intercept CommonJS require() (see .claude/skills/testing-conventions/SKILL.md).
+// intercept CommonJS require().
 // auth.controller.js does plain, non-destructured
 // `const authService = require('../services/auth.service')`,
 // `const bcrypt = require('bcryptjs')` and
@@ -41,90 +41,6 @@ const NO_DB_REQ = (overrides = {}) => createReq({ app: { locals: {} }, ...overri
 
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe('AuthController.register', () => {
-  it('returns 503 when db is unavailable', async () => {
-    const req = NO_DB_REQ();
-    const res = createRes();
-
-    await authController.register(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(503);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: 'Banco de dados não disponível',
-    });
-  });
-
-  // #1037: registerUser's third argument is `grantedBy`, defaulting to the
-  // string 'system'. While POST /api/auth/register was unauthenticated the
-  // controller passed only two arguments, so every account created through it
-  // carried grantedBy: 'system' on its UserRoleAssignment with no actor
-  // anywhere. The route now requires authenticate + createUser, so the
-  // caller's id is always available and is forwarded.
-  it('returns 201, forwards the caller as grantedBy, and writes the CREATE audit row', async () => {
-    const fakeUser = { userID: 'u1', username: 'alice', _id: { toString: () => 'oid-1' } };
-    vi.spyOn(authService, 'registerUser').mockResolvedValue(fakeUser);
-    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
-    const req = createReq({
-      body: { username: 'alice', password: 'Str0ng!Pass' },
-      user: { userID: 'caller-1' },
-    });
-    const res = createRes();
-
-    await authController.register(req, res);
-
-    expect(authService.registerUser).toHaveBeenCalledWith(req.app.locals.db, req.body, 'caller-1');
-    // RF003 AC#6 requires auditing account creation; RF012 AC#1 and RNF009
-    // AC#2 (Critica) make the actor mandatory on the event.
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy.mock.calls[0][0]).toMatchObject({
-      action: 'CREATE',
-      resourceType: 'User',
-      resourceId: 'oid-1',
-      status: 'success',
-    });
-    expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith({
-      success: true,
-      message: 'Usuário registrado com sucesso',
-      data: fakeUser,
-    });
-  });
-
-  // #1037: a logging fault must not turn a successful creation into a 400 via
-  // the handler's outer catch. auditLogger.log swallows its own errors, so
-  // this pins the controller's own belt-and-braces guard rather than that.
-  it('still returns 201 when the audit write throws', async () => {
-    const fakeUser = { userID: 'u1', username: 'alice', _id: { toString: () => 'oid-1' } };
-    vi.spyOn(authService, 'registerUser').mockResolvedValue(fakeUser);
-    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-    vi.spyOn(auditLogger, 'log').mockRejectedValue(new Error('audit down'));
-    vi.spyOn(logger, 'error').mockImplementation(() => {});
-    const req = createReq({ body: { username: 'alice' }, user: { userID: 'caller-1' } });
-    const res = createRes();
-
-    await authController.register(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(201);
-  });
-
-  it('returns 400 when authService.registerUser throws', async () => {
-    vi.spyOn(authService, 'registerUser').mockRejectedValue(new Error('username taken'));
-    const req = createReq({ body: { username: 'alice' } });
-    const res = createRes();
-
-    await authController.register(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      error: 'Erro ao registrar usuário',
-      message: 'username taken',
-    });
-  });
 });
 
 describe('AuthController.login', () => {
@@ -555,6 +471,28 @@ describe('AuthController.requestPasswordReset', () => {
   });
 });
 
+// #1249: authentication.allowPasswordReset off refuses the emailed-token flow.
+describe('password reset while authentication.allowPasswordReset is off', () => {
+  const disabledDb = { collection: () => ({ findOne: async () => ({ _id: 'main', authentication: { allowPasswordReset: false } }) }) };
+
+  it('requestPasswordReset answers 403 PASSWORD_RESET_DISABLED and sends nothing', async () => {
+    const spy = vi.spyOn(authService, 'requestPasswordReset');
+    const res = createRes();
+    await authController.requestPasswordReset(createReq({ app: { locals: { db: disabledDb } }, body: { email: 'a@b.com' } }), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json.mock.calls[0][0].code).toBe('PASSWORD_RESET_DISABLED');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('resetPassword answers 403 PASSWORD_RESET_DISABLED and changes nothing', async () => {
+    const spy = vi.spyOn(authService, 'resetPassword');
+    const res = createRes();
+    await authController.resetPassword(createReq({ app: { locals: { db: disabledDb } }, body: { token: 't', newPassword: 'NewStr0ng!' } }), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
 describe('AuthController.resetPassword', () => {
   it('returns 503 when db is unavailable', async () => {
     const req = NO_DB_REQ({ body: { token: 't', newPassword: 'p' } });
@@ -682,7 +620,7 @@ describe('AuthController.changePassword', () => {
   });
 
   it('returns 400 when the old password does not match', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [] };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [] };
     const usersCollection = createUsersCollection(user);
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
@@ -708,7 +646,7 @@ describe('AuthController.changePassword', () => {
   // covered the other three with auth.service's shared helpers and this one was
   // not reachable from them, because the helpers were module-private.
   it('counts a wrong old password toward the account lockout', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], failedLoginAttempts: 1 };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [], failedLoginAttempts: 1 };
     const usersCollection = createUsersCollection(user);
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
@@ -734,7 +672,7 @@ describe('AuthController.changePassword', () => {
   // one still burns a round.
   it('refuses a locked account before verifying the old password', async () => {
     const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], accountLockedUntil: lockedUntil };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [], accountLockedUntil: lockedUntil };
     const usersCollection = createUsersCollection(user);
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
@@ -757,7 +695,7 @@ describe('AuthController.changePassword', () => {
   // pair cannot tell a working gate from one that refuses unconditionally.
   it('allows the change when a previous lock has already expired', async () => {
     const expired = new Date(Date.now() - 60 * 1000);
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], accountLockedUntil: expired };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [], accountLockedUntil: expired };
     const usersCollection = createUsersCollection(user);
     const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 0 }) };
     const db = { collection: vi.fn((name) => (name === 'sessions' ? sessionsCollection : usersCollection)) };
@@ -778,8 +716,38 @@ describe('AuthController.changePassword', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
+  it('#1244: stores passwordHistory to the policy depth from security_config', async () => {
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: ['h1', 'h2'] };
+    const usersCollection = createUsersCollection(user);
+    const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 0 }) };
+    const policy = { _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 2 } };
+    const configCollection = { findOne: vi.fn().mockResolvedValue(policy) };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'sessions') return sessionsCollection;
+        if (name === 'security_config') return configCollection;
+        return usersCollection;
+      }),
+    };
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(bcrypt, 'hash').mockResolvedValue('hashed-new');
+    vi.spyOn(passwordService, 'validateStrength').mockReturnValue(true);
+    vi.spyOn(passwordService, 'validateReuse').mockResolvedValue(undefined);
+    const req = createReq({
+      app: { locals: { db } },
+      user: { userID: '507f1f77bcf86cd799439011' },
+      body: { oldPassword: 'correct', newPassword: 'NewStr0ng!' },
+    });
+    const res = createRes();
+
+    await authController.changePassword(req, res);
+
+    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, expect.objectContaining({ preventReuse: true, maxReuseHistory: 2 }));
+    expect(usersCollection.updateOne.mock.calls[0][1].$set.passwordHistoryHashes).toEqual(['hashed-old', 'h1']);
+  });
+
   it('updates the password and returns 200 on success', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: ['hashed-oldest'] };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: ['hashed-oldest'] };
     const usersCollection = createUsersCollection(user);
     // #958: a named sessions collection, not the one-collection-for-every-name
     // stub this file used -- a password change now revokes the user's OTHER
@@ -800,16 +768,25 @@ describe('AuthController.changePassword', () => {
 
     await authController.changePassword(req, res);
 
-    expect(passwordService.validateStrength).toHaveBeenCalledWith('NewStr0ng!');
-    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user);
+    // #1244/#1246: the resolved policy. This mock answers every collection's
+    // findOne, the security_config read included, with the user, which reads
+    // as a stored document with no passwordRules (#1257).
+    // #1257: and the account, whose MFA enrolment decides the length floor.
+    const policy = passwordService.validateStrength.mock.calls[0][1];
+    expect(policy).toMatchObject({ minLength: 8, minLengthWithMFA: 8, preventReuse: true });
+    expect(passwordService.validateStrength).toHaveBeenCalledWith('NewStr0ng!', policy, user);
+    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, policy);
     expect(bcrypt.hash).toHaveBeenCalledWith('NewStr0ng!', 10);
+    // #1330: `user` is legacy-named; the change is stored under the canonical
+    // names and the legacy ones are removed.
     expect(usersCollection.updateOne).toHaveBeenCalledWith(
       { _id: 'u1' },
       {
+        $unset: { password: '', passwordHistory: '', forceReset: '' },
         $set: expect.objectContaining({
-          password: 'hashed-new',
-          passwordHistory: ['hashed-old', 'hashed-oldest'],
-          forceReset: false,
+          passwordHash: 'hashed-new',
+          passwordHistoryHashes: ['hashed-old', 'hashed-oldest'],
+          forcePasswordReset: false,
           // #995: failedLoginAttempts: 0 was here alone. The lockout gate reads
           // accountLockedUntil and never the counter, so zeroing one without
           // nulling the other left the document internally inconsistent -- zero
@@ -824,7 +801,10 @@ describe('AuthController.changePassword', () => {
     // All-but-current: the session making this request just proved knowledge of
     // BOTH the old and the new password, so it is not an affected session.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ userID: '507f1f77bcf86cd799439011', isActive: true }),
+      expect.objectContaining({
+        userAccountId: '507f1f77bcf86cd799439011',
+        isActive: true
+      }),
       expect.objectContaining({
         $set: expect.objectContaining({
           isRevoked: true,
@@ -858,7 +838,7 @@ describe('AuthController.changePassword', () => {
   });
 
   it('returns 400 when passwordService.validateStrength throws', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [] };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [] };
     const usersCollection = createUsersCollection(user);
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
@@ -917,10 +897,12 @@ describe('AuthController.setupMFAFirstLogin', () => {
 
     await authController.setupMFAFirstLogin(req, res);
 
-    expect(authService.setupMFAFirstLogin).toHaveBeenCalledWith(req.app.locals.db, {
-      username: 'alice',
-      password: 'p',
-    });
+    // req is passed through so the service's source-address gate sees req.ip (#1255).
+    expect(authService.setupMFAFirstLogin).toHaveBeenCalledWith(
+      req.app.locals.db,
+      { username: 'alice', password: 'p' },
+      req
+    );
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,

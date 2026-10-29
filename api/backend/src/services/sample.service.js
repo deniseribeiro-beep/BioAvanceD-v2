@@ -1,5 +1,6 @@
 const { SampleModel, BLOCKED_SPECIMEN_STATUSES } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
+const collectionGovernanceService = require('./collectionGovernance.service');
 const logger = require('../utils/logger');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
@@ -11,17 +12,23 @@ const {
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
-const { withMongoTransaction } = require('../utils/mongoTransaction');
+const crypto = require('crypto');
+const { withMongoTransaction, withTransactionWhereSupported, isTransientTransactionError } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const qualityDomain = require('./quality-domain.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
-const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+const legalHoldService = require('./legalHold.service');
+const operationalStateDecisionService = require('./operationalStateDecision.service');
+const { applySampleOrganizationScope } = require('./sampleTenancy.service');
 const participantIdentityService = require('./participantIdentity.service');
+const { issueSpecimenLabel } = require('./specimenLabel.service');
+const { withoutLegacyBarcode, assertLegacyBarcodeWritable } = require('../utils/sampleBarcodeWindow');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
+const { recordLineageProjection, recordSpecimenProjection, GraphProjectionService } = require('./graphProjection.service');
 const { ObjectId } = require('mongodb');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
@@ -30,24 +37,24 @@ const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadas
 // #470: imports the shared equipment-readiness constants (#774) — the
 // equipment-readiness half of RF004's gate, missing here until now.
 
-/**
- * Every caller (sample.routes.js) passes an already-cast ObjectId as
- * `specimenId` — but that field on Sample is a separate, server-generated
- * string (see sampleIDGenerator.js), so a bare `{ specimenId }` query never
- * matched it. Looks up by _id first (the real intent), falling back to the
- * specimenId field for any caller that does pass the string form.
- */
-async function findSampleByAnyId(samplesCollection, id) {
-  if (id instanceof ObjectId || (typeof id === 'string' && ObjectId.isValid(id) && String(id).length === 24)) {
-    const sample = await samplesCollection.findOne({ _id: new ObjectId(id) });
-    if (sample) return sample;
-  }
-  return samplesCollection.findOne({ specimenId: id });
-}
+// The route id may be the Mongo _id or the server-generated specimenId
+// string (see sampleIDGenerator.js). #1216 moved this lookup to a util so
+// the sample-file controller and the storage routes resolve it the same way.
+const { findSampleByAnyId } = require('../utils/sampleLookup');
 
 function createSampleValidationError(message, statusCode = 422) {
   const error = new Error(message);
   error.statusCode = statusCode;
+  return error;
+}
+
+// RF006 AC3 / RF026 AC7: a status write the generic update refuses (a
+// quantityStatus, `closed`, a v1.3.0 value, a change out of closed). The
+// code lets the route answer 422 for exactly these.
+const STATUS_WRITE_REFUSED = 'SPECIMEN_STATUS_WRITE_REFUSED';
+function createStatusWriteRefusal(message) {
+  const error = createSampleValidationError(message, 422);
+  error.code = STATUS_WRITE_REFUSED;
   return error;
 }
 
@@ -164,6 +171,7 @@ class SampleService {
 
         const validationError = new Error(validationMessage);
         validationError.statusCode = 422;
+        validationError.details = Array.isArray(validation.errors) ? validation.errors : [];
         throw validationError;
       }
 
@@ -218,6 +226,24 @@ class SampleService {
         if (!collectionDoc) {
           throw createSampleValidationError(`collectionId ${sampleData.collectionId} não encontrado`, 404);
         }
+        // RF004 AC2/AC3/AC7, RF021 AC6: human research material enters only
+        // a collection governed as a biobank or a biorepository, with the
+        // one context its regime names and an approval in force.
+        const refusal = await collectionGovernanceService.registrationRefusal(db, collectionDoc);
+        if (refusal) {
+          throw createSampleValidationError(refusal, 422);
+        }
+        // RF004 AC4: a biorepository specimen belongs to the context's study
+        // and protocol; one naming another is refused.
+        const ctx = collectionDoc.governanceContext;
+        if (collectionDoc.governanceRegime === 'biorepository') {
+          for (const field of ['studyId', 'protocolId']) {
+            const given = sampleData[field];
+            if (given !== undefined && given !== null && given !== '' && String(given) !== ctx[field]) {
+              throw createSampleValidationError(`${field} ${given} difere do ${field} do biorrepositório da coleção (${ctx[field]})`, 422);
+            }
+          }
+        }
       }
 
       // ELM-0128 - collectionSite (Reference(Organization)): quando informado,
@@ -227,6 +253,36 @@ class SampleService {
         if (!organization) {
           throw createSampleValidationError(`collectionSite ${sampleData.collectionSite} não encontrado`, 404);
         }
+      }
+
+      // dict-02 ELM-0120 (#1368): a derivative names its parents by
+      // specimenId. Each must exist, belong to the same participant (consent
+      // governance flows through the donor) and not be closed. The sample
+      // stores the specimenIds; the lineage event carries each parent's
+      // _id, the key the graph holds a Sample under.
+      const parentSpecimenIds = [...new Set((Array.isArray(sampleData.parentSpecimenIds) ? sampleData.parentSpecimenIds : [])
+        .map((parentId) => String(parentId).trim())
+        .filter(Boolean))];
+      let parentMongoIds = [];
+      if (parentSpecimenIds.length > 0) {
+        const parents = await samplesCollection.find({ specimenId: { $in: parentSpecimenIds } }).toArray();
+        const byId = new Map(parents.map((parent) => [String(parent.specimenId), parent]));
+        for (const parentId of parentSpecimenIds) {
+          const parent = byId.get(parentId);
+          if (parentId === String(sampleData.specimenId)) {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} é a própria amostra`, 422);
+          }
+          if (!parent) {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} não encontrado`, 404);
+          }
+          if (String(parent.participantId) !== String(sampleData.participantId)) {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} pertence a outro participante`, 422);
+          }
+          if (SampleModel.isTerminalSpecimen(parent)) {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} está encerrada (status: ${parent.specimenStatus})`, 422);
+          }
+        }
+        parentMongoIds = parentSpecimenIds.map((parentId) => String(byId.get(parentId)._id));
       }
 
       const storageBoxesCollection = db.collection('storageBoxes');
@@ -305,7 +361,11 @@ class SampleService {
       // mirrors import.service.js's CSV/XLSX branch (#383), which is the
       // only other place `sprec` -> RCS-GOV field mapping already exists.
       if (sampleData.sprec && typeof sampleData.sprec === 'object' && Object.keys(sampleData.sprec).length > 0) {
-        const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec: sampleData.sprec });
+        const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({
+          sprec: sampleData.sprec,
+          // RF018 AC2 (#1320): the use context reaches the assessment only when sent.
+          ...(sampleData.qualificationContext !== undefined ? { qualificationContext: sampleData.qualificationContext } : {}),
+        });
         sampleData.modelVersion = canonicalQualityAssessment.model_version;
         sampleData.matrixType = canonicalQualityAssessment.matrix_type;
         sampleData.governanceStatus = canonicalQualityAssessment.governance_status;
@@ -321,76 +381,176 @@ class SampleService {
       }
 
       const sample = SampleModel.create(sampleData);
-
-      const result = await samplesCollection.insertOne(sample);
-
-      const movementsCollection = await getCollection(db, 'sampleMovements');
+      // #1192: the tenancy key comes only from the caller's server-built
+      // options, never from sampleData, which a request body or import row fills.
+      sample.organizationId = options.organizationId ? String(options.organizationId) : null;
       const createdQuantity = Number(sample.currentQuantity ?? sample.quantity ?? 0);
-      const createMovementID = await SampleMovementModel.generateMovementID(db);
 
-      try {
-        await appendMovementWithHashChain(movementsCollection, SampleMovementModel.create({
-          movementId: createMovementID,
-          specimenId: sample.specimenId,
-          barcode: sample.barcode,
-          type: 'create',
-          quantity: createdQuantity,
-          unit: sample.unit || 'µL',
-          responsible: options?.auditInfo?.userName || options?.auditInfo?.actorName || 'SYSTEM',
-          destination: `storage:${boxId}:${positionCode}`,
-          purpose: 'sample_birth',
-          linkedProject: sample.linkedProject || null,
-          observations: options?.auditInfo?.notes || null,
-          userId: options?.auditInfo?.userId || null,
-          userName: options?.auditInfo?.userName || null,
-          userRole: options?.auditInfo?.userRole || null,
-          ipAddress: options?.auditInfo?.ipAddress || null,
-          userAgent: options?.auditInfo?.userAgent || null,
-          previousQuantity: 0,
-          newQuantity: createdQuantity
-        }));
-      } catch (ledgerError) {
-        await samplesCollection.deleteOne({ _id: result.insertedId });
-        throw new Error(`Falha ao registrar cadeia de custódia no nascimento da amostra: ${ledgerError.message || ledgerError}`);
-      }
+      const buildBirthMovement = (createMovementID) => SampleMovementModel.create({
+        movementId: createMovementID,
+        specimenId: sample.specimenId,
+        barcode: sample.barcode,
+        type: 'create',
+        quantity: createdQuantity,
+        unit: sample.unit || 'µL',
+        responsible: options?.auditInfo?.userName || options?.auditInfo?.actorName || 'SYSTEM',
+        destination: `storage:${boxId}:${positionCode}`,
+        purpose: 'sample_birth',
+        linkedProject: sample.linkedProject || null,
+        observations: options?.auditInfo?.notes || null,
+        userId: options?.auditInfo?.userId || null,
+        userName: options?.auditInfo?.userName || null,
+        userRole: options?.auditInfo?.userRole || null,
+        ipAddress: options?.auditInfo?.ipAddress || null,
+        userAgent: options?.auditInfo?.userAgent || null,
+        previousQuantity: 0,
+        newQuantity: createdQuantity
+      });
+      const ledgerFailure = (ledgerError) => new Error(`Falha ao registrar cadeia de custódia no nascimento da amostra: ${ledgerError.message || ledgerError}`);
 
       // #474: storageLocation is no longer written directly onto the create
       // doc — the sample is inserted unallocated, then AllocateSampleUseCase
-      // performs the atomic occupancyGrid write, storageLocation update,
-      // StorageAssignment record, and audit/lineage trail (same use case
+      // performs the atomic occupancyGrid write, storageLocation update, the
+      // specimen's placement on the physical chain (#1374, in the create's
+      // session) and audit/lineage trail (same use case
       // allocate-sample.controller.js and RegisterSampleUseCase reuse).
-      const allocateUseCase = new AllocateSampleUseCase({
+      const buildAllocateUseCase = () => new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(options?.neo4jDriver || null)
+        lineageRepository: new LineageRepository(db)
       });
-
-      try {
-        await allocateUseCase.execute({
-          specimenId: result.insertedId,
-          boxId: String(boxId),
-          position: positionCode,
-          actor: {
-            userId: options?.auditInfo?.userId || null,
-            userName: options?.auditInfo?.userName || options?.auditInfo?.actorName || null,
-            userRole: options?.auditInfo?.userRole || null,
-            ipAddress: options?.auditInfo?.ipAddress || null,
-            userAgent: options?.auditInfo?.userAgent || null
-          }
-        });
-      } catch (allocationError) {
-        await samplesCollection.deleteOne({ _id: result.insertedId });
+      const allocationCommand = (insertedId) => ({
+        specimenId: insertedId,
+        boxId: String(boxId),
+        position: positionCode,
+        actor: {
+          userId: options?.auditInfo?.userId || null,
+          userName: options?.auditInfo?.userName || options?.auditInfo?.actorName || null,
+          userRole: options?.auditInfo?.userRole || null,
+          ipAddress: options?.auditInfo?.ipAddress || null,
+          userAgent: options?.auditInfo?.userAgent || null
+        }
+      });
+      const allocationFailure = (allocationError) => {
         const message = allocationError?.message || String(allocationError);
         const wrapped = new Error(`Falha ao alocar amostra na posição de armazenamento: ${message}`);
         wrapped.statusCode = message.includes('STORAGE_COLLISION') || message.includes('já está alocada') ? 409 : 422;
-        throw wrapped;
-      }
+        return wrapped;
+      };
+      // #1378: the sample's code is issued as a LabelIdentifier (V2E-0169)
+      // on the container the allocation has just loaded it into.
+      // Sample.barcode (ELM-0116) is still written for read compatibility
+      // until the migration window closes; the insert then drops it.
+      const labelIssuedAt = new Date();
+      const issueLabel = (insertedId, session) => issueSpecimenLabel(db, { ...sample, _id: insertedId }, {
+        code: sample.barcode,
+        actorId: options?.auditInfo?.userId || null,
+        at: labelIssuedAt,
+        session
+      });
+      const labelFailure = (labelError) => {
+        const message = labelError?.message || String(labelError);
+        const wrapped = new Error(`Falha ao emitir a etiqueta da amostra: ${message}`);
+        wrapped.statusCode = labelError?.code === 'LABEL_EXISTS' ? 409 : 422;
+        return wrapped;
+      };
+      const movementsCollection = await getCollection(db, 'sampleMovements');
+
+      // RF023 AC3, RNF019 C1: on a deployment that runs transactions, the
+      // sample insert, its birth movement, the allocation's writes with its
+      // custody event, the label's issue (#1378), SPECIMEN_UPSERTED, a derivative's LINEAGE_REGISTERED
+      // (#1368) and the caller's own in-transaction step
+      // (options.onCreatedInTransaction, the register custody event) commit
+      // or abort together: a failed append leaves no sample and no movement.
+      // Without a transaction the writes run in sequence, each failure
+      // deleting the inserted sample, and SPECIMEN_UPSERTED and
+      // LINEAGE_REGISTERED are logged rather than thrown.
+      const result = await withTransactionWhereSupported(db, async (session) => {
+        if (!session) {
+          const insertResult = await samplesCollection.insertOne(withoutLegacyBarcode(sample));
+
+          const createMovementID = await SampleMovementModel.generateMovementID(db);
+          try {
+            await appendMovementWithHashChain(movementsCollection, buildBirthMovement(createMovementID));
+          } catch (ledgerError) {
+            await samplesCollection.deleteOne({ _id: insertResult.insertedId });
+            throw ledgerFailure(ledgerError);
+          }
+
+          try {
+            await buildAllocateUseCase().execute(allocationCommand(insertResult.insertedId));
+          } catch (allocationError) {
+            await samplesCollection.deleteOne({ _id: insertResult.insertedId });
+            throw allocationFailure(allocationError);
+          }
+
+          try {
+            await issueLabel(insertResult.insertedId, null);
+          } catch (labelError) {
+            await samplesCollection.deleteOne({ _id: insertResult.insertedId });
+            throw labelFailure(labelError);
+          }
+
+          await recordSpecimenProjection(db, {
+            specimenId: String(insertResult.insertedId),
+            participantId: sample.participantId,
+            sourceService: 'sample.service'
+          });
+          await recordLineageProjection(db, {
+            specimenId: String(insertResult.insertedId),
+            parentSpecimenIds: parentMongoIds,
+            sourceService: 'sample.service'
+          });
+          return insertResult;
+        }
+
+        const insertResult = await samplesCollection.insertOne(withoutLegacyBarcode(sample), { session });
+
+        const createMovementID = await SampleMovementModel.generateMovementID(db, session);
+        try {
+          await appendMovementWithHashChain(movementsCollection, buildBirthMovement(createMovementID), { session });
+        } catch (ledgerError) {
+          if (isTransientTransactionError(ledgerError)) throw ledgerError;
+          throw ledgerFailure(ledgerError);
+        }
+
+        try {
+          await buildAllocateUseCase().execute(allocationCommand(insertResult.insertedId), { session });
+        } catch (allocationError) {
+          if (isTransientTransactionError(allocationError)) throw allocationError;
+          throw allocationFailure(allocationError);
+        }
+
+        try {
+          await issueLabel(insertResult.insertedId, session);
+        } catch (labelError) {
+          if (isTransientTransactionError(labelError)) throw labelError;
+          throw labelFailure(labelError);
+        }
+
+        await new GraphProjectionService().appendSpecimenEvent(db, {
+          specimenId: String(insertResult.insertedId),
+          participantId: sample.participantId,
+          sourceService: 'sample.service'
+        }, { session });
+        await new GraphProjectionService().appendLineageEvents(db, {
+          specimenId: String(insertResult.insertedId),
+          parentSpecimenIds: parentMongoIds,
+          sourceService: 'sample.service'
+        }, { session });
+
+        if (typeof options?.onCreatedInTransaction === 'function') {
+          await options.onCreatedInTransaction({ _id: insertResult.insertedId, ...sample }, session);
+        }
+        return insertResult;
+      });
 
       sample.storageLocation = { boxId, position: positionCode };
 
-      // #510: expose the canonical StorageAssignment (dict-02 ELM-0167-0178)
-      // the allocation above just opened, alongside the legacy storageLocation
-      // snapshot — additive, same precedent #507 set for findSampleById.
+      // #510: expose the current placement findCurrentStorageAssignment reads
+      // from the physical chain the allocation above just wrote (#1374),
+      // alongside the legacy storageLocation snapshot — additive, same
+      // precedent #507 set for findSampleById.
       sample.storageAssignment = await new MongoStorageRepository(db)
         .findCurrentStorageAssignment(result.insertedId);
 
@@ -472,6 +632,11 @@ class SampleService {
       if (BLOCKED_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
         throw new Error(`Amostra não está disponível para retirada (Status: ${currentSpecimenStatus})`);
       }
+      // RF006 AC6: a legal hold blocks the withdrawal too, not only destruction.
+      const holdRefusal = await legalHoldService.specimenHoldRefusal(db, sample);
+      if (holdRefusal) {
+        throw new Error(`Retirada bloqueada: ${holdRefusal}`);
+      }
 
       // Validações MIABIS
       if (!SampleModel.validateWithdrawalType(withdrawalData.withdrawalType)) {
@@ -491,13 +656,11 @@ class SampleService {
         ? sample.currentQuantity
         : sample.quantity;
 
-      // #541: 'depleted' isn't in BLOCKED_SPECIMEN_STATUSES (it can't be —
-      // that would also make it sticky in computeStatus and block
-      // returnSample's un-deplete-on-return flow), so a Total withdrawal
-      // on an already-exhausted sample isn't caught by the status gate
-      // above. Without this, withdrawQty floors at 0 and the write
-      // "succeeds" with nothing actually withdrawn.
-      if (availableQty <= 0) {
+      // #541, RF006 AC3: depletion is quantityStatus, not a specimenStatus,
+      // so the status gate above does not see it. A depleted specimen has
+      // nothing to withdraw; without this, withdrawQty floors at 0 and the
+      // write "succeeds" with nothing actually withdrawn.
+      if (availableQty <= 0 || SampleModel.resolveQuantityStatus(sample) === 'depleted') {
         throw new Error(`Quantidade indisponível. Disponível: ${availableQty} ${sample.unit || 'µL'}`);
       }
 
@@ -520,7 +683,9 @@ class SampleService {
       const newAvailableQty = availableQty - withdrawQty;
       const totalWithdrawn = (sample.totalWithdrawn || 0) + withdrawQty;
 
-      const specimenStatus = SampleModel.computeStatus(sample.initialQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
+      // RF006 AC2/AC3: a withdrawal moves quantityStatus only; specimenStatus
+      // is an operational state no quantity change moves.
+      const quantityStatus = SampleModel.computeQuantityStatus(sample.initialQuantity || sample.quantity, newAvailableQty);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -560,7 +725,7 @@ class SampleService {
           sampleDestination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
           linkedProject: withdrawalData.linkedProject || sample.linkedProject,
           lastWithdrawalID: movementID,
-          specimenStatus,
+          quantityStatus,
           updatedAt: new Date()
         };
 
@@ -578,7 +743,8 @@ class SampleService {
         movementID,
         withdrawnQuantity: withdrawQty,
         remainingQuantity: newAvailableQty,
-        newStatus: specimenStatus
+        newStatus: currentSpecimenStatus,
+        quantityStatus
       };
     } catch (error) {
       logger.error('Erro ao retirar amostra:', error.message);
@@ -593,8 +759,10 @@ class SampleService {
       if (!sample) return null;
       // Guarantee specimenStatus is populated even for legacy documents
       // written before the field existed (#415 — frontend readers can then
-      // drop their lifecycleStatus fallback).
+      // drop their lifecycleStatus fallback). A v1.3.0 value reads folded
+      // onto the v2 set, and quantityStatus is derived when absent.
       sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
+      sample.quantityStatus = SampleModel.resolveQuantityStatus(sample);
       return sample;
     } catch (error) {
       logger.error('Erro ao buscar amostra:', error.message);
@@ -611,8 +779,19 @@ class SampleService {
         query.participantId = filters.participantId;
       }
 
+      // RF006 AC2/AC3: a v1.3.0 quantity value (partial, depleted) asked of
+      // specimenStatus is a quantityStatus filter now.
       if (filters.specimenStatus) {
-        query.specimenStatus = filters.specimenStatus;
+        const requested = String(filters.specimenStatus).trim().toLowerCase();
+        if (requested === 'partial' || requested === 'depleted') {
+          query.quantityStatus = requested;
+        } else {
+          query.specimenStatus = requested;
+        }
+      }
+
+      if (filters.quantityStatus) {
+        query.quantityStatus = String(filters.quantityStatus).trim().toLowerCase();
       }
 
       if (filters.sampleType) {
@@ -620,11 +799,12 @@ class SampleService {
       }
 
       // #340 (RF003 AC#3): org-scoped caller sees only samples whose
-      // collectionSite is one of their scoped organizations. No-op for a
-      // 'global' (Administrador) scope. Caller must resolve+attach
-      // organizationScope via rbac.js's requireOrganizationScope first.
+      // tenancy key (organizationId, falling back to collectionSite, #1192)
+      // is one of their scoped organizations. No-op for a 'global'
+      // (Administrador) scope. Caller must resolve+attach organizationScope
+      // via rbac.js's requireOrganizationScope first.
       if (filters.organizationScope) {
-        applyOrganizationScopeFilter(query, filters.organizationScope, 'collectionSite');
+        applySampleOrganizationScope(query, filters.organizationScope);
       }
 
       const limit = filters.limit || 50;
@@ -633,8 +813,8 @@ class SampleService {
       // #647 (same shape as #645's sensor-list bug): no sort meant Mongo's
       // natural (insertion) order decided which samples landed on the
       // default 50-item page -- once the collection passed that default
-      // (e2e fixtures accumulate across sessions, see docker-workflow's
-      // local-env), a freshly created sample silently never appeared in
+      // (e2e fixtures accumulate across sessions in the test stack's named
+      // volumes), a freshly created sample silently never appeared in
       // the list, so SampleDetailsPage's client-side find-by-id came up
       // empty for a sample that had just been created. Newest-first makes
       // a just-created record always land on page 1 regardless of backlog.
@@ -647,6 +827,7 @@ class SampleService {
       // See getSample's comment — same specimenStatus guarantee for the list view.
       samples.forEach((sample) => {
         sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
+        sample.quantityStatus = SampleModel.resolveQuantityStatus(sample);
       });
 
       const total = await samplesCollection.countDocuments(query);
@@ -673,12 +854,35 @@ class SampleService {
         ? updateData.initialQuantity
         : existing.initialQuantity ?? existing.quantity;
 
-      const currentSpecimenStatus = updateData.specimenStatus || SampleModel.resolveSpecimenStatus(existing);
-      const specimenStatus = SampleModel.computeStatus(
-        nextOriginal,
-        nextAvailable,
-        currentSpecimenStatus
-      );
+      const previousStatus = SampleModel.resolveSpecimenStatus(existing);
+      const requestedStatus = updateData.specimenStatus
+        ? String(updateData.specimenStatus).trim().toLowerCase()
+        : null;
+      // RF006 AC3: quantityStatus is derived, never written by a client.
+      if (Object.prototype.hasOwnProperty.call(updateData, 'quantityStatus')) {
+        throw createStatusWriteRefusal('quantityStatus é derivado de initialQuantity e currentQuantity e não pode ser editado');
+      }
+      // #1378 (ELM-0116): after the migration window, barcode is not written.
+      assertLegacyBarcodeWritable(updateData);
+      if (requestedStatus) {
+        // RF026 AC7: closed only by POST /api/samples/:id/close (validated
+        // total consumption) or an executed disposition, never by an edit.
+        if (requestedStatus === 'closed') {
+          throw createStatusWriteRefusal('specimenStatus closed só é atribuído por POST /api/samples/:id/close (consumo total validado) ou por uma destinação executada');
+        }
+        // RF006 AC2 (V2E-0544): the v1.3.0 values are not operational states.
+        if (!SampleModel.validateSpecimenStatus(requestedStatus)) {
+          throw createStatusWriteRefusal(`specimenStatus inválido: ${requestedStatus}. Aceitos: available, reserved, checked_out, quarantined, unavailable`);
+        }
+      }
+      // RF026 AC7: closed is final; an edit does not reopen it.
+      if (requestedStatus && SampleModel.isTerminalSpecimen(existing) && requestedStatus !== previousStatus) {
+        throw createStatusWriteRefusal(`Amostra em ${previousStatus} não admite mudança de specimenStatus`);
+      }
+      // RF006 AC2: only an explicit request moves specimenStatus; quantity
+      // moves quantityStatus alone.
+      const specimenStatus = requestedStatus || previousStatus;
+      const quantityStatus = SampleModel.computeQuantityStatus(nextOriginal, nextAvailable);
 
       // lifecycleStatus/availabilityStatus/quarantineStatus are retired
       // (#408), and status/currentStatus alongside them (#540) —
@@ -691,13 +895,16 @@ class SampleService {
       // recognized or not, sailed through untouched. Use an allowlist
       // instead, derived from SampleModel.create()'s field set
       // (src/models/Sample.js:184-246), excluding identity (specimenId,
-      // participantId), the 5 status fields above (already handled/
+      // participantId, and sourceRecordId, the source system's id an
+      // import recorded), the 5 status fields above (already handled/
       // recomputed), and _id/createdAt/updatedAt (this service owns
       // updatedAt below). Add a field to Sample.create() and this list
       // together.
       // 'notes' is not in Sample.js's field list but is pinned writable by
       // #540's test; whether it belongs in the model is #875's dict-02
       // flag, not this change's call.
+      // parentSpecimenIds (ELM-0120, #1368) is set at creation, where its
+      // LINEAGE_REGISTERED is appended, and is deliberately not updatable.
       const ALLOWED_UPDATE_FIELDS = [
         'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
         'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
@@ -724,16 +931,41 @@ class SampleService {
         }
       }
 
+      // A document not yet migrated keeps its stored value unless the caller
+      // asked for a status: the migration, not an unrelated edit, replaces
+      // it and records its provenance.
       const payload = {
         ...restUpdateData,
-        specimenStatus,
+        ...(requestedStatus ? { specimenStatus } : {}),
+        quantityStatus,
         updatedAt: new Date()
       };
-      
-      const result = await samplesCollection.updateOne(
-        { specimenId: existing.specimenId },
-        { $set: payload }
-      );
+
+      const statusChanges = String(previousStatus || '').toLowerCase() !== String(specimenStatus || '').toLowerCase();
+      const writeUpdate = async (session) => {
+        const result = await samplesCollection.updateOne(
+          { specimenId: existing.specimenId },
+          { $set: payload },
+          session ? { session } : undefined
+        );
+        // RF006 AC7: an edit that changes specimenStatus records the change,
+        // append-only, with the write. The edit has no event of its own, so
+        // the decision's trigger is an id minted for this update.
+        if (result.matchedCount > 0 && statusChanges) {
+          await operationalStateDecisionService.recordStatusChange(db, {
+            specimenId: existing.specimenId || String(existing._id),
+            previousStatus,
+            newStatus: specimenStatus,
+            triggerEventId: `sample-update:${crypto.randomUUID()}`,
+            rulesApplied: ['manual_status_update'],
+            reasonCodes: ['update'],
+          }, { session });
+        }
+        return result;
+      };
+      const result = statusChanges
+        ? await withTransactionWhereSupported(db, writeUpdate)
+        : await writeUpdate(null);
 
       if (result.matchedCount === 0) {
         return null;
@@ -749,7 +981,11 @@ class SampleService {
   async deleteSample(db, specimenId) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
-      const result = await samplesCollection.deleteOne({ specimenId });
+      // #1216: a bare { specimenId } filter never matched the ObjectId the
+      // route passed, so DELETE answered 404 for a sample that exists.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+      if (!sample) return false;
+      const result = await samplesCollection.deleteOne({ _id: sample._id });
       return result.deletedCount > 0;
     } catch (error) {
       logger.error('Erro ao deletar amostra:', error.message);
@@ -840,16 +1076,19 @@ class SampleService {
             if (parts.length === 1) return parts[0].charAt(0) + '***';
             return parts[0].charAt(0) + '. ' + parts[parts.length - 1].charAt(0) + '.';
           };
+          // #1386: the record number is the identity's (P1X-0355); a Patient's
+          // own legacy recordNumber is not read.
           participant = {
             participantId: participant.participantId,
             patientName: anonymizeName(identity?.patientName),
-            recordNumber: participant.recordNumber
+            recordNumber: identity?.recordNumber ?? null
           };
         }
       }
 
       // See getSample's comment — same specimenStatus guarantee for barcode lookups.
       sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
+      sample.quantityStatus = SampleModel.resolveQuantityStatus(sample);
 
       return { sample, participant };
     } catch (error) {
@@ -962,7 +1201,9 @@ class SampleService {
         newAvailableQty += returnQty;
       }
 
-      const specimenStatus = SampleModel.computeStatus(sample.initialQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
+      // RF006 AC2/AC3: a return moves quantityStatus only (a depleted
+      // specimen becomes partial or full again); specimenStatus stays.
+      const quantityStatus = SampleModel.computeQuantityStatus(sample.initialQuantity || sample.quantity, newAvailableQty);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -995,11 +1236,12 @@ class SampleService {
         const update = {
           currentQuantity: newAvailableQty,
           totalReturned: newTotalReturned,
-          specimenStatus,
+          quantityStatus,
           updatedAt: new Date()
         };
 
-        if (specimenStatus === 'available') {
+        // Fully restored: the withdrawal it answered is over.
+        if (quantityStatus === 'full') {
           update.withdrawnAt = null;
           update.withdrawalType = null;
           update.withdrawalResponsible = null;
@@ -1021,7 +1263,8 @@ class SampleService {
         returnedQuantity: returnQty,
         condition: returnData.condition,
         newAvailableQuantity: newAvailableQty,
-        newStatus: specimenStatus
+        newStatus: currentSpecimenStatus,
+        quantityStatus
       };
     } catch (error) {
       logger.error('Erro ao retornar amostra:', error.message);
@@ -1050,7 +1293,9 @@ class SampleService {
         .find({
           $or: [
             { specimenId: specimenIdStr },
-            { barcode: (sample && sample.barcode) || specimenIdStr }
+            { barcode: (sample && sample.barcode) || specimenIdStr },
+            // #1220: legacy rows are keyed by the sample's _id.
+            ...(sample ? [{ specimenId: String(sample._id) }] : [])
           ]
         })
         .sort({ timestamp: -1 })
@@ -1113,15 +1358,27 @@ class SampleService {
     try {
       const samplesCollection = await getCollection(db, 'samples');
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
-      const specimenIdStr = sample
-        ? sample.specimenId
-        : (specimenId.toString ? specimenId.toString() : specimenId);
-
-      return await quarantineActionService.getActionsForSpecimen(db, specimenIdStr);
+      // #1219: handed the sample, the lookup matches its specimenId and the
+      // _id every action recorded before #1219 carries.
+      return await quarantineActionService.getActionsForSpecimen(
+        db,
+        sample || (specimenId.toString ? specimenId.toString() : specimenId)
+      );
     } catch (error) {
       logger.error('Erro ao buscar ações de quarentena:', error.message);
       throw error;
     }
+  }
+
+  // RF006 AC7: a specimen's OperationalStateDecisions, oldest first. A legacy
+  // sample with no specimenId has its decisions keyed by its stored _id.
+  async getStateDecisions(db, specimenId) {
+    const samplesCollection = await getCollection(db, 'samples');
+    const sample = await findSampleByAnyId(samplesCollection, specimenId);
+    if (!sample) return null;
+    const keys = [...new Set([sample.specimenId, String(sample._id)].filter(Boolean))];
+    const rows = (await Promise.all(keys.map((key) => operationalStateDecisionService.historyOf(db, key)))).flat();
+    return rows.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
   }
 
   /**
@@ -1129,9 +1386,70 @@ class SampleService {
    */
   async findAvailableSamplesForResearch(db, query = {}) {
     const samplesCollection = await getCollection(db, 'samples');
-    // Garante que só retorna amostras AVAILABLE
-    const finalQuery = { ...query, specimenStatus: 'available' };
+    // Garante que só retorna amostras AVAILABLE. RF006 AC3: a depleted
+    // specimen is available in state but has nothing to use.
+    const finalQuery = { ...query, specimenStatus: 'available', quantityStatus: { $ne: 'depleted' } };
     return samplesCollection.find(finalQuery).toArray();
+  }
+
+  /**
+   * RF026 AC7 (dictionary RULE-006): closes a specimen whose total
+   * consumption is validated, i.e. its quantities derive quantityStatus
+   * depleted. Refused (409) when it is not depleted or already closed.
+   * The change appends an OperationalStateDecision with the write; the route
+   * audits it. Returns null when the specimen does not exist.
+   */
+  async closeSpecimen(db, specimenId, { actorId = null } = {}) {
+    const samplesCollection = await getCollection(db, 'samples');
+    const sample = await findSampleByAnyId(samplesCollection, specimenId);
+    if (!sample) return null;
+
+    const previousStatus = SampleModel.resolveSpecimenStatus(sample);
+    if (previousStatus === 'closed') {
+      throw createSampleValidationError('Amostra já está encerrada (closed)', 409);
+    }
+    // Derived from the quantities themselves, not a stored quantityStatus a
+    // stale document might carry.
+    const { initial, current } = SampleModel.quantitiesOf(sample);
+    const quantityStatus = SampleModel.computeQuantityStatus(initial, current);
+    if (quantityStatus !== 'depleted') {
+      throw createSampleValidationError(
+        `Encerramento exige consumo total validado: quantityStatus é ${quantityStatus} (currentQuantity ${current ?? 0})`,
+        409
+      );
+    }
+
+    const canonicalId = sample.specimenId || String(sample._id);
+    const triggerEventId = `sample-close:${crypto.randomUUID()}`;
+    const now = new Date();
+    const decision = await withTransactionWhereSupported(db, async (session) => {
+      const result = await samplesCollection.updateOne(
+        { _id: sample._id, specimenStatus: sample.specimenStatus ?? null },
+        { $set: { specimenStatus: 'closed', quantityStatus, updatedAt: now } },
+        session ? { session } : undefined
+      );
+      if (!result || result.matchedCount === 0) {
+        throw createSampleValidationError('Amostra alterada concorrentemente; leia-a de novo', 409);
+      }
+      return operationalStateDecisionService.recordStatusChange(db, {
+        specimenId: canonicalId,
+        previousStatus,
+        newStatus: 'closed',
+        triggerEventId,
+        rulesApplied: ['rf026_ac7_validated_consumption'],
+        reasonCodes: ['total_consumption'],
+      }, { session });
+    });
+
+    logger.info(`Amostra encerrada por consumo total: ${canonicalId}${actorId ? ` (por ${actorId})` : ''}`);
+    return {
+      specimenId: canonicalId,
+      previousStatus,
+      specimenStatus: 'closed',
+      quantityStatus,
+      operationalStateDecisionId: decision?.operationalStateDecisionId || null,
+      triggerEventId,
+    };
   }
 }
 

@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { getCollection } = require('../utils/collectionResolver');
 const fs = require('fs');
+const objectStorage = require('../infrastructure/objectStorage');
 
 function sha256Hex(input) {
   return crypto.createHash('sha256').update(String(input)).digest('hex');
@@ -12,7 +14,7 @@ class HL7AuditService {
   }
 
   async _hashFHIRResources(db, date) {
-    const samplesCol = db.collection('amostras');
+    const samplesCol = getCollection(db, 'samples');
     // search for samples with a 'fhir' field and createdAt on date
     const start = new Date(date + 'T00:00:00.000Z');
     const end = new Date(date + 'T23:59:59.999Z');
@@ -45,7 +47,23 @@ class HL7AuditService {
     const results = [];
     for (const f of candidates) {
       try {
-        if (f.storagePath && fs.existsSync(f.storagePath)) {
+        // RF007 AC2 (#1321): a row with an object version is read through the
+        // object store; a missing object takes the metadata fallback, and any
+        // other failure leaves the item out so the next run retries it.
+        if (typeof f.storageObjectVersion === 'string' && f.storageObjectVersion.length > 0) {
+          let body = null;
+          try {
+            body = await objectStorage.getFileObjectStore().getObject(f.storageUri);
+          } catch (error) {
+            if (!error || error.code !== 'ENOENT') throw error;
+          }
+          if (body) {
+            results.push({ type: 'hl7', fileId: f._id, hash: sha256Hex(body.toString('utf8')), file: f });
+          } else {
+            const hash = sha256Hex(f.fileName + '|' + (f.fileSize || 0));
+            results.push({ type: 'hl7', fileId: f._id, hash, note: 'arquivo não encontrado em disco' });
+          }
+        } else if (f.storagePath && fs.existsSync(f.storagePath)) {
           const content = fs.readFileSync(f.storagePath, 'utf8');
           const hash = sha256Hex(content);
           results.push({ type: 'hl7', fileId: f._id, hash, file: f });

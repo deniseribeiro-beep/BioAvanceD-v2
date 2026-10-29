@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { mockLogin } from './helpers/mockAuth';
-import { realLogin, realAuthLogin } from './helpers/realAuth';
+import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
+import { deleteOrganizations } from './helpers/listOrganizations';
 import {
   createRealParticipant,
   closeSeedDb,
@@ -16,7 +18,7 @@ import {
 import type { SeededStorageBox } from './helpers/seedParticipant';
 import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver } from './helpers/queryNeo4j';
 import { generateValidCpf } from './helpers/cpf';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
@@ -37,6 +39,34 @@ test.describe('Intake wizard (/next/intake)', () => {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ success: true, data: [] }),
+      });
+    });
+
+    // #1357: the mocked token has no refresh cookie, so a refresh 401s on the
+    // real backend at once. Without a backend it dies on a network error and
+    // the client's port scan delays the logout past a case's end, so a host
+    // run passed what the Docker gate failed. Answering 401 here makes an
+    // unfulfilled route fail the same way on both.
+    await page.route('**/api/auth/refresh', async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: false, message: 'Unauthorized' }),
+      });
+    });
+
+    // #1357: useCreateOrganizationChoice looks up the caller's scope on
+    // mount. Unfulfilled, it reaches the real backend with the mocked token,
+    // 401s, and the client ends the session. One organization means no
+    // picker, so the demographic step renders as before.
+    await page.route('**/api/organizations/mine', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { scope: 'organization', organizations: [{ organizationId: 'org-e2e-mock', officialName: 'Mock Org' }] },
+        }),
       });
     });
   });
@@ -185,11 +215,11 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   const diseaseLabel = `RF005 e2e Marfan-like disease ${Date.now()}`;
   const phenotypeLabel = 'Seizure';
   const medicationName = `rf005-e2e-captopril-${Date.now()}`;
-  // #708: AllergyIntolerance's allergenCoding is DCB-coded but, unlike
-  // Condition/PhenotypeObservation, allergy-intolerance.service.js doesn't
-  // gate on activeCodeValidator (#708's own scope note) -- no
-  // TerminologyConcept fixture is needed for this to persist, only a
-  // uniquely-named display value so this test's own assertion doesn't pick
+  // #714: AllergyIntolerance's allergenCoding is DCB-coded and, like
+  // Condition/PhenotypeObservation, allergy-intolerance.service.js now gates
+  // it on activeCodeValidator -- a DCB TerminologyConcept/
+  // ReferenceDatasetRelease fixture for this code is seeded below, alongside
+  // a uniquely-named display value so this test's own assertion doesn't pick
   // up a prior run's fixture from the persistent test-stack Mongo volume.
   const allergenCode = '03730';
   const allergenName = `RF005 e2e allergen #708 ${Date.now()}`;
@@ -287,6 +317,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await seedActiveTerminologyConcept('http://hl7.org/fhir/sid/icd-10', cidCode, 'malignant neoplasm of breast', { datasetCode: 'ICD10' });
     await seedActiveTerminologyConcept('https://www.omim.org', omimCodeAsImported, 'marfan syndrome', { datasetCode: 'OMIM' });
     await seedActiveTerminologyConcept('http://purl.obolibrary.org/obo/hp.owl', hpoCode, phenotypeLabel, { datasetCode: 'HPO' });
+    // #714: AllergyIntolerance's allergenCoding is now gated the same way.
+    await seedActiveTerminologyConcept(
+      'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb',
+      allergenCode,
+      allergenName,
+      { datasetCode: 'DCB' }
+    );
   });
 
   test.afterAll(async () => {
@@ -407,6 +444,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-comorbidity-copd').check();
     await page.getByTestId('wizard-comorbidity-ckd').check();
     await page.getByTestId('wizard-comorbidity-hypertension').check();
+
+    // #1232: (outcomeType, outcomeDate) is drawn from 9000 dates and every
+    // run's outcome stays on the volume, so count what is already there.
+    const outcomesBefore = await mongoClient.db(mongoDbName).collection('clinicalOutcomes').countDocuments({
+      'outcomeType.code': outcomeType,
+      outcomeDate: new Date(outcomeDate),
+    });
 
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
@@ -551,12 +595,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     // longitudinal-outcome UI existed before this slice). No participantId
     // field exists on this entity (dict-02's own gap, matching #691's
     // model) and no free-text display field either -- queried by the
-    // (outcomeType, outcomeDate) pair this run's fixture uniquely derived.
+    // (outcomeType, outcomeDate) pair, counted against the rows that pair
+    // already matched before this submission (#1232).
     const outcomes = await db.collection('clinicalOutcomes').find({
       'outcomeType.code': outcomeType,
       outcomeDate: new Date(outcomeDate),
     }).toArray();
-    expect(outcomes).toHaveLength(1);
+    expect(outcomes).toHaveLength(outcomesBefore + 1);
     expect(outcomes[0]).toMatchObject({
       outcomeType: { code: outcomeType },
     });
@@ -585,5 +630,254 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     });
     const scoreComponentCodes = derivedScores[0].scoreComponents.map((c: { condition: { code: string } }) => c.condition.code);
     expect(scoreComponentCodes.sort()).toEqual(['chronicPulmonaryDisease', 'renalDisease']);
+  });
+
+  // #1354/#1355: the intake resolves one organization per submission and
+  // stamps it as the sample's collectionSite and the created participant's
+  // clinicalUnitId, the keys the scoped reads filter on. A caller assigned
+  // to two organizations must name one, through the wizard's picker.
+  const organizationIds: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+  });
+
+  test('a Coordenador assigned to two organizations registers through the wizard, picks the second, and reads the sample and participant back (#1354, #1355)', async ({ page, request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const orgIds: string[] = [];
+    for (const label of ['A', 'B']) {
+      const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+        headers: adminAuth,
+        data: { officialName: `#1354 intake ${label} ${suffix}`, countryCode: 'BR' },
+      });
+      expect(orgRes.ok(), await orgRes.text()).toBeTruthy();
+      orgIds.push((await orgRes.json()).data.organizationId as string);
+    }
+    organizationIds.push(...orgIds);
+    const [firstOrg, secondOrg] = orgIds;
+
+    const username = `coord.1354.${Date.now()}`;
+    const password = 'Coordenador@123';
+    const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: adminAuth,
+      data: {
+        name: '#1354 Coordenador Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 3,
+        roleName: 'Coordenador',
+        organizationId: firstOrg,
+      },
+    });
+    expect(registerRes.ok(), await registerRes.text()).toBeTruthy();
+
+    // #1358: the administrator gives the Coordenador the second organization
+    // through its route, a second assignment of the same role.
+    const db = mongoClient.db(mongoDbName);
+    const user = await db.collection('users').findOne({ username });
+    expect(user, 'the registered fixture user').toBeTruthy();
+    const grantRes = await request.post(`${apiBaseURL}/api/users/${String(user!._id)}/organizations`, {
+      headers: adminAuth,
+      data: { organizationId: secondOrg },
+    });
+    expect(grantRes.status(), await grantRes.text()).toBe(201);
+    expect((await grantRes.json()).data.organizationIds.sort()).toEqual([...orgIds].sort());
+    const scopedAssignments = await db.collection('userRoleAssignments').find({
+      userAccountId: String(user!._id),
+      assignmentStatus: 'active',
+      scopeType: 'organization',
+    }).toArray();
+    expect(scopedAssignments.map((doc) => doc.scopeId).sort()).toEqual([...orgIds].sort());
+
+    const coordinator = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+    const coordinatorAuth = { Authorization: `Bearer ${coordinator.token}` };
+
+    const mine = await request.get(`${apiBaseURL}/api/organizations/mine`, { headers: coordinatorAuth });
+    expect(mine.status(), await mine.text()).toBe(200);
+    const mineData = (await mine.json()).data;
+    expect(mineData.scope).toBe('organization');
+    expect(mineData.organizations.map((org: { organizationId: string }) => org.organizationId).sort()).toEqual([...orgIds].sort());
+
+    await seedRealAuth(page, coordinator);
+    await page.goto('/next/intake');
+    await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+
+    await page.getByTestId('wizard-full-name').fill(`#1354 e2e patient ${suffix}`);
+    await page.getByTestId('wizard-birth-date').fill('01/01/1990');
+    await page.getByTestId('wizard-gender').selectOption('F');
+    await page.getByTestId('wizard-email').fill(`e2e-1354-${suffix}@example.com`);
+    await page.getByTestId('wizard-document').fill(generateValidCpf());
+    await page.getByTestId('wizard-next-button').click();
+
+    await expect(page.getByTestId('wizard-sprec-axis-1')).toBeVisible();
+    await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+    await page.getByTestId('wizard-sample-type').selectOption({ index: 1 });
+    await page.getByTestId('wizard-sample-origin').selectOption({ index: 1 });
+    await page.getByTestId('wizard-extraction-protocol').selectOption({ index: 1 });
+    await page.getByTestId('wizard-sprec-axis-1').selectOption({ index: 1 });
+    await page.getByTestId('wizard-sprec-axis-2').selectOption({ index: 1 });
+    await page.getByTestId('wizard-processing-unknown').check();
+    await page.getByTestId('wizard-sprec-axis-7').selectOption({ index: 1 });
+    await page.getByTestId('wizard-quantity').fill('5');
+    // Two organizations: the picker is shown, and a choice is required.
+    await expect(page.getByTestId('wizard-organization')).toBeVisible();
+    await page.getByTestId('wizard-organization').selectOption(secondOrg);
+    await page.getByTestId('wizard-linked-project').fill(`E2E-1354-${suffix}`);
+    await page.getByTestId('wizard-institution-name').fill('Hospital E2E 1354');
+    await page.getByTestId('wizard-next-button').click();
+
+    await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
+    await page.getByTestId('wizard-diagnosis-search').fill(diseaseLabel);
+    await expect(page.getByTestId('wizard-diagnosis-option-0')).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId('wizard-diagnosis-option-0').click();
+    await expect(page.locator('.phenotype-card', { hasText: phenotypeLabel })).toBeVisible({ timeout: 10_000 });
+    // Required for a clinical sample (MIABIS); NAIVE needs no medication.
+    await page.getByTestId('wizard-treatment-status').selectOption('NAIVE');
+
+    const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
+    await page.getByTestId('wizard-submit-button').click();
+    const response = await submissionResponse;
+    const rawBody = await response.text();
+    expect(response.ok(), `POST /intake-wizard -> ${response.status()}: ${rawBody.slice(0, 500)}`).toBe(true);
+    const participantId = String((await response.json())?.patientMatch?.patientID || '');
+    expect(participantId).toBeTruthy();
+
+    // Read back through the coordinator's own scoped reads: the sample list
+    // filters on collectionSite, the participant read on clinicalUnitId.
+    const list = await request.get(
+      `${apiBaseURL}/api/samples?participantId=${encodeURIComponent(participantId)}&limit=200`,
+      { headers: coordinatorAuth }
+    );
+    expect(list.status(), await list.text()).toBe(200);
+    const listBody = await list.json();
+    const samples = (listBody?.data?.samples ?? listBody?.data ?? []) as Array<Record<string, unknown>>;
+    expect(samples, 'the scoped coordinator cannot read back the sample it registered').toHaveLength(1);
+    expect(samples[0]).toMatchObject({ collectionSite: secondOrg });
+
+    const participantRes = await request.get(`${apiBaseURL}/api/patients/${encodeURIComponent(participantId)}`, { headers: coordinatorAuth });
+    expect(participantRes.status(), await participantRes.text()).toBe(200);
+    const participant = await db.collection('patients').findOne({ participantId });
+    expect(participant?.clinicalUnitId).toBe(secondOrg);
+  });
+
+  // #1371 (dict-02 ELM-0120): the wizard names a derivative's parents by
+  // specimenId; the sample stores them and the outbox carries one
+  // LINEAGE_REGISTERED per parent, keyed by each sample's _id.
+  const lineageSamples: Array<{ mongoId: string; specimenId: string }> = [];
+
+  test.afterAll(async () => {
+    if (lineageSamples.length === 0) return;
+    const mongoIds = lineageSamples.map((sample) => sample.mongoId);
+    const specimenIds = lineageSamples.map((sample) => sample.specimenId);
+    const client = new MongoClient(mongoUri);
+    try {
+      await client.connect();
+      const db = client.db(mongoDbName);
+      await Promise.all([
+        db.collection('samples').deleteMany({ _id: { $in: mongoIds.map((id) => new ObjectId(id)) } }),
+        db.collection('sample_movements').deleteMany({
+          $or: [
+            { specimenId: { $in: [...specimenIds, ...mongoIds] } },
+            { sampleID: { $in: [...specimenIds, ...mongoIds] } },
+          ],
+        }),
+        db.collection('storageAssignments').deleteMany({ specimenId: { $in: mongoIds } }),
+        db.collection('graph_projection_outbox').deleteMany({ aggregateType: 'Sample', aggregateId: { $in: mongoIds } }),
+        db.collection<{ _id: string }>('graph_projection_outbox_aggregate_versions').deleteMany({
+          _id: { $in: mongoIds.map((id) => `Sample:${id}`) },
+        }),
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test('a derivative registered through the wizard names its parent specimenId, stored on the sample and carried by a LINEAGE_REGISTERED outbox event (#1371)', async ({ page, request }) => {
+    await realAuthLogin(request, page);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const patientName = `#1371 e2e patient ${suffix}`;
+    const document = generateValidCpf();
+
+    // The #1354 path, less the organization picker.
+    const registerThroughWizard = async (label: string, parentSpecimenIds?: string) => {
+      await page.goto('/next/intake');
+      await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+
+      await page.getByTestId('wizard-full-name').fill(patientName);
+      await page.getByTestId('wizard-birth-date').fill('01/01/1990');
+      if (parentSpecimenIds) {
+        // Same name and birth date: the derivative's intake matches the
+        // participant the parent's intake created.
+        await expect(page.getByTestId('wizard-patient-match-alert')).toBeVisible({ timeout: 10_000 });
+      }
+      await page.getByTestId('wizard-gender').selectOption('F');
+      await page.getByTestId('wizard-email').fill(`e2e-1371-${suffix}@example.com`);
+      await page.getByTestId('wizard-document').fill(document);
+      await page.getByTestId('wizard-next-button').click();
+
+      await expect(page.getByTestId('wizard-sprec-axis-1')).toBeVisible();
+      await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+      await page.getByTestId('wizard-sample-type').selectOption({ index: 1 });
+      await page.getByTestId('wizard-sample-origin').selectOption({ index: 1 });
+      await page.getByTestId('wizard-extraction-protocol').selectOption({ index: 1 });
+      await page.getByTestId('wizard-sprec-axis-1').selectOption({ index: 1 });
+      await page.getByTestId('wizard-sprec-axis-2').selectOption({ index: 1 });
+      await page.getByTestId('wizard-processing-unknown').check();
+      await page.getByTestId('wizard-sprec-axis-7').selectOption({ index: 1 });
+      await page.getByTestId('wizard-quantity').fill('5');
+      await page.getByTestId('wizard-linked-project').fill(`E2E-1371-${label}-${suffix}`);
+      if (parentSpecimenIds) {
+        await page.getByTestId('wizard-parent-specimen-ids').fill(parentSpecimenIds);
+      }
+      await page.getByTestId('wizard-institution-name').fill('Hospital E2E 1371');
+      await page.getByTestId('wizard-next-button').click();
+
+      await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
+      await page.getByTestId('wizard-diagnosis-search').fill(diseaseLabel);
+      await expect(page.getByTestId('wizard-diagnosis-option-0')).toBeVisible({ timeout: 10_000 });
+      await page.getByTestId('wizard-diagnosis-option-0').click();
+      await expect(page.locator('.phenotype-card', { hasText: phenotypeLabel })).toBeVisible({ timeout: 10_000 });
+      await page.getByTestId('wizard-treatment-status').selectOption('NAIVE');
+
+      const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
+      await page.getByTestId('wizard-submit-button').click();
+      const response = await submissionResponse;
+      const rawBody = await response.text();
+      expect(response.ok(), `POST /intake-wizard (${label}) -> ${response.status()}: ${rawBody.slice(0, 500)}`).toBe(true);
+      const body = JSON.parse(rawBody);
+      const sample = {
+        mongoId: String(body?.sample?._id || ''),
+        specimenId: String(body?.sample?.specimenId || ''),
+      };
+      expect(sample.mongoId, `${label} sample _id`).toBeTruthy();
+      expect(sample.specimenId, `${label} sample specimenId`).toBeTruthy();
+      lineageSamples.push(sample);
+      return { sample, participantId: String(body?.patientMatch?.patientID || '') };
+    };
+
+    const parent = await registerThroughWizard('parent');
+    expect(parent.participantId).toBeTruthy();
+
+    const derivative = await registerThroughWizard('derivative', parent.sample.specimenId);
+    expect(derivative.participantId).toBe(parent.participantId);
+
+    const db = mongoClient.db(mongoDbName);
+    const stored = await db.collection('samples').findOne({ _id: new ObjectId(derivative.sample.mongoId) });
+    expect(stored?.parentSpecimenIds).toEqual([parent.sample.specimenId]);
+
+    const lineageEvents = await db.collection('graph_projection_outbox').find({
+      eventType: 'LINEAGE_REGISTERED',
+      aggregateType: 'Sample',
+      aggregateId: derivative.sample.mongoId,
+    }).toArray();
+    expect(lineageEvents).toHaveLength(1);
+    expect(lineageEvents[0].payload).toEqual({
+      specimenId: String(derivative.sample.mongoId),
+      parentSpecimenId: String(parent.sample.mongoId),
+    });
   });
 });

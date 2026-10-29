@@ -2,9 +2,11 @@ const mongoose = require('mongoose');
 const logger = require('../utils/logger');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
+const UserModel = require('../models/User');
 const { sendIncidentAlertEmail } = require('../services/sendIncidentAlertEmail');
 const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
 const { findUserAccountIdsByRoleCodes } = require('../services/rbac-assignment.service');
+const { datastreamEquipmentIdsBySensor } = require('../services/sensorDatastream.service');
 
 const NOTIFIABLE_ROLE_CODES = ['technician', 'coordinator', 'administrator'];
 
@@ -35,7 +37,7 @@ async function getAlertRecipients() {
     const { ObjectId } = mongoose.Types;
     const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
     const recipients = await UserCollection
-      .find({ _id: { $in: objectIds }, status: 'active' })
+      .find({ _id: { $in: objectIds }, ...UserModel.accountStatusFilter('active') })
       .project({ email: 1, username: 1 })
       .toArray();
     return recipients.map(u => u.email).filter(e => e);
@@ -58,29 +60,40 @@ async function applyColdChainQuarantine(db, incident) {
 // (iot.controller.js's upsertTemperatureIncidentAndQuarantine/
 // upsertEnvironmentalExcursion, keyed by sensorKey and equipmentId
 // respectively) but nothing closed the excursion when its incident resolved.
+// #1392: the excursion's key is the equipmentId of the sensor's temperature
+// datastream valid now, else its SensorMetadata device's deviceId. The open
+// excursion under each of the two keys is closed, so one opened under the
+// device before the sensor was bound is not left open; the first closed, in
+// that order, is returned
+// (docs/decisions/2026-10-21-sensor-readers-from-datastream.md, decision 5).
 async function closeEnvironmentalExcursion(db, sensorKey, closedAt) {
-  const SensorMetadataCollection = db.collection('sensorMetadata');
-  const DeviceCollection = db.collection('devices');
-  const sensorMetadata = await SensorMetadataCollection.findOne({ sensorId: sensorKey });
-  if (!sensorMetadata?.device) return null;
+  const keys = [];
+  const datastreamKey = (await datastreamEquipmentIdsBySensor(db, [sensorKey])).get(String(sensorKey));
+  if (datastreamKey) keys.push(datastreamKey);
 
-  const device = await DeviceCollection.findOne({ _id: sensorMetadata.device });
-  const deviceId = device?.deviceId || null;
-  if (!deviceId) return null;
+  const sensorMetadata = await db.collection('sensorMetadata').findOne({ sensorId: sensorKey });
+  if (sensorMetadata?.device) {
+    const device = await db.collection('devices').findOne({ _id: sensorMetadata.device });
+    if (device?.deviceId && !keys.includes(device.deviceId)) keys.push(device.deviceId);
+  }
 
   const ExcursionCollection = db.collection('environmentalExcursions');
-  const openExcursion = await ExcursionCollection.findOne({
-    equipmentId: deviceId,
-    excursionStatus: { $in: ['open', 'under_assessment'] }
-  });
-  if (!openExcursion) return null;
+  let firstClosed = null;
+  for (const equipmentId of keys) {
+    const openExcursion = await ExcursionCollection.findOne({
+      equipmentId,
+      excursionStatus: { $in: ['open', 'under_assessment'] }
+    });
+    if (!openExcursion) continue;
 
-  const duration = closedAt.getTime() - new Date(openExcursion.startDateTime).getTime();
-  await ExcursionCollection.updateOne(
-    { _id: openExcursion._id },
-    { $set: { endDateTime: closedAt, excursionStatus: 'resolved', duration, updatedAt: closedAt } }
-  );
-  return { ...openExcursion, endDateTime: closedAt, excursionStatus: 'resolved', duration };
+    const duration = closedAt.getTime() - new Date(openExcursion.startDateTime).getTime();
+    await ExcursionCollection.updateOne(
+      { _id: openExcursion._id },
+      { $set: { endDateTime: closedAt, excursionStatus: 'resolved', duration, updatedAt: closedAt } }
+    );
+    firstClosed = firstClosed || { ...openExcursion, endDateTime: closedAt, excursionStatus: 'resolved', duration };
+  }
+  return firstClosed;
 }
 
 async function markColdChainReview(db, incident) {

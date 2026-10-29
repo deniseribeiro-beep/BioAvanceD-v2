@@ -22,6 +22,25 @@ async function withMongoTransaction(db, handler) {
 }
 
 /**
+ * #1313 (RF023 AC3, RNF019 C1): an aggregate write and the outbox event it
+ * appends, in one transaction wherever the deployment can run one. A replica
+ * set or mongos runs `handler(session)` inside a transaction; anything else
+ * runs `handler(null)` as sequential writes, the fallback sensor.service.js
+ * and #918 already take. Each write in the handler passes the session it was
+ * given, when there is one.
+ *
+ * @param {import('mongodb').Db} db
+ * @param {(session: import('mongodb').ClientSession|null) => Promise<any>} handler
+ * @returns {Promise<any>}
+ */
+async function withTransactionWhereSupported(db, handler) {
+  if (await isTransactionCapable(db)) {
+    return withMongoTransaction(db, handler);
+  }
+  return handler(null);
+}
+
+/**
  * Per-client cache of the transaction-capability probe below, so repeated
  * calls (e.g. one per request) don't re-run `hello` every time.
  */
@@ -96,4 +115,23 @@ async function probeTopology(db) {
   return topology;
 }
 
-module.exports = { withMongoTransaction, isTransactionCapable, isKnownStandaloneDeployment };
+/**
+ * #1370: `session.withTransaction` retries its callback only when the thrown
+ * error is a driver `MongoError` labelled `TransientTransactionError`, so a
+ * transaction body rethrows such an error as itself rather than wrapping it.
+ * Duck-typed on `hasErrorLabel`, so a caller need not require `mongodb`.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+function isTransientTransactionError(error) {
+  return typeof error?.hasErrorLabel === 'function' && error.hasErrorLabel('TransientTransactionError');
+}
+
+module.exports = {
+  withMongoTransaction,
+  withTransactionWhereSupported,
+  isTransactionCapable,
+  isKnownStandaloneDeployment,
+  isTransientTransactionError,
+};

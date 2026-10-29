@@ -20,21 +20,31 @@ function makeFakeDb(collectionsByName = {}) {
 }
 
 describe('ParticipantIdentityService.getEncryptedFieldMap', () => {
-  it('returns map for the three civil-identity fields (RF005/RNF007, dict-07 row 1, #566)', () => {
+  it('returns map for the three civil-identity fields plus the contact, the representative and the record number (RF005/RNF007, dict-07 row 1, #566, #1166, #1168, #1386)', () => {
     const map = participantIdentityService.getEncryptedFieldMap();
     expect(map).toEqual({
-      patientName: 'patientNameEncrypted',
-      birthDate: 'birthDateEncrypted',
-      identityDocument: 'identityDocumentEncrypted'
+      patientName: 'patientNameCiphertext',
+      birthDate: 'birthDateCiphertext',
+      identityDocument: 'identityDocumentCiphertext',
+      email: 'emailCiphertext',
+      phone: 'phoneCiphertext',
+      representativeName: 'representativeNameCiphertext',
+      representativeEmail: 'representativeEmailCiphertext',
+      representativeIdentityDocument: 'representativeIdentityDocumentCiphertext',
+      representativePhone: 'representativePhoneCiphertext',
+      recordNumber: 'recordNumberCiphertext'
     });
   });
 });
 
 describe('ParticipantIdentityService.getHashFieldMap', () => {
-  it('returns map for the two fields queried by exact/range match (RF005/RNF007, #574)', () => {
+  it('returns map for the fields queried by exact/range match (RF005/RNF007, #574, #1104, #1386) plus phone uniqueness (#1166)', () => {
     expect(participantIdentityService.getHashFieldMap()).toEqual({
+      patientName: 'patientNameHash',
       identityDocument: 'identityDocumentHash',
-      birthDate: 'birthDateHash'
+      birthDate: 'birthDateHash',
+      phone: 'phoneHash',
+      recordNumber: 'recordNumberHash'
     });
   });
 });
@@ -62,9 +72,11 @@ describe('ParticipantIdentityService.computeBlindIndex', () => {
     expect(a).not.toBe(b);
   });
 
+  // #1412: an instant that is neither noon UTC nor a local midnight is read
+  // as its UTC calendar day.
   it('is deterministic for the same birthDate calendar day regardless of time-of-day', () => {
-    const a = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20, 3, 15));
-    const b = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20, 23, 59));
+    const a = participantIdentityService.computeBlindIndex('birthDate', new Date(Date.UTC(1990, 0, 20, 3, 15)));
+    const b = participantIdentityService.computeBlindIndex('birthDate', new Date(Date.UTC(1990, 0, 20, 23, 59)));
     expect(a).toBe(b);
   });
 
@@ -72,6 +84,26 @@ describe('ParticipantIdentityService.computeBlindIndex', () => {
     const a = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20));
     const b = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 21));
     expect(a).not.toBe(b);
+  });
+
+  // #1104: listPatients' name filter is an exact match on this hash, so it
+  // has to agree with the in-memory comparison PatientIdentityService and
+  // intakeWizard's /patient-match already make.
+  it('#1104: is the same patientName hash regardless of accents, case and spacing', () => {
+    const a = participantIdentityService.computeBlindIndex('patientName', 'José  da Silva');
+    const b = participantIdentityService.computeBlindIndex('patientName', ' jose DA silva ');
+    expect(a).toBeTruthy();
+    expect(a).toBe(b);
+  });
+
+  it('#1104: still differs across genuinely different names', () => {
+    const a = participantIdentityService.computeBlindIndex('patientName', 'José da Silva');
+    const b = participantIdentityService.computeBlindIndex('patientName', 'José da Silveira');
+    expect(a).not.toBe(b);
+  });
+
+  it('#1104: returns null for a whitespace-only patientName', () => {
+    expect(participantIdentityService.computeBlindIndex('patientName', '   ')).toBeNull();
   });
 
   it('returns null for null/undefined/empty', () => {
@@ -108,8 +140,8 @@ describe('ParticipantIdentityService.computeBlindIndexCandidates', () => {
   });
 
   it('applies the SAME normalization as computeBlindIndex -- birthDate calendar day (#1099)', () => {
-    const a = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(1990, 0, 20, 3, 15));
-    const b = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(1990, 0, 20, 23, 59));
+    const a = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(Date.UTC(1990, 0, 20, 3, 15)));
+    const b = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(Date.UTC(1990, 0, 20, 23, 59)));
     expect(a).toEqual(b);
     expect(a).toContain(participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20)));
   });
@@ -123,7 +155,7 @@ describe('ParticipantIdentityService.computeBlindIndexCandidates', () => {
 });
 
 describe('ParticipantIdentityService.encryptIdentityFields', () => {
-  it('encrypts patientName/birthDate/identityDocument at rest without dropping the plaintext (dual-write, #566 is additive-only)', () => {
+  it('encrypts patientName/birthDate/identityDocument at rest, ciphertext-only (#566, #1104)', () => {
     const fields = {
       participantId: '12345678',
       patientName: 'Paciente QA Teste',
@@ -134,22 +166,26 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
     const result = participantIdentityService.encryptIdentityFields(fields);
 
     // Ciphertext must not contain the plaintext value anywhere in its encoding.
-    expect(JSON.stringify(result.patientNameEncrypted)).not.toContain('Paciente QA Teste');
-    expect(JSON.stringify(result.identityDocumentEncrypted)).not.toContain('11144477735');
-    expect(result.patientNameEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
-    expect(result.birthDateEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
-    expect(result.identityDocumentEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(JSON.stringify(result.patientNameCiphertext)).not.toContain('Paciente QA Teste');
+    expect(JSON.stringify(result.identityDocumentCiphertext)).not.toContain('11144477735');
+    expect(result.patientNameCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.birthDateCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.identityDocumentCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
 
-    // Existing consumers (#561-#564) still read these directly off the
-    // document — dropping them now would regress every one of them.
-    expect(result.patientName).toBe('Paciente QA Teste');
-    expect(result.identityDocument).toBe('11144477735');
+    // #1104: dict-07 row 1 ("cifrar") -- a field encrypted beside its own
+    // plaintext copy is not encrypted at rest, and decryptIdentity prefers
+    // the plaintext whenever it is present.
+    expect(result.patientName).toBeNull();
+    expect(result.birthDate).toBeNull();
+    expect(result.identityDocument).toBeNull();
 
     // dict-02 P1X-0362: encryptionKeyVersion records the key used, for
     // auditable rotation.
     expect(result.encryptionKeyVersion).toBe('test-key-1');
 
-    // RF005/RNF007 (#574): blind-index siblings for the two queried fields.
+    // RF005/RNF007 (#574, #1104): blind-index siblings for the three
+    // queried fields.
+    expect(result.patientNameHash).toBe(participantIdentityService.computeBlindIndex('patientName', 'Paciente QA Teste'));
     expect(result.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
     expect(result.birthDateHash).toBe(participantIdentityService.computeBlindIndex('birthDate', new Date('1990-01-20')));
   });
@@ -163,9 +199,11 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
       identityDocument: '111.444.777-35',
     });
 
-    expect(result.identityDocument).toBe('11144477735');
+    // #1104: the plaintext is dropped, so the canonical form is read back
+    // through the ciphertext.
+    expect(participantIdentityService.decryptIdentity(result).identityDocument).toBe('11144477735');
     expect(result.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
-    expect(JSON.stringify(result.identityDocumentEncrypted)).not.toContain('111.444.777-35');
+    expect(JSON.stringify(result.identityDocumentCiphertext)).not.toContain('111.444.777-35');
   });
 
   // #1109 control: a document with no punctuation is untouched, so a red
@@ -176,18 +214,18 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
       identityDocument: '11144477735',
     });
 
-    expect(result.identityDocument).toBe('11144477735');
+    expect(participantIdentityService.decryptIdentity(result).identityDocument).toBe('11144477735');
   });
 
   it('does not mutate the input object', () => {
     const fields = { participantId: '1', patientName: 'Ana' };
     participantIdentityService.encryptIdentityFields(fields);
-    expect(Object.keys(fields)).not.toContain('patientNameEncrypted');
+    expect(Object.keys(fields)).not.toContain('patientNameCiphertext');
   });
 
   it('skips fields that are null/undefined/absent', () => {
     const result = participantIdentityService.encryptIdentityFields({ participantId: '1', patientName: null });
-    expect(result.patientNameEncrypted).toBeUndefined();
+    expect(result.patientNameCiphertext).toBeUndefined();
     expect(result.encryptionKeyVersion).toBeUndefined();
   });
 });
@@ -209,7 +247,7 @@ describe('ParticipantIdentityService.encryptIdentityFields -- birthDate cipherte
     });
 
     expect(result.birthDate).toBeNull();
-    expect(result.birthDateEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.birthDateCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
     expect(result.birthDateHash).toBe(
       participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20))
     );
@@ -246,23 +284,42 @@ describe('ParticipantIdentityService.encryptIdentityFields -- birthDate cipherte
       birthDate: new Date(1990, 0, 20),
     });
 
-    expect(result.birthDateEncrypted).toBeUndefined();
+    expect(result.birthDateCiphertext).toBeUndefined();
     expect(result.birthDate).toBeInstanceOf(Date);
     expect(result.birthDate.getFullYear()).toBe(1990);
   });
 
-  // Control: this is a birthDate-ONLY cutover. patientName and
-  // identityDocument still have live plaintext readers and plaintext query
-  // arms, so their dual-write must be untouched. Expected behaviour is the
-  // same before and after, so a red here is the fixture, not the cutover.
-  it('#1104 control: patientName and identityDocument keep their plaintext', () => {
+  // The second half of the cutover: patientName's one plaintext query became
+  // an exact match on patientNameHash, and identityDocument's $or plaintext
+  // arms became hash-only, so neither needs its plaintext at rest.
+  it('#1104: writes NO plaintext patientName or identityDocument once the ciphertext exists, and both round-trip', () => {
     const result = participantIdentityService.encryptIdentityFields({
       participantId: '12345678',
       patientName: 'Paciente QA Teste',
-      birthDate: new Date(1990, 0, 20),
       identityDocument: '11144477735',
     });
 
+    expect(result.patientName).toBeNull();
+    expect(result.identityDocument).toBeNull();
+    expect(result.patientNameCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.identityDocumentCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+
+    const decrypted = participantIdentityService.decryptIdentity(result);
+    expect(decrypted.patientName).toBe('Paciente QA Teste');
+    expect(decrypted.identityDocument).toBe('11144477735');
+  });
+
+  // #1083, as for birthDate above: a keyless stack must keep the value.
+  it('#1104/#1083: KEEPS the plaintext patientName and identityDocument when no ciphertext could be produced', () => {
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      patientName: 'Paciente QA Teste',
+      identityDocument: '111.444.777-35',
+    });
+
+    expect(result.patientNameCiphertext).toBeUndefined();
     expect(result.patientName).toBe('Paciente QA Teste');
     expect(result.identityDocument).toBe('11144477735');
   });
@@ -291,7 +348,8 @@ describe('ParticipantIdentityService.decryptIdentity', () => {
     expect(decrypted.patientName).toBe('Paciente QA Teste');
     expect(decrypted.identityDocument).toBe('11144477735');
     expect(decrypted.birthDate).toBeInstanceOf(Date);
-    expect(decrypted.birthDate.toISOString()).toBe(new Date('1990-01-20').toISOString());
+    // #1412: stored as noon UTC of the day.
+    expect(decrypted.birthDate.toISOString()).toBe('1990-01-20T12:00:00.000Z');
   });
 
   it('falls back to the existing plaintext for legacy records with no ciphertext (pre-#566)', () => {
@@ -310,6 +368,81 @@ describe('ParticipantIdentityService.decryptIdentity', () => {
   it('returns non-object input unchanged', () => {
     expect(participantIdentityService.decryptIdentity(null)).toBeNull();
     expect(participantIdentityService.decryptIdentity('x')).toBe('x');
+  });
+});
+
+// dict-02 P1X-0352/P1X-0353 (#1166): participant email and phone are
+// ParticipantIdentity fields, "MongoDB protegido". Since slice 4 they are
+// ciphertext-only: every reader decrypts, and no query reads the plaintext.
+describe('ParticipantIdentityService -- contact fields encrypted at rest (#1166)', () => {
+  it('#1166: encrypts email and phone and drops the plaintext (slice 4)', () => {
+    const result = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      email: 'maria@example.com',
+      phone: '11987654321',
+    });
+
+    expect(result.emailCiphertext).toBeTruthy();
+    expect(result.phoneCiphertext).toBeTruthy();
+    expect(JSON.stringify(result.emailCiphertext)).not.toContain('maria@example.com');
+    expect(result.email).toBeNull();
+    expect(result.phone).toBeNull();
+  });
+
+  // #1168: the representative's four fields (dict-02 P1X-0357..0360) are
+  // enciphered and ciphertext-only too. Nothing queries them, so no hash.
+  it('#1168: encrypts the representative fields ciphertext-only, and they round-trip', () => {
+    const result = participantIdentityService.encryptIdentityFields({ participantId: '12345678', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } });
+
+    for (const field of ['representativeName', 'representativeEmail', 'representativeIdentityDocument', 'representativePhone']) {
+      expect(result[`${field}Ciphertext`]).toBeTruthy();
+      expect(result[field]).toBeNull();
+    }
+    const decrypted = participantIdentityService.decryptIdentity(result);
+    expect(decrypted.representativeIdentityDocument).toBe('98765432100');
+    expect(decrypted.representativeEmail).toBe('rep@example.com');
+  });
+
+  // #1166 slice 4: the Patient copy is no longer written, so it is no longer
+  // a fallback either. A stale one left on an un-migrated row must not win.
+  it('#1166: withIdentityContact takes the contact from the identity record only', () => {
+    const resolved = participantIdentityService.withIdentityContact(
+      { participantId: '12345678', email: 'stale@example.com', phone: '11900000000' },
+      { participantId: '12345678', email: null, phone: null }
+    );
+
+    expect(resolved.email ?? null).toBeNull();
+    expect(resolved.phone ?? null).toBeNull();
+  });
+
+  it('#1166: withIdentityContact overlays the identity contact (control)', () => {
+    const resolved = participantIdentityService.withIdentityContact(
+      { participantId: '12345678', status: 'PENDING_CONSENT' },
+      { email: 'maria@example.com', phone: '11987654321' }
+    );
+
+    expect(resolved).toMatchObject({ status: 'PENDING_CONSENT', email: 'maria@example.com', phone: '11987654321' });
+  });
+
+  it('#1166: email and phone round-trip through decryptIdentity from ciphertext alone', () => {
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      email: 'maria@example.com',
+      phone: '11987654321',
+    });
+
+    const decrypted = participantIdentityService.decryptIdentity({ ...encrypted, email: null, phone: null });
+
+    expect(decrypted.email).toBe('maria@example.com');
+    expect(decrypted.phone).toBe('11987654321');
+  });
+
+  it('#1166: writes a phoneHash, and a punctuated phone hashes like its digits', () => {
+    const result = participantIdentityService.encryptIdentityFields({ participantId: '12345678', phone: '11987654321' });
+
+    expect(result.phoneHash).toBeTruthy();
+    expect(participantIdentityService.computeBlindIndex('phone', '(11) 98765-4321')).toBe(result.phoneHash);
+    expect(participantIdentityService.computeBlindIndex('phone', '11912345678')).not.toBe(result.phoneHash);
   });
 });
 

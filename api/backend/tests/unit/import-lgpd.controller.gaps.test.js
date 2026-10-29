@@ -166,7 +166,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(false);
@@ -188,7 +188,7 @@ describe('import-lgpd.controller gaps', () => {
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
       const req = {
-        app: { locals: { db } },
+        organizationScope: { scope: 'global' }, app: { locals: { db } },
         file,
         body: {
           groupFields: '{"clinicalUnit":"HUSF"}',
@@ -228,7 +228,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: { groupFields: '{not json' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { groupFields: '{not json' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -239,9 +239,13 @@ describe('import-lgpd.controller gaps', () => {
 
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: false, error: 'groupFields inválido' })
-      );
+      // #840: full body -- error, reason token AND message.
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'malformed',
+        message: 'groupFields deve ser um JSON válido'
+      });
     });
 
     // #818's actual subject: the boundary must reject an operator-shaped
@@ -253,7 +257,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: { groupFields: '{"$ne": null}' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { groupFields: '{"$ne": null}' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -268,6 +272,15 @@ describe('import-lgpd.controller gaps', () => {
       expect(importSpy).not.toHaveBeenCalled();
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
+      // #840: the "value" reason token and its own Portuguese sentence, not
+      // the "malformed" body every rejection used to answer regardless of
+      // why parseGroupFields rejected the payload.
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'value',
+        message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano'
+      });
     });
 
     // #837: mapping's JSON.parse was the last unguarded parse in this
@@ -280,7 +293,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: { mapping: '{not json' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { mapping: '{not json' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -313,7 +326,7 @@ describe('import-lgpd.controller gaps', () => {
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
       const req = {
-        app: { locals: { db } },
+        organizationScope: { scope: 'global' }, app: { locals: { db } },
         file,
         body: { mapping: '{"Coluna":"$where"}' }
       };
@@ -341,7 +354,7 @@ describe('import-lgpd.controller gaps', () => {
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
       const req = {
-        app: { locals: { db } },
+        organizationScope: { scope: 'global' }, app: { locals: { db } },
         file,
         body: { mapping: { $ne: 'patientName' } }
       };
@@ -366,7 +379,7 @@ describe('import-lgpd.controller gaps', () => {
       const db = createDb();
       db.__collection.insertOne.mockResolvedValue({ insertedId: 'report-1' });
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1', name: 'Tester' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1', name: 'Tester' } };
       const res = createRes();
 
       const fs = require('fs');
@@ -395,7 +408,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       const fs = require('fs');
@@ -419,7 +432,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       const fs = require('fs');
@@ -450,7 +463,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       const fs = require('fs');
@@ -495,7 +508,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: { groupFields: { clinicalUnit: 'HUSF' } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: { groupFields: { clinicalUnit: 'HUSF' } } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -516,7 +529,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -542,7 +555,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -567,7 +580,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/a.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -589,7 +602,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -609,7 +622,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -637,7 +650,7 @@ describe('import-lgpd.controller gaps', () => {
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('content'));
       const file = { path: '/tmp/smart.csv', originalname: 'smart.csv' };
       const req = {
-        app: { locals: { db } },
+        organizationScope: { scope: 'global' }, app: { locals: { db } },
         file,
         body: { groupFields: { clinicalUnit: 'HUSF' }, mapping: { patientName: 'nome' } }
       };
@@ -669,7 +682,7 @@ describe('import-lgpd.controller gaps', () => {
       const fs = require('fs');
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('content'));
       const file = { path: '/tmp/smart.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -693,7 +706,7 @@ describe('import-lgpd.controller gaps', () => {
       const fs = require('fs');
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('content'));
       const file = { path: '/tmp/smart.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -733,7 +746,7 @@ describe('import-lgpd.controller gaps', () => {
           toArray: collections[name].toArray
         }))
       };
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.downloadSampleTemplateCSV(req, res);
@@ -757,7 +770,7 @@ describe('import-lgpd.controller gaps', () => {
       };
       const db = { collection: vi.fn().mockReturnValue(collection) };
       const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.downloadSampleTemplateExcel(req, res);
@@ -782,7 +795,7 @@ describe('import-lgpd.controller gaps', () => {
           toArray: vi.fn().mockResolvedValue(collections[name])
         }))
       };
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.downloadSampleTemplateExcel(req, res);
@@ -803,7 +816,7 @@ describe('import-lgpd.controller gaps', () => {
           toArray: vi.fn().mockResolvedValue(collections[name])
         }))
       };
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.downloadSampleTemplateExcel(req, res);
@@ -819,7 +832,7 @@ describe('import-lgpd.controller gaps', () => {
       vi.spyOn(ExcelJS.Workbook.prototype, 'addWorksheet').mockImplementation(() => {
         throw err;
       });
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
 
       await controller.downloadSampleTemplateExcel(req, res);
@@ -845,7 +858,7 @@ describe('import-lgpd.controller gaps', () => {
           toArray: vi.fn().mockResolvedValue(collections[name])
         }))
       };
-      const req = { app: { locals: { db } } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } } };
       const res = createRes();
 
       await controller.downloadSampleTemplateExcel(req, res);
@@ -869,7 +882,7 @@ describe('import-lgpd.controller gaps', () => {
         toArray: vi.fn().mockRejectedValue(err),
         countDocuments: vi.fn().mockResolvedValue(0)
       }));
-      const req = { app: { locals: { db } }, query: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, query: {} };
       const res = createRes();
       vi.spyOn(logger, 'error').mockImplementation(() => {});
 
@@ -889,7 +902,7 @@ describe('import-lgpd.controller gaps', () => {
       vi.spyOn(importLGPDService, 'getPatientsSmartImportMetadata').mockImplementation(() => {
         throw err;
       });
-      const req = { app: { locals: {} } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: {} } };
       const res = createRes();
       vi.spyOn(logger, 'error').mockImplementation(() => {});
 
@@ -908,7 +921,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -929,7 +942,7 @@ describe('import-lgpd.controller gaps', () => {
       const controller = require('../../src/controllers/import-lgpd.controller');
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-      const req = { app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {}, user: { id: 'u1' } };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);

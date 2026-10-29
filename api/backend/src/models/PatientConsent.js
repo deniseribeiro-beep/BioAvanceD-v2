@@ -62,6 +62,13 @@ class PatientConsentModel {
       consentId: data.consentId || crypto.randomUUID(),
       participantId: data.participantId,
       consentTemplateId: data.consentTemplateId,
+      // #827: dict-02 ELM-0091 and the evidence trio ELM-0105/0106, P1X-0373
+      consentVersion: data.consentVersion || null,
+      consentModel: data.consentModel || null,
+      evidenceDocumentUri: data.evidenceDocumentUri || null,
+      evidenceHash: data.evidenceHash || null,
+      evidenceMimeType: data.evidenceMimeType || null,
+      evidenceEncryption: data.evidenceEncryption || null,
       signedAt: data.signedAt ? new Date(data.signedAt) : new Date(),
       status: data.status || 'ACTIVE',
       revokedAt: data.revokedAt ? new Date(data.revokedAt) : null,

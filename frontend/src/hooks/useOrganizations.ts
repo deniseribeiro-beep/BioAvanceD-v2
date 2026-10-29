@@ -5,6 +5,38 @@ import { extractResponseItems } from '../api/response.adapters';
 import { onClientLogout } from '../utils/sessionCleanup';
 import { useRequestSequence } from './useRequestSequence';
 
+// #1280: GET /api/organizations returns one page sorted by name, at most 500
+// rows. Every consumer of this hook (the organizations tab and the pickers)
+// needs the whole list, so read pages until one comes back short.
+export const ORGANIZATION_PAGE_SIZE = 500;
+const MAX_ORGANIZATION_PAGES = 100;
+
+const organizationKey = (organization: Organization): string => {
+  const record = organization as unknown as Record<string, unknown>;
+  return String(record.organizationId ?? record._id ?? record.id ?? '');
+};
+
+export async function fetchAllOrganizations(): Promise<Organization[]> {
+  const all: Organization[] = [];
+  const seen = new Set<string>();
+  for (let page = 0; page < MAX_ORGANIZATION_PAGES; page += 1) {
+    const response = await organizationService.getAll({ limit: ORGANIZATION_PAGE_SIZE, skip: page * ORGANIZATION_PAGE_SIZE });
+    const items = extractResponseItems<Organization>(response);
+    let added = 0;
+    for (const item of items) {
+      const key = organizationKey(item);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      all.push(item);
+      added += 1;
+    }
+    // A short page is the last one. A page adding nothing new means the
+    // server ignored the offset, so stop rather than loop.
+    if (items.length < ORGANIZATION_PAGE_SIZE || added === 0) break;
+  }
+  return all;
+}
+
 export function useOrganizations() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,9 +61,8 @@ export function useOrganizations() {
     const seq = requestSeq.next();
     try {
       setLoading(true);
-      const response = await organizationService.getAll();
+      const organizationsData = await fetchAllOrganizations();
       if (!requestSeq.isCurrent(seq)) return;
-      const organizationsData = extractResponseItems<Organization>(response);
       setOrganizations(organizationsData);
       setError(null);
     } catch (err: any) {

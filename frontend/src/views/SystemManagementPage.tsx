@@ -5,7 +5,7 @@ import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound } from 'lucide-react';
+import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound, LogOut, Landmark } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
 import { useOrganizations } from '../hooks/useOrganizations';
 import { useCollections } from '../hooks/useCollections';
@@ -14,6 +14,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { userService } from '../services/api';
 import { Organization, Collection } from '../types/models';
 import SecurityPage from './SecurityPage';
+import CollectionGovernancePanel from './CollectionGovernancePanel';
 import './SystemManagementPage.css';
 
 type TabType = 'users' | 'organizations' | 'collections' | 'security';
@@ -183,6 +184,12 @@ function UsersSection() {
                         {getAccessTypeLabel(user.accessType)}
                       </span>
                     )}
+                    {/* #1240: the additive auditor role, beside the main one. */}
+                    {user.auditorRole && (
+                      <span className="role-badge role-auditor" data-testid={`auditor-badge-${userId || user.id}`}>
+                        {t('users.auditorBadge')}
+                      </span>
+                    )}
                   </div>
                 </td>
                 <td>
@@ -295,6 +302,33 @@ function UsersSection() {
                       title={t('users.forcePasswordResetTitle')}
                     >
                       <KeyRound size={16} />
+                    </button>
+                    {/* #1020 / RF003 AC#5: revoke every active session, recording
+                        whether the account is judged at risk (P1X-0267 'risk'). */}
+                    <button
+                      data-testid={`revoke-sessions-button-${userId || user.id}`}
+                      className="action-button"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!userId) {
+                          alert(t('users.userIdNotFound'));
+                          return;
+                        }
+                        if (!confirm(`Revogar todas as sessões ativas de ${user.name}?`)) return;
+                        const reason = confirm(
+                          'A conta pode estar comprometida?\n\nOK: registrar o motivo como "risco".\nCancelar: registrar como ação administrativa.'
+                        ) ? 'risk' : 'admin_action';
+                        try {
+                          const response = await userService.revokeSessions(userId, reason);
+                          alert(`${response.data.data.revoked} sessão(ões) revogada(s).`);
+                        } catch (err: any) {
+                          alert(err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao revogar sessões');
+                        }
+                      }}
+                      title="Revogar sessões"
+                    >
+                      <LogOut size={16} />
                     </button>
                     <button
                       data-testid={`delete-user-button-${userId || user.id}`}
@@ -574,6 +608,7 @@ export interface CollectionFormState {
   collectionId: string;
   collectionName: string;
   collectionStatus: string;
+  governanceRegime: string;
   exclusionCriteria: string;
   participantCount: string;
   sampleCount: string;
@@ -595,6 +630,7 @@ export function buildCollectionFormState(collection: Collection | null): Collect
     collectionId: collection?.collectionId || '',
     collectionName: collection?.collectionName || '',
     collectionStatus: collection?.collectionStatus || 'active',
+    governanceRegime: collection?.governanceRegime || '',
     exclusionCriteria: collection?.exclusionCriteria || '',
     participantCount: collection?.participantCount != null ? String(collection.participantCount) : '',
     sampleCount: collection?.sampleCount != null ? String(collection.sampleCount) : '',
@@ -628,6 +664,7 @@ export function buildCollectionSubmissionPayload(formData: CollectionFormState):
     collectionId: formData.collectionId.trim(),
     collectionName: formData.collectionName.trim(),
     collectionStatus: formData.collectionStatus || 'active',
+    governanceRegime: (formData.governanceRegime || null) as Collection['governanceRegime'],
     exclusionCriteria: formData.exclusionCriteria.trim() || null,
     participantCount: formData.participantCount.trim() === '' ? null : Number(formData.participantCount),
     sampleCount: formData.sampleCount.trim() === '' ? null : Number(formData.sampleCount),
@@ -644,10 +681,12 @@ export function buildCollectionSubmissionPayload(formData: CollectionFormState):
 
 // Seção de Coleções
 function CollectionsSection() {
-  const { collections, loading, error, createCollection, updateCollection, deleteCollection } = useCollections();
+  const { collections, loading, error, loadCollections, createCollection, updateCollection, deleteCollection } = useCollections();
+  const { organizations } = useOrganizations();
   const { t } = useLanguage();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCollection, setEditingCollection] = useState<Collection | null>(null);
+  const [governedCollection, setGovernedCollection] = useState<Collection | null>(null);
 
   return (
     <>
@@ -701,6 +740,14 @@ function CollectionsSection() {
                       title={t('common.edit')}
                     >
                       <Edit size={16} />
+                    </button>
+                    <button
+                      data-testid={`governance-collection-button-${collection.collectionId}`}
+                      className="action-button"
+                      onClick={() => setGovernedCollection(collection)}
+                      title={t('system.collections.governance.title', 'Governança')}
+                    >
+                      <Landmark size={16} />
                     </button>
                     <button
                       data-testid={`delete-collection-button-${collection.collectionId}`}
@@ -763,6 +810,20 @@ function CollectionsSection() {
           }}
         />
       </Modal>
+
+      <Modal
+        isOpen={governedCollection !== null}
+        onClose={() => {
+          setGovernedCollection(null);
+          // A decision may have set or converted the regime the table shows.
+          loadCollections();
+        }}
+        title={`${t('system.collections.governance.title', 'Governança')}: ${governedCollection?.collectionName ?? ''}`}
+      >
+        {governedCollection && (
+          <CollectionGovernancePanel collection={governedCollection} organizations={organizations} />
+        )}
+      </Modal>
     </>
   );
 }
@@ -817,6 +878,25 @@ function CollectionForm({
           >
             <option value="active">{t('system.collections.statusActive', 'Ativa')}</option>
             <option value="inactive">{t('system.collections.statusInactive', 'Inativa')}</option>
+          </select>
+        </div>
+        <div className="form-grid-full">
+          <label className="input-label" htmlFor="collectionGovernanceRegimeSelect">
+            {t('system.collections.governanceRegime', 'Regime de governança')}
+          </label>
+          {/* RF004 AC2: biobank or biorepository. RF020 AC4: once set, a change is a governed event, not an edit; a collection stored without one may receive it. */}
+          <select
+            id="collectionGovernanceRegimeSelect"
+            data-testid="collection-governance-regime-select"
+            className="input"
+            value={formData.governanceRegime}
+            onChange={(e) => setFormData({ ...formData, governanceRegime: e.target.value })}
+            disabled={!!collection?.governanceRegime}
+            required
+          >
+            <option value="">{t('system.collections.governanceRegimePlaceholder', 'Selecione o regime')}</option>
+            <option value="biobank">{t('system.collections.regimeBiobank', 'Biobanco')}</option>
+            <option value="biorepository">{t('system.collections.regimeBiorepository', 'Biorrepositório')}</option>
           </select>
         </div>
         <Input

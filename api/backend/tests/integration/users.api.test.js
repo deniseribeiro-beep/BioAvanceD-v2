@@ -18,13 +18,17 @@ const { buildRbacCollections } = require('../factories/rbac.factory');
 // a handler actually executes.
 const auditLogger = require('../../src/utils/auditLogger');
 
-function createCoordinatorToken() {
+// #1008: registering a user assigns a role, which is the Administrador's
+// (assignRole). These validation tests used a Coordenador caller, which the
+// route now refuses before validation runs, so the caller is an
+// Administrador. The Coordenador refusal is pinned in its own test below.
+function createCallerToken({ userID = 'qa-admin-1', accessType = 4, roleName = 'Administrador' } = {}) {
   return jwt.sign(
     {
-      userID: 'qa-coord-1',
-      accessType: 3,
-      roleName: 'Coordenador',
-      name: 'QA Coordenador',
+      userID,
+      accessType,
+      roleName,
+      name: `QA ${roleName}`,
       mfaVerified: true,
     },
     process.env.JWT_SECRET,
@@ -42,7 +46,7 @@ describe('RF003 - POST /api/users/register', () => {
     const usersCollection = createCollectionMock(overrides);
     app.locals.db = createDbMock({
       users: usersCollection,
-      ...buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]),
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
     });
     return usersCollection;
   }
@@ -50,9 +54,29 @@ describe('RF003 - POST /api/users/register', () => {
   async function whenRegisterUser(payload) {
     return request(app)
       .post('/api/users/register')
-      .set('Authorization', `Bearer ${createCoordinatorToken()}`)
+      .set('Authorization', `Bearer ${createCallerToken()}`)
       .send(payload);
   }
+
+  // #1008 (Denise, 2026-09-25): through the real requirePermission chain, a
+  // Coordenador holds createUser but not assignRole, so it cannot register a
+  // user at any level, the default Técnico included.
+  it('#1008: refuses a Coordenador registering a user, even with no role named, and writes nothing', async () => {
+    const usersCollection = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null), insertOne: vi.fn(), updateOne: vi.fn() });
+    app.locals.db = createDbMock({
+      users: usersCollection,
+      ...buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]),
+    });
+    const { accessType: _omit, ...noRole } = buildUserRegistrationPayload();
+
+    const response = await request(app)
+      .post('/api/users/register')
+      .set('Authorization', `Bearer ${createCallerToken({ userID: 'qa-coord-1', accessType: 3, roleName: 'Coordenador' })}`)
+      .send(noRole);
+
+    expect(response.status).toBe(403);
+    expect(usersCollection.insertOne).not.toHaveBeenCalled();
+  });
 
   beforeEach(() => {
     givenAuthenticatedSession();
@@ -80,8 +104,8 @@ describe('RF003 - POST /api/users/register', () => {
       })
     );
 
-    // Then
-    expect(response.status).toBe(400);
+    // Then: a model-validation failure answers 422 (RNF018, #1300)
+    expect(response.status).toBe(422);
     expect(response.body.success).toBe(false);
     expect(String(response.body.message || '').toLowerCase()).toContain('password');
     expect(String(response.body.message || '').toLowerCase()).toContain('senha');
@@ -122,7 +146,7 @@ describe('RF003 - POST /api/users/register', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'new-user-1' }),
       updateOne: vi.fn(),
     });
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]);
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }),
     });
@@ -153,7 +177,7 @@ describe('RF003 - POST /api/users/register', () => {
       insertOne: vi.fn(),
       updateOne: vi.fn(),
     });
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]);
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
@@ -205,13 +229,17 @@ describe('resetMFA permission enforcement (#632)', () => {
       permissionCode,
       ...entry,
     }));
+    // #1384: user.routes.js runs requireOrganizationScope, so the operator
+    // and its target share an organization, as the route now requires.
     return {
       roles: queryableCollectionMock([
         { roleId: 'role-mfa-operator', roleCode: 'mfa_operator', hierarchyLevel: null, roleStatus: 'active', permissionIds: ['perm-resetMFA'] },
+        { roleId: 'role-technician', roleCode: 'technician', hierarchyLevel: 2, roleStatus: 'active', permissionIds: [] },
       ]),
       permissions: queryableCollectionMock(permissionDocs),
       userRoleAssignments: queryableCollectionMock([
-        { userAccountId: 'qa-mfa-operator', roleId: 'role-mfa-operator', assignmentStatus: 'active', validUntil: null },
+        { userAccountId: 'qa-mfa-operator', roleId: 'role-mfa-operator', assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-a' },
+        { userAccountId: 'user-target-1', roleId: 'role-technician', assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-a' },
       ]),
     };
   }
@@ -717,5 +745,132 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
         expect(thrown?.message ?? '').not.toMatch(/secondFactorActive/);
       }
     });
+  });
+});
+
+// #1358: an administrator gives a user a second organization and takes it
+// away again, each a UserRoleAssignment of the user's role per organization.
+describe('#1358: /api/users/:id/organizations', () => {
+  const { ObjectId } = require('mongodb');
+  const targetId = new ObjectId();
+  let assignmentDocs;
+  let permissionChangeSpy;
+
+  function sameQuery(doc, query = {}) {
+    return Object.entries(query).every(([key, cond]) => (
+      cond && typeof cond === 'object' && '$in' in cond ? cond.$in.includes(doc[key]) : doc[key] === cond
+    ));
+  }
+
+  async function givenTargetCoordinatorIn(organizationIds) {
+    const rbac = buildRbacCollections([
+      { userAccountId: 'qa-admin-1', accessType: 4 },
+      { userAccountId: 'qa-coord-1', accessType: 3, organizationId: 'org-a' },
+      { userAccountId: targetId.toString(), accessType: 3, organizationId: organizationIds[0] },
+    ]);
+    assignmentDocs = await rbac.userRoleAssignments.find({}).toArray();
+    const template = assignmentDocs.find((doc) => doc.userAccountId === targetId.toString());
+    for (const scopeId of organizationIds.slice(1)) {
+      assignmentDocs.push({ ...template, assignmentId: `extra-${scopeId}`, scopeId });
+    }
+    rbac.userRoleAssignments = createCollectionMock({
+      findOne: vi.fn(async (query) => assignmentDocs.find((doc) => sameQuery(doc, query)) || null),
+      find: vi.fn((query) => ({ toArray: vi.fn().mockResolvedValue(assignmentDocs.filter((doc) => sameQuery(doc, query))) })),
+      insertOne: vi.fn(async (doc) => { assignmentDocs.push(doc); return { insertedId: doc.assignmentId }; }),
+      updateOne: vi.fn(async (filter, update) => {
+        const doc = assignmentDocs.find((d) => sameQuery(d, filter));
+        if (doc && update.$set) Object.assign(doc, update.$set);
+        return { matchedCount: doc ? 1 : 0 };
+      }),
+    });
+    app.locals.db = createDbMock({
+      users: createCollectionMock({
+        findOne: vi.fn(async () => ({ _id: targetId, name: 'Target', organizationId: organizationIds[0] })),
+      }),
+      organizations: createCollectionMock({
+        findOne: vi.fn(async (query) => (['org-a', 'org-b'].includes(query.organizationId) ? query : null)),
+      }),
+      ...rbac,
+    });
+  }
+
+  const activeScopes = () => assignmentDocs
+    .filter((doc) => doc.userAccountId === targetId.toString() && doc.assignmentStatus === 'active')
+    .map((doc) => doc.scopeId)
+    .sort();
+
+  beforeEach(() => {
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    permissionChangeSpy = vi.spyOn(auditLogger, 'logPermissionChange').mockResolvedValue(undefined);
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('grants a second organization, lists both, and writes a permission-change row', async () => {
+    await givenTargetCoordinatorIn(['org-a']);
+
+    const response = await request(app)
+      .post(`/api/users/${targetId}/organizations`)
+      .set('Authorization', `Bearer ${createCallerToken()}`)
+      .send({ organizationId: 'org-b' });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data).toEqual({ homeOrganizationId: 'org-a', global: false, organizationIds: ['org-a', 'org-b'] });
+    expect(activeScopes()).toEqual(['org-a', 'org-b']);
+    expect(permissionChangeSpy).toHaveBeenCalledWith(expect.anything(), targetId.toString(), { organizationScope: { added: 'org-b' } });
+
+    const listed = await request(app)
+      .get(`/api/users/${targetId}/organizations`)
+      .set('Authorization', `Bearer ${createCallerToken()}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data.organizationIds).toEqual(['org-a', 'org-b']);
+  });
+
+  it('answers 200 and writes nothing for an organization already held, and 404 for an unknown one', async () => {
+    await givenTargetCoordinatorIn(['org-a']);
+
+    const again = await request(app)
+      .post(`/api/users/${targetId}/organizations`)
+      .set('Authorization', `Bearer ${createCallerToken()}`)
+      .send({ organizationId: 'org-a' });
+    expect(again.status).toBe(200);
+    expect(permissionChangeSpy).not.toHaveBeenCalled();
+
+    const unknown = await request(app)
+      .post(`/api/users/${targetId}/organizations`)
+      .set('Authorization', `Bearer ${createCallerToken()}`)
+      .send({ organizationId: 'org-x' });
+    expect(unknown.status).toBe(404);
+    expect(activeScopes()).toEqual(['org-a']);
+  });
+
+  it('removes a second organization, and refuses the home one with a 409', async () => {
+    await givenTargetCoordinatorIn(['org-a', 'org-b']);
+
+    const removed = await request(app)
+      .delete(`/api/users/${targetId}/organizations/org-b`)
+      .set('Authorization', `Bearer ${createCallerToken()}`);
+    expect(removed.status).toBe(200);
+    expect(removed.body.data.organizationIds).toEqual(['org-a']);
+    expect(permissionChangeSpy).toHaveBeenCalledWith(expect.anything(), targetId.toString(), { organizationScope: { removed: 'org-b' } });
+
+    const home = await request(app)
+      .delete(`/api/users/${targetId}/organizations/org-a`)
+      .set('Authorization', `Bearer ${createCallerToken()}`);
+    expect(home.status).toBe(409);
+    expect(activeScopes()).toEqual(['org-a']);
+  });
+
+  it('refuses a Coordenador, who holds createUser but not assignRole, and writes nothing', async () => {
+    await givenTargetCoordinatorIn(['org-a']);
+
+    const response = await request(app)
+      .post(`/api/users/${targetId}/organizations`)
+      .set('Authorization', `Bearer ${createCallerToken({ userID: 'qa-coord-1', accessType: 3, roleName: 'Coordenador' })}`)
+      .send({ organizationId: 'org-b' });
+
+    expect(response.status).toBe(403);
+    expect(activeScopes()).toEqual(['org-a']);
   });
 });

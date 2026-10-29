@@ -27,6 +27,8 @@ test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test
 // move/release calls, and inline-storage-movement.spec.ts only mocks those
 // HTTP calls, never exercising the real backend), so the transaction path
 // was never proven against the real stack.
+// #1220: the storage responses echo the canonical specimenId.
+
 function validSampleFields() {
   return {
     sampleType: 'PLASMA',
@@ -73,7 +75,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
 
     // --- MoveSampleUseCase#execute -> withTransaction ---
@@ -90,6 +92,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(move.status()).toBe(200);
     const moveBody = await move.json();
     expect(moveBody.success).toBe(true);
+    expect(moveBody.data.specimenId).toBe(sampleId);
     expect(moveBody.data.to).toEqual({ boxId: boxB.boxId, position: boxB.positionCode });
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, moveWatch);
 
@@ -109,6 +112,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(release.status()).toBe(200);
     const releaseBody = await release.json();
     expect(releaseBody.success).toBe(true);
+    expect(releaseBody.data.specimenId).toBe(sampleId);
     expect(releaseBody.data.boxId).toBe(boxB.boxId);
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, releaseWatch);
 
@@ -185,7 +189,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create2.status());
-    const sample2Id = (await create2.json()).data.sampleID;
+    const sample2Id = (await create2.json()).data.specimenId;
 
     const release2 = await request.delete(`${apiBaseURL}/api/storage/release/${sample2Id}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -236,7 +240,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
 
     // The only way to reach an unallocated sample: release it first, since

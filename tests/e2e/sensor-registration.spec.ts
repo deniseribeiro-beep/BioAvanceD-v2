@@ -3,6 +3,11 @@ import {
   seedFreezerContainer,
   findSensorMetadata,
   removeSensorRegistration,
+  removeTemperaturePolicy,
+  seedDatastreamBinding,
+  removeDatastreamBinding,
+  findTemperatureDatastreams,
+  findSensor,
   closeSeedSensorDb,
 } from './helpers/seedSensor';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
@@ -22,7 +27,7 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
 
   test('POST /api/sensors with macAddress + storageContainer upserts a resolvable sensorMetadata doc', async ({ request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
       data: { username: testUser, password: testPass },
@@ -110,6 +115,263 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
       expect(metadata.storageContainer?.toString()).toBe(freezerId);
     } finally {
       await removeSensorRegistration(sensorId, freezerId);
+    }
+  });
+
+  // Real-backend proof for #1145: the form's policy dropdown used to send a
+  // numeric policyID onto Sensor.policyId, which no resolver reads, so a
+  // sensor registered with a policy was governed by nothing. It must now bind
+  // SensorMetadata.temperaturePolicy -- the field iot.controller and
+  // TelemetryMonitor resolve thresholds from -- to the chosen policy's _id.
+  // The policy is created through the real API, the path an operator uses.
+  test('the Novo Sensor policy dropdown binds SensorMetadata.temperaturePolicy (#1145)', async ({ page, request }) => {
+    const freezerId = await seedFreezerContainer();
+    const suffix = Date.now();
+    const sensorId = `rf009-ui-policy-e2e-${suffix}`;
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
+    let policyId: string | undefined;
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed -- DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+
+      const policyResponse = await request.post(`${apiBaseURL}/api/policies`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+        data: {
+          name: `e2e-1145-${suffix}`,
+          minTemp: 2,
+          maxTemp: 8,
+          effectivePeriod: {
+            start: new Date().toISOString(),
+            end: new Date(Date.now() + 86_400_000).toISOString(),
+          },
+        },
+      });
+      expect(policyResponse.status()).toBe(201);
+      policyId = (await policyResponse.json())?.data?._id;
+      expect(policyId).toBeTruthy();
+
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=sensors');
+      await page.getByTestId('new-sensor-button').click();
+
+      // Without a MAC there is no SensorMetadata to bind to, so the
+      // dropdown stays disabled until one is entered.
+      await expect(page.getByTestId('sensor-policy-select')).toBeDisabled();
+
+      await page.getByTestId('sensor-id-input').fill(sensorId);
+      await page.getByTestId('sensor-type-input').fill('temperature');
+      await page.getByTestId('sensor-mac-address-input').fill(`AA:BB:CC:33:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`);
+      await expect(page.getByTestId('sensor-policy-select')).toBeEnabled();
+      await page.getByTestId('sensor-policy-select').selectOption(policyId!);
+      await page.getByTestId('sensor-storage-container-select').selectOption(freezerId);
+
+      await page.getByTestId('sensor-form-submit').click();
+      await expect(page.getByTestId('sensor-form-submit')).not.toBeVisible();
+
+      const metadata = await findSensorMetadata(sensorId);
+      expect(metadata).not.toBeNull();
+      expect(metadata.temperaturePolicy?.toString()).toBe(policyId);
+    } finally {
+      await removeSensorRegistration(sensorId, freezerId);
+      if (policyId) await removeTemperaturePolicy(policyId);
+    }
+  });
+
+  // Real-backend proof for #1179: the edit modal offered the freezer (and,
+  // before #1145, the policy) select, but updateSensor wrote only the
+  // `sensors` document while both bindings live on SensorMetadata -- so a
+  // changed freezer saved nothing, and the select opened blank because the
+  // list never returned the current binding.
+  test('editing a sensor pre-fills and rebinds its freezer and policy on SensorMetadata (#1179)', async ({ page, request }) => {
+    const freezerA = await seedFreezerContainer();
+    const freezerB = await seedFreezerContainer();
+    const suffix = Date.now();
+    const sensorId = `rf009-ui-edit-e2e-${suffix}`;
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
+    const policyIds: string[] = [];
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed -- DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+      const headers = { Authorization: `Bearer ${session.token}` };
+
+      for (const tag of ['a', 'b']) {
+        const res = await request.post(`${apiBaseURL}/api/policies`, {
+          headers,
+          data: {
+            name: `e2e-1179-${tag}-${suffix}`,
+            minTemp: 2,
+            maxTemp: 8,
+            effectivePeriod: {
+              start: new Date().toISOString(),
+              end: new Date(Date.now() + 86_400_000).toISOString(),
+            },
+          },
+        });
+        expect(res.status()).toBe(201);
+        policyIds.push((await res.json())?.data?._id);
+      }
+      const [policyA, policyB] = policyIds;
+
+      const createResponse = await request.post(`${apiBaseURL}/api/sensors`, {
+        headers,
+        data: {
+          sensorId,
+          sensorType: 'temperature',
+          macAddress: `AA:BB:CC:44:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
+          storageContainer: freezerA,
+          temperaturePolicy: policyA,
+        },
+      });
+      expect(createResponse.status()).toBe(201);
+
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=sensors');
+      await page.getByTestId(`sensor-edit-${sensorId}`).click();
+
+      // Pre-filled from the list, which now carries the SensorMetadata bindings.
+      await expect(page.getByTestId('sensor-storage-container-select')).toHaveValue(freezerA);
+      await expect(page.getByTestId('sensor-policy-select')).toHaveValue(policyA);
+
+      await page.getByTestId('sensor-storage-container-select').selectOption(freezerB);
+      await page.getByTestId('sensor-policy-select').selectOption(policyB);
+      // A changed MAC must reach the SensorMetadata row too: the cold-chain
+      // lookup matches macAddress on both collections.
+      const newMac = `AA:BB:CC:55:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`;
+      await page.getByTestId('sensor-mac-address-input').fill(newMac);
+      await page.getByTestId('sensor-form-submit').click();
+      await expect(page.getByTestId('sensor-form-submit')).not.toBeVisible();
+
+      const metadata = await findSensorMetadata(sensorId);
+      expect(metadata.storageContainer?.toString()).toBe(freezerB);
+      expect(metadata.temperaturePolicy?.toString()).toBe(policyB);
+      expect(metadata.macAddress).toBe(`AA:BB:CC:55:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`);
+    } finally {
+      await removeSensorRegistration(sensorId, freezerA);
+      await removeSensorRegistration(sensorId, freezerB);
+      for (const id of policyIds) if (id) await removeTemperaturePolicy(id);
+    }
+  });
+
+  // #1387: the operator-initiated sensor read was removed (no requirement
+  // names it; RF009's actor is the system). Neither route answers, and the
+  // sensors table renders a row without the 'Coletar Leitura' button.
+  test('the manual sensor read is gone: no row button, and both routes 404 (#1387)', async ({ page, request }) => {
+    const freezerId = await seedFreezerContainer();
+    const suffix = Date.now();
+    const sensorId = `rf009-ui-no-manual-read-e2e-${suffix}`;
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed -- DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+      const headers = { Authorization: `Bearer ${session.token}` };
+
+      const createResponse = await request.post(`${apiBaseURL}/api/sensors`, {
+        headers,
+        data: {
+          sensorId,
+          sensorType: 'temperature',
+          macAddress: `AA:BB:CC:66:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
+          storageContainer: freezerId,
+        },
+      });
+      expect(createResponse.status()).toBe(201);
+
+      for (const path of ['reading', 'collect-reading']) {
+        const res = await request.post(`${apiBaseURL}/api/sensors/${sensorId}/${path}`, { headers });
+        expect(res.status()).toBe(404);
+      }
+
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=sensors');
+      await expect(page.getByTestId(`sensor-edit-${sensorId}`)).toBeVisible();
+      await expect(page.getByTitle('Coletar Leitura')).toHaveCount(0);
+    } finally {
+      await removeSensorRegistration(sensorId, freezerId);
+    }
+  });
+
+  // #1392: the readers take the temperature TelemetryDatastream valid now
+  // first, so a registration naming a stored samplingPolicyId writes one from
+  // the freezer and policy it binds on SensorMetadata. An unstored one is a
+  // 422 that writes nothing.
+  test('POST /api/sensors with a samplingPolicyId writes the sensor\'s temperature datastream (#1392)', async ({ request }) => {
+    const binding = await seedDatastreamBinding();
+    const suffix = Date.now();
+    const sensorId = `rf009-datastream-e2e-${suffix}`;
+    const refusedSensorId = `rf009-datastream-refused-e2e-${suffix}`;
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed -- DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+      const headers = { Authorization: `Bearer ${session.token}` };
+
+      const createResponse = await request.post(`${apiBaseURL}/api/sensors`, {
+        headers,
+        data: {
+          sensorId,
+          sensorType: 'temperature',
+          macAddress: `AA:BB:CC:77:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
+          storageContainer: binding.freezerId,
+          temperaturePolicy: binding.policyId,
+          samplingPolicyId: binding.samplingPolicyId,
+        },
+      });
+      expect(createResponse.status()).toBe(201);
+      const created = await createResponse.json();
+      expect(created.data.datastreamBound).toBe(true);
+
+      const streams = await findTemperatureDatastreams(sensorId);
+      expect(streams).toHaveLength(1);
+      expect(streams[0]).toMatchObject({
+        telemetryDatastreamId: created.data.telemetryDatastreamId,
+        equipmentId: binding.equipmentId,
+        storageLocationId: binding.storageLocationId,
+        unit: 'Cel',
+        samplingPolicyId: binding.samplingPolicyId,
+        thresholdProfileId: binding.policyId,
+        status: 'active',
+      });
+      expect(streams[0].validityPeriod.end).toBeNull();
+
+      const refusedResponse = await request.post(`${apiBaseURL}/api/sensors`, {
+        headers,
+        data: {
+          sensorId: refusedSensorId,
+          sensorType: 'temperature',
+          macAddress: `AA:BB:CC:78:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
+          storageContainer: binding.freezerId,
+          temperaturePolicy: binding.policyId,
+          samplingPolicyId: `${binding.samplingPolicyId}-unstored`,
+        },
+      });
+      expect(refusedResponse.status()).toBe(422);
+      expect(await findSensor(refusedSensorId)).toBeNull();
+    } finally {
+      await removeDatastreamBinding(binding, [sensorId, refusedSensorId]);
     }
   });
 });

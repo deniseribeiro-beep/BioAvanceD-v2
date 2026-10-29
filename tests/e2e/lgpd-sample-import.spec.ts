@@ -1,5 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
+import { deleteOrganizations } from './helpers/listOrganizations';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
 import { findLgpdQuarantineBatch, findLgpdQuarantinedRows, closeFhirImportDb, seedForeignImportBatch, removeForeignImportBatch } from './helpers/queryFhirImport';
 
@@ -215,19 +217,22 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     expect(quarantined[0]).toMatchObject({ status: 'ERROR', rowNumber: 3 });
     expect(JSON.stringify(quarantined[0].errors)).toMatch(/sampleType/i);
 
-    // Not just the error text -- the original values, which is what makes a
-    // quarantined row correctable and re-submittable rather than merely
-    // auditable.
-    expect(quarantined[0].row).toBeTruthy();
-    expect(String(quarantined[0].row.participantId)).toBe(String(bad.participantId));
-    expect(quarantined[0].row.sampleType).toBe('NOT_A_REAL_SAMPLE_TYPE');
+    // #807: the original values are kept, which is what makes a quarantined
+    // row correctable rather than merely auditable -- but sealed at rest,
+    // because a rejected LGPD row carries the same identifiers that are
+    // encrypted everywhere else. At rest: no plaintext, one envelope. The
+    // values themselves are asserted through the batch API in the #794 test
+    // below, which is the reader that decrypts them.
+    expect(quarantined[0].row ?? null).toBeNull();
+    expect(quarantined[0].sealedPayload).toMatchObject({ alg: 'aes-256-gcm' });
+    const atRest = JSON.stringify(quarantined[0]);
+    expect(atRest).not.toContain('NOT_A_REAL_SAMPLE_TYPE');
+    expect(atRest).not.toContain(String(bad.participantId));
 
     // And the row that imported cleanly is NOT quarantined -- quarantine is
-    // for invalid rows, not a copy of the whole file.
-    expect(
-      quarantined.some((r) => String(r.row?.participantId) === String(good.participantId)),
-      'a row that imported successfully must not be quarantined'
-    ).toBe(false);
+    // for invalid rows, not a copy of the whole file. One staged row, and it
+    // is the rejected one (rowNumber 3, the second data line).
+    expect(quarantined.map((r) => r.rowNumber), 'a row that imported successfully must not be quarantined').toEqual([3]);
   });
 
   test('RNF011 AC#4: a clean import leaves no quarantine batch behind', async ({ request }) => {
@@ -337,6 +342,74 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     expect(payload.records[0].row.sampleType).toBe('NOT_A_REAL_SAMPLE_TYPE');
   });
 
+  // #1352 (RNF011 AC#4, "sem correção silenciosa"): a quarantined row is
+  // corrected and resubmitted through the import's own row path. A
+  // correction that is still wrong is refused and recorded; a right one
+  // imports the sample, resolves the record and, with nothing left, the
+  // batch.
+  test('RNF011 AC#4: a quarantined row is corrected and resubmitted, and a still-wrong correction is refused (#1352)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const bad = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await importSamples(request, admin.token, [
+      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e resubmit`,
+    ]);
+    expect(response.status()).toBe(200);
+    const batchId = String((await response.json()).data.stagingBatchId);
+
+    const read = await request.get(`${apiBaseURL}/api/import-lgpd/batches/${batchId}`, { headers: auth });
+    expect(read.status()).toBe(200);
+    const record = (await read.json()).records[0];
+    const resubmitURL = `${apiBaseURL}/api/import-lgpd/batches/${batchId}/records/${record._id}/resubmit`;
+
+    // Still wrong: the same import validator refuses it, and the record keeps
+    // the attempt in ERROR rather than dropping it.
+    const stillWrong = await request.post(resubmitURL, {
+      headers: auth,
+      data: { row: { ...record.row, sampleType: 'STILL_NOT_A_SAMPLE_TYPE' } },
+    });
+    expect(stillWrong.status()).toBe(422);
+    const stillWrongBody = await stillWrong.json();
+    expect(stillWrongBody.success).toBe(false);
+    expect(JSON.stringify(stillWrongBody.errors)).toMatch(/sampleType/i);
+
+    // Corrected: every column the import's header rule requires is in the
+    // row (participantId, sampleType, sampleOrigin), carried from the file.
+    const corrected = await request.post(resubmitURL, {
+      headers: auth,
+      data: {
+        row: {
+          ...record.row,
+          participantId: String(bad.participantId),
+          sampleType: SAMPLE_TYPE,
+          sampleOrigin: SAMPLE_ORIGIN,
+        },
+      },
+    });
+    expect(corrected.status(), JSON.stringify(await corrected.json())).toBe(200);
+    expect((await corrected.json()).data).toMatchObject({ recordStatus: 'RESUBMITTED', batchStatus: 'RESOLVED' });
+
+    const after = await (await request.get(`${apiBaseURL}/api/import-lgpd/batches/${batchId}`, { headers: auth })).json();
+    expect(after.batch).toMatchObject({ status: 'RESOLVED' });
+    expect(after.batch.counts).toMatchObject({ success: 1, errors: 0, resubmitted: 1 });
+    expect(after.records[0]).toMatchObject({ status: 'RESUBMITTED' });
+    expect(after.records[0].resubmitAttempts).toHaveLength(2);
+
+    // The sample exists, through the real server-side participant filter.
+    const list = await request.get(
+      `${apiBaseURL}/api/samples?participantId=${encodeURIComponent(bad.participantId)}&limit=200`,
+      { headers: auth }
+    );
+    const listBody = await list.json();
+    const samples = (listBody?.data?.samples ?? listBody?.data ?? []) as Array<Record<string, unknown>>;
+    expect(samples.some((sample) => sample.sampleType === SAMPLE_TYPE)).toBe(true);
+
+    // A second resubmit of a resolved record is refused, so no second sample.
+    const again = await request.post(resubmitURL, { headers: auth, data: { row: record.row } });
+    expect(again.status()).toBe(409);
+  });
+
   test('an unknown batch id is a 404, and a malformed one does not 500 (#794)', async ({ request }) => {
     const admin = await realLogin(request);
 
@@ -375,8 +448,83 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
       expect(await read.json()).toMatchObject({ success: false });
     } finally {
       // This fixture is not created by any import, so nothing else will clean
-      // it up -- the named volumes persist across sessions (docker-workflow).
+      // it up -- the named volumes persist across sessions.
       await removeForeignImportBatch(fhirBatchId);
     }
+  });
+});
+
+// #1353: the import stamps the importer's organization as each sample's
+// collectionSite, the key every scoped sample read filters on. Before it, an
+// organization-scoped importer's samples landed with none, so the importer
+// could not read back what they had just imported.
+test.describe('LGPD sample import by an organization-scoped user (#1353)', () => {
+  const organizationIds: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await closeSeedDb();
+  });
+
+  test('a Coordenador scoped to one organization imports a sample and reads it back, stamped with that organization', async ({ request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: adminAuth,
+      data: { officialName: `#1353 import ${suffix}`, countryCode: 'BR' },
+    });
+    expect(orgRes.ok(), await orgRes.text()).toBeTruthy();
+    const ownOrg = (await orgRes.json()).data.organizationId as string;
+    organizationIds.push(ownOrg);
+
+    const username = `coord.1353.${Date.now()}`;
+    const password = 'Coordenador@123';
+    const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: adminAuth,
+      data: {
+        name: '#1353 Coordenador Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 3,
+        roleName: 'Coordenador',
+        organizationId: ownOrg,
+      },
+    });
+    expect(registerRes.ok(), await registerRes.text()).toBeTruthy();
+    const coordinator = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+
+    // #1354: the create forms read the caller's scope here to decide whether
+    // to ask for an organization; one organization means no picker.
+    const mine = await request.get(`${apiBaseURL}/api/organizations/mine`, {
+      headers: { Authorization: `Bearer ${coordinator.token}` },
+    });
+    expect(mine.status(), await mine.text()).toBe(200);
+    const mineData = (await mine.json()).data;
+    expect(mineData.scope).toBe('organization');
+    expect(mineData.organizations.map((org: { organizationId: string }) => org.organizationId)).toEqual([ownOrg]);
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const response = await importSamples(request, coordinator.token, [
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,#1353 scoped import`,
+    ]);
+    expect(response.status(), await response.text()).toBe(200);
+    const body = await response.json();
+    expect(body.data.errorsDetails).toEqual([]);
+    expect(body.data).toMatchObject({ total: 1, success: 1, errors: 0 });
+
+    // Read back through the coordinator's own scoped list: under the bug the
+    // sample carried no collectionSite and this list came back without it.
+    const list = await request.get(
+      `${apiBaseURL}/api/samples?participantId=${encodeURIComponent(participant.participantId)}&limit=200`,
+      { headers: { Authorization: `Bearer ${coordinator.token}` } }
+    );
+    expect(list.status(), await list.text()).toBe(200);
+    const listBody = await list.json();
+    const samples = (listBody?.data?.samples ?? listBody?.data ?? []) as Array<Record<string, unknown>>;
+    expect(samples, 'the scoped importer cannot read back its own imported sample').toHaveLength(1);
+    expect(samples[0]).toMatchObject({ sampleType: SAMPLE_TYPE, collectionSite: ownOrg });
   });
 });

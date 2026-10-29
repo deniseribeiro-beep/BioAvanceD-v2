@@ -1,5 +1,7 @@
 const multer = require('multer');
 const fhirImportStagingService = require('../services/fhir-import-staging.service');
+const callerCreateOrganization = require('../services/callerCreateOrganization.service');
+const rbacAssignment = require('../services/rbac-assignment.service');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -35,10 +37,18 @@ class FhirImportStagingController {
   async stage(req, res) {
     try {
       const db = req.app.locals.db;
+      // #1385: the batch carries the organization the caller's scope resolves
+      // to (#1376); its reads and writes check it.
+      const { organizationId } = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
+        userId: req.user?.userID,
+        organizationScope: req.organizationScope,
+        requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined,
+      });
       const payload = parseJsonFile(req.file) || req.body;
       const result = await fhirImportStagingService.stageBundle(db, payload, {
         fileName: req.file?.originalname,
         userID: req.user?.userID || req.user?.id || null,
+        organizationId,
       });
 
       return res.status(201).json({
@@ -53,7 +63,9 @@ class FhirImportStagingController {
 
   async getBatch(req, res) {
     try {
-      const result = await fhirImportStagingService.getBatch(req.app.locals.db, req.params.id);
+      const result = await fhirImportStagingService.getBatch(req.app.locals.db, req.params.id, {
+        organizationScope: req.organizationScope,
+      });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {
       return sendError(res, error);
@@ -62,7 +74,9 @@ class FhirImportStagingController {
 
   async validate(req, res) {
     try {
-      const result = await fhirImportStagingService.validateBatch(req.app.locals.db, req.params.id);
+      const result = await fhirImportStagingService.validateBatch(req.app.locals.db, req.params.id, {
+        organizationScope: req.organizationScope,
+      });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {
       return sendError(res, error);
@@ -73,6 +87,7 @@ class FhirImportStagingController {
     try {
       const result = await fhirImportStagingService.sendConsents(req.app.locals.db, req.params.id, {
         userID: req.user?.userID || req.user?.id || null,
+        organizationScope: req.organizationScope,
       });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {
@@ -82,7 +97,9 @@ class FhirImportStagingController {
 
   async consentStatus(req, res) {
     try {
-      const result = await fhirImportStagingService.getConsentStatus(req.app.locals.db, req.params.id);
+      const result = await fhirImportStagingService.getConsentStatus(req.app.locals.db, req.params.id, {
+        organizationScope: req.organizationScope,
+      });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {
       return sendError(res, error);
@@ -91,7 +108,13 @@ class FhirImportStagingController {
 
   async commit(req, res) {
     try {
-      const result = await fhirImportStagingService.commitBatch(req.app.locals.db, req.params.id);
+      // RF011 AC4 (#1322): a staged ResearchStudy becomes a Study only for a
+      // Coordenador (3) or Administrador (4), as POST /api/studies requires.
+      const level = await rbacAssignment.resolveUserHierarchyLevel(req.app.locals.db, req.user?.userID);
+      const result = await fhirImportStagingService.commitBatch(req.app.locals.db, req.params.id, {
+        organizationScope: req.organizationScope,
+        canCreateStudy: level === 3 || level === 4,
+      });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {
       return sendError(res, error);
@@ -103,6 +126,7 @@ class FhirImportStagingController {
       const result = await fhirImportStagingService.attachExternalDocument(req.app.locals.db, req.params.id, req.params.recordId, {
         userID: req.user?.userID || req.user?.id || null,
         note: req.body?.note,
+        organizationScope: req.organizationScope,
       });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {

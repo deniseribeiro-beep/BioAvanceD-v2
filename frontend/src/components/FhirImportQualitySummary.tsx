@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import RcsScopeNotice from './RcsScopeNotice';
 
 export interface FhirImportQualitySummaryData {
   gradeA?: number;
@@ -36,6 +37,7 @@ export default function FhirImportQualitySummary({ summary, style }: FhirImportQ
       Qualidade: A={gradeA} | B={gradeB} | C={gradeC} | D={gradeD} | E={gradeE}
       {' '}| Falha Governança={summary.governanceFailures ?? 0}
       {' '}| RCS Médio={averageRcsScore}
+      <RcsScopeNotice />
     </div>
   );
 }

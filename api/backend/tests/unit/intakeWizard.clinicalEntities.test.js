@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -70,6 +70,7 @@ function clearCache() {
 const ORPHA_SYSTEM_URI = 'http://www.orpha.net';
 const HPO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/hp.owl';
 const OMIM_SYSTEM_URI = 'https://www.omim.org';
+const DCB_SYSTEM_URI = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb';
 
 /**
  * Real query-matching fake for the two RF029 active-code-check collections
@@ -83,11 +84,15 @@ function makeActiveCodeCollections() {
     { systemUri: HPO_SYSTEM_URI, code: 'HP:0000822', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-hpo' },
     // #698: RF028's real OMIM importer stores bare digits, no "OMIM:" prefix.
     { systemUri: OMIM_SYSTEM_URI, code: '154700', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-omim' },
+    // #714: AllergyIntolerance's allergenCoding now goes through the same
+    // active-release gate as Condition/PhenotypeObservation above.
+    { systemUri: DCB_SYSTEM_URI, code: '03730', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-dcb' },
   ];
   const referenceDatasetReleases = [
     { referenceDatasetReleaseId: 'release-orpha', datasetCode: 'ORPHA', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-hpo', datasetCode: 'HPO', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-omim', datasetCode: 'OMIM', releaseStatus: 'active' },
+    { referenceDatasetReleaseId: 'release-dcb', datasetCode: 'DCB', releaseStatus: 'active' },
   ];
   return {
     terminologyConcepts: {
@@ -114,6 +119,9 @@ function buildApp(router, db) {
   const app = express();
   app.use(express.json());
   app.locals.db = db;
+  // #1355: the scope requireOrganizationScope supplies in front of this
+  // router (intakeWizard.routes.js); global, as the fixtures' caller.
+  app.use((req, _res, next) => { req.organizationScope = req.organizationScope || { scope: 'global', organizationIds: [] }; next(); });
   app.use('/api/intake-wizard', router);
   return app;
 }
@@ -136,11 +144,20 @@ const VALID_PAYLOAD = {
  * the intake wizard's own already-collected payload -- proves AC4-6's
  * structured-coding requirement is satisfied by a real write path, not just
  * schema-complete (#689-#692). Native-only proof (real query-matching
- * fakes, not canned stubs) is this repo's own build-loop overlay bar for a
+ * fakes, not canned stubs) is this repo's own proof bar for a
  * backend-internal slice; the literal real-backend Playwright e2e proof is
  * tracked separately (see #693's close comment for the follow-up number).
  */
 describe('intakeWizard clinical-entity recording (#693)', () => {
+  // #1238: the first require of the route pulls in its whole third-party and
+  // service graph, 2+ s cold, which is load cost rather than anything a test
+  // proves. clearCache() drops only this file's own modules, so the graph
+  // stays warm after this hook and each test's 5 s budget covers its own work.
+  beforeAll(() => {
+    require(routePath);
+    clearCache();
+  }, 30000);
+
   afterEach(() => {
     vi.restoreAllMocks();
     clearCache();
@@ -238,7 +255,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     const db = {
       collection: (name) => {
         if (collections[name]) return collections[name];
-        if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+        if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
         if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
         if (name === 'storageBoxes') {
           return {

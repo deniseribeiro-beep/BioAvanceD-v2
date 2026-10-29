@@ -12,7 +12,8 @@ coverage
 # It cannot simply become "tests": .dockerignore is per-CONTEXT, not per
 # Dockerfile, and compose.prod.yml (Dockerfile.prod) and compose.test.yml
 # (Dockerfile.dev) share context ./api/backend. compose.test.yml's
-# backend-unit-runner mounts only ./frontend and ./docs -- there is no
+# backend-unit-runner mounts ./frontend, ./docs and, read-only, tests/unit
+# and tests/integration (#1413, below) -- there is no
 # ./api/backend:/app bind-mount -- so it runs current-state:ci
 # (package.json:50) from the IMAGE LAYER, and that needs tests/architecture and
 # tests/compliance. It is the only "Run backend test suite" step in CI
@@ -22,13 +23,16 @@ coverage
 # CI step runs backend vitest, and tests/architecture + tests/compliance require
 # nothing outside ../../src. compose.dev.yml:51 bind-mounts the real tree over
 # /app, so dev is unaffected either way. This is 6.2M of the 6.6M.
+# #1413: since #1334, tests/architecture/mock-return-keys.arch.test.js also
+# reads tests/unit and tests/integration; compose.test.yml mounts them
+# read-only into backend-unit-runner, so they stay excluded here.
 tests/unit
 tests/integration
 *.md
 .git
 .gitignore
 
-# #947: runtime data roots. Dockerfile.prod's COPY . . otherwise bakes whatever a developer's local stack has written into the production image -- including api/backend/storage/samples/**, which holds one tracked personal PDF. Nothing in any image needs these: prod mounts named volumes at /data/{uploads,storage,backups} per 092c4f52, and compose.test.yml mounts uploads-test-data at /app/uploads.
+# #947: runtime data roots. Dockerfile.prod's COPY . . otherwise bakes whatever a developer's local stack has written into the production image -- including api/backend/storage/samples/**, which held a tracked personal PDF (untracked by #961, still in a local checkout). Nothing in any image needs these: prod mounts named volumes at /data/{uploads,storage,backups} per 092c4f52, and compose.test.yml mounts uploads-test-data at /app/uploads.
 uploads
 storage
 backups

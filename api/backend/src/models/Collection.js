@@ -1,6 +1,11 @@
 /**
  * Modelo de validação e estrutura para Collection (RF004 AC#3, RF020 AC#3/AC#5, ELM-0039..0052)
  */
+
+// V2E-0427 Collection.governanceRegime (1..1). RF004 AC2: research human
+// material needs a collection whose regime is biobank or biorepository;
+// RULE-001/002 name the two values.
+const GOVERNANCE_REGIMES = ['biobank', 'biorepository'];
 const CODEABLE_CONCEPT_ARRAY_FIELDS = [
   'sampleTypes',
   'datasetTypes',
@@ -20,6 +25,10 @@ class CollectionModel {
 
     if (!data.collectionName || typeof data.collectionName !== 'string' || data.collectionName.trim() === '') {
       errors.push('collectionName é obrigatório e deve ser string');
+    }
+
+    if (!GOVERNANCE_REGIMES.includes(data.governanceRegime)) {
+      errors.push(`governanceRegime é obrigatório e deve ser um de: ${GOVERNANCE_REGIMES.join(', ')}`);
     }
 
     for (const field of CODEABLE_CONCEPT_ARRAY_FIELDS) {
@@ -57,6 +66,7 @@ class CollectionModel {
       collectionId: data.collectionId,
       collectionName: data.collectionName,
       collectionStatus: data.collectionStatus || 'active',
+      governanceRegime: data.governanceRegime ?? null,
       exclusionCriteria: data.exclusionCriteria ?? null,
       participantCount: data.participantCount !== undefined && data.participantCount !== null ? Number(data.participantCount) : null,
       sampleCount: data.sampleCount !== undefined && data.sampleCount !== null ? Number(data.sampleCount) : null,
@@ -75,3 +85,4 @@ class CollectionModel {
 
 module.exports = CollectionModel;
 module.exports.CODEABLE_CONCEPT_ARRAY_FIELDS = CODEABLE_CONCEPT_ARRAY_FIELDS;
+module.exports.GOVERNANCE_REGIMES = GOVERNANCE_REGIMES;

@@ -4,6 +4,8 @@ const { generateUniqueParticipantId } = require('../utils/patientAnonymization')
 // below (a pre-existing, unrelated same-name collision between the two
 // files -- see participantIdentity.service.js's own top-of-file comment).
 const identityCryptoService = require('./participantIdentity.service');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const { parseBirthDateDay, birthDateDayRange } = require('../utils/birthDate');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -13,42 +15,20 @@ function normalizeName(value) {
   return normalizeString(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
 }
 
-function parseBirthDate(value) {
-  if (!value) return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  }
-
-  const raw = normalizeString(value);
-  if (!raw) return null;
-
-  const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
-  if (ddmmyyyy) {
-    const day = Number(ddmmyyyy[1]);
-    const month = Number(ddmmyyyy[2]) - 1;
-    const year = Number(ddmmyyyy[3]);
-    const date = new Date(year, month, day);
-    if (!Number.isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
-      return date;
-    }
-  }
-
-  const iso = new Date(raw);
-  if (Number.isNaN(iso.getTime())) return null;
-  return new Date(iso.getFullYear(), iso.getMonth(), iso.getDate());
-}
-
 class participantIdentityService {
-  async matchOrUpsertParticipant(db, payload = {}) {
+  async matchOrUpsertParticipant(db, payload = {}, { organizationScope = null } = {}) {
     const participants = await getCollection(db, 'patients');
     const identities = await getCollection(db, 'participantIdentities');
     const participantId = normalizeString(payload.participantId);
     const patientName = normalizeString(payload.patientName);
-    const birthDate = parseBirthDate(payload.birthDate);
+    const birthDate = parseBirthDateDay(payload.birthDate);
     const normalizedName = normalizeName(patientName);
     const identityDocument = normalizeString(payload.identityDocument);
     const email = normalizeString(payload.email);
     const phone = normalizeString(payload.phone);
+    // #1166: lowercased like every other identity-side email writer
+    // (ParticipantIdentityModel.fieldsOf), so the ciphertext holds one spelling.
+    const normalizedEmail = email ? email.toLowerCase() : email;
     const sex = normalizeString(payload.sex);
     const cpf = normalizeString(payload.cpf);
     // #703: a caller-supplied participantId that isn't a real 8-digit id
@@ -62,13 +42,12 @@ class participantIdentityService {
     }
 
     // RF005/RNF007 (#561): resolve the name+birthDate match via
-    // ParticipantIdentity, not Patient's own (soon to be removed)
-    // patientNameNormalized/birthDateKey fields.
+    // ParticipantIdentity, not Patient's own patientNameNormalized/
+    // birthDateKey fields, which no longer land on Patient (#575).
     let matchedParticipantId = validParticipantId;
     const matchedBySuppliedId = Boolean(validParticipantId);
     if (!matchedParticipantId) {
-      const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
-      const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
+      const { start: startOfDay, end: endOfDay } = birthDateDayRange(birthDate);
       // RF005/RNF007 (#574, done for this field in #1104): birthDate is
       // ciphertext-only, so this narrows by day of birth on the blind index
       // alone. The plaintext range condition below is NOT a fallback for old
@@ -83,8 +62,8 @@ class participantIdentityService {
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identities.find({ $or: dateOrConditions }).toArray();
       const matchedIdentity = candidates.find((rawCandidate) => {
-        // patientName is civil identity -- decrypt before comparing so this
-        // keeps matching once the plaintext field is eventually dropped.
+        // patientName is civil identity and ciphertext-only (#1104), so
+        // decrypt before comparing.
         const candidate = identityCryptoService.decryptIdentity(rawCandidate);
         return normalizeName(candidate.patientName) === normalizedName;
       });
@@ -98,6 +77,18 @@ class participantIdentityService {
       : null;
 
     if (existing) {
+      // #1356: a caller scoped to other organizations may link to a matched
+      // participant (decided in docs/decisions/
+      // 2026-10-13-participant-cross-organization-link.md) but never writes
+      // that participant's records: that is the reparent class #1053 closed
+      // on the update routes. An unstamped participant is out of scope for
+      // everyone but global scope, the scope filters' own rule.
+      if (organizationScope) {
+        const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
+        if (!isRecordInOrganizationScope(existing, organizationScope, 'clinicalUnitId')) {
+          return { created: false, matchType: matchedBySuppliedId ? 'participantId' : 'name+birthDate', patient: { ...existing, participantId: existing.participantId || matchedParticipantId }, outOfScope: true };
+        }
+      }
       // RF005/RNF007 (#575): patientName/birthDate/identityDocument (plus the
       // patientNameNormalized/birthDateKey helper fields, which only ever
       // existed to support matching against Patient — matching above already
@@ -121,10 +112,14 @@ class participantIdentityService {
       // Omit a field that resolves to nothing rather than writing null over
       // a stored value: a caller that supplies nothing must change nothing.
       const identityValues = {};
+      // #1166 slice 4: plus the contact, which is identity data and lives
+      // only on this record now.
       const resolvedIdentity = {
         patientName: patientName || existingIdentity.patientName,
         birthDate: birthDate || existingIdentity.birthDate,
         identityDocument: identityDocument || existingIdentity.identityDocument,
+        email: normalizedEmail || existingIdentity.email,
+        phone: phone || existingIdentity.phone,
       };
       for (const [identityField, resolvedValue] of Object.entries(resolvedIdentity)) {
         if (resolvedValue !== null && resolvedValue !== undefined && resolvedValue !== '') {
@@ -136,22 +131,26 @@ class participantIdentityService {
       // produces (#566/#574), not plaintext-only.
       const encryptedIdentityValues = identityCryptoService.encryptIdentityFields(identityValues);
       const update = {
-        email: email || existing.email || null,
-        phone: phone || existing.phone || null,
         sex: sex || existing.sex || null,
         cpf: cpf || existing.cpf || null,
         updatedAt: new Date()
       };
       await participants.updateOne({ _id: existing._id }, { $set: update });
+      const identitySet = {
+        ...encryptedIdentityValues,
+        updatedAt: update.updatedAt,
+      };
+      // #1386: the old <field>Encrypted envelope goes with the rewrite. An
+      // empty $unset is refused before MongoDB 5.0, so it is sent only when
+      // it names a field.
+      const legacyUnset = identityCryptoService.legacyCiphertextUnset(identitySet);
       await identities.updateOne(
         { participantId: matchedParticipantId },
         {
-          $set: {
-            ...encryptedIdentityValues,
-            email: update.email,
-            phone: update.phone,
-            updatedAt: update.updatedAt,
-          },
+          $set: identitySet,
+          ...(Object.keys(legacyUnset).length > 0 ? { $unset: legacyUnset } : {}),
+          // #1386: a participant matched without an identity record gets one here.
+          $setOnInsert: ParticipantIdentityModel.onInsertFields(),
         },
         { upsert: true }
       );
@@ -164,28 +163,41 @@ class participantIdentityService {
       birthDate: birthDate || null,
       identityDocument: identityDocument || null,
     };
+    // #1166 slice 4: the contact goes to the identity record only.
+    if (normalizedEmail) identityValues.email = normalizedEmail;
+    if (phone) identityValues.phone = phone;
     // #640: same rationale as the update branch above.
     const encryptedIdentityValues = identityCryptoService.encryptIdentityFields(identityValues);
     const toInsert = {
       participantId: generatedParticipantId,
-      email: email || null,
-      phone: phone || null,
       sex: sex || null,
       cpf: cpf || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };
+    // #1353: the tenancy key the scoped participant readers filter on, for a
+    // participant a create path makes here (a sample import row). Only the
+    // insert takes it: a match is not a create, and moving an existing
+    // participant between organizations is a reparent (#1053).
+    const clinicalUnitId = normalizeString(payload.clinicalUnitId);
+    if (clinicalUnitId) {
+      toInsert.clinicalUnitId = clinicalUnitId;
+    }
     const result = await participants.insertOne(toInsert);
+    const identitySet = {
+      participantId: generatedParticipantId,
+      ...encryptedIdentityValues,
+      updatedAt: toInsert.updatedAt,
+    };
+    // #1386: a record left under a supplied participantId may still hold an
+    // old <field>Encrypted envelope; same rule as the match branch.
+    const legacyUnset = identityCryptoService.legacyCiphertextUnset(identitySet);
     await identities.updateOne(
       { participantId: generatedParticipantId },
       {
-        $set: {
-          participantId: generatedParticipantId,
-          ...encryptedIdentityValues,
-          email: toInsert.email,
-          phone: toInsert.phone,
-          updatedAt: toInsert.updatedAt,
-        },
+        $set: identitySet,
+        ...(Object.keys(legacyUnset).length > 0 ? { $unset: legacyUnset } : {}),
+        $setOnInsert: ParticipantIdentityModel.onInsertFields(),
       },
       { upsert: true }
     );

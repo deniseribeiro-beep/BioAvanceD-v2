@@ -3,6 +3,7 @@ const consentService = require('../../src/services/consent.service');
 const notificationService = require('../../src/services/notification.service');
 const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 const logger = require('../../src/utils/logger');
+const consentEvidence = require('../../src/services/consentEvidence.service');
 const { ObjectId } = require('mongodb');
 
 // Fake, chainable Mongo cursor helper: supports .sort().skip().limit().toArray()
@@ -21,8 +22,11 @@ function makeCollection(overrides = {}) {
     find: vi.fn(() => makeCursor([])),
     findOne: vi.fn(async () => null),
     insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    insertMany: vi.fn(async (docs) => ({ insertedCount: docs.length })),
     updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
     updateMany: vi.fn(async () => ({ modifiedCount: 1 })),
+    // #1313: the outbox's per-aggregate version counter.
+    findOneAndUpdate: vi.fn(async () => ({ version: 1 })),
     countDocuments: vi.fn(async () => 0),
     ...overrides,
   };
@@ -34,6 +38,24 @@ function makeDb(collectionsByName = {}) {
   return {
     collection: vi.fn((name) => collectionsByName[name] || makeCollection()),
   };
+}
+
+// #1313: a replica-set client whose one session runs each transaction, so a
+// case can read which writes carried it.
+function makeTransactionalClient() {
+  const session = { id: 'consent-session', withTransaction: vi.fn(async (fn) => { await fn(); }), endSession: vi.fn(async () => {}) };
+  return {
+    session,
+    client: {
+      db: () => ({ command: async () => ({ setName: 'rs0' }) }),
+      startSession: vi.fn(() => session),
+    },
+  };
+}
+
+// The session each call of a spy carried, read from its options argument.
+function sessionsOf(spy, optionsIndex) {
+  return spy.mock.calls.map((call) => call[optionsIndex]?.session);
 }
 
 describe('ConsentService.parseVersionNumber', () => {
@@ -167,6 +189,18 @@ describe('ConsentService.validateTemplatePayload', () => {
   it('throws for empty title', () => {
     expect(() => consentService.validateTemplatePayload({ title: '', content: 'Terms' })).toThrow();
   });
+
+  // RNF018: a schema failure is a validation failure, answered 422 with details.
+  it('marks a schema failure 422 and lists each failure in details', () => {
+    let thrown;
+    try {
+      consentService.validateTemplatePayload({ title: 'Title', htmlContent: '<p>x</p>' });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown.statusCode).toBe(422);
+    expect(thrown.details).toEqual([expect.stringContaining("'content'")]);
+  });
 });
 
 describe('ConsentService.validatePolicyPayload', () => {
@@ -192,6 +226,18 @@ describe('ConsentService.validatePolicyPayload', () => {
     expect(() =>
       consentService.validatePolicyPayload({ ...validPolicy, granularPermissions: [] })
     ).toThrow();
+  });
+
+  it('marks a schema failure 422 and lists each failure in details', () => {
+    const { title: _t, ...noTitle } = validPolicy;
+    let thrown;
+    try {
+      consentService.validatePolicyPayload(noTitle);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown.statusCode).toBe(422);
+    expect(thrown.details).toEqual([expect.stringContaining("'title'")]);
   });
 });
 
@@ -284,19 +330,28 @@ describe('ConsentService.generateNextPolicyVersion', () => {
     expect(version).toBe('v1');
   });
 
-  it('increments past the highest existing version', async () => {
+  it('increments past the highest version of the lineage, reading only that lineage (#1181)', async () => {
     const templates = makeCollection({
       find: vi.fn(() => makeCursor([{ version: 'v3' }, { version: 'v7' }, { version: 'v2' }])),
     });
     const db = makeDb({ consent_templates: templates });
 
-    const version = await consentService.generateNextPolicyVersion(db);
+    const version = await consentService.generateNextPolicyVersion(db, 'lineage-a');
     expect(version).toBe('v8');
+    expect(templates.find).toHaveBeenCalledWith({ versionGroupId: 'lineage-a' }, expect.anything());
+  });
+
+  it('starts a lineage with no id at v1 without reading other terms (#1181)', async () => {
+    const templates = makeCollection();
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(consentService.generateNextPolicyVersion(db)).resolves.toBe('v1');
+    expect(templates.find).not.toHaveBeenCalled();
   });
 });
 
 describe('ConsentService.createTemplate', () => {
-  it('creates a template, deactivating previously active ones', async () => {
+  it('creates a template, deactivating the active term of its own lineage only (#1181)', async () => {
     const templates = makeCollection({
       find: vi.fn(() => makeCursor([])),
       insertOne: vi.fn(async (doc) => ({ insertedId: new ObjectId() })),
@@ -313,8 +368,9 @@ describe('ConsentService.createTemplate', () => {
     expect(result._id).toBeDefined();
     expect(result.title).toBe('My Template');
     expect(result.active).toBe(true);
+    expect(result.version).toBe('v1');
     expect(templates.updateMany).toHaveBeenCalledWith(
-      { active: true },
+      { versionGroupId: result.versionGroupId, active: true },
       expect.objectContaining({ $set: expect.objectContaining({ active: false }) })
     );
     expect(templates.insertOne).toHaveBeenCalled();
@@ -544,6 +600,31 @@ describe('ConsentService.updateTemplate', () => {
   it('throws for a malformed template id', async () => {
     const db = makeDb({ consent_templates: makeCollection() });
     await expect(consentService.updateTemplate(db, 'not-an-object-id', { title: 'x' })).rejects.toThrow('inválido');
+  });
+
+  // #824 (found proving it on the real stack): the builder's CAAE field is
+  // optional, createTemplate stores an absent one as '' (ConsentTemplateModel
+  // .create), and this re-validated that stored '' against `caae: minLength 1`
+  // -- so a term created without a CAAE could never be revised in the builder.
+  it('revises a term that was created without a CAAE', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'No CAAE',
+      content: 'c',
+      htmlContent: 'c',
+      version: 'v1',
+      caae: '',
+      active: true,
+      permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'No CAAE', content: 'c2' });
+
+    expect(result.version).toBe('v2');
+    expect(templates.insertOne).toHaveBeenCalled();
   });
 
   it('reuses the existing permissions when the payload omits them', async () => {
@@ -887,10 +968,10 @@ describe('ConsentService.createPolicy', () => {
       return { db, patients, templates };
     }
 
-    /** participantIds the sweep persisted a consentToken for. */
+    /** participantIds the sweep persisted a consentTokenHash for (#1049). */
     function tokenedParticipants(patients, pending) {
       return patients.updateOne.mock.calls
-        .filter(([, update]) => update?.$set?.consentToken !== undefined)
+        .filter(([, update]) => update?.$set?.consentTokenHash !== undefined)
         .map(([filter]) => pending.find((p) => String(p._id) === String(filter._id))?.participantId);
     }
 
@@ -922,6 +1003,62 @@ describe('ConsentService.createPolicy', () => {
       expect(
         notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => patient.participantId)
       ).toEqual(['10203041', '10203042', '10203043']);
+    });
+
+    // #824: the TCLE builder -- the only UI that publishes a term -- revises
+    // through updateTemplate, which created the new version and invited
+    // nobody: the sweep lived only in createPolicy, whose frontend client is
+    // commented out. dict-07 row 39 makes the two one entity
+    // (ConsentTemplate), so both paths now share ONE sweep.
+    it('a builder revision (updateTemplate) invites the cohort pending on the term it revises (#824)', async () => {
+      const pending = THREE_PENDING();
+      const { db, templates } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      const result = await consentService.updateTemplate(db, PREVIOUS_POLICY_ID.toString(), {
+        title: 'Policy v2',
+        content: '<p>revised</p>',
+        permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+      });
+
+      expect(
+        notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => patient.participantId)
+      ).toEqual(['10203041', '10203042', '10203043']);
+      expect(result.consentNotifications).toEqual({ total: 3, notified: 3, failed: 0 });
+      // The canonical lineage fields createPolicy writes and the sweep reads
+      // (RF010 AC#1), not only the builder's own previousTemplateId.
+      expect(templates.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        previousPolicyId: PREVIOUS_POLICY_ID.toString(),
+        versionGroupId: 'group-810',
+        revisionType: 'update',
+      }));
+    });
+
+    it('a builder create (createTemplate) starts a lineage and reports an empty sweep (#824)', async () => {
+      const pending = THREE_PENDING();
+      const { db, templates } = setup(pending);
+      db.collection('consent_templates').find = vi.fn((filter = {}) =>
+        filter.versionGroupId !== undefined ? makeCursor([]) : makeCursor([{ version: 'v1' }])
+      );
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      const result = await consentService.createTemplate(db, {
+        title: 'Brand new term',
+        content: '<p>new</p>',
+        validFrom: '2026-01-01T00:00:00.000Z',
+        validTo: '2026-12-31T23:59:59.000Z',
+        permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+      });
+
+      expect(notificationService.enqueueConsentNotification).not.toHaveBeenCalled();
+      expect(result.consentNotifications).toEqual({ total: 0, notified: 0, failed: 0 });
+      expect(templates.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        previousPolicyId: null,
+        revisionType: 'create',
+        // The validity period the builder sends is kept, not dropped.
+        validFrom: new Date('2026-01-01T00:00:00.000Z'),
+        validTo: new Date('2026-12-31T23:59:59.000Z'),
+      }));
     });
 
     it('sweeps the whole version lineage, so someone pending on an older version is still invited', async () => {
@@ -1053,6 +1190,36 @@ describe('ConsentService.createPolicy', () => {
       const result = await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
       expect(result.consentNotifications).toEqual({ total: 3, notified: 2, failed: 1 });
+    });
+
+    // #1166 slice 2: the sweep hands the send path the contact from the
+    // decrypted identity record. These pending rows carry no email, as every
+    // Patient will after slice 4.
+    it('#1166: notifies with the email and phone from the decrypted identity record', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const pending = THREE_PENDING();
+      const { db } = setup(pending);
+      const identities = await db.collection('participantIdentities');
+      identities.findOne = vi.fn(async ({ participantId }) => ({
+        ...participantIdentityService.encryptIdentityFields({
+          participantId,
+          email: `${participantId}@example.com`,
+          phone: '11987654321',
+        }),
+        email: null,
+        phone: null,
+      }));
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
+
+      expect(
+        notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => [patient.email, patient.phone])
+      ).toEqual([
+        ['10203041@example.com', '11987654321'],
+        ['10203042@example.com', '11987654321'],
+        ['10203043@example.com', '11987654321'],
+      ]);
     });
 
     it('reports a clean sweep when every patient succeeds', async () => {
@@ -1435,29 +1602,124 @@ describe('ConsentService.createPatientConsent', () => {
   // POST /api/e-consent/consents carries one).
   const validSignature = { signatureImageBase64: Buffer.from('sig').toString('base64'), signatureName: 'Jane Doe' };
 
+  // #827: every recorded consent now writes an encrypted evidence document.
+  // Kept off the disk here; consentEvidence.service.unit.test.js owns it.
+  beforeEach(() => {
+    vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue({
+      evidenceDocumentUri: 'objstore://consents/stub/evidence.json',
+      evidenceHash: `sha256:${'0'.repeat(64)}`,
+      evidenceMimeType: 'application/json',
+      evidenceEncryption: null,
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  // #1313 (RF023 AC3): on a replica set the consent, its decision event, its
+  // derived state and its outbox event are written in one transaction.
+  it('writes the consent, its history and its outbox event in one transaction on a replica set', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const decisionEvents = makeCollection();
+    const permissions = makeCollection();
+    const outbox = makeCollection({ createIndex: vi.fn(async () => 'ok') });
+    const db = makeDb({
+      patients,
+      consent_templates: templates,
+      patientConsents: consents,
+      consentDecisionEvents: decisionEvents,
+      consentPermissions: permissions,
+      graph_projection_outbox: outbox,
+    });
+    const { session, client } = makeTransactionalClient();
+    db.client = client;
+
+    await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      ...validSignature,
+    }, { channel: 'staff_portal', signerRole: 'participant', authenticationLevel: 'session' });
+
+    expect(session.withTransaction).toHaveBeenCalledTimes(1);
+    expect(sessionsOf(consents.insertOne, 1)).toEqual([session]);
+    expect(sessionsOf(permissions.insertMany, 1)).toEqual([session]);
+    expect(sessionsOf(decisionEvents.insertOne, 1)).toEqual([session]);
+    expect(sessionsOf(decisionEvents.find, 1)).toEqual([session]);
+    expect(sessionsOf(consents.updateOne, 2)).toEqual([session]);
+    expect(sessionsOf(outbox.updateOne, 2)).toEqual([session]);
+    expect(outbox.updateOne.mock.calls[0][1].$setOnInsert.eventType).toBe('CONSENT_UPSERTED');
   });
 
   it('creates a consent when patient and template are valid', async () => {
     const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
     const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
-    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+    const decisionEvents = makeCollection();
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents, consentDecisionEvents: decisionEvents });
 
     const result = await consentService.createPatientConsent(db, {
       participantId: '12345678',
       consentTemplateId: templateId.toString(),
       responses: { analytics: true },
       ...validSignature,
-    });
+    }, { channel: 'staff_portal', signerRole: 'participant', authenticationLevel: 'session' });
 
     expect(result._id).toBeDefined();
     expect(result.status).toBe('ACTIVE');
-    expect(consents.updateMany).toHaveBeenCalledWith(
-      { participantId: '12345678', status: 'ACTIVE' },
-      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
+    expect(result.currentStateDerived).toBe('active');
+    // RF010 AC4: the acceptance is an appended decision event.
+    expect(decisionEvents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: result.consentId,
+      decision: 'accepted',
+      channel: 'staff_portal',
+      signerRole: 'participant',
+      signerId: '12345678',
+      authenticationLevel: 'session',
+      evidenceUri: 'objstore://consents/stub/evidence.json',
+    }));
+    // RF010 AC5: no earlier consent is overwritten in bulk.
+    expect(consents.updateMany).not.toHaveBeenCalled();
+  });
+
+  // RF010 AC5: a newer consent supersedes the participant's consent in force
+  // through that consent's history -- a `superseded` decision event and a
+  // pointer -- and its state is derived from it.
+  it('supersedes the participant\'s consent in force through its history', async () => {
+    const priorId = new ObjectId();
+    const prior = { _id: priorId, consentId: 'prior-uuid', participantId: '12345678', consentTemplateId: 'tmpl-0', status: 'ACTIVE', responses: { analytics: true } };
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ find: vi.fn(() => makeCursor([prior])) });
+    const supersededEvent = { consentId: 'prior-uuid', decision: 'superseded', occurredAt: new Date() };
+    const decisionEvents = makeCollection({
+      find: vi.fn((query) => makeCursor(query.consentId === 'prior-uuid' ? [supersededEvent] : [])),
+    });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents, consentDecisionEvents: decisionEvents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+    });
+
+    expect(result.supersedesConsentId).toBe('prior-uuid');
+    expect(decisionEvents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: 'prior-uuid',
+      decision: 'superseded',
+    }));
+    expect(consents.updateOne).toHaveBeenCalledWith(
+      { _id: priorId },
+      { $set: { supersededByConsentId: result.consentId } }
     );
+    expect(consents.updateOne).toHaveBeenCalledWith(
+      { _id: priorId },
+      { $set: expect.objectContaining({ currentStateDerived: 'superseded', status: 'REVOKED' }) }
+    );
+    expect(consents.updateMany).not.toHaveBeenCalled();
   });
 
   // #820: the path production actually takes. POST /api/e-consent/update --
@@ -1492,6 +1754,50 @@ describe('ConsentService.createPatientConsent', () => {
     // Origin evidence is still captured (RF010 AC#4's "origem").
     expect(result.ipAddress).toBe('203.0.113.7');
     expect(result.userAgent).toBe('Mozilla/5.0');
+  });
+
+  // #827: RF010 AC#3 ("Vincular as respostas à versão exata do termo") and
+  // AC#4's evidence -- dict-02 consentVersion (ELM-0091) and the evidence
+  // trio (ELM-0105/0106, P1X-0373), all 1..1 Core. The recorder stored the
+  // template id alone, so once the template group was revised the consent
+  // could not be resolved back to the text the participant saw.
+  it('records the exact term version and the stored evidence on every consent (#827)', async () => {
+    const storeSpy = vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue({
+      evidenceDocumentUri: 'objstore://consents/x/evidence.json',
+      evidenceHash: `sha256:${'a'.repeat(64)}`,
+      evidenceMimeType: 'application/json',
+      evidenceEncryption: { algorithm: 'aes-256-gcm', keyId: 'k1', iv: 'iv', tag: 'tag' },
+    });
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const versioned = { ...activeTemplate, version: '4', htmlContent: '<p>v4</p>' };
+    const templates = makeCollection({ findOne: vi.fn(async () => versioned) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      ipAddress: '203.0.113.7',
+    });
+
+    expect(result.consentVersion).toBe('4');
+    expect(result.evidenceDocumentUri).toBe('objstore://consents/x/evidence.json');
+    expect(result.evidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(result.evidenceMimeType).toBe('application/json');
+    // The evidence is written for THIS consent's id, against the template
+    // actually loaded, with the answers actually recorded.
+    expect(storeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: result.consentId,
+      participantId: '12345678',
+      template: versioned,
+      responses: { analytics: true },
+      ipAddress: '203.0.113.7',
+    }));
+    expect(consents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentVersion: '4',
+      evidenceHash: `sha256:${'a'.repeat(64)}`,
+    }));
   });
 
   it('drops a caller-supplied empty signatureImageBase64 instead of 422ing on it', async () => {
@@ -1743,23 +2049,114 @@ describe('ConsentService.createPatientConsent', () => {
 });
 
 describe('ConsentService.revokeConsent', () => {
+  // RF010 AC4/AC6: a revocation stores its own evidence document; kept off
+  // the disk here, consentEvidence.service.unit.test.js owns it.
+  beforeEach(() => {
+    vi.spyOn(consentEvidence, 'storeRevocationEvidence').mockReturnValue({
+      evidenceUri: 'objstore://consents/stub/revocation.json',
+      evidenceHash: `sha256:${'1'.repeat(64)}`,
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('revokes an active consent', async () => {
+  // The history a revocation appends is what the state is derived from, so
+  // the fake revocations collection hands back what was inserted into it.
+  function makeHistoryCollections() {
+    const rows = { consentDecisionEvents: [], consentRevocations: [] };
+    const collections = {};
+    for (const name of Object.keys(rows)) {
+      collections[name] = makeCollection({
+        find: vi.fn(() => makeCursor(rows[name])),
+        insertOne: vi.fn(async (doc) => { rows[name].push(doc); return { insertedId: new ObjectId() }; }),
+      });
+    }
+    return collections;
+  }
+
+  // #1313 (RF023 AC3): the revocation, its decision event, the derived state
+  // and the CONSENT_REVOKED event share one transaction on a replica set.
+  it('writes the revocation, its history and its outbox event in one transaction on a replica set', async () => {
     const consentId = new ObjectId();
-    const consent = { _id: consentId, status: 'ACTIVE', patientId: '12345678' };
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: '12345678', consentTemplateId: 'tmpl-1', responses: { analytics: true } };
     const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ patientConsents: consents });
+    const history = makeHistoryCollections();
+    const outbox = makeCollection({ createIndex: vi.fn(async () => 'ok') });
+    const db = makeDb({ patientConsents: consents, ...history, graph_projection_outbox: outbox });
+    const { session, client } = makeTransactionalClient();
+    db.client = client;
 
     const result = await consentService.revokeConsent(db, consentId.toString());
 
     expect(result.status).toBe('REVOKED');
+    expect(session.withTransaction).toHaveBeenCalledTimes(1);
+    expect(sessionsOf(history.consentDecisionEvents.insertOne, 1)).toEqual([session]);
+    expect(sessionsOf(history.consentRevocations.insertOne, 1)).toEqual([session]);
+    expect(sessionsOf(consents.updateOne, 2)).toEqual([session]);
+    expect(sessionsOf(outbox.updateOne, 2)).toEqual([session]);
+    expect(outbox.updateOne.mock.calls[0][1].$setOnInsert.eventType).toBe('CONSENT_REVOKED');
+  });
+
+  it('revokes an active consent', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: '12345678', consentTemplateId: 'tmpl-1', responses: { analytics: true } };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const history = makeHistoryCollections();
+    const db = makeDb({ patientConsents: consents, ...history });
+
+    const result = await consentService.revokeConsent(db, consentId.toString());
+
+    expect(result.status).toBe('REVOKED');
+    expect(result.currentStateDerived).toBe('revoked');
+    expect(history.consentDecisionEvents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: 'c-uuid',
+      decision: 'revoked',
+      evidenceUri: 'objstore://consents/stub/revocation.json',
+    }));
+    expect(history.consentRevocations.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: 'c-uuid',
+      scope: ['all'],
+      priorUseDisposition: 'retain_history',
+    }));
     expect(consents.updateOne).toHaveBeenCalledWith(
       { _id: consentId },
-      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED', currentStateDerived: 'revoked' }) })
     );
+  });
+
+  // RF010 AC6: a scope naming some permissions leaves the consent in force
+  // with those permissions blocked, and sends no revocation notice.
+  it('revokes only the scoped permissions and keeps the consent in force', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: 'PART-1', consentTemplateId: 'tmpl-1', responses: { analytics: true, contact: true } };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const history = makeHistoryCollections();
+    const db = makeDb({ patientConsents: consents, ...history });
+    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+    const result = await consentService.revokeConsent(db, consentId.toString(), { scope: ['contact'], reason: 'não quer contato' });
+
+    expect(result.status).toBe('ACTIVE');
+    expect(result.currentStateDerived).toBe('partially_revoked');
+    expect(result.effectivePermissions).toEqual({ analytics: true, contact: false });
+    expect(result.responses).toEqual({ analytics: true, contact: true });
+    expect(history.consentRevocations.insertOne).toHaveBeenCalledWith(expect.objectContaining({ scope: ['contact'], reason: 'não quer contato' }));
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a scope naming no permission of the consent with a 422', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: 'PART-1', consentTemplateId: 'tmpl-1', responses: { analytics: true } };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const history = makeHistoryCollections();
+    const db = makeDb({ patientConsents: consents, ...history });
+
+    await expect(consentService.revokeConsent(db, consentId.toString(), { scope: ['genetic'] }))
+      .rejects.toMatchObject({ statusCode: 422 });
+    expect(history.consentDecisionEvents.insertOne).not.toHaveBeenCalled();
+    expect(history.consentRevocations.insertOne).not.toHaveBeenCalled();
   });
 
   it('returns the consent unchanged when it is already revoked', async () => {
@@ -1778,7 +2175,7 @@ describe('ConsentService.revokeConsent', () => {
     const consentId = new ObjectId();
     const consent = { _id: consentId, status: 'ACTIVE', participantId: 'PART-1' };
     const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ patientConsents: consents });
+    const db = makeDb({ patientConsents: consents, ...makeHistoryCollections() });
     const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
 
     await consentService.revokeConsent(db, consentId.toString());
@@ -1787,6 +2184,9 @@ describe('ConsentService.revokeConsent', () => {
       eventType: 'consent_revoked',
       sourceEventType: 'PatientConsent',
       sourceEventId: consentId,
+      // #903 (RF015 AC5): linked to its purpose and the consent revoked.
+      purpose: 'consent_revocation',
+      consentId: consentId.toString(),
       payload: {
         participantId: 'PART-1',
         consentId: consentId.toString()
@@ -1810,7 +2210,7 @@ describe('ConsentService.revokeConsent', () => {
     const consentId = new ObjectId();
     const consent = { _id: consentId, status: 'ACTIVE', participantId: 'PART-1' };
     const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ patientConsents: consents });
+    const db = makeDb({ patientConsents: consents, ...makeHistoryCollections() });
     vi.spyOn(notificationDispatchService, 'dispatchNotification').mockRejectedValue(new Error('notificationRules lookup failed'));
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 

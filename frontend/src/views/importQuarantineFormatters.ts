@@ -132,3 +132,47 @@ export function describeRowFields(
       value: typeof value === 'object' ? JSON.stringify(value) : String(value),
     }));
 }
+
+/**
+ * #1352: whether a record can be corrected and resubmitted from this page.
+ * Only a sample batch's rows (the backend 404s a participant batch here), only
+ * a record still in ERROR, and only one whose original row was retained, since
+ * the correction starts from it.
+ */
+export function canResubmit(
+  batch: QuarantineBatch | null | undefined,
+  record: QuarantineRecord | null | undefined
+): boolean {
+  if (batch?.type !== 'LGPD_SAMPLE_CSV') return false;
+  if (record?.status !== 'ERROR' || !record?._id) return false;
+  const row = record?.row;
+  return Boolean(row && typeof row === 'object' && Object.keys(row).length > 0);
+}
+
+/**
+ * #1352: the editable form of a retained row, every cell as text, in the
+ * file's column order. A non-scalar cell is shown as JSON so it can be fixed
+ * by hand rather than sent back as "[object Object]".
+ */
+export function toEditableRow(record: QuarantineRecord | null | undefined): Record<string, string> {
+  const row = record?.row;
+  if (!row || typeof row !== 'object') return {};
+  const editable: Record<string, string> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (value === null || value === undefined) editable[key] = '';
+    else editable[key] = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  }
+  return editable;
+}
+
+/**
+ * #1352: the errors a failed resubmit answered with. A 422 carries the row's
+ * new errors in `errors`; anything else carries one message in `error`.
+ */
+export function resubmitErrorMessages(responseData: unknown): string[] {
+  const data = (responseData || {}) as { errors?: unknown; error?: unknown };
+  const fromRow = formatRecordErrors({ errors: data.errors });
+  if (fromRow.length > 0) return fromRow;
+  if (typeof data.error === 'string' && data.error) return [data.error];
+  return ['Não foi possível reenviar a linha.'];
+}

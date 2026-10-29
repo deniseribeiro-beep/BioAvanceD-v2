@@ -2,8 +2,16 @@ name: bioavanced-prod
 
 services:
   mongodb:
-    image: mongo:7
+    image: mongo:7.0.45
     restart: unless-stopped
+    # RNF014 C3: CPU and memory limits on every service. No reference
+    # environment is documented, so these are a starting point to revisit
+    # against measured use.
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?MONGO_ROOT_USERNAME is required}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}
@@ -17,10 +25,19 @@ services:
       start_period: 10s
 
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:5.26.32-community
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
     environment:
       NEO4J_AUTH: ${NEO4J_USERNAME:?NEO4J_USERNAME is required}/${NEO4J_PASSWORD:?NEO4J_PASSWORD is required}
+      # RNF014 C3: keep the JVM heap and page cache inside the 2g memory limit.
+      NEO4J_server_memory_heap_initial__size: 512M
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_memory_pagecache_size: 512M
     volumes:
       - neo4j_data:/data
     healthcheck:
@@ -31,8 +48,13 @@ services:
       start_period: 20s
 
   influxdb:
-    image: influxdb:2.7
+    image: influxdb:2.7.12
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1g
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_INIT_USERNAME:?INFLUXDB_INIT_USERNAME is required}
@@ -50,8 +72,13 @@ services:
       start_period: 20s
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
     # #965: production Redis requires auth. Without this the server accepted
     # unauthenticated connections while validateEnv.js:44 demanded a
     # REDIS_PASSWORD outside development -- and that mismatch was FATAL for
@@ -79,6 +106,11 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     init: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256m
     environment:
       PORT: "8095"
       TSA_CONFIG: /etc/tsa/openssl-ts.cnf
@@ -114,6 +146,11 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     init: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256m
     environment:
       PORT: "8096"
       WITNESS_ID: bioavanced-prod-witness
@@ -134,12 +171,72 @@ services:
       retries: 20
       start_period: 10s
 
+  foundation:
+    # RF022 AC4, RNF014 C6/C7: the Foundation Data Pipeline as a one-shot
+    # job, separate from the API's startup and run before it. It does
+    # dry-run, apply and verify, writes a ReadinessReport, and exits
+    # non-zero when that report is blocked; backend and both workers wait
+    # for it to complete successfully, and the backend re-checks the report
+    # itself (FOUNDATION_READINESS_REQUIRED). The same prod image as the
+    # backend; the direct node form for the same reason as worker's (#955).
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.prod
+    init: true
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1g
+    command: ["node", "scripts/seed-essential-reference-data.js"]
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    read_only: true
+    cap_drop: ["ALL"]
+
+  essential-references:
+    # RF022 AC7, plano §5: Phase 2 for the essential reference set (MIABIS
+    # and SPREC minimal, RCS-GOV 1.0), which the Foundation job prepares
+    # and does not load. It runs on a ready ReadinessReport and exits 1
+    # without one; the backend waits for it.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.prod
+    init: true
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1g
+    command: ["node", "scripts/load-essential-references.js"]
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    depends_on:
+      foundation:
+        condition: service_completed_successfully
+    read_only: true
+    cap_drop: ["ALL"]
+
   backend:
     build:
       context: ./api/backend
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     init: true
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
     ports:
       - "${BACKEND_HOST_PORT:-3000}:3000"
     env_file:
@@ -147,7 +244,14 @@ services:
     environment:
       NODE_ENV: production
       CHOKIDAR_USEPOLLING: "false"
+      # RF022 AC9, RNF014 C7: refuse to start without a ready ReadinessReport.
+      FOUNDATION_READINESS_REQUIRED: "true"
     depends_on:
+      foundation:
+        condition: service_completed_successfully
+      # RF022 AC7: the essential reference set, loaded in Phase 2.
+      essential-references:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:
@@ -176,6 +280,8 @@ services:
       - uploads_data:/data/uploads
       - storage_data:/data/storage
       - backups_data:/data/backups
+      # The worker runs daily-merkle.job and the backend serves POST /api/audit/anchor; both readFile the signing key (#989, #978).
+      - ./infra/audit/prod/secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
@@ -193,6 +299,11 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     init: true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1g
     # #955: was "npm run worker". package.json:10 aliases a plain
     # "node ./src/workers/worker.js", so the npm layer buys nothing and costs a
     # process that wants a writable $HOME/.npm -- "adduser -S app"
@@ -210,6 +321,9 @@ services:
       retries: 4
       start_period: 60s
     depends_on:
+      # RNF014 C7: workers start only after a successful Foundation job.
+      foundation:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:
@@ -228,6 +342,8 @@ services:
       - uploads_data:/data/uploads
       - storage_data:/data/storage
       - backups_data:/data/backups
+      # The worker runs daily-merkle.job and the backend serves POST /api/audit/anchor; both readFile the signing key (#989, #978).
+      - ./infra/audit/prod/secrets:/run/secrets:ro
 
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
@@ -239,6 +355,11 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     init: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
     # #955: same as the worker service above -- package.json:26 aliases
     # "node src/workers/neo4jProjection.worker.js".
     command: ["node", "src/workers/neo4jProjection.worker.js"]
@@ -253,6 +374,9 @@ services:
       retries: 4
       start_period: 60s
     depends_on:
+      # RNF014 C7: workers start only after a successful Foundation job.
+      foundation:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:
@@ -272,6 +396,11 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     init: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
     ports:
       - "${FRONTEND_HOST_PORT:-80}:80"
     env_file:

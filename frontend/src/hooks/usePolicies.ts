@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Policy } from '../types/models';
 import { policyService } from '../services/api';
 import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
@@ -45,14 +45,23 @@ export function usePolicies() {
     }
   };
 
-  const getActiveLimit = async (policyID: number, isMax: boolean = true) => {
+  // #1178: every id below is the policy's _id, the only id the API returns.
+  // #1194: stable identity. PoliciesSection lists this in an effect's deps
+  // and sets state from that effect, so a new function per render re-fired
+  // the effect on every render and re-fetched every policy's limit forever.
+  // It closes over nothing but policyService, so no deps.
+  const getActiveLimit = useCallback(async (id: string, isMax: boolean = true) => {
     try {
-      const response = await policyService.getActiveLimit(policyID, isMax);
-      return response.data;
+      const response = await policyService.getActiveLimit(id, isMax);
+      // #1178: GET /:id/active-limit answers { success, data: { limit, type,
+      // unit } }, and callers read `.limit`. Returning the axios body handed
+      // them the envelope, so the tab showed 'N/A'. That was hidden while
+      // the policyID filter meant this call never ran.
+      return extractResponseEntity<{ limit: number; type: string; unit: string }>(response);
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao obter limite ativo');
     }
-  };
+  }, []);
 
   const createPolicy = async (data: Partial<Policy>) => {
     try {
@@ -66,7 +75,7 @@ export function usePolicies() {
     }
   };
 
-  const updatePolicy = async (id: number, data: Partial<Policy>) => {
+  const updatePolicy = async (id: string, data: Partial<Policy>) => {
     try {
       const response = await policyService.update(id, data);
       // PUT /policies/:id returns { success, message } with no data key --
@@ -79,10 +88,10 @@ export function usePolicies() {
     }
   };
 
-  const deletePolicy = async (id: number) => {
+  const deletePolicy = async (id: string) => {
     try {
       await policyService.delete(id);
-      setPolicies(policies.filter((p) => p.policyID !== id));
+      setPolicies(policies.filter((p) => p._id !== id));
       notifyDashboardDataChanged();
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao deletar política');

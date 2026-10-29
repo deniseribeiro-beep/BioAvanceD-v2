@@ -19,6 +19,10 @@ process.env.ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID || 'vitest-key-001
 // iot.api.test.js's test-support describe block needs the routes actually
 // registered at module-load time to exercise them at all.
 process.env.ENABLE_TEST_SUPPORT_ROUTES = process.env.ENABLE_TEST_SUPPORT_ROUTES || 'true';
+// #1392: the unit fixtures post readings for unbound sensors, which the
+// native suite accepts as `record`. The binding cases set the mode
+// themselves, and the e2e stack proves `enforce`, the code default.
+process.env.TELEMETRY_BINDING_MODE = process.env.TELEMETRY_BINDING_MODE || 'record';
 
 function createMockSession() {
   return {
@@ -106,9 +110,9 @@ vi.mock('../src/infrastructure/database/neo4j/connection', () => ({
 }));
 
 vi.mock('../src/services/session.service', () => ({
-  verifySession: vi.fn(async () => ({ valid: true, session: { sessionID: 'test-session', userID: 'test-user' } })),
-  updateActivity: vi.fn(async () => ({ sessionID: 'test-session' })),
-  revokeSessionById: vi.fn(async () => ({ sessionID: 'test-session', isRevoked: true, revokedAt: new Date() })),
+  verifySession: vi.fn(async () => ({ valid: true, session: { sessionId: 'test-session', userAccountId: 'test-user' } })),
+  updateActivity: vi.fn(async () => ({ sessionId: 'test-session' })),
+  revokeSessionById: vi.fn(async () => ({ sessionId: 'test-session', isRevoked: true, revokedAt: new Date() })),
   revokeAllOtherSessions: vi.fn(async () => ({ revokedCount: 0 })),
   listUserSessions: vi.fn(async () => []),
   invalidateSession: vi.fn(async () => true),

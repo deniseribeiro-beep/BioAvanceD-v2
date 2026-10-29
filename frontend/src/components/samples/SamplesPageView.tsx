@@ -11,6 +11,8 @@ import InlineStorageMovementPanel from './InlineStorageMovementPanel';
 import type { Sample } from '../../types/models';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 import { getStorageLabel, buildSprecSummary } from './sampleListFormatters';
+import { resolveSampleLifecycleStatus } from '../../foundation/contracts';
+import { BLOCKED_SPECIMEN_STATUSES, resolveSpecimenStatus } from '../../utils/sampleHelpers';
 
 type TranslatorFn = (key: string, fallback?: string) => string;
 
@@ -44,25 +46,19 @@ interface SamplesPageViewProps {
   onViewPending: (sample: SampleWithId) => void;
 }
 
-function mapStatus(sample: Sample): Sample['status'] {
-  // #532: specimenStatus is the canonical, always-populated signal (see
-  // models.ts's own comment on the field). SampleGraphValidator's
-  // compliance-graph check now writes specimenStatus directly (previously
-  // wrote a separate release_status field, dropped in #532) — no secondary
-  // signal needed here anymore.
-  const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
+// The list row's status badge. #532: specimenStatus is the canonical,
+// always-populated signal (see models.ts's own comment on the field).
+// RF006 AC2/AC3: specimenStatus gives the operational state (closed, or
+// blocked as quarantine), and quantityStatus gives PARTIAL/DEPLETED; the
+// retired currentStatus/status fields are not read.
+export function mapStatus(sample: Sample): Sample['status'] {
+  const specimenStatus = resolveSpecimenStatus(sample);
   const consentStatus = String((sample as any).consentStatus || '').toUpperCase();
-  const status = sample.status || sample.currentStatus?.toString().toUpperCase();
-  if (specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || consentStatus === 'PENDING') {
-    return 'QUARANTINED' as Sample['status'];
+  if (specimenStatus === 'closed') return 'CLOSED';
+  if (BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || consentStatus === 'PENDING') {
+    return 'QUARANTINED';
   }
-  if (specimenStatus === 'available' || consentStatus === 'SIGNED' || consentStatus === 'EXTERNAL_ATTACHED' || consentStatus === 'WAIVED_TRANSFER' || consentStatus === 'NOT_REQUIRED') {
-    return 'AVAILABLE';
-  }
-  if (status === 'AVAILABLE' || status === 'PARTIAL' || status === 'DEPLETED' || status === 'UNAVAILABLE') {
-    return status as Sample['status'];
-  }
-  return 'AVAILABLE';
+  return resolveSampleLifecycleStatus(sample) as Sample['status'];
 }
 
 function computeVolume(sample: Sample) {
@@ -194,7 +190,8 @@ export default function SamplesPageView({
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--danger)' }}>
+                {/* RNF027 C2 (#1324): --danger on white is 3.8:1; this is 8.3:1. */}
+                <td colSpan={10} style={{ textAlign: 'center', padding: '1.5rem', color: '#991b1b' }}>
                   {error}
                 </td>
               </tr>
@@ -237,7 +234,7 @@ export default function SamplesPageView({
                         </div>
                       </td>
                       <td>{sample.sampleOrigin || 'N/A'}</td>
-                      <td style={{ fontFamily: 'monospace' }}>{sample.barcode || sample.sampleID || 'N/A'}</td>
+                      <td style={{ fontFamily: 'monospace' }}>{sample.barcode || sample.specimenId || 'N/A'}</td>
                       <td>
                         <SampleStatusBadge status={mapStatus(sample) as any} />
                       </td>
@@ -343,7 +340,7 @@ export default function SamplesPageView({
         <Modal isOpen title={t('samples.printLabels')} onClose={onClosePrintModal}>
           <div id="printable-area">
             {selectedSamples.map((sample) => {
-              const barcodeValue = sample.barcode || sample.sampleID || sample.id;
+              const barcodeValue = sample.barcode || sample.specimenId || sample.id;
               const participantId = sample.participantId ?? (sample as any).patient?.participantId;
 
               return (
@@ -375,17 +372,16 @@ export default function SamplesPageView({
   );
 }
 
-// specimenStatus values that block use — mirrors backend's
-// BLOCKED_SPECIMEN_STATUSES (Sample.js), the canonical source since #409.
-const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'destroyed', 'disposed', 'quarantined'];
-
-function isQuarantined(sample: SampleWithId) {
-  const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
-  return specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || sample.canUse === false;
+// The consent/document actions apply to a blocked specimen that can still be
+// released; a closed one is final (RF026 AC7), so it offers none.
+export function isQuarantined(sample: SampleWithId) {
+  const specimenStatus = resolveSpecimenStatus(sample);
+  if (specimenStatus === 'closed') return false;
+  return BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus) || sample.canUse === false;
 }
 
-function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
-  const specimenStatus = String((sample as any).specimenStatus || '').toLowerCase();
+export function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
+  const specimenStatus = (sample as any).specimenStatus ? resolveSpecimenStatus(sample) : '';
   const consentStatus = String((sample as any).consentStatus || '').toUpperCase();
   // No specimenStatus equivalent carries the human-readable reason text —
   // quarantineReason stays legacy-sourced per #407's scope (dual-written, still correct).
@@ -393,7 +389,9 @@ function renderSampleBadges(sample: SampleWithId, t: TranslatorFn) {
 
   const badges: Array<{ label: string; className: string; title: string }> = [];
 
-  if (specimenStatus === 'quarantined' || BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus)) {
+  if (specimenStatus === 'closed') {
+    badges.push({ label: t('samples.badges.closed', 'Encerrada'), className: 'unknown', title: t('samples.badges.closedTitle', 'Amostra encerrada: consumo total validado ou descarte executado') });
+  } else if (BLOCKED_SPECIMEN_STATUSES.includes(specimenStatus)) {
     badges.push({ label: t('samples.badges.quarantine', 'Quarentena'), className: 'pending', title: quarantineReason || t('samples.badges.quarantineTitle', 'Amostra bloqueada aguardando regularização ética') });
   }
 

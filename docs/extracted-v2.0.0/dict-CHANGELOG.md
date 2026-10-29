@@ -1,0 +1,20 @@
+# BioAvanceD_Dicionario_Dados_Consolidado_v2.0.0.xlsx :: CHANGELOG
+
+| Version | Date | Change | Impact | Source |
+|---|---|---|---|---|
+| 2.0.0-candidate | 2026-09-07 | Preserved and accounted for all 929 v1.3.0 elements; added V2E range. | Major semantic evolution without silent overwrite | GOV-001–002 |
+| 2.0.0-candidate | 2026-09-07 | Separated specimen operational state, derived quantity status and disposition actions. | Migration required for legacy partial/depleted/destroyed values | SPM-001–007 |
+| 2.0.0-candidate | 2026-09-07 | Added computable collection governance regimes and contexts. | Collection activation requires compatible context and approval | BIO-001–007 |
+| 2.0.0-candidate | 2026-09-07 | Normalized consent permissions, append-only decisions, revocation and authorization. | Legacy booleans become granular permissions | CON-001–009 |
+| 2.0.0-candidate | 2026-09-07 | Added governed physical identification and unified resolver contract. | Legacy barcodeValue is read-only migration input | IDF-001–010 |
+| 2.0.0-candidate | 2026-09-07 | Made RCS contextual and reproducible, with SPREC 2.0 baseline and 4.0 roadmap only. | Multiple assessments per specimen | RCS-001–007 |
+| 2.0.0-candidate | 2026-09-07 | Completed the RCS contract with explicit matrix, five SPREC axes, normalized severities, individual gate evidence, immutable resolvable snapshot and decomposed result route. | Independent recalculation and audit; unresolved inputs cannot be treated as zero | Canonical RCS Supplementary Files 1 and 2; author technical review |
+| 2.0.0-candidate | 2026-09-07 | Added structural preparation for future analytics/model governance without activating AI. | Future entities remain inactive and conditional | AIR-001–015 |
+| 2.0.0-candidate | 2026-09-07 | Recreated pipeline design from canonical v2.0.0 and phase gates. | Historical pipeline plans are non-authoritative references | PIP-001–003; user decision |
+| 2.0.0-candidate | 2026-09-09 | Applied seven telemetry/graph corrections: InfluxDB field authority, idempotent identity, storage correlation, exposure summary, explicit topology, half-open temporal intervals and prohibition of PII/raw readings in Neo4j. | Telemetry becomes reproducible and graph projection reconstructible without new store authority | Approved telemetry and graph review |
+| 2.0.0-candidate | 2026-09-12 | Withdrew an experimental remote-management extension and permanently reserved V2E-0624 through V2E-0637. | Architecture remains focused on governed MQTT/HTTPS ingestion without an additional service-layer dependency | Author approval |
+| 2.0.0-candidate | 2026-09-12 | Distinguished Container, StorageRack, StoragePosition, temporal container placement and specimen content assignment. | Empty Data Matrix tubes can be tested without creating artificial Specimen records | Author approval; photographic fixtures |
+| 2.0.0-candidate | 2026-09-12 | Expanded InteroperabilityMappingRelease and added IdentifierNamespaceRegistry under bioadvanced.dev. | FHIR homologation becomes versioned, testable and auditable in MongoDB | Author approval; FHIR R4 identifier semantics |
+| 2.0.0-candidate | 2026-09-12 | Added the governed ex ante physical identification validation protocol registry. | Data Matrix tubes, 96-position rack, rack barcode and freezer catalog can be evaluated with synthetic records only | Author approval; photographic fixtures |
+| 2.0.0-candidate | 2026-09-12 | Deprecated StorageAssignment and normalized physical custody into specimen-container, container-position and rack-location temporal assignments. | Removes duplicated location semantics while preserving every historical identifier for read/migration | Author approval |
+| 2.0.0 | 2026-09-12 | Formalized the canonical model as an approved final release and fixed PhysicalIdentificationValidationProtocol v1.0.0 to status approved_for_execution, without executing the ex ante assay. | Documentary approval is separated from future execution evidence and outcome. | Author approval; final release decision |

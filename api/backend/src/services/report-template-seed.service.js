@@ -13,12 +13,11 @@ const ReportTemplateModel = require('../models/ReportTemplate');
  * here is deliberately the snake_case form of the matching frontend
  * `REPORT_TYPE_DEFINITIONS` `key` (report.constants.js), not the old
  * typeIncludes chain's free-form Portuguese/English matching, since that's
- * what the live frontend actually sends as `:type`. `audit` is a second row
- * onto the same `accessLogs` handlerKey as `access_logs` -- the frontend
- * exposes both as distinct menu entries (fallbackType 'Auditoria' vs 'Logs
- * de acesso') that the old typeIncludes(['log','audit','acesso','access'])
- * chain already collapsed onto the same `logs`-collection query; preserved
- * as-is here rather than treated as a taxonomy bug to fix in this slice.
+ * what the live frontend actually sends as `:type`. `audit` and
+ * `access_logs` once shared the `accessLogs` handler, the collapse the old
+ * typeIncludes(['log','audit','acesso','access']) chain made; #733 gave
+ * `audit` its own `auditEvents` handler over the AuditEvent trail, which
+ * RF008 names. The seed reconciles handlerKey, so existing databases move.
  */
 const SYSTEM_REPORT_TEMPLATES = [
   { code: 'samples_by_patient', name: 'Amostras por Paciente', handlerKey: 'samplesByPatient' },
@@ -30,7 +29,7 @@ const SYSTEM_REPORT_TEMPLATES = [
   { code: 'sensors', name: 'Sensores', handlerKey: 'sensor' },
   { code: 'equipment', name: 'Equipamentos', handlerKey: 'equipment' },
   { code: 'results', name: 'Resultados', handlerKey: 'result' },
-  { code: 'audit', name: 'Auditoria', handlerKey: 'accessLogs' },
+  { code: 'audit', name: 'Auditoria', handlerKey: 'auditEvents' },
   { code: 'withdrawal_history', name: 'Histórico de Retirada', handlerKey: 'withdrawalHistory' },
   { code: 'tissue_origin_history', name: 'Origem de Tecido', handlerKey: 'tissueOriginHistory' },
   { code: 'extracellular_network', name: 'Rede Extracelular', handlerKey: 'extracellularNetwork' },

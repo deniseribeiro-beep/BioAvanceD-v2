@@ -4,6 +4,9 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const uploadController = require('../../src/controllers/upload.controller');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const uploadConfig = require('../../src/config/uploadConfig');
 const logger = require('../../src/utils/logger');
 const analysisValidationService = require('../../src/services/analysisValidation.service');
 
@@ -411,5 +414,72 @@ describe('upload.controller - uploadAnalysisFile', () => {
       error: 'Erro ao fazer upload de arquivo de análise',
       message: 'insert failed'
     });
+  });
+});
+
+// #1321 (RF007 AC1, RNF029 C1): the analysis upload runs multer and then
+// checks the written file's leading bytes against its extension.
+describe('upload.controller - uploadMiddleware', () => {
+  const written = [];
+
+  function writeTemp(name, content) {
+    const filePath = path.join(os.tmpdir(), `upload-controller-${process.pid}-${written.length}-${Date.now()}-${name}`);
+    fs.writeFileSync(filePath, content);
+    written.push(filePath);
+    return filePath;
+  }
+
+  function givenMulterWrites(originalname, filePath) {
+    vi.spyOn(uploadConfig.upload, 'single').mockReturnValue((req, res, cb) => {
+      req.file = { originalname, path: filePath, mimetype: 'application/pdf' };
+      cb();
+    });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    while (written.length) {
+      const filePath = written.pop();
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+  });
+
+  it('answers 400 and removes a .pdf whose content is not a PDF', () => {
+    const filePath = writeTemp('report.pdf', 'hello');
+    givenMulterWrites('report.pdf', filePath);
+    const res = buildRes();
+    const next = vi.fn();
+
+    uploadController.uploadMiddleware()({}, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Invalid file content' });
+    expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  it('calls next with no argument for a .pdf that starts with a PDF header', () => {
+    const filePath = writeTemp('report.pdf', '%PDF-1.7\n');
+    givenMulterWrites('report.pdf', filePath);
+    const res = buildRes();
+    const next = vi.fn();
+
+    uploadController.uploadMiddleware()({}, res, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(res.status).not.toHaveBeenCalled();
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it('passes a multer error to next', () => {
+    const err = new Error('Invalid file type');
+    vi.spyOn(uploadConfig.upload, 'single').mockReturnValue((req, res, cb) => cb(err));
+    const res = buildRes();
+    const next = vi.fn();
+
+    uploadController.uploadMiddleware()({}, res, next);
+
+    expect(next).toHaveBeenCalledWith(err);
+    expect(res.status).not.toHaveBeenCalled();
   });
 });

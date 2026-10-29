@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
 const {
   validateRedisEnv,
   validateAllEnv,
@@ -8,6 +13,8 @@ const {
   validateEncryptionEnv,
   validateEncryptionAndHalt,
   validateKeyRotationEnv,
+  validateAuditSigningEnv,
+  validateAuditSigningAndWarn,
 } = require('../../src/config/validateEnv');
 
 const logger = require('../../src/utils/logger');
@@ -639,6 +646,149 @@ describe('validateEnv', () => {
 
       expect(result).toBe(true);
       expect(warnSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1154: the boot check for the audit signing config. Direction 1 of the
+  // three the issue listed -- ALWAYS a warning, never fatal, because #989
+  // requires the nightly job not to reject and #979 owns the open
+  // fatal-vs-degrade call. The coverage is direction 3's (a full sign/verify
+  // round trip), because the failure that looks healthiest is the worst: a
+  // readable private key whose id has no match in the registry signs fine and
+  // makes processTimestampBacklog stamp every root FAILED.
+  //
+  // These mutate the `env` MODULE rather than process.env, unlike every other
+  // block in this file: the validator asks audit-signing.provider, which reads
+  // config/env, so that is the surface a test has to move. The provider's own
+  // test file does the same.
+  describe('validateAuditSigningEnv / validateAuditSigningAndWarn (#1154)', () => {
+    const env = require('../../src/config/env');
+    let tmpFiles = [];
+    let auditSnapshot;
+
+    beforeEach(() => {
+      auditSnapshot = {
+        key: env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE,
+        id: env.AUDIT_MERKLE_SIGN_KEY_ID,
+        json: env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON,
+        file: env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE,
+      };
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = '';
+      env.AUDIT_MERKLE_SIGN_KEY_ID = '';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = '';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = '';
+    });
+
+    afterEach(() => {
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = auditSnapshot.key;
+      env.AUDIT_MERKLE_SIGN_KEY_ID = auditSnapshot.id;
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = auditSnapshot.json;
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = auditSnapshot.file;
+      tmpFiles.forEach((f) => fs.rmSync(f, { force: true }));
+      tmpFiles = [];
+    });
+
+    function writeTmp(name, contents) {
+      const p = path.join(os.tmpdir(), 'validate-audit-' + name + '-' + Date.now() + '-' + Math.random());
+      fs.writeFileSync(p, contents, 'utf8');
+      tmpFiles.push(p);
+      return p;
+    }
+
+    function configureWorkingKey() {
+      const pair = crypto.generateKeyPairSync('ed25519');
+      const privatePem = pair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+      const publicPem = pair.publicKey.export({ format: 'pem', type: 'spki' }).toString();
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = writeTmp('key', privatePem);
+      env.AUDIT_MERKLE_SIGN_KEY_ID = 'key-boot-1';
+      return { privatePem, publicPem };
+    }
+
+    it('warns when AUDIT_MERKLE_SIGN_KEY_ID is unset', async () => {
+      const warnings = await validateAuditSigningEnv();
+      expect(warnings.some((w) => w.includes('AUDIT_MERKLE_SIGN_KEY_ID'))).toBe(true);
+    });
+
+    it('warns when the private key file cannot be read', async () => {
+      env.AUDIT_MERKLE_SIGN_KEY_ID = 'key-boot-1';
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = path.join(os.tmpdir(), 'nao-existe-1154.pem');
+
+      const warnings = await validateAuditSigningEnv();
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('chave privada');
+      expect(warnings[0]).toContain('ENOENT');
+    });
+
+    // The failure that looks healthiest: signing works, verification cannot.
+    it('warns when the key signs but has no entry in the registry', async () => {
+      configureWorkingKey();
+
+      const warnings = await validateAuditSigningEnv();
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('unknown_key_id');
+      expect(warnings[0]).toContain('key-boot-1');
+    });
+
+    it('warns when the registry holds a DIFFERENT key for the active id', async () => {
+      configureWorkingKey();
+      const other = crypto.generateKeyPairSync('ed25519');
+      const otherPublic = other.publicKey.export({ format: 'pem', type: 'spki' }).toString();
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({ 'key-boot-1': otherPublic });
+
+      const warnings = await validateAuditSigningEnv();
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('signature_verification_failed');
+    });
+
+    it('reports nothing when the key round-trips against the registry', async () => {
+      const { publicPem } = configureWorkingKey();
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({ 'key-boot-1': publicPem });
+
+      expect(await validateAuditSigningEnv()).toEqual([]);
+    });
+
+    // #1157's file form has to satisfy the same check, or the boot gate would
+    // contradict the stack it is meant to validate.
+    it('reports nothing when the registry comes from a FILE (#1157)', async () => {
+      const { publicPem } = configureWorkingKey();
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = writeTmp(
+        'registry',
+        JSON.stringify({ 'key-boot-1': publicPem })
+      );
+
+      expect(await validateAuditSigningEnv()).toEqual([]);
+    });
+
+    it('logs every warning through logger.warn and returns false', async () => {
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      expect(await validateAuditSigningAndWarn()).toBe(false);
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[AUDIT]'));
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('returns true and logs nothing when the config is sound', async () => {
+      const { publicPem } = configureWorkingKey();
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({ 'key-boot-1': publicPem });
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      expect(await validateAuditSigningAndWarn()).toBe(true);
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    // Never fatal, in any environment -- the whole point of direction 1, and
+    // what keeps it independent of #979. If this ever throws, the posture
+    // changed without the decision having been made.
+    it('does not throw in production, however broken the config is', async () => {
+      process.env.NODE_ENV = 'production';
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      await expect(validateAuditSigningAndWarn()).resolves.toBe(false);
     });
   });
 });

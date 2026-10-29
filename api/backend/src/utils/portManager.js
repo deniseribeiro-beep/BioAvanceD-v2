@@ -58,23 +58,33 @@ class PortManager {
   async _getProcessUsingPortWindows(port) {
     try {
       const { stdout } = await execAsync(`netstat -ano | findstr :${port}`);
-      const lines = stdout.trim().split('\n');
-      if (lines.length > 0) {
-        const parts = lines[0].trim().split(/\s+/);
-        const pid = parts[parts.length - 1];
-        if (pid && !isNaN(pid)) {
-          try {
-            const { stdout: taskStdout } = await execAsync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`);
-            const taskParts = taskStdout.split(',');
-            if (taskParts.length > 0) {
-              const processName = taskParts[0].replace(/"/g, '');
-              return { pid, processName };
-            }
-          } catch (e) {
-            // Ignora erro ao obter nome do processo
+      // O findstr casa a porta como substring de qualquer coluna (#1390): só conta
+      // um socket TCP em escuta cuja porta local é exatamente a pedida, como o
+      // ramo POSIX (lsof -sTCP:LISTEN). A coluna remota terminada em `:0` marca a
+      // escuta sem depender da palavra de estado, que é localizada.
+      const wanted = String(port);
+      let pid = null;
+      for (const line of stdout.split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        if (parts[0] !== 'TCP' || parts.length !== 5) continue;
+        const [, local, foreign, , linePid] = parts;
+        if (local.slice(local.lastIndexOf(':') + 1) !== wanted) continue;
+        if (!foreign.endsWith(':0') || !/^\d+$/.test(linePid)) continue;
+        pid = linePid;
+        break;
+      }
+      if (pid) {
+        try {
+          const { stdout: taskStdout } = await execAsync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`);
+          const taskParts = taskStdout.split(',');
+          if (taskParts.length > 0) {
+            const processName = taskParts[0].replace(/"/g, '');
+            return { pid, processName };
           }
-          return { pid };
+        } catch (e) {
+          // Ignora erro ao obter nome do processo
         }
+        return { pid };
       }
     } catch (error) {
       // Porta não está em uso ou comando falhou

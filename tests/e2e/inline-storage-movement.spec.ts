@@ -26,14 +26,14 @@ const FREEZER_TREE = {
 
 const UNSTORED_SAMPLE = {
   _id: 'sample-488-unstored',
-  sampleID: 'AMO-E2E-0488-1',
+  specimenId: 'AMO-E2E-0488-1',
   sampleType: 'Sangue',
   participantId: 'P-488',
 };
 
 const STORED_SAMPLE = {
   _id: 'sample-488-stored',
-  sampleID: 'AMO-E2E-0488-2',
+  specimenId: 'AMO-E2E-0488-2',
   sampleType: 'Plasma',
   participantId: 'P-489',
   storageLocation: { boxId: 'box-488-0', position: 'A1' },
@@ -193,7 +193,7 @@ test.describe('Inline storage movement panel (#488)', () => {
         body: JSON.stringify({
           success: true,
           data: {
-            specimenId: STORED_SAMPLE._id,
+            specimenId: STORED_SAMPLE.specimenId,
             box: { boxId: 'box-488-0', boxName: 'Caixa 0', position: 'A1' },
             path: 'Freezer 488/Prateleira 1/Rack 1/Caixa 0',
             fullHierarchy: { freezerId: FREEZER._id, shelfId: 'shelf-0', rackId: 'rack-0', boxId: 'box-488-0' },

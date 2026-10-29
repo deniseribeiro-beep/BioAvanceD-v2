@@ -1,5 +1,6 @@
 const fhirService = require('../../services/fhir.service');
 const logger = require('../../utils/logger');
+const { getCollection } = require('../../utils/collectionResolver');
 const fs = require('fs');
 const path = require('path');
 const yauzl = require('yauzl');
@@ -190,6 +191,7 @@ class ResultWorker {
     return new Promise((resolve, reject) => {
       const rows = [];
       fs.createReadStream(filePath)
+        .on('error', reject)
         .pipe(csv())
         .on('data', (row) => {
           rows.push(row);
@@ -238,13 +240,15 @@ class ResultWorker {
       }
 
       // Busca amostra
-      const samplesCollection = db.collection('amostras');
-      const sample = await samplesCollection.findOne({
-        $or: [
-          { specimenId: row.specimenId },
-          { barcode: row.barcode },
-        ],
-      });
+      // #1340: query only the identifiers the row carries. A row with no
+      // barcode column has row.barcode undefined, which the driver sends as
+      // { barcode: null }, and that matches every sample without a barcode:
+      // the result was attached to whichever such sample came first.
+      const identifierClauses = [];
+      if (row.specimenId) identifierClauses.push({ specimenId: row.specimenId });
+      if (row.barcode) identifierClauses.push({ barcode: row.barcode });
+      const samplesCollection = getCollection(db, 'samples');
+      const sample = await samplesCollection.findOne({ $or: identifierClauses });
 
       if (!sample) {
         throw new Error(

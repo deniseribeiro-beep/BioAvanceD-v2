@@ -1,12 +1,14 @@
 // backend/src/interface/routes/intakeWizard.routes.js
+const crypto = require('crypto');
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const intakeWizardRouter = require('../../../src/routes/intakeWizard');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 const { getCollection } = require('../../utils/collectionResolver');
 const { SampleModel } = require('../../models/Sample');
 const quarantineActionService = require('../../services/quarantine-action.service');
+const operationalStateDecisionService = require('../../services/operationalStateDecision.service');
 const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
 const GetSampleStorageLocationUseCase = require('../../core/use-cases/GetSampleStorageLocationUseCase');
 
@@ -132,6 +134,12 @@ async function enforcePersistedGovernanceStatus(req, body) {
 
   const samplesCollection = await getCollection(db, 'samples');
   const existingSample = await samplesCollection.findOne(query);
+  // RF026 AC7: closed is final. A closed specimen keeps its status: nothing
+  // is written, applied, released or recorded, and the response is built
+  // from the intake body alone, as when persistence is unavailable.
+  if (existingSample && SampleModel.isTerminalSpecimen(existingSample)) {
+    return null;
+  }
   const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
 
   // #540: status/currentStatus are legacy fields canonical-data-contract-v1.md
@@ -146,16 +154,28 @@ async function enforcePersistedGovernanceStatus(req, body) {
     },
   });
 
-  const specimenId = existingSample?._id ? String(existingSample._id) : null;
-  if (specimenId) {
+  if (existingSample?._id) {
+    let action = null;
     if (specimenStatus === 'quarantined' && !wasQuarantined) {
-      await quarantineActionService.recordAction(db, {
-        specimenIds: [specimenId],
+      action = await quarantineActionService.recordAction(db, {
+        specimenIds: [quarantineActionService.canonicalSpecimenId(existingSample)],
         reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE'],
       });
+      await quarantineActionService.auditDecision(db, { decision: 'applied', action, req });
     } else if (specimenStatus !== 'quarantined' && wasQuarantined) {
-      await quarantineActionService.releaseActiveAction(db, specimenId, req.user?.userID || 'SYSTEM');
+      action = await quarantineActionService.releaseActiveAction(db, existingSample, req.user?.userID || 'SYSTEM');
+      await quarantineActionService.auditDecision(db, { decision: 'released', action, req });
     }
+    // RF006 AC7 (#1315): a change of the stored status is a decision,
+    // triggered by the action it applied or released, else by this write.
+    await operationalStateDecisionService.recordStatusChange(db, {
+      specimenId: quarantineActionService.canonicalSpecimenId(existingSample),
+      previousStatus: SampleModel.resolveSpecimenStatus(existingSample),
+      newStatus: specimenStatus,
+      triggerEventId: action?.quarantineActionId || crypto.randomUUID(),
+      rulesApplied: ['intake_governance'],
+      reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE_CLEARED'],
+    });
   }
 
   return governanceStatus;
@@ -200,6 +220,8 @@ async function intakeGovernanceResponseGuard(req, res, next) {
   return next();
 }
 
-router.use(authenticate, requirePermission('createSample'), intakeGovernanceResponseGuard, intakeWizardRouter);
+// #1355: the intake writes a sample and may create a participant, both
+// organization-owned, so it resolves the caller's scope like POST /api/samples.
+router.use(authenticate, requirePermission('createSample'), requireOrganizationScope, intakeGovernanceResponseGuard, intakeWizardRouter);
 
 module.exports = router;

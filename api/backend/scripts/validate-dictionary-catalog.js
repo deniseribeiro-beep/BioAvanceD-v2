@@ -1,7 +1,11 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const canonicalDictionary = require('../src/reference-data/canonical-dictionary');
-const { parseDictionary, SOURCE_MD } = require('./generate-dictionary-catalog');
+const canonicalDictionaryV2 = require('../src/reference-data/canonical-dictionary/v2');
+const {
+  parseDictionary, SOURCE_MD, parseDictionaryV2, SOURCE_MD_V2,
+  readReleaseManifest, SOURCE_RELEASE_MANIFEST, OUTPUT_RELEASE_MANIFEST,
+} = require('./generate-dictionary-catalog');
 
 /**
  * RF022 follow-up (#381): dict-08_MAIN_GAPS.md's Foundation Data Pipeline
@@ -39,8 +43,35 @@ function main() {
     messages.push('catalog.1.3.0.json is stale relative to dict-02_DICIONARIO.md — run `npm run dictionary:generate`.');
   }
 
+  // RF022 AC1: the approved v2.0.0 catalog, 1644 elements including the 929
+  // historical ones, under the same completeness and staleness checks.
+  const v2 = canonicalDictionaryV2.checkCompleteness();
+  if (!v2.verified) {
+    messages.push(
+      `Canonical dictionary v${v2.dictionaryVersion} failed completeness: `
+        + `${v2.loadedTotal}/${v2.expectedTotal} elements, ${v2.uniqueTotal} unique, `
+        + `duplicates [${v2.duplicateIds.join(', ')}], `
+        + `missing entity/field/cardinality/preparationPhase/changeStatus [${v2.missingRequiredFieldIds.join(', ')}], `
+        + `unknown changeStatus [${v2.unknownChangeStatusIds.join(', ')}], `
+        + `historical ids absent [${v2.missingHistoricalIds.join(', ')}].`
+    );
+  }
+  const freshV2 = parseDictionaryV2(fs.readFileSync(SOURCE_MD_V2, 'utf8'));
+  const freshV2Checksum = crypto.createHash('sha256').update(JSON.stringify(freshV2)).digest('hex');
+  if (freshV2Checksum !== canonicalDictionaryV2.dictionaryChecksum()) {
+    messages.push('catalog.2.0.0.json is stale relative to docs/extracted-v2.0.0/dict-DICIONARIO.md — run `npm run dictionary:generate`.');
+  }
+
+  // #1304: the release manifest the CanonicalModelRelease is built from.
+  const freshManifest = readReleaseManifest(fs.readFileSync(SOURCE_RELEASE_MANIFEST, 'utf8'));
+  const carriedManifest = readReleaseManifest(fs.readFileSync(OUTPUT_RELEASE_MANIFEST, 'utf8'));
+  if (JSON.stringify(freshManifest) !== JSON.stringify(carriedManifest)) {
+    messages.push('release-manifest.2.0.0.json is stale relative to docs/RELEASE_MANIFEST.json — run `npm run dictionary:generate`.');
+  }
+
   if (messages.length) fail(messages);
   console.log(`Canonical dictionary catalog validation passed: ${completeness.loadedTotal}/${completeness.expectedTotal} elements verified (v${completeness.dictionaryVersion}).`);
+  console.log(`Canonical dictionary catalog validation passed: ${v2.loadedTotal}/${v2.expectedTotal} elements verified, ${v2.historicalTotal} historical present (v${v2.dictionaryVersion}).`);
 }
 
 main();

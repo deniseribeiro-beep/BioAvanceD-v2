@@ -97,11 +97,82 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(notifySpy).toHaveBeenCalledTimes(1);
 
     expect(participantIdentities.inserted).toHaveLength(1);
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
     expect(participantIdentities.inserted[0]).toMatchObject({
       participantId: patients.inserted[0].participantId,
+      patientName: null,
+      identityDocument: null,
+    });
+    expect(participantIdentityService.decryptIdentity(participantIdentities.inserted[0])).toMatchObject({
       patientName: 'Maria Silva',
       identityDocument: '12345678900',
     });
+  });
+
+  // #1166 slice 3: the identity row is written after the Patient row and can
+  // now be refused on its own (the phoneHash unique index). The Patient row
+  // must not survive that with no identity.
+  it('#1166: rolls back the Patient row when the identity insert fails', async () => {
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+    const filePath = writeTmpFile('identity-refused.json', JSON.stringify(validPatient()));
+    const patients = makeCollection();
+    const deleted = [];
+    patients.deleteOne = async (query) => {
+      deleted.push(query);
+      return { deletedCount: 1 };
+    };
+    const participantIdentities = makeCollection();
+    participantIdentities.insertOne = async () => {
+      throw Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { phoneHash: 1 } });
+    };
+    const db = makeDb({ patients, participantIdentities });
+
+    const result = await importService.importPatients(db, { path: filePath, originalname: 'identity-refused.json' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(deleted).toEqual([{ _id: 'generated-id' }]);
+  });
+
+  // #1166 slice 4: a merge that carries a contact writes it to the identity
+  // record, encrypted, and not to the Patient row.
+  it('#1166: a merge writes the contact to the identity record, not to patients', async () => {
+    const filePath = writeTmpFile('merge-contact.json', JSON.stringify(validPatient({ phone: '11944443333' })));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
+
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-contact.json' });
+
+    expect(result.success).toBe(1);
+    expect(patients.updates[0].update.$set).not.toHaveProperty('email');
+    expect(patients.updates[0].update.$set).not.toHaveProperty('phone');
+    const identitySet = participantIdentities.updates[0].update.$set;
+    expect(identitySet.emailCiphertext).toBeTruthy();
+    expect(identitySet.phoneHash).toBeTruthy();
+  });
+
+  // #1168: same for the legal representative.
+  it('#1168: a merge writes the representative to the identity record, not to patients', async () => {
+    const filePath = writeTmpFile('merge-rep.json', JSON.stringify(validPatient({ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com' })));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
+
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-rep.json' });
+
+    expect(result.success).toBe(1);
+    expect(patients.updates[0].update.$set).not.toHaveProperty('representativeName');
+    expect(patients.updates[0].update.$set).not.toHaveProperty('representativeEmail');
+    const identitySet = participantIdentities.updates[0].update.$set;
+    expect(identitySet.representativeNameCiphertext).toBeTruthy();
+    expect(identitySet.representativeEmailCiphertext).toBeTruthy();
   });
 
   it('swallows notification errors and still counts the patient as successfully imported', async () => {
@@ -137,10 +208,75 @@ describe('ImportService.importPatients (JSON)', () => {
 
     expect(participantIdentities.updates).toHaveLength(1);
     expect(participantIdentities.updates[0].query).toEqual({ participantId: '10203040' });
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
     expect(participantIdentities.updates[0].update.$set).toMatchObject({
+      patientName: null,
+      identityDocument: null,
+    });
+    expect(participantIdentityService.decryptIdentity(participantIdentities.updates[0].update.$set)).toMatchObject({
       patientName: 'Maria Silva',
       identityDocument: '12345678900',
     });
+  });
+
+  // #1386: a record the merge's upsert inserts gets its own id and a status
+  // (P1X-0348, P1X-0361), on insert only, so a matched record keeps its own.
+  it('#1386: the merge\'s identity upsert sets participantIdentityId and identityStatus on insert only', async () => {
+    const filePath = writeTmpFile('merge-1386.json', JSON.stringify(validPatient()));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '12345678900', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
+
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-1386.json' });
+
+    expect(result.success).toBe(1);
+    expect(participantIdentities.updates).toHaveLength(1);
+    const { update } = participantIdentities.updates[0];
+    expect(update.$setOnInsert).toEqual({
+      participantIdentityId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+      identityStatus: 'active',
+    });
+    expect(update.$set).not.toHaveProperty('participantIdentityId');
+    expect(update.$set).not.toHaveProperty('identityStatus');
+  });
+
+  // #1386: the merge removes the old <field>Encrypted envelope of every
+  // ciphertext it sets, and sends no $unset when it sets none.
+  it('#1386: the merge unsets the old <field>Encrypted name of each ciphertext it sets', async () => {
+    const filePath = writeTmpFile('merge-legacy.json', JSON.stringify(validPatient()));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '12345678900', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocumentEncrypted: { iv: 'old' } },
+    });
+
+    await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-legacy.json' });
+
+    const { update } = participantIdentities.updates[0];
+    expect(update.$set.identityDocumentCiphertext).toBeTruthy();
+    expect(update.$unset).toMatchObject({ patientNameEncrypted: '', birthDateEncrypted: '', identityDocumentEncrypted: '', emailEncrypted: '' });
+  });
+
+  it('#1386: a merge that sets no ciphertext (keyless stack) sends no $unset', async () => {
+    const keyRegistry = require2('../../src/config/keyRegistry');
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+    const filePath = writeTmpFile('merge-keyless.json', JSON.stringify(validPatient()));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '12345678900', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
+
+    await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-keyless.json' });
+
+    const { update } = participantIdentities.updates[0];
+    expect(update.$set.patientName).toBe('Maria Silva');
+    expect(update).not.toHaveProperty('$unset');
   });
 
   it('dedups via identityDocumentHash (RF005/RNF007 #574), matching a record with no plaintext-queryable identityDocument left', async () => {
@@ -178,11 +314,32 @@ describe('ImportService.importPatients (JSON)', () => {
     );
 
     expect(result.success).toBe(1);
-    expect(capturedQuery.$or).toEqual(
-      expect.arrayContaining([{ identityDocumentHash: { $in: expect.arrayContaining([expectedHash]) } }])
-    );
+    // #1104: the hash arm ALONE. identityDocument is ciphertext-only, so a
+    // plaintext arm beside it matches nothing and makes the $or unindexable.
+    expect(capturedQuery.$or).toEqual([
+      { identityDocumentHash: { $in: expect.arrayContaining([expectedHash]) } },
+    ]);
     expect(patientsCollection.updates).toHaveLength(1);
     expect(patientsCollection.updates[0].update.$set.participantId).toBe('10203040');
+  });
+
+  // #1083: with no key only the plaintext is written, so the keyless branch
+  // queries it -- in the digits-only form every writer stores (#1109), not
+  // the punctuated form the import row carried.
+  it('#1104/#1083: on a keyless stack, dedups on the canonical plaintext identityDocument', async () => {
+    const keyRegistry = require2('../../src/config/keyRegistry');
+    vi.spyOn(keyRegistry, 'getFallbackKeys').mockReturnValue([]);
+    const filePath = writeTmpFile('keyless.json', JSON.stringify(validPatient({ cpf: '123.456.789-00' })));
+    let capturedQuery = null;
+    const patients = makeCollection();
+    const participantIdentities = {
+      ...makeCollection(),
+      findOne: async (query) => { capturedQuery = query; return null; },
+    };
+
+    await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'keyless.json' });
+
+    expect(capturedQuery).toEqual({ $or: [{ identityDocument: '12345678900' }] });
   });
 
   it('records a merge error when birthDate conflicts with the existing record, without touching ParticipantIdentity', async () => {
@@ -287,9 +444,10 @@ describe('ImportService.importPatients (CSV)', () => {
     expect(result.errors).toHaveLength(0);
     expect(patients.inserted).toHaveLength(1);
     expect(patients.inserted[0]).toMatchObject({
-      email: 'joao@example.com',
       consentTemplateId: 'tcle-1',
     });
+    // #1166 slice 4: the email is identity data -- identity row only, encrypted.
+    expect(patients.inserted[0]).not.toHaveProperty('email');
     // RF005/RNF007 (#575): identityDocument is civil identity — never on
     // Patient, only on the ParticipantIdentity assertion below.
     expect(patients.inserted[0].identityDocument).toBeUndefined();
@@ -297,10 +455,13 @@ describe('ImportService.importPatients (CSV)', () => {
     expect(patients.inserted[0].participantId).toMatch(/^\d{8}$/);
 
     expect(participantIdentities.inserted).toHaveLength(1);
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
     expect(participantIdentities.inserted[0]).toMatchObject({
       participantId: patients.inserted[0].participantId,
-      identityDocument: '98765432100',
+      identityDocument: null,
     });
+    expect(participantIdentityService.decryptIdentity(participantIdentities.inserted[0]).identityDocument).toBe('98765432100');
+    expect(participantIdentityService.decryptIdentity(participantIdentities.inserted[0]).email).toBe('joao@example.com');
   });
 
   it('records an error for a CSV row that fails model validation', async () => {
@@ -347,10 +508,25 @@ describe('ImportService.importPatients (CSV)', () => {
 });
 
 describe('ImportService.importPatients (top-level error)', () => {
+  // #1176: this used to pass `{}` as the db and assert a bare `toThrow()`, so
+  // it passed on getCollection's `db.collection is not a function` TypeError
+  // and never reached the missing file.
   it('rejects when the file does not exist', async () => {
-    await expect(importService.importPatients({}, {
+    const db = makeDb({ patients: {}, participantIdentities: {} });
+    await expect(importService.importPatients(db, {
       path: path.join(os.tmpdir(), 'does-not-exist-patients.json'),
       originalname: 'does-not-exist-patients.json',
-    })).rejects.toThrow();
+    })).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a missing
+  // CSV was an uncaught exception that crashed the process instead of this
+  // rejection -- the JSON case above fails in a synchronous readFileSync.
+  it('rejects when the CSV file does not exist (#1175)', async () => {
+    const db = makeDb({ patients: {}, participantIdentities: {} });
+    await expect(importService.importPatients(db, {
+      path: path.join(os.tmpdir(), `does-not-exist-patients-${Date.now()}.csv`),
+      originalname: 'does-not-exist-patients.csv',
+    })).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

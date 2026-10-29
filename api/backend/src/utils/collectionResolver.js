@@ -9,7 +9,7 @@ const { ensureParticipantIdentityIndexes } = require('./participantIdentityIndex
 const samplesIndexed = new Set();
 
 // #1102: same latch, for participantIdentities -- a collection that had no
-// declared index of any kind (absent from create-db.js, no model file), so
+// declared index of any kind (absent from the retired create-db.js, no model file), so
 // every identity query was a collection scan.
 const participantIdentitiesIndexed = new Set();
 

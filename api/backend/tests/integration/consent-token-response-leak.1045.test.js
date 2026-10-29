@@ -176,7 +176,10 @@ describe('#1045: no response hands out a live consentToken', () => {
 
     const response = await request(app)
       .post('/api/patients/find-for-edit')
-      .set('Authorization', `Bearer ${createCoordinatorToken()}`)
+      // #1185: find-for-edit is org-scoped now, like GET /:id above, and
+      // this fixture's patient is in no organization the coordinator
+      // holds -- admin (global) keeps the test on its subject, the token.
+      .set('Authorization', `Bearer ${createAdminToken()}`)
       .send({ participantId: '77222497' });
 
     expect(response.status).toBe(200);

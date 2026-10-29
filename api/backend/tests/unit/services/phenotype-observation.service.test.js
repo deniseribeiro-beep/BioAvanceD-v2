@@ -129,6 +129,51 @@ describe('phenotype-observation.service', () => {
     });
   });
 
+  describe('createPhenotypeObservation phenotypeEvidence (#695, ELM-0218)', () => {
+    const base = {
+      participantId: 'PART-1',
+      hpoCoding: { systemUri: SYSTEM_URI, code: CODE },
+      presenceStatus: 'present',
+      effectiveDateTime: '2026-01-01',
+    };
+
+    it('persists a typed DiagnosticReport/ entry that resolves to a real report', async () => {
+      const db = createFakeDb(activeConceptAndRelease({ diagnosticReports: [{ diagnosticReportId: 'dr-1' }] }));
+
+      const stored = await createPhenotypeObservation(db, { ...base, phenotypeEvidence: ['DiagnosticReport/dr-1'] });
+
+      expect(stored.phenotypeEvidence).toEqual(['DiagnosticReport/dr-1']);
+      expect(db.collections.phenotypeObservations.docs).toHaveLength(1);
+    });
+
+    it('rejects a typed DiagnosticReport/ entry that does not resolve, without persisting anything', async () => {
+      const db = createFakeDb(activeConceptAndRelease({ diagnosticReports: [] }));
+
+      await expect(
+        createPhenotypeObservation(db, { ...base, phenotypeEvidence: ['DiagnosticReport/dr-unknown'] })
+      ).rejects.toThrow(/Referência inexistente.*phenotypeEvidence\[0\]/);
+      expect(db.collections.phenotypeObservations?.docs || []).toHaveLength(0);
+    });
+
+    it('rejects a typed entry with leading whitespace that does not resolve, without persisting anything', async () => {
+      const db = createFakeDb(activeConceptAndRelease({ diagnosticReports: [] }));
+
+      await expect(
+        createPhenotypeObservation(db, { ...base, phenotypeEvidence: [' DiagnosticReport/ghost'] })
+      ).rejects.toThrow(/Referência inexistente.*phenotypeEvidence\[0\]="ghost"/);
+      expect(db.collections.phenotypeObservations?.docs || []).toHaveLength(0);
+    });
+
+    it('persists an untyped entry unchecked', async () => {
+      const db = createFakeDb(activeConceptAndRelease({ diagnosticReports: [] }));
+
+      const stored = await createPhenotypeObservation(db, { ...base, phenotypeEvidence: ['Practitioner/p-1'] });
+
+      expect(stored.phenotypeEvidence).toEqual(['Practitioner/p-1']);
+      expect(db.collections.phenotypeObservations.docs).toHaveLength(1);
+    });
+  });
+
   describe('getPhenotypeObservationsForParticipant', () => {
     it('scopes results to the requested participantId only', async () => {
       const db = createFakeDb(activeConceptAndRelease());

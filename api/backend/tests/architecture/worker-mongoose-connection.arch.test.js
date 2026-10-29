@@ -104,3 +104,23 @@ for (const entry of WORKER_ENTRYPOINTS) {
     );
   });
 }
+
+// #830: the API process queries Mongoose models too (Sample.findById in
+// miabisValidator.service.js, the storage-hierarchy models), and it used to
+// connect Mongoose only as a side effect of whichever route called
+// connectMongoDB() first -- the batch upload among them, until #830 moved
+// StagingImport to the native driver. The graph check above cannot pin this
+// for server.js: iot.controller.js calls connectMongoDB() lazily, so the API
+// passes it with or without a boot-time connection. This reads the boot
+// itself.
+test('server.js opens the Mongoose connection during boot, after the native connectDB()', () => {
+  const source = read(path.join(backendRoot, 'server.js'));
+  const nativeAt = source.indexOf('await connectDB()');
+  const mongooseAt = source.indexOf('await connectMongoDB()');
+  assert.ok(nativeAt >= 0, 'server.js no longer awaits connectDB()');
+  assert.ok(
+    mongooseAt > nativeAt,
+    'server.js does not await connectMongoDB() after connectDB(): Mongoose-model reads in the API ' +
+      'would buffer and time out unless some other route happened to connect first (#826, #830).'
+  );
+});

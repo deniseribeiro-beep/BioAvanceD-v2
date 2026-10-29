@@ -66,6 +66,15 @@ describe('hpo routes', () => {
       expect(searchHpoLocal).not.toHaveBeenCalled();
     });
 
+    it('returns 400 when q is repeated (#1415)', async () => {
+      const searchHpoLocal = vi.fn();
+      const app = loadRouteWithMocks({ searchHpoLocal });
+      const res = await request(app).get('/api/hpo/search?q=a&q=b').timeout(2000);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'Invalid query' });
+      expect(searchHpoLocal).not.toHaveBeenCalled();
+    });
+
     it('returns local results with 200 and does not call external when local search succeeds', async () => {
       const localResults = [{ hpoId: 'HP:0000001', label: 'Local term' }];
       const searchHpoLocal = vi.fn().mockResolvedValue(localResults);

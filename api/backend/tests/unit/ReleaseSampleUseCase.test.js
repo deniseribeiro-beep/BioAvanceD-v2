@@ -58,6 +58,91 @@ describe('ReleaseSampleUseCase', () => {
     expect(auditRepository.appendImmutableAudit).toHaveBeenCalledTimes(1);
     const [auditPayload] = auditRepository.appendImmutableAudit.mock.calls[0];
     expect(auditPayload.after.storageLocation).toBeNull();
+    // #1225/#1312: custody reads no consent; the pre-Mongo validation
+    // carries no consent flag, so a revoked consent cannot block release to
+    // quarantine or discard.
+    const [validated] = lineageRepository.validateBeforePersistence.mock.calls[0];
+    expect(validated).toMatchObject({ specimenId: 'sample-1', eventType: 'release' });
+    expect(validated).not.toHaveProperty('requireEthicalConsent');
+  });
+
+  // #1312 (RF023 AC3/AC8): the custody event is an outbox append in the
+  // release's own transaction, after the release and audit writes.
+  it('#1312: appends the release custody event inside the transaction, with its session', async () => {
+    const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot() });
+    const auditRepository = makeAuditRepository();
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-1' }))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
+
+    await useCase.execute(baseCommand);
+
+    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(1);
+    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledWith(
+      {
+        specimenId: 'sample-1',
+        barcode: 'BC-1',
+        eventType: 'release',
+        from: { boxId: 'box-1', position: 'A1' },
+        to: null,
+        actorId: 'user-1',
+        reason: 'release',
+        happenedAt: expect.any(Date)
+      },
+      { session: 'session-1' }
+    );
+    const appendOrder = lineageRepository.recordCustodyEvent.mock.invocationCallOrder[0];
+    expect(appendOrder).toBeGreaterThan(storageRepository.withTransaction.mock.invocationCallOrder[0]);
+    expect(appendOrder).toBeGreaterThan(storageRepository.releaseSamplePosition.mock.invocationCallOrder[0]);
+    expect(appendOrder).toBeGreaterThan(auditRepository.appendImmutableAudit.mock.invocationCallOrder[0]);
+  });
+
+  // #1220: the custody ledger row is keyed by the canonical specimenId, as the
+  // create path writes it, and the response echoes it; the storage call and
+  // graph event keep the _id.
+  it('#1220: the audit row and the response carry the canonical specimenId while storage and lineage get the _id', async () => {
+    const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot({ specimenId: 'SP-1' }) });
+    const auditRepository = makeAuditRepository();
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-1' }))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
+
+    const result = await useCase.execute(baseCommand);
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('SP-1');
+    expect(storageRepository.releaseSamplePosition.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(lineageRepository.recordCustodyEvent.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(result.releasedFrom.specimenId).toBe('SP-1');
+  });
+
+  it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {
+    const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot() });
+    const auditRepository = makeAuditRepository();
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-1' }))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
+
+    await useCase.execute(baseCommand);
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('sample-1');
+  });
+
+  it.each(['fail-closed', 'fail-open'])('#1312: a failed append aborts the transaction and refuses the release (%s)', async (mode) => {
+    env.LINEAGE_MODE = mode;
+    const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot() });
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.reject(new Error('outbox append failed')))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository: makeAuditRepository(), lineageRepository });
+
+    await expect(useCase.execute(baseCommand)).rejects.toThrow('outbox append failed');
   });
 
   it('throws when command is undefined', async () => {
@@ -119,7 +204,7 @@ describe('ReleaseSampleUseCase', () => {
     expect(storageRepository.withTransaction).not.toHaveBeenCalled();
   });
 
-  it('resolves lineage before the Mongo transaction is opened (custody chain ordering)', async () => {
+  it('#1312: validates the custody payload before the transaction and appends it inside', async () => {
     const sampleSnapshot = makeSampleSnapshot();
     const storageRepository = makeStorageRepository({ sampleSnapshot });
     const auditRepository = makeAuditRepository();
@@ -142,7 +227,7 @@ describe('ReleaseSampleUseCase', () => {
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
     await useCase.execute(baseCommand);
 
-    expect(callOrder).toEqual(['validateBeforePersistence', 'recordCustodyEvent', 'withTransaction']);
+    expect(callOrder).toEqual(['validateBeforePersistence', 'withTransaction', 'recordCustodyEvent']);
 
     const [validatePayload] = lineageRepository.validateBeforePersistence.mock.calls[0];
     expect(validatePayload.eventType).toBe('release');
@@ -172,7 +257,7 @@ describe('ReleaseSampleUseCase', () => {
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });
 
     await expect(useCase.execute(baseCommand)).rejects.toThrow(
-      '[ISO20387][LINEAGE] Repositório Neo4j ausente para operação de custódia'
+      '[ISO20387][LINEAGE] Repositório de linhagem ausente para operação de custódia'
     );
     expect(storageRepository.withTransaction).not.toHaveBeenCalled();
   });
@@ -185,7 +270,7 @@ describe('ReleaseSampleUseCase', () => {
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });
 
     await expect(useCase.execute(baseCommand)).rejects.toThrow(
-      '[ISO20387][LINEAGE] Repositório Neo4j ausente para operação de custódia'
+      '[ISO20387][LINEAGE] Repositório de linhagem ausente para operação de custódia'
     );
     expect(storageRepository.withTransaction).not.toHaveBeenCalled();
   });
@@ -226,7 +311,7 @@ describe('ReleaseSampleUseCase', () => {
     expect(storageRepository.withTransaction).not.toHaveBeenCalled();
   });
 
-  it('rethrows the original mongo error when the transaction fails, and attempts compensation when lineage was persisted with an eventId', async () => {
+  it('#1312: a transaction that fails before the append records no custody event and rethrows the Mongo error', async () => {
     const sampleSnapshot = makeSampleSnapshot();
     const mongoError = new Error('mongo release failed');
     const storageRepository = makeStorageRepository({ sampleSnapshot });
@@ -236,21 +321,15 @@ describe('ReleaseSampleUseCase', () => {
     const auditRepository = makeAuditRepository();
     const lineageRepository = {
       validateBeforePersistence: vi.fn(() => Promise.resolve()),
-      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-comp' })),
-      compensateCustodyEvent: vi.fn(() => Promise.resolve())
+      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-comp' }))
     };
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
 
     await expect(useCase.execute(baseCommand)).rejects.toThrow('mongo release failed');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledWith({
-      eventId: 'evt-comp',
-      specimenId: 'sample-1',
-      reason: 'mongo_transaction_failed'
-    });
+    expect(lineageRepository.recordCustodyEvent).not.toHaveBeenCalled();
   });
 
-  it('does not attempt compensation when lineage was not persisted, and still rethrows the mongo error', async () => {
+  it('rethrows the mongo error with no lineage repository', async () => {
     const sampleSnapshot = makeSampleSnapshot();
     const mongoError = new Error('mongo release failed again');
     const storageRepository = makeStorageRepository({ sampleSnapshot });
@@ -261,25 +340,6 @@ describe('ReleaseSampleUseCase', () => {
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository });
 
     await expect(useCase.execute(baseCommand)).rejects.toThrow('mongo release failed again');
-  });
-
-  it('when compensation itself throws, the original mongo error is still what rejects (not masked)', async () => {
-    const sampleSnapshot = makeSampleSnapshot();
-    const mongoError = new Error('mongo release failed yet again');
-    const storageRepository = makeStorageRepository({ sampleSnapshot });
-    storageRepository.withTransaction.mockImplementation(async () => {
-      throw mongoError;
-    });
-    const auditRepository = makeAuditRepository();
-    const lineageRepository = {
-      validateBeforePersistence: vi.fn(() => Promise.resolve()),
-      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-comp-2' })),
-      compensateCustodyEvent: vi.fn(() => Promise.reject(new Error('compensation also failed')))
-    };
-    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
-
-    await expect(useCase.execute(baseCommand)).rejects.toThrow('mongo release failed yet again');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
   });
 
   it('defaults barcode to null and actorId to null when both are absent', async () => {
@@ -328,25 +388,6 @@ describe('ReleaseSampleUseCase', () => {
 
     expect(result.success).toBe(true);
     expect(result.lineageValidated).toBe(false);
-  });
-
-  it('falls back to the raw rejection value when compensation rejects with a non-Error', async () => {
-    const sampleSnapshot = makeSampleSnapshot();
-    const mongoError = new Error('mongo release failed once more');
-    const storageRepository = makeStorageRepository({ sampleSnapshot });
-    storageRepository.withTransaction.mockImplementation(async () => {
-      throw mongoError;
-    });
-    const auditRepository = makeAuditRepository();
-    const lineageRepository = {
-      validateBeforePersistence: vi.fn(() => Promise.resolve()),
-      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-comp-3' })),
-      compensateCustodyEvent: vi.fn(() => Promise.reject('raw string rejection'))
-    };
-    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
-
-    await expect(useCase.execute(baseCommand)).rejects.toThrow('mongo release failed once more');
-    expect(lineageRepository.compensateCustodyEvent).toHaveBeenCalledTimes(1);
   });
 
   it('throws when the sample disappears between the initial lookup and the transactional re-fetch', async () => {

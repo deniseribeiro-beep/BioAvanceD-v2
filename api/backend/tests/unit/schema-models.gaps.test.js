@@ -90,7 +90,8 @@ describe('Disease schema', () => {
     expect(doc.drug_classes).toEqual([]);
     expect(doc.active).toBe(true);
     expect(doc.validation_requirements.miabis.requireTreatmentStatus).toBe(true);
-    expect(doc.validation_requirements.biomarkers.required).toEqual([]);
+    // #1206: biomarker knowledge lives on BiomarkerAssociation, not here.
+    expect(doc.validation_requirements.toObject()).not.toHaveProperty('biomarkers');
     expect(doc.validation_requirements.pharmacology.treatmentStatuses).toEqual([
       'NAIVE',
       'TREATED',
@@ -98,7 +99,7 @@ describe('Disease schema', () => {
     ]);
   });
 
-  it('allows overriding nested validation_requirements fields', () => {
+  it('allows overriding nested validation_requirements fields and drops a sent biomarkers key (#1206)', () => {
     const doc = new Disease({
       orpha_code: 'ORPHA:1',
       name: 'Rare Disease',
@@ -109,7 +110,7 @@ describe('Disease schema', () => {
     });
 
     expect(doc.validation_requirements.miabis.requireTreatmentStatus).toBe(false);
-    expect(doc.validation_requirements.biomarkers.required).toEqual(['BRCA1']);
+    expect(doc.toObject().validation_requirements).not.toHaveProperty('biomarkers');
   });
 });
 
@@ -154,7 +155,6 @@ describe('TemperaturePolicy schema', () => {
   it('validates successfully with all required fields', () => {
     const doc = new TemperaturePolicy({
       name: 'Cold storage',
-      targetTemp: -20,
       minTemp: -25,
       maxTemp: -15,
     });
@@ -169,7 +169,7 @@ describe('TemperaturePolicy schema', () => {
 
     expect(err).toBeDefined();
     expect(err.errors.name).toBeDefined();
-    expect(err.errors.targetTemp).toBeDefined();
+    expect(err.errors.targetTemp).toBeUndefined(); // #1197: no setpoint
     expect(err.errors.minTemp).toBeDefined();
     expect(err.errors.maxTemp).toBeDefined();
   });
@@ -177,7 +177,6 @@ describe('TemperaturePolicy schema', () => {
   it('defaults hysteresis to 0.5 when omitted', () => {
     const doc = new TemperaturePolicy({
       name: 'Cold storage',
-      targetTemp: -20,
       minTemp: -25,
       maxTemp: -15,
     });
@@ -188,7 +187,6 @@ describe('TemperaturePolicy schema', () => {
   it('allows overriding hysteresis', () => {
     const doc = new TemperaturePolicy({
       name: 'Cold storage',
-      targetTemp: -20,
       minTemp: -25,
       maxTemp: -15,
       hysteresis: 1.5,
@@ -201,7 +199,6 @@ describe('TemperaturePolicy schema', () => {
     it('defaults metricType, ruleVersion and effectivePeriod.start, leaves minimumDuration/effectivePeriod.end null', () => {
       const doc = new TemperaturePolicy({
         name: 'Cold storage',
-        targetTemp: -20,
         minTemp: -25,
         maxTemp: -15,
       });
@@ -221,7 +218,6 @@ describe('TemperaturePolicy schema', () => {
       const end = new Date('2026-12-31T00:00:00Z');
       const doc = new TemperaturePolicy({
         name: 'Cold storage',
-        targetTemp: -20,
         minTemp: -25,
         maxTemp: -15,
         metricType: 'humidity',

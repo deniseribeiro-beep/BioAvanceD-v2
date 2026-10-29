@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../../../utils/collectionResolver');
+const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../../../utils/storageIndexes');
 
 class MongoStorageTopologyReadRepository {
   /**
@@ -9,10 +10,17 @@ class MongoStorageTopologyReadRepository {
     this.db = db;
   }
 
-  async listOperationalFreezers() {
+  /**
+   * @param {object} [scopeFilter] - #1211: organization terms from storage-scope.service
+   */
+  async listOperationalFreezers(scopeFilter = {}) {
     const storageContainersCollection = this.db.collection('storageContainers');
+    // #1163: this query is what storage_containers_type_status_idx_v1 exists
+    // for, so it is ensured here, where the read runs (utils/lookupIndex.js).
+    ensureStorageContainerIndexes(storageContainersCollection);
     return storageContainersCollection
       .find({
+        ...scopeFilter,
         containerType: 'FREEZER',
         status: 'OPERATIONAL'
       })
@@ -92,6 +100,10 @@ class MongoStorageTopologyReadRepository {
   async getFreezerTree(input) {
     const storageContainersCollection = this.db.collection('storageContainers');
     const storageBoxesCollection = this.db.collection('storageBoxes');
+    // #1163: the shelf/rack/box walk below is what the two parent_id lookup
+    // indexes serve, so they are ensured on this read path.
+    ensureStorageContainerIndexes(storageContainersCollection);
+    ensureStorageBoxIndexes(storageBoxesCollection);
     const freezerObjId = this.toObjectId(input.freezerId);
 
     const freezer = await storageContainersCollection.findOne({
@@ -207,15 +219,15 @@ class MongoStorageTopologyReadRepository {
     let actualCount = 0;
     const occupancyGrid = box.occupancyGrid || {};
 
-    for (const [position, specimenId] of Object.entries(occupancyGrid)) {
-      if (!specimenId) continue;
+    for (const [position, sampleObjectId] of Object.entries(occupancyGrid)) {
+      if (!sampleObjectId) continue;
       actualCount += 1;
 
-      const normalizedSampleId = this.toObjectId(specimenId);
+      const normalizedSampleId = this.toObjectId(sampleObjectId);
       const sample = await samplesCollection.findOne({ _id: normalizedSampleId });
 
       if (!sample) {
-        errors.push(`Orfão: posição ${position} referencia amostra inexistente ${specimenId}`);
+        errors.push(`Orfão: posição ${position} referencia amostra inexistente ${sampleObjectId}`);
         continue;
       }
 
@@ -224,7 +236,7 @@ class MongoStorageTopologyReadRepository {
         sample.storageLocation?.position !== position
       ) {
         errors.push(
-          `Inconsistência: Box referencia ${specimenId} em ${position}, ` +
+          `Inconsistência: Box referencia ${sampleObjectId} em ${position}, ` +
           `mas amostra aponta para ${sample.storageLocation?.boxId}/${sample.storageLocation?.position}`
         );
       }

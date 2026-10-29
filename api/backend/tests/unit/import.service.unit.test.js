@@ -168,6 +168,15 @@ describe('ImportService.validateCSVStructure', () => {
       fs.unlinkSync(filePath);
     }
   });
+
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a missing
+  // file was an uncaught exception that crashed the process instead of this
+  // rejection.
+  it('rejects when the file does not exist (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `import-service-test-missing-${Date.now()}.csv`);
+    await expect(importService.validateCSVStructure({ path: missingPath }, 'patients'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
 describe('ImportService.validateFHIRFile', () => {
@@ -203,6 +212,31 @@ describe('ImportService.validateFHIRFile', () => {
       expect(result.valid).toBe(false);
       expect(result.issues[0].severity).toBe('error');
       expect(result.resourcesValidated).toBe(0);
+    } finally {
+      fs.unlinkSync(filePath);
+    }
+  });
+
+  // RF011 AC3 (#1322): the registry the caller loaded reaches the validator.
+  it('accepts an identifier.system that the passed registry holds, and refuses it without one', () => {
+    const systemUri = 'https://id.bioadvanced.dev/ns/specimen';
+    const filePath = writeTempFile(JSON.stringify({
+      resourceType: 'Patient', id: '123', name: [{ family: 'Silva', given: ['Ana'] }], gender: 'female', birthDate: '1990-01-01',
+      identifier: [{ system: systemUri, value: 'S-0001' }]
+    }), '.json');
+    const registry = {
+      profiles: [],
+      approvedAuthorities: [],
+      namespaces: [{
+        namespaceKey: 'specimen', systemUri, authorityDomain: 'bioadvanced.dev', targetTypes: ['specimen'],
+        semanticVersion: '1.0.0', effectivePeriod: { start: '2026-01-01' }, configurationReleaseId: 'cfg-2026-10'
+      }]
+    };
+    try {
+      expect(importService.validateFHIRFile({ path: filePath }, { registry })).toMatchObject({ isFhir: true, valid: true, issues: [] });
+      const refused = importService.validateFHIRFile({ path: filePath });
+      expect(refused.valid).toBe(false);
+      expect(refused.issues.map((issue) => issue.reason)).toEqual(['identifier-system-unknown']);
     } finally {
       fs.unlinkSync(filePath);
     }
@@ -327,8 +361,13 @@ describe('ImportService.parseSampleCSV', () => {
   });
 
   it('reads a specimenStatus column directly when present', () => {
-    const { data } = importService.parseSampleCSV({ specimenStatus: 'partial' });
-    expect(data.specimenStatus).toBe('partial');
+    const { data } = importService.parseSampleCSV({ specimenStatus: 'reserved' });
+    expect(data.specimenStatus).toBe('reserved');
+  });
+
+  it('folds a v1.3.0 specimenStatus column onto the v2 set (RF006 AC2)', () => {
+    expect(importService.parseSampleCSV({ specimenStatus: 'partial' }).data.specimenStatus).toBe('available');
+    expect(importService.parseSampleCSV({ specimenStatus: 'disposed' }).data.specimenStatus).toBe('unavailable');
   });
 
   it('defaults specimenStatus to available when no status column is present', () => {

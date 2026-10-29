@@ -88,7 +88,7 @@ async function sendViaChannel(channel, { recipients, subject, message }) {
   return { channel, success: false, reason: `unsupported_channel:${channel}` };
 }
 
-async function dispatchNotification(db, { eventType, sourceEventType, sourceEventId, payload = {} }) {
+async function dispatchNotification(db, { eventType, sourceEventType, sourceEventId, payload = {}, purpose = null, consentId = null }) {
   const rule = await notificationRuleService.getActiveRuleForEventType(db, eventType);
   if (!rule) {
     logger.info(`[NOTIFICATION_DISPATCH] Nenhuma regra ativa para eventType=${eventType} -- notificação não gerada.`);
@@ -101,45 +101,95 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
   const subject = `[BioAvanceD] Alerta: ${eventType}`;
   const message = `Evento ${eventType} detectado. Detalhes: ${JSON.stringify(sanitizedPayload)}`;
 
+  // #903 (RF015 AC3 "tentativas", AC1): the notification is stored before
+  // any send, naming its rule and the ConfigurationRelease in force, and each
+  // attempt is written as `attempted` before its channel is called, then
+  // given its result. A process that dies mid-send leaves the attempt.
+  const notificationsCollection = await getCollection(db, 'notifications');
   const attempts = [];
+  const document = {
+    ruleId: rule._id,
+    ruleVersion: rule.version,
+    configurationReleaseId: await activeConfigurationReleaseId(db),
+    eventType,
+    sourceEventType: sourceEventType || eventType,
+    sourceEventId: sourceEventId ? String(sourceEventId) : null,
+    // RF015 AC5 (#903): the communication's purpose (the caller's, else the
+    // rule's) and the consent it concerns, when it concerns one. Recorded on
+    // the row only: the payload allowlist still decides what the message says.
+    purpose: purpose || rule.purpose || null,
+    consentId: consentId ? String(consentId) : null,
+    payload: sanitizedPayload,
+    recipients,
+    attempts: [],
+    status: 'dispatching',
+    escalated: false,
+    deliveredChannel: null,
+    createdAt,
+    deliveredAt: null,
+    confirmedAt: null,
+    deliveryDurationMs: null,
+    maxDeliveryMinutes: rule.maxDeliveryMinutes,
+    withinSla: null,
+    slaBreached: false
+  };
+  const { insertedId } = await notificationsCollection.insertOne(document);
+  // Each write carries copies of the attempts, never the array this loop edits.
+  const record = (set) => notificationsCollection.updateOne(
+    { _id: insertedId },
+    { $set: { ...set, attempts: attempts.map((entry) => ({ ...entry })) } }
+  );
+  const attempt = async (channel, escalation, send) => {
+    const entry = { channel, timestamp: new Date(), result: 'attempted', reason: null, escalation };
+    attempts.push(entry);
+    await record({ attempts });
+    const result = await send();
+    entry.result = result.success ? 'success' : 'failure';
+    entry.reason = result.reason || null;
+    await record({ attempts });
+    return result;
+  };
+
   let delivered = false;
   let deliveredChannel = null;
 
-  for (const channel of rule.channels) {
-    const attemptTime = new Date();
-    const result = await sendViaChannel(channel, { recipients, subject, message });
-    attempts.push({
-      channel,
-      timestamp: attemptTime,
-      result: result.success ? 'success' : 'failure',
-      reason: result.reason || null,
-      escalation: false
-    });
-    if (result.success) {
-      delivered = true;
-      deliveredChannel = channel;
-      break;
+  // #903 (RNF026 AC2, RF015 AC6): each channel is retried as the rule
+  // configures, only inside its delivery window. [inference] Once the
+  // window closes undelivered, retrying stops and the escalation runs at
+  // once, whatever its failure count: the window is the rule's own maximum.
+  const maxAttempts = Math.max(1, rule.retry?.maxAttempts || 1);
+  const backoffMs = Math.max(0, (rule.retry?.backoffSeconds || 0) * 1000);
+  const deadline = createdAt.getTime() + rule.maxDeliveryMinutes * 60000;
+  const windowClosed = () => Date.now() >= deadline;
+  let windowLapsed = false;
+
+  channels: for (const channel of rule.channels) {
+    for (let n = 1; n <= maxAttempts; n += 1) {
+      if (attempts.length > 0 && windowClosed()) {
+        windowLapsed = true;
+        break channels;
+      }
+      if (n > 1 && backoffMs > 0) await sleep(backoffMs);
+      const result = await attempt(channel, false, () => sendViaChannel(channel, { recipients, subject, message }));
+      if (result.success) {
+        delivered = true;
+        deliveredChannel = channel;
+        break channels;
+      }
     }
   }
+  if (!delivered && windowClosed()) windowLapsed = true;
 
   let escalated = false;
   if (!delivered && rule.escalation?.enabled) {
     const failedAttempts = attempts.filter((attempt) => attempt.result === 'failure').length;
-    if (failedAttempts >= rule.escalation.afterFailures) {
+    if (windowLapsed || failedAttempts >= rule.escalation.afterFailures) {
       escalated = true;
-      const escalationTime = new Date();
-      const escalationResult = await sendViaChannel(rule.escalation.channel, {
+      const escalationResult = await attempt(rule.escalation.channel, true, () => sendViaChannel(rule.escalation.channel, {
         recipients,
         subject: `[ESCALADO] ${subject}`,
         message
-      });
-      attempts.push({
-        channel: rule.escalation.channel,
-        timestamp: escalationTime,
-        result: escalationResult.success ? 'success' : 'failure',
-        reason: escalationResult.reason || null,
-        escalation: true
-      });
+      }));
       if (escalationResult.success) {
         delivered = true;
         deliveredChannel = rule.escalation.channel;
@@ -150,32 +200,33 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
   const deliveredAt = delivered ? new Date() : null;
   const deliveryDurationMs = deliveredAt ? deliveredAt.getTime() - createdAt.getTime() : null;
 
-  const notificationsCollection = await getCollection(db, 'notifications');
-  const document = {
-    ruleId: rule._id,
-    ruleVersion: rule.version,
-    eventType,
-    sourceEventType: sourceEventType || eventType,
-    sourceEventId: sourceEventId ? String(sourceEventId) : null,
-    payload: sanitizedPayload,
-    recipients,
+  const outcome = {
     attempts,
     status: delivered ? 'delivered' : (escalated ? 'escalated_failed' : 'failed'),
     escalated,
     deliveredChannel,
-    createdAt,
     deliveredAt,
-    confirmedAt: null,
     deliveryDurationMs,
-    maxDeliveryMinutes: rule.maxDeliveryMinutes,
     // RNF026 AC#1 - measurable against the rule's own SLA; null while
     // undelivered rather than false, since "not yet delivered" and
-    // "delivered late" are different states.
-    withinSla: deliveredAt ? deliveryDurationMs <= rule.maxDeliveryMinutes * 60000 : null
+    // "delivered late" are different states. The window closes at the
+    // deadline itself (windowClosed is >=), so within means strictly before
+    // it, and a lapsed window is never within: the two fields cannot disagree.
+    withinSla: deliveredAt ? !windowLapsed && deliveryDurationMs < rule.maxDeliveryMinutes * 60000 : null,
+    // RF015 AC6: the window closed before delivery, so retrying stopped.
+    slaBreached: windowLapsed
   };
+  await record(outcome);
+  return { _id: insertedId, ...document, ...outcome };
+}
 
-  const result = await notificationsCollection.insertOne(document);
-  return { _id: result.insertedId, ...document };
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// CFG-004 ("Toda execução ou decisão registra configurationReleaseId"): the
+// ConfigurationRelease the stored configuration names, or null before any.
+async function activeConfigurationReleaseId(db) {
+  const config = await db.collection('security_config').findOne({ _id: 'main' });
+  return config?.configurationReleaseId || null;
 }
 
 // AC#3 "confirmação" - an explicit read receipt, distinct from delivered

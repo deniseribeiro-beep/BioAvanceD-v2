@@ -50,10 +50,10 @@ router.post('/', authenticate, requireRole(3, 4), async (req, res) => {
     const { fileId, direction } = req.body || {};
 
     if (!DIRECTIONS.includes(direction)) {
-      return res.status(422).json({ success: false, error: `direction deve ser um de: ${DIRECTIONS.join(', ')}` });
+      return res.status(422).json({ success: false, error: `direction deve ser um de: ${DIRECTIONS.join(', ')}`, details: [`direction deve ser um de: ${DIRECTIONS.join(', ')}`] });
     }
     if (!fileId || typeof fileId !== 'string' || fileId.trim() === '') {
-      return res.status(422).json({ success: false, error: 'fileId é obrigatório' });
+      return res.status(422).json({ success: false, error: 'fileId é obrigatório', details: ['fileId é obrigatório'] });
     }
 
     const workflowRun = await db.collection('workflowRuns').findOne(buildWorkflowRunQuery(String(req.params.workflowRunId)));
@@ -70,6 +70,12 @@ router.post('/', authenticate, requireRole(3, 4), async (req, res) => {
     await db.collection('workflowRuns').updateOne(
       { _id: workflowRun._id },
       { $addToSet: { [arrayField]: fileId }, $set: { updatedAt: new Date() } }
+    );
+    // RF007 AC5, V2E-0476 (#1321): the file records the run too. The keys
+    // keep this order, so a repeated link adds no second entry.
+    await db.collection(foundInCollection).updateOne(
+      { _id: new ObjectId(fileId) },
+      { $addToSet: { linkedEntityRefs: { entityType: 'WorkflowRun', entityId: String(workflowRun.workflowRunId || workflowRun._id) } } }
     );
 
     if (req.user) {

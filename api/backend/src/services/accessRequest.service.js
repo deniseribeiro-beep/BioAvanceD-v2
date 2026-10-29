@@ -1,9 +1,42 @@
+const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const AccessRequestModel = require('../models/AccessRequest');
+const { evaluatePolicies } = require('../models/AccessPolicy');
+const ConsentAuthorizationDecisionModel = require('../models/ConsentAuthorizationDecision');
+const { SampleModel } = require('../models/Sample');
 const { getCollection } = require('../utils/collectionResolver');
 
 // sources/duo.js's own fixed systemUri for every DUO-imported TerminologyConcept.
-const DUO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/duo.owl';
+const { DUO_SYSTEM_URI } = require('../models/ConsentPermission');
+
+/**
+ * #1347: a DUO code and every code it `is_a` descends from, read from the
+ * imported terminology (TerminologyConcept, TerminologyRelation). A use
+ * requested for a purpose is covered by a permission for that purpose or
+ * for any broader one (GA4GH DUO matching).
+ */
+async function duoCodeWithAncestors(db, code) {
+  const concepts = await getCollection(db, 'terminologyConcepts');
+  const relations = await getCollection(db, 'terminologyRelations');
+  const codes = new Set();
+  const pending = [code];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (codes.has(current)) continue;
+    const concept = await concepts.findOne({ systemUri: DUO_SYSTEM_URI, code: current });
+    if (!concept) continue;
+    codes.add(current);
+    const parents = await relations
+      .find({ sourceConceptId: concept.terminologyConceptId, relationType: 'is_a' })
+      .toArray();
+    for (const relation of parents) {
+      if (relation.relationStatus && relation.relationStatus !== 'active') continue;
+      const parent = await concepts.findOne({ terminologyConceptId: relation.targetConceptId });
+      if (parent?.code) pending.push(parent.code);
+    }
+  }
+  return codes;
+}
 
 /**
  * RF024 AC#5 ("bloquear acesso expirado, negado ou revogado") — pure
@@ -16,6 +49,16 @@ function evaluateAccessState(accessRequest, now = new Date()) {
   if (status === 'pending') return { allowed: false, reason: 'pending' };
   if (status === 'rejected') return { allowed: false, reason: 'denied' };
   if (status === 'revoked') return { allowed: false, reason: 'revoked' };
+
+  // RF024 AC6 ("bloquear acesso ... incompatível"): an approval stands only
+  // on a compatibility evaluation that passed, and the latest one wins, so a
+  // re-evaluation that turns incompatible blocks an approved request too.
+  // Fail-closed: a document with no passing evaluation is incompatible.
+  if (accessRequest.overallCompatible !== true) return { allowed: false, reason: 'incompatible' };
+
+  // RF024 AC3/AC6: a re-evaluation whose AccessPolicy effect is deny blocks
+  // an approved request as well.
+  if (accessRequest.policyDecision?.effect === 'deny') return { allowed: false, reason: 'policy_denied' };
 
   const end = accessRequest.approvalPeriod?.end ? new Date(accessRequest.approvalPeriod.end) : null;
   if (end && end.getTime() < now.getTime()) {
@@ -31,26 +74,90 @@ function evaluateAccessState(accessRequest, now = new Date()) {
   return { allowed: true, reason: status };
 }
 
+function unprocessable(message) {
+  const error = new Error(message);
+  error.statusCode = 422;
+  return error;
+}
+
+/**
+ * RF024 AC4: the version of evaluateCompatibility's own rules: active consent
+ * per participant-linked item, an active DUO concept when a duoCode is
+ * given, and an active Study. Bump it whenever those rules change, so a
+ * stored decision names the rules it stood on. The AccessPolicy versions a
+ * decision applied are recorded beside it, in appliedPolicies.
+ */
+const ACCESS_COMPATIBILITY_POLICY_VERSION = 'rf024-compatibility/1.0.0';
+
+/**
+ * RF024 AC4, CFG-004 ("Toda execução ou decisão registra
+ * configurationReleaseId"): the ConfigurationRelease the stored configuration
+ * names at the moment of the decision, or null before any release exists.
+ */
+async function activeConfigurationReleaseId(db) {
+  const config = await db.collection('security_config').findOne({ _id: 'main' });
+  return config?.configurationReleaseId || null;
+}
+
+async function decisionContext(db, policyDecision) {
+  return {
+    decisionId: crypto.randomUUID(),
+    decidedAt: new Date(),
+    policyVersion: ACCESS_COMPATIBILITY_POLICY_VERSION,
+    // RNF008 AC4: the AccessPolicy/version pairs the decision stood on, and
+    // the effect and reasons they produced (RF024 AC3).
+    appliedPolicies: (policyDecision?.appliedPolicies || []).map(({ accessPolicyId, policyVersion, decisionEffect }) => ({
+      accessPolicyId,
+      policyVersion,
+      decisionEffect,
+    })),
+    policyEffect: policyDecision?.effect || null,
+    policyReasons: policyDecision?.reasons || [],
+    configurationReleaseId: await activeConfigurationReleaseId(db),
+  };
+}
+
 class AccessRequestService {
   async createRequest(db, payload) {
     const validation = AccessRequestModel.validate(payload);
     if (!validation.isValid) {
-      throw new Error(validation.errors.join(', '));
+      // RNF018 (#1300): a validation failure answers 422; the caller's catch
+      // keeps every other error on its own status.
+      const validationError = new Error(validation.errors.join(', '));
+      validationError.statusCode = 422;
+
+      validationError.details = validation.errors;
+      throw validationError;
+    }
+
+    // RF024 AC1: the organization and the protocol are references, so each
+    // must resolve; the protocol must be approved (RF021 AC5's gate, as for
+    // a Sample), and its version in force is recorded with the request.
+    const organizations = await getCollection(db, 'organizations');
+    if (!(await organizations.findOne({ organizationId: payload.organizationId }))) {
+      throw unprocessable(`organizationId ${payload.organizationId} não encontrado`);
+    }
+    const protocol = await db.collection('protocols').findOne({ protocolId: payload.protocolId });
+    if (!protocol) {
+      throw unprocessable(`protocolId ${payload.protocolId} não encontrado`);
+    }
+    if (protocol.approvalStatus !== 'approved') {
+      throw unprocessable(`Protocolo ${payload.protocolId} não está aprovado (status: ${protocol.approvalStatus})`);
     }
 
     const collection = await getCollection(db, 'accessRequests');
-    const document = AccessRequestModel.create(payload);
+    const document = AccessRequestModel.create({ ...payload, protocolVersion: protocol.protocolVersion ?? null });
     await collection.insertOne(document);
     return document;
   }
 
   /**
    * AC#2: avalia consentimento (por item vinculado a um participante real),
-   * DUO (o duoCode da própria solicitação, se informado) e política de
-   * acesso (o Study de destino precisa estar `active`, mesmo gate que RF021
-   * já usa para Sample/Consent/Patient). Nenhum AccessPolicy dedicado
-   * existe neste repositório ainda — o status do Study é o proxy real e
-   * verificável disponível hoje para essa terceira perna da AC.
+   * DUO (o duoCode da própria solicitação, se informado), o Study de destino
+   * (precisa estar `active`, mesmo gate que RF021 já usa para
+   * Sample/Consent/Patient) e as AccessPolicy vigentes. AC#3: o resultado
+   * das políticas é `policyDecision` (permit, deny ou review_required, com
+   * as políticas aplicadas e as razões; ver models/AccessPolicy.js).
    *
    * #661: 'file' items (SampleFile) always carry the specimenId they were
    * uploaded against, so they resolve to a real participant the same way a
@@ -90,33 +197,70 @@ class AccessRequestService {
       duoCompatible = !!concept && concept.conceptStatus === 'active';
     }
 
-    const resolveConsent = async (resolvedParticipantId) => {
+    // RF010 AC7: each item's consent in force answers permit, deny or
+    // review_required for this request's use, recorded as a
+    // ConsentAuthorizationDecision. A deny makes the item incompatible; a
+    // review_required leaves it to the committee, with its reasons.
+    const decisions = await getCollection(db, 'consentAuthorizationDecisions');
+    const consentPermissions = await getCollection(db, 'consentPermissions');
+    const configurationReleaseId = await activeConfigurationReleaseId(db);
+    // #1347: the requested purpose with its DUO ancestors, so a partially
+    // revoked consent is judged on the purpose rather than sent to review.
+    const requestedPurposeCodes = duoCompatible
+      ? await duoCodeWithAncestors(db, accessRequest.duoCode)
+      : null;
+    const resolveConsent = async (resolvedParticipantId, itemId) => {
       if (!resolvedParticipantId) {
         // Item references a specimen/file that doesn't resolve to a real
         // participant — don't default to "consent ok", that would silently
         // approve compatibility for a nonexistent item.
-        return false;
+        return { consentValid: false, decision: null };
       }
-      const consent = await consents.findOne({ participantId: resolvedParticipantId, status: 'ACTIVE' });
-      return !!consent;
+      const consent = await consents.findOne(
+        { participantId: resolvedParticipantId, status: 'ACTIVE' },
+        { sort: { signedAt: -1, createdAt: -1 } }
+      );
+      if (!consent) {
+        return { consentValid: false, decision: null };
+      }
+      const permissions = consent.currentStateDerived === 'partially_revoked'
+        ? await consentPermissions.find({ consentId: consent.consentId || String(consent._id) }).toArray()
+        : [];
+      const evaluation = ConsentAuthorizationDecisionModel.evaluateConsentAuthorization(
+        consent, accessRequest, { permissions, requestedPurposeCodes }
+      );
+      const decision = ConsentAuthorizationDecisionModel.create({
+        ...evaluation,
+        consentId: consent.consentId || String(consent._id),
+        participantId: resolvedParticipantId,
+        purpose: accessRequest.requestedPurpose,
+        studyId: accessRequest.studyId,
+        protocolId: accessRequest.protocolId,
+        accessRequestId: accessRequest.accessRequestId,
+        itemId,
+        configurationReleaseId,
+      });
+      await decisions.insertOne(decision);
+      return { consentValid: decision.result !== 'deny', decision };
     };
 
     const consentCompatibility = [];
     for (const item of accessRequest.requestedItems) {
       let participantId = null;
       let consentValid = null;
+      let decision = null;
 
       if (item.itemType === 'specimen') {
         const sample = await samples.findOne({ specimenId: item.itemId });
         participantId = sample?.participantId || null;
-        consentValid = await resolveConsent(participantId);
+        ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
       } else if (item.itemType === 'file') {
         const file = ObjectId.isValid(item.itemId)
           ? await sampleFiles.findOne({ _id: new ObjectId(item.itemId) })
           : null;
         const sample = file?.specimenId ? await samples.findOne({ specimenId: file.specimenId }) : null;
         participantId = sample?.participantId || null;
-        consentValid = await resolveConsent(participantId);
+        ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
       }
       // 'dataset' items: intentionally left untouched — participantId/
       // consentValid stay null (non-blocking), per #661's de-identified-
@@ -129,6 +273,9 @@ class AccessRequestService {
         itemType: item.itemType,
         participantId,
         consentValid,
+        consentAuthorizationDecisionId: decision?.consentAuthorizationDecisionId || null,
+        consentAuthorizationResult: decision?.result || null,
+        consentAuthorizationReasons: decision?.reasons || [],
         duoCompatible,
         studyActive,
         compatible,
@@ -138,12 +285,15 @@ class AccessRequestService {
     const overallCompatible = consentCompatibility.length > 0 && consentCompatibility.every((entry) => entry.compatible);
     const compatibilityEvaluatedAt = new Date();
 
+    const policies = await (await getCollection(db, 'accessPolicies')).find({}).toArray();
+    const policyDecision = evaluatePolicies(policies, accessRequest, consentCompatibility, compatibilityEvaluatedAt);
+
     await collection.updateOne(
       { accessRequestId },
-      { $set: { consentCompatibility, compatibilityEvaluatedAt, overallCompatible, updatedAt: new Date() } }
+      { $set: { consentCompatibility, compatibilityEvaluatedAt, overallCompatible, policyDecision, updatedAt: new Date() } }
     );
 
-    return { ...accessRequest, consentCompatibility, compatibilityEvaluatedAt, overallCompatible };
+    return { ...accessRequest, consentCompatibility, compatibilityEvaluatedAt, overallCompatible, policyDecision };
   }
 
   /** AC#3: registra decisão, justificativa e vigência. */
@@ -163,11 +313,30 @@ class AccessRequestService {
       throw new Error('A compatibilidade de consentimento/DUO/política deve ser avaliada antes da decisão do comitê');
     }
 
+    // RF024 AC6: evaluated is not enough; an approval needs the evaluation to
+    // have passed. A rejection stays open whatever the evaluation said.
+    if (['approved', 'conditioned'].includes(payload.status) && accessRequest.overallCompatible !== true) {
+      throw new Error('Uma solicitação incompatível com consentimento/DUO/política não pode ser aprovada ou condicionada');
+    }
+
+    // RF024 AC3: the AccessPolicy effect gates the approval. deny refuses it;
+    // review_required is what the committee's decision resolves; a request
+    // evaluated before policies existed has no effect and is re-evaluated.
+    if (['approved', 'conditioned'].includes(payload.status)) {
+      const effect = accessRequest.policyDecision?.effect;
+      if (!effect) {
+        throw new Error('A solicitação deve ser reavaliada contra as políticas de acesso antes da aprovação');
+      }
+      if (effect === 'deny') {
+        throw new Error(`Uma solicitação negada pela política de acesso não pode ser aprovada ou condicionada: ${accessRequest.policyDecision.reasons.join('; ')}`);
+      }
+    }
+
     const committeeDecision = {
+      ...(await decisionContext(db, accessRequest.policyDecision)),
       status: payload.status,
       justification: payload.justification.trim(),
       decidedBy: decidedBy || null,
-      decidedAt: new Date(),
     };
 
     const approvalPeriod = ['approved', 'conditioned'].includes(payload.status)
@@ -198,9 +367,34 @@ class AccessRequestService {
       throw new Error(`Não é possível vincular a remessa/disponibilização: acesso ${access.reason}`);
     }
 
+    // RF019 AC3 (#1315): a specimen quarantined since the approval is not
+    // sent. The compatibility decision read its state then; this reads it now.
+    const specimenIds = (accessRequest.requestedItems || [])
+      .filter((item) => item.itemType === 'specimen')
+      .map((item) => String(item.itemId));
+    if (specimenIds.length) {
+      const samples = await getCollection(db, 'samples');
+      const quarantined = [];
+      for (const specimenId of specimenIds) {
+        const sample = await samples.findOne({ specimenId });
+        if (sample && SampleModel.resolveSpecimenStatus(sample) === 'quarantined') quarantined.push(specimenId);
+      }
+      if (quarantined.length) {
+        throw new Error(`Não é possível vincular a remessa/disponibilização: espécime em quarentena (${quarantined.join(', ')}) (RF019)`);
+      }
+    }
+
     await collection.updateOne(
       { accessRequestId },
-      { $set: { distributionStatus: 'released', distributedAt: new Date(), updatedAt: new Date() } }
+      {
+        $set: {
+          distributionStatus: 'released',
+          distributedAt: new Date(),
+          // RF024 AC7: the distribution names the decision that allowed it.
+          distributionDecisionId: accessRequest.committeeDecision.decisionId || null,
+          updatedAt: new Date(),
+        },
+      }
     );
 
     return collection.findOne({ accessRequestId });
@@ -223,12 +417,14 @@ class AccessRequestService {
       throw new Error('Somente uma solicitação aprovada ou condicionada pode ser revogada');
     }
 
+    // A revocation is a decision of its own: a new decisionId, and the
+    // policyVersion and configurationReleaseId in force now.
     const committeeDecision = {
       ...accessRequest.committeeDecision,
+      ...(await decisionContext(db, accessRequest.policyDecision)),
       status: 'revoked',
       justification: String(justification).trim(),
       decidedBy: decidedBy || accessRequest.committeeDecision.decidedBy,
-      decidedAt: new Date(),
     };
 
     await collection.updateOne(
@@ -261,3 +457,5 @@ const accessRequestService = new AccessRequestService();
 module.exports = accessRequestService;
 module.exports.evaluateAccessState = evaluateAccessState;
 module.exports.DUO_SYSTEM_URI = DUO_SYSTEM_URI;
+module.exports.ACCESS_COMPATIBILITY_POLICY_VERSION = ACCESS_COMPATIBILITY_POLICY_VERSION;
+module.exports.duoCodeWithAncestors = duoCodeWithAncestors;

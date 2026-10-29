@@ -31,11 +31,10 @@ describe('#936 ensureSampleIndexes', () => {
 
     await ensureSampleIndexes(collection);
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
     const [keys, options] = collection.createIndex.mock.calls[0];
     expect(keys).toEqual({ barcode: 1 });
     expect(options.unique).toBe(true);
-    expect(options.name).toBe('samples_barcode_unique_v1');
+    expect(options.name).toBe('samples_barcode_unique_v2');
   });
 
   // The filter is the whole design decision, so it is pinned by value, not
@@ -45,13 +44,20 @@ describe('#936 ensureSampleIndexes', () => {
   // (what StorageBox.boxID uses) would both match those nulls, so the
   // second barcodeless sample ever created would collide with the first and
   // the insert would fail. `$type: 'string'` indexes only real barcodes.
-  it('filters on $type string, not $exists or sparse, because barcode is written as an explicit null', async () => {
+  //
+  // #1164: and `$gt: ''` rather than `$type: 'string'`. Both exclude the
+  // nulls, but the planner cannot prove `{ barcode: 'BR-1' }` implies
+  // `{ $type: 'string' }`, so the v1 index could never serve a lookup --
+  // every findOne({ barcode }) was a COLLSCAN. It can prove the implication
+  // for `$gt: ''` (comparisons are type-bracketed, so it still means
+  // "a non-empty string").
+  it("filters on $gt '', not $type, $exists or sparse, because barcode is written as an explicit null", async () => {
     const collection = makeCollection();
 
     await ensureSampleIndexes(collection);
 
     const [, options] = collection.createIndex.mock.calls[0];
-    expect(options.partialFilterExpression).toEqual({ barcode: { $type: 'string' } });
+    expect(options.partialFilterExpression).toEqual({ barcode: { $gt: '' } });
     expect(options.sparse).toBeUndefined();
     expect(JSON.stringify(options.partialFilterExpression)).not.toContain('$exists');
   });
@@ -61,8 +67,11 @@ describe('#936 ensureSampleIndexes', () => {
   // not swallowed.
   it('logs and does not throw when the index cannot be built', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    const collection = makeCollection(async () => {
-      throw new Error('E11000 duplicate key error collection: bio.samples index: samples_barcode_unique_v1');
+    const collection = makeCollection(async (keys) => {
+      if (keys.barcode) {
+        throw new Error('E11000 duplicate key error collection: bio.samples');
+      }
+      return 'ok';
     });
 
     await expect(ensureSampleIndexes(collection)).resolves.toBeUndefined();
@@ -70,6 +79,90 @@ describe('#936 ensureSampleIndexes', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('E11000');
     expect(warn.mock.calls[0][0]).toContain('#936');
+  });
+
+  // #941: the two lookup indexes `Sample.js` has always declared and never
+  // built. Measured with explain('executionStats') on mongo:7 over 20k
+  // samples: `findOne({ specimenId })` examined 12,346 docs as a COLLSCAN and
+  // 1 with the index; the participantId list examined 20,000 and 5. Both
+  // are non-unique -- the declaration never said unique, and making it so
+  // would be a constraint decision, not an index build.
+  it.each([
+    [{ specimenId: 1 }, 'samples_specimenid_idx_v1'],
+    [{ participantId: 1 }, 'samples_participantid_idx_v1'],
+  ])('builds the non-unique %o lookup index', async (keys, name) => {
+    const collection = makeCollection();
+
+    await ensureSampleIndexes(collection);
+
+    const call = collection.createIndex.mock.calls.find(([k]) => JSON.stringify(k) === JSON.stringify(keys));
+    expect(call).toBeDefined();
+    expect(call[1].name).toBe(name);
+    expect(call[1].unique).toBeUndefined();
+    expect(call[1].partialFilterExpression).toBeUndefined();
+  });
+
+  // Per-index catches (#1027's shape): a failed barcode build -- the E11000
+  // case above -- must not cost the lookup builds after it.
+  it('still builds both lookup indexes when the barcode build fails', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const collection = makeCollection(async (keys) => {
+      if (keys.barcode) throw new Error('E11000 duplicate key error');
+      return 'ok';
+    });
+
+    await ensureSampleIndexes(collection);
+
+    const built = collection.createIndex.mock.calls.map(([k]) => Object.keys(k)[0]);
+    expect(built).toEqual(expect.arrayContaining(['specimenId', 'participantId']));
+  });
+
+  // A lookup build failing costs a query plan, never data integrity, so its
+  // message must not borrow the unique index's duplicates wording.
+  it('reports a lookup build failure as a performance loss, not as duplicates', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const collection = makeCollection(async (keys) => {
+      if (keys.specimenId) throw new Error('boom');
+      return 'ok';
+    });
+
+    await ensureSampleIndexes(collection);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('samples_specimenid_idx_v1');
+    expect(warn.mock.calls[0][0]).toContain('desempenho');
+    expect(warn.mock.calls[0][0]).not.toContain('duplicados');
+  });
+
+  // #1164: the superseded v1 carries a different partial filter, so it is a
+  // different index and would otherwise linger beside v2. Built first, then
+  // dropped, so the constraint never has a gap.
+  it('drops the superseded samples_barcode_unique_v1 only AFTER building v2', async () => {
+    const collection = makeCollection();
+    collection.dropIndex = vi.fn(async () => {});
+
+    await ensureSampleIndexes(collection);
+
+    expect(collection.dropIndex).toHaveBeenCalledWith('samples_barcode_unique_v1');
+    const buildV2 = collection.createIndex.mock.calls.findIndex(([, o]) => o.name === 'samples_barcode_unique_v2');
+    expect(collection.createIndex.mock.invocationCallOrder[buildV2])
+      .toBeLessThan(collection.dropIndex.mock.invocationCallOrder[0]);
+  });
+
+  // The drop is conditional: if v2 cannot be built (an E11000 over existing
+  // duplicates, or anything transient), dropping v1 anyway would leave no
+  // constraint at all.
+  it('keeps samples_barcode_unique_v1 when building v2 fails', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const collection = makeCollection(async (keys) => {
+      if (keys.barcode) throw new Error('boom');
+      return 'ok';
+    });
+    collection.dropIndex = vi.fn(async () => {});
+
+    await ensureSampleIndexes(collection);
+
+    expect(collection.dropIndex).not.toHaveBeenCalled();
   });
 
   it('is a no-op for a collection handle that cannot create indexes', async () => {
@@ -90,7 +183,7 @@ describe('#936 collectionResolver wiring', () => {
     vi.restoreAllMocks();
   });
 
-  it('ensures the samples indexes on first resolution, and only once per process', () => {
+  it('ensures the samples indexes on first resolution, and only once per process', async () => {
     const { getCollection } = freshResolver();
     const collection = makeCollection();
     const db = { collection: vi.fn(() => collection) };
@@ -98,8 +191,11 @@ describe('#936 collectionResolver wiring', () => {
     getCollection(db, 'samples');
     getCollection(db, 'samples');
     getCollection(db, 'samples');
+    // The resolver fires the helper without awaiting it; let its sequential
+    // builds settle before counting them.
+    await new Promise((resolve) => setImmediate(resolve));
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
+    expect(collection.createIndex).toHaveBeenCalledTimes(3);
   });
 
   // The resolver's own header explains why only sampleMovements returns a

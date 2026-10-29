@@ -31,7 +31,7 @@ class LegalHoldController {
       return res.status(201).json({ success: true, message: 'Bloqueio legal aplicado com sucesso', data: hold });
     } catch (error) {
       logger.error('Erro ao aplicar bloqueio legal:', error.message);
-      return res.status(400).json({ success: false, error: 'Erro ao aplicar bloqueio legal', message: error.message });
+      return res.status(error.statusCode === 422 ? 422 : 400).json({ success: false, error: 'Erro ao aplicar bloqueio legal', message: error.message, details: error.details });
     }
   }
 

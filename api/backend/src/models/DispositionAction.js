@@ -18,6 +18,18 @@ const { randomUUID } = require('crypto');
  */
 const DISPOSITION_ACTIONS = ['transfer', 'return', 'destroy', 'anonymize', 'preserve'];
 
+// #1315 (RF026 AC4/AC5, V2E-0454..0457): a disposition is recorded
+// `planned`, authorized to `approved` (authorizationId), and `executed`
+// only with its executor, instant (executedAt) and evidence (evidenceIds).
+// `blocked` is an execution a legal hold refused; `cancelled` ends it.
+// dispositionDateTime (ELM-0414) is the execution instant, null before.
+const ACTION_STATUSES = ['planned', 'approved', 'executed', 'cancelled', 'blocked'];
+const TRANSITIONS = {
+  approve: ['planned', 'blocked'],
+  execute: ['approved'],
+  cancel: ['planned', 'approved', 'blocked'],
+};
+
 class DispositionActionModel {
   static validate(data = {}) {
     const errors = [];
@@ -65,7 +77,14 @@ class DispositionActionModel {
       dispositionAction: data.dispositionAction,
       dispositionMethod: data.dispositionMethod || null,
       performedBy: data.performedBy,
-      dispositionDateTime: new Date(),
+      actionStatus: 'planned',
+      authorizationId: null,
+      authorizedBy: null,
+      authorizedAt: null,
+      evidenceIds: [],
+      executedBy: null,
+      executedAt: null,
+      dispositionDateTime: null,
       // AC#5: no real document-generation/object-storage capability exists
       // in this repo to build a real PDF/certificate against honestly (see
       // #666-style "don't fabricate infrastructure" discipline) -- the
@@ -81,3 +100,5 @@ class DispositionActionModel {
 
 module.exports = DispositionActionModel;
 module.exports.DISPOSITION_ACTIONS = DISPOSITION_ACTIONS;
+module.exports.ACTION_STATUSES = ACTION_STATUSES;
+module.exports.TRANSITIONS = TRANSITIONS;

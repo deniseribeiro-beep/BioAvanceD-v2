@@ -44,7 +44,7 @@ describe('equipment-sensor-quarantine.service', () => {
   describe('isQuarantineTriggerStatus', () => {
     it('recognizes known trigger statuses case-insensitively and trimmed', () => {
       expect(service.isQuarantineTriggerStatus('OFFLINE')).toBe(true);
-      expect(service.isQuarantineTriggerStatus('  Manutenção ')).toBe(true);
+      expect(service.isQuarantineTriggerStatus('repair')).toBe(true);
       expect(service.isQuarantineTriggerStatus('awaiting repair')).toBe(true);
     });
 
@@ -52,6 +52,21 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(service.isQuarantineTriggerStatus('operational')).toBe(false);
       expect(service.isQuarantineTriggerStatus(undefined)).toBe(false);
       expect(service.isQuarantineTriggerStatus(null)).toBe(false);
+    });
+
+    // #883: routine maintenance/inactive states are not quarantine triggers
+    // -- only failure states (offline/repair) are.
+    it('does not treat routine Maintenance/Inactive states as triggers', () => {
+      expect(service.isQuarantineTriggerStatus('Maintenance')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('maintenance')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('Inactive')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('inativo')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('  Manutenção ')).toBe(false);
+    });
+
+    it('still treats failure states as triggers', () => {
+      expect(service.isQuarantineTriggerStatus('offline')).toBe(true);
+      expect(service.isQuarantineTriggerStatus('repair')).toBe(true);
     });
   });
 
@@ -106,10 +121,11 @@ describe('equipment-sensor-quarantine.service', () => {
       const samplesCursor = { toArray: vi.fn(async () => [sample]) };
       const samplesCollection = {
         find: vi.fn(() => samplesCursor),
-        updateOne: vi.fn(async () => ({ matchedCount: 1 }))
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 }))
       };
       const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M1' })) };
       const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA1' })) };
+      const decisionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'D1' })) };
 
       collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
         if (key === 'samples') return samplesCollection;
@@ -122,6 +138,8 @@ describe('equipment-sensor-quarantine.service', () => {
         collection: vi.fn((name) => {
           if (name === 'storageContainers') return storageContainersCollection;
           if (name === 'storageBoxes') return storageBoxesCollection;
+          // RF006 AC7 (#1315): the decision service resolves its own collection.
+          if (name === 'operationalStateDecisions') return decisionsCollection;
           throw new Error(`unexpected collection ${name}`);
         })
       };
@@ -173,18 +191,99 @@ describe('equipment-sensor-quarantine.service', () => {
         }),
         undefined
       );
+      expect(decisionsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'S1', newStatus: 'quarantined', rulesApplied: ['sensor_equipment_quarantine'], reasonCodes: ['equipment'] }),
+        undefined
+      );
 
-      expect(SampleMovementModel.generateMovementID).toHaveBeenCalledWith(db);
+      // #1369: without a session the counter is bumped with no session, as
+      // before; the model sends the same options for an undefined one.
+      expect(SampleMovementModel.generateMovementID).toHaveBeenCalledTimes(1);
+      const [counterDb, counterSession] = SampleMovementModel.generateMovementID.mock.calls[0];
+      expect(counterDb).toBe(db);
+      expect(counterSession).toBeUndefined();
       expect(sampleMovementLedgerModule.appendMovementWithHashChain).toHaveBeenCalledWith(
         movementsCollection,
         expect.objectContaining({
-          sampleID: 'S1',
+          specimenId: 'S1',
           type: 'adjust',
           purpose: 'sensor_equipment_quarantine',
           quantity: 5
         }),
         {}
       );
+    });
+
+    // #883: `quarantined` reflects whether the update actually changed the
+    // document, not just that a matching sample was found.
+    it('records nothing for a sample whose update reports modifiedCount 0', async () => {
+      const freezerId = 'FRZ-2';
+      const shelfId = 'SHF-2';
+      const rackId = 'RCK-2';
+      const boxId = 'BOX-2';
+
+      const storageContainersCollection = {
+        find: vi.fn((filter) => {
+          if (filter.containerType === 'FREEZER') {
+            return { toArray: vi.fn(async () => [{ _id: freezerId, containerID: 43 }]) };
+          }
+          if (filter.containerType === 'SHELF') {
+            return { toArray: vi.fn(async () => (filter.parent_id === freezerId ? [{ _id: shelfId }] : [])) };
+          }
+          if (filter.containerType === 'RACK') {
+            return { toArray: vi.fn(async () => (filter.parent_id.$in.includes(shelfId) ? [{ _id: rackId }] : [])) };
+          }
+          if (filter.containerType === 'DRAWER') {
+            return { toArray: vi.fn(async () => []) };
+          }
+          return { toArray: vi.fn(async () => []) };
+        })
+      };
+      const storageBoxesCollection = {
+        find: vi.fn((filter) => ({
+          toArray: vi.fn(async () => (filter.parent_id.$in.includes(rackId) ? [{ _id: boxId }] : []))
+        }))
+      };
+
+      const sample = {
+        _id: 'S2',
+        barcode: 'BC-2',
+        currentQuantity: 5,
+        unit: 'mL',
+        storageLocation: { boxId, position: 'A1' }
+      };
+      const samplesCursor = { toArray: vi.fn(async () => [sample]) };
+      const samplesCollection = {
+        find: vi.fn(() => samplesCursor),
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 0 }))
+      };
+      const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M3' })) };
+      const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA3' })) };
+
+      collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'sampleMovements') return movementsCollection;
+        if (key === 'quarantineActions') return quarantineActionsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'storageContainers') return storageContainersCollection;
+          if (name === 'storageBoxes') return storageBoxesCollection;
+          throw new Error(`unexpected collection ${name}`);
+        })
+      };
+
+      const result = await service.quarantineByEquipmentStatus(db, { equipmentID: 43 }, 'offline');
+
+      expect(result.matched).toBe(1);
+      expect(result.quarantined).toBe(0);
+      // #883: a no-op update (a concurrent writer already quarantined it)
+      // records no second QuarantineAction and no second ledger movement.
+      expect(result.movements).toBe(0);
+      expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+      expect(movementsCollection.insertOne).not.toHaveBeenCalled();
     });
 
     it('resolves equipment identifiers from the bare `id` field when `_id`/`equipmentID` are absent', async () => {
@@ -215,7 +314,7 @@ describe('equipment-sensor-quarantine.service', () => {
     it('returns zero-matched result when equipment has no resolvable identifiers', async () => {
       const db = { collection: vi.fn() };
 
-      const result = await service.quarantineByEquipmentStatus(db, {}, 'inactive');
+      const result = await service.quarantineByEquipmentStatus(db, {}, 'offline');
 
       expect(result).toEqual({
         triggered: true,
@@ -268,10 +367,11 @@ describe('equipment-sensor-quarantine.service', () => {
       const samplesCursor = { toArray: vi.fn(async () => [sample]) };
       const samplesCollection = {
         find: vi.fn(() => samplesCursor),
-        updateOne: vi.fn(async () => ({ matchedCount: 1 }))
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 }))
       };
       const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M2' })) };
       const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA2' })) };
+      const decisionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'D2' })) };
 
       collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
         if (key === 'samples') return samplesCollection;
@@ -284,6 +384,8 @@ describe('equipment-sensor-quarantine.service', () => {
         collection: vi.fn((name) => {
           if (name === 'storageContainers') return storageContainersCollection;
           if (name === 'storageBoxes') return storageBoxesCollection;
+          // RF006 AC7 (#1315): the decision service resolves its own collection.
+          if (name === 'operationalStateDecisions') return decisionsCollection;
           throw new Error(`unexpected collection ${name}`);
         })
       };
@@ -327,6 +429,111 @@ describe('equipment-sensor-quarantine.service', () => {
         boxIds: []
       });
       expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
+    });
+  });
+
+  // RF026 AC7: closed is final. A bulk quarantine never selects a closed
+  // specimen and, should one still reach it, moves it nowhere and records no
+  // OperationalStateDecision for it; an open specimen beside it is still
+  // quarantined.
+  describe('a closed specimen', () => {
+    it('is excluded from the quarantine query and is neither moved nor given a decision, while an open one is quarantined', async () => {
+      const closedSample = { _id: 'S-CLOSED', specimenId: 'SP-CLOSED', specimenStatus: 'closed', quantity: 0 };
+      const openSample = { _id: 'S-OPEN', specimenId: 'SP-OPEN', specimenStatus: 'available', quantity: 2 };
+      const samplesCollection = {
+        // Returns both, as a read racing a close could: the loop must still skip it.
+        find: vi.fn(() => ({ toArray: vi.fn(async () => [closedSample, openSample]) })),
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 }))
+      };
+      const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M-NC' })) };
+      const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA-NC' })) };
+      const decisionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'D-NC' })) };
+
+      collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'sampleMovements') return movementsCollection;
+        if (key === 'quarantineActions') return quarantineActionsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'operationalStateDecisions') return decisionsCollection;
+          throw new Error(`unexpected collection ${name}`);
+        })
+      };
+
+      const result = await service.quarantineByNonconformance(db, {
+        nonconformanceId: 'NC-1',
+        nonconformanceType: 'process',
+        affectedEntityIds: ['SP-CLOSED', 'SP-OPEN']
+      });
+
+      const query = samplesCollection.find.mock.calls[0][0];
+      expect(query.$and).toContainEqual({ specimenStatus: { $nin: expect.arrayContaining(['closed', 'destroyed', 'disposed']) } });
+
+      expect(result.quarantined).toBe(1);
+      expect(samplesCollection.updateOne).toHaveBeenCalledTimes(1);
+      expect(samplesCollection.updateOne).toHaveBeenCalledWith(
+        { _id: 'S-OPEN' },
+        { $set: expect.objectContaining({ specimenStatus: 'quarantined' }) },
+        undefined
+      );
+      expect(decisionsCollection.insertOne).toHaveBeenCalledTimes(1);
+      expect(decisionsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'SP-OPEN', newStatus: 'quarantined' }),
+        undefined
+      );
+      expect(decisionsCollection.insertOne).not.toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'SP-CLOSED' }),
+        expect.anything()
+      );
+    });
+  });
+
+  // #1369: the automatic quarantine runs inside its caller's transaction when
+  // given a session; its movement id is then drawn in that session, beside
+  // the in-session append, so the counter bump does not write-conflict.
+  describe('inside a session', () => {
+    it("takes the movement id and makes every write in the session it is given", async () => {
+      const session = { id: 'sess-1369' };
+      const sample = { _id: 'S-SESS', specimenId: 'SP-SESS', specimenStatus: 'available', quantity: 3 };
+      const samplesCollection = {
+        find: vi.fn(() => ({ toArray: vi.fn(async () => [sample]) })),
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 }))
+      };
+      const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M-SESS' })) };
+      const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA-SESS' })) };
+      const decisionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'D-SESS' })) };
+
+      collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'sampleMovements') return movementsCollection;
+        if (key === 'quarantineActions') return quarantineActionsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'operationalStateDecisions') return decisionsCollection;
+          throw new Error(`unexpected collection ${name}`);
+        })
+      };
+
+      const result = await service.quarantineByNonconformance(db, {
+        nonconformanceId: 'NC-1369',
+        nonconformanceType: 'process',
+        affectedEntityIds: ['SP-SESS']
+      }, { session });
+
+      expect(result.movements).toBe(1);
+      expect(SampleMovementModel.generateMovementID.mock.calls).toStrictEqual([[db, session]]);
+      expect(sampleMovementLedgerModule.appendMovementWithHashChain).toHaveBeenCalledWith(
+        movementsCollection,
+        expect.objectContaining({ specimenId: 'SP-SESS', movementID: 'MOV-1' }),
+        { session }
+      );
+      expect(samplesCollection.updateOne.mock.calls[0][2]).toStrictEqual({ session });
+      expect(quarantineActionsCollection.insertOne.mock.calls[0][1]).toStrictEqual({ session });
+      expect(decisionsCollection.insertOne.mock.calls[0][1]).toStrictEqual({ session });
     });
   });
 });

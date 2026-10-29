@@ -143,6 +143,18 @@ const authenticate = async (req, res, next) => {
         const { ObjectId } = require('mongodb');
         if (decoded.userID && ObjectId.isValid(decoded.userID)) {
           const currentUser = await db.collection('users').findOne({ _id: new ObjectId(decoded.userID) });
+          // #1306 (RF001 AC4, RNF021 C2): an inactivated, suspended or blocked
+          // account is refused here too, not only at login. Inactivation also
+          // revokes the sessions; this covers a session the revoke missed.
+          const UserModel = require('../../models/User');
+          if (currentUser && UserModel.normalizeStatus(UserModel.accountStatusOf(currentUser)) !== 'active') {
+            return res.status(401).json({
+              success: false,
+              error: 'Conta inativa',
+              message: 'Esta conta não está ativa. Contate um administrador.',
+              accountInactive: true
+            });
+          }
           if (currentUser?.roleValidUntil && new Date(currentUser.roleValidUntil) <= new Date()) {
             return res.status(403).json({
               success: false,

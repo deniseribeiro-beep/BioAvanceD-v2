@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
-const { upload, UPLOAD_ROOT, UPLOADS_BASE } = require('../config/uploadConfig');
+const { upload, UPLOAD_ROOT, UPLOADS_BASE, verifyUploadedFileSignature } = require('../config/uploadConfig');
 const analysisValidationService = require('../services/analysisValidation.service');
 
 const getRelativePath = (absolutePath) => {
@@ -10,8 +10,18 @@ const getRelativePath = (absolutePath) => {
 };
 
 class UploadController {
+  // #1321 (RF007 AC1, RNF029 C1): a multer error still goes to next(err);
+  // a written file must then match its extension's format.
   uploadMiddleware() {
-    return upload.single('file');
+    const handler = upload.single('file');
+    return (req, res, next) => {
+      handler(req, res, (err) => {
+        if (err) {
+          return next(err);
+        }
+        return verifyUploadedFileSignature(req, res, next);
+      });
+    };
   }
 
   async uploadAnalysisFile(req, res) {

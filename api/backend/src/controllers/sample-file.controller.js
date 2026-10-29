@@ -4,14 +4,33 @@ const fs = require('fs');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { findSampleByAnyId } = require('../utils/sampleLookup');
 const SampleFileModel = require('../models/SampleFile');
 const { getUserAnonId } = require('../utils/userAnonymization');
-const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+const { isSampleInOrganizationScope } = require('../services/sampleTenancy.service');
 // #643: extracted to a shared module so the Assay/Dataset scientific-file
 // linkage controllers reuse the exact same crypto path instead of a second
 // implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
-const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
+const { encryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
+const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = require('../utils/uploadFormatPolicy');
+const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
+const retentionPolicyService = require('../services/retentionPolicy.service');
+const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
+const objectStorage = require('../infrastructure/objectStorage');
+const malwareScan = require('../infrastructure/malwareScan');
+const { issueFileAccessToken } = require('../services/dataFileAccessToken.service');
+
+// RNF029 (#938, #1321): once the ciphertext is in the object store, the
+// plaintext multer staged is removed. A failed removal is logged, never
+// thrown, since the object and its record are already sound.
+function removeStagingFile(stagingPath) {
+  try {
+    fs.unlinkSync(stagingPath);
+  } catch (unlinkError) {
+    logger.error('Erro ao remover arquivo temporário:', unlinkError.message);
+  }
+}
 
 /**
  * Controller de Upload de Arquivos de Análise de Amostras
@@ -64,10 +83,13 @@ class SampleFileController {
       const allowedExtensions = ['.raw', '.zip', '.csv', '.xls', '.xlsx', '.pdf', '.txt'];
       const ext = path.extname(file.originalname).toLowerCase();
 
-      if (allowedExtensions.includes(ext)) {
-        cb(null, true);
-      } else {
+      if (!allowedExtensions.includes(ext)) {
         cb(new Error(`Formato de arquivo inválido. Apenas ${allowedExtensions.join(', ')} são permitidos.`), false);
+      } else if (!isMimeAllowedForExtension(ext, file.mimetype)) {
+        // #1321 (RF007 AC1, RNF029 C1): the MIME must be allowed for the extension.
+        cb(new Error(`Tipo MIME ${file.mimetype} não permitido para a extensão ${ext}`), false);
+      } else {
+        cb(null, true);
       }
     };
 
@@ -96,6 +118,25 @@ class SampleFileController {
             success: false,
             error: err.message || (req.t ? req.t('sampleFiles.uploadError') : 'Erro ao processar upload do arquivo')
           });
+        }
+        // #1321 (RF007 AC1, RNF029 C1): the written file's leading bytes must
+        // match its extension's format. The upload is not yet recorded by
+        // any row, so removing it destroys no evidence.
+        if (req.file) {
+          const ext = path.extname(req.file.originalname || '').toLowerCase();
+          if (!checkFileSignature(req.file.path, ext).ok) {
+            if (fs.existsSync(req.file.path)) {
+              try {
+                fs.unlinkSync(req.file.path);
+              } catch (unlinkError) {
+                logger.error('Erro ao remover arquivo após validação:', unlinkError.message);
+              }
+            }
+            return res.status(400).json({
+              success: false,
+              error: `Conteúdo do arquivo não corresponde ao formato ${ext}`
+            });
+          }
         }
         next();
       });
@@ -129,14 +170,9 @@ class SampleFileController {
 
       // Valida se a amostra existe
       const samplesCollection = db.collection('samples');
-      let sample;
-      try {
-        // Tenta buscar por ObjectId primeiro
-        sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
-      } catch (idError) {
-        // Se não for ObjectId válido, tenta buscar por specimenId numérico
-        sample = await samplesCollection.findOne({ specimenId: Number(specimenId) });
-      }
+      // #1216: an _id or the canonical specimenId. The old fallback matched
+      // specimenId as a Number, and the field is a string, so it never hit.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
 
       if (!sample) {
         // Remove arquivo se amostra não existe
@@ -156,7 +192,7 @@ class SampleFileController {
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
       // req.organizationScope is only absent when requireOrganizationScope
       // wasn't run ahead of this handler (never true in production).
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         if (fs.existsSync(file.path)) {
           try {
             fs.unlinkSync(file.path);
@@ -202,6 +238,30 @@ class SampleFileController {
         });
       }
 
+      // RF007 AC5, V2E-0476 (#1321): the specimen, then any consent,
+      // approval or study the upload names. Refused before the object is
+      // written, so a bad link leaves no orphan object, and before any row,
+      // so removing the staging file destroys no evidence.
+      const { refs: linkedEntityRefs, errors: linkErrors } = await resolveLinkedEntityRefs(
+        db,
+        req.body || {},
+        { entityType: 'Specimen', entityId: sample._id.toString() }
+      );
+      if (linkErrors.length > 0) {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(422).json({
+          success: false,
+          error: 'Vínculo inválido',
+          details: linkErrors
+        });
+      }
+
+      // RF007 AC3, V2E-0475 (#1321): the server records the active DataFile
+      // policy; a request field of that name is never read.
+      const retentionPolicyId = await retentionPolicyService.getActivePolicyId(db, 'dataFile');
+
       // RF007 AC#3/AC#4/AC#5 - checksum do conteúdo original, cifra em
       // repouso (RNF029) e URI estável de Object Storage. O conteúdo em
       // disco é substituído pelo ciphertext; o checksum é sempre calculado
@@ -217,12 +277,21 @@ class SampleFileController {
       // Same shape as #734's backup guard.
       assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
+      // RNF029 C4 (#1321): the plaintext passes the malware scanner before
+      // it is encrypted or stored; a refusal throws to the catch below,
+      // which removes the staging file and answers its statusCode.
+      const malwareScanVerdict = await malwareScan.scanStagedFile(malwareScan.getFileScanner(), plaintext, { fileName: file.originalname });
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
-      if (encryption) {
-        fs.writeFileSync(file.path, encryption.ciphertext);
-      }
-      const storageUri = `objstore://samples/${sample._id.toString()}/files/${path.basename(file.path)}`;
+      // RF007 AC2 / RNF016 C4 (#1321): the binary goes to the object store,
+      // write-once and content-addressed; MongoDB keeps its metadata.
+      const stored = await objectStorage.getFileObjectStore().putObject({
+        area: 'samples',
+        ownerKey: sample._id.toString(),
+        body: encryption ? encryption.ciphertext : plaintext
+      });
+      removeStagingFile(file.path);
+      const storageUri = stored.uri;
 
       // Cria registro na collection sample_files
       const sampleFilesCollection = db.collection('sample_files');
@@ -233,20 +302,26 @@ class SampleFileController {
         fileType: fileType,
         fileRole: fileRole || 'raw',
         fileFormat: SampleFileModel.getFileFormatFromType(fileType),
+        mimeType: canonicalMimeType(path.extname(file.originalname).toLowerCase()),
         fileSize: file.size,
-        storagePath: file.path,
+        storagePath: stored.path,
         storageUri,
+        storageObjectVersion: stored.version,
         checksum,
         checksumAlgorithm: 'sha256',
         encryptionAlgorithm: encryption ? encryption.algorithm : null,
         encryptionKeyId: encryption ? encryption.keyId : null,
         encryptionIv: encryption ? encryption.iv : null,
         encryptionTag: encryption ? encryption.tag : null,
+        malwareScan: malwareScanVerdict,
         // Restrição de acesso vigente hoje (rbac.js/roles.min.json): leitura
         // exige apenas autenticação, upload/exclusão exigem
         // uploadSampleFiles/deleteSampleFiles (Admin/Coordenador).
         accessPolicy: { view: 'authenticated', manage: ['admin', 'coordinator'] },
         uploaderAnonId: uploaderAnonId,
+        ownerId: uploaderAnonId,
+        retentionPolicyId,
+        linkedEntityRefs,
         uploadDate: new Date(),
         createdAt: new Date(),
         updatedAt: new Date()
@@ -285,7 +360,9 @@ class SampleFileController {
             fileType: fileType,
             specimenId: sample._id.toString(),
             checksum,
-            checksumAlgorithm: 'sha256'
+            checksumAlgorithm: 'sha256',
+            linkedEntityRefs: sampleFile.linkedEntityRefs,
+            retentionPolicyId: sampleFile.retentionPolicyId
             // Não inclui dados sensíveis
           },
           req: req,
@@ -304,10 +381,15 @@ class SampleFileController {
           fileType: sampleFile.fileType,
           fileRole: sampleFile.fileRole,
           fileFormat: sampleFile.fileFormat,
+          mimeType: sampleFile.mimeType,
           fileSize: sampleFile.fileSize,
           uploaderAnonId: sampleFile.uploaderAnonId,
+          ownerId: sampleFile.ownerId,
+          retentionPolicyId: sampleFile.retentionPolicyId,
+          linkedEntityRefs: sampleFile.linkedEntityRefs,
           uploadDate: sampleFile.uploadDate,
           uri: sampleFile.storageUri,
+          storageObjectVersion: sampleFile.storageObjectVersion,
           checksum: sampleFile.checksum,
           checksumAlgorithm: sampleFile.checksumAlgorithm,
           encryption: {
@@ -361,12 +443,9 @@ class SampleFileController {
 
       // Valida se a amostra existe
       const samplesCollection = db.collection('samples');
-      let sample;
-      try {
-        sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
-      } catch (idError) {
-        sample = await samplesCollection.findOne({ specimenId: Number(specimenId) });
-      }
+      // #1216: an _id or the canonical specimenId. The old fallback matched
+      // specimenId as a Number, and the field is a string, so it never hit.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
 
       if (!sample) {
         return res.status(404).json({
@@ -376,7 +455,7 @@ class SampleFileController {
       }
 
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -387,7 +466,7 @@ class SampleFileController {
       // Busca arquivos da amostra
       const sampleFilesCollection = db.collection('sample_files');
       const specimenIdString = sample._id.toString();
-      const files = await sampleFilesCollection.find({ specimenId: specimenIdString }).toArray();
+      const files = await sampleFilesCollection.find({ specimenId: specimenIdString, deletedAt: null }).toArray();
 
       // Remove caminhos sensíveis da resposta (LGPD)
       const sanitizedFiles = files.map(file => ({
@@ -397,6 +476,7 @@ class SampleFileController {
         fileType: file.fileType,
         fileRole: file.fileRole,
         fileFormat: file.fileFormat,
+        mimeType: file.mimeType,
         fileSize: file.fileSize,
         uri: file.storageUri,
         checksum: file.checksum,
@@ -407,6 +487,9 @@ class SampleFileController {
         },
         accessPolicy: file.accessPolicy,
         uploaderAnonId: file.uploaderAnonId, // Apenas ID anonimizado
+        ownerId: file.ownerId,
+        retentionPolicyId: file.retentionPolicyId,
+        linkedEntityRefs: file.linkedEntityRefs,
         uploadDate: file.uploadDate,
         createdAt: file.createdAt
         // storagePath não é retornado por segurança
@@ -474,7 +557,7 @@ class SampleFileController {
         });
       }
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
@@ -482,9 +565,18 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId) 
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      // #1216: the URL may name the specimen by its specimenId, while a file
+      // is keyed by the sample's _id string, so resolve the sample first and
+      // compare against that. The same document serves the scope check below.
+      let resolvedSample = null;
+      try {
+        resolvedSample = await findSampleByAnyId(db.collection('samples'), specimenId);
+      } catch (_) {}
+      const specimenIdString = resolvedSample
+        ? resolvedSample._id.toString()
+        : typeof specimenId === 'string' && ObjectId.isValid(specimenId)
+          ? new ObjectId(specimenId).toString()
+          : String(specimenId);
       
       if (fileRecord.specimenId !== specimenIdString) {
         return res.status(403).json({
@@ -499,12 +591,8 @@ class SampleFileController {
       // the sample no longer exists) is treated as "can't determine
       // scope" and doesn't block the download on its own.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
-        let sampleForScope = null;
-        try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
-        } catch (_) {}
-        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+        const sampleForScope = resolvedSample;
+        if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
           return res.status(403).json({
             success: false,
             error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -513,14 +601,29 @@ class SampleFileController {
         }
       }
 
-      // Verifica se o arquivo existe no sistema de arquivos
-      if (!fs.existsSync(fileRecord.storagePath)) {
+      // Verifica se o arquivo existe no sistema de arquivos. RF007 AC2
+      // (#1321): a row held only in the object store has no local path;
+      // /api/file-access answers its absence with 404.
+      const storeOnly = (fileRecord.storagePath === null || fileRecord.storagePath === undefined)
+        && typeof fileRecord.storageObjectVersion === 'string' && fileRecord.storageObjectVersion.length > 0
+        && typeof fileRecord.storageUri === 'string' && fileRecord.storageUri.length > 0;
+      if (!storeOnly && !fs.existsSync(fileRecord.storagePath)) {
         logger.error(`Arquivo não encontrado no sistema de arquivos: ${fileRecord.storagePath}`);
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFoundOnDisk') : 'Arquivo não encontrado no sistema de arquivos'
         });
       }
+
+      // RNF029 C5 (#1321): the checks above passed, so the caller gets a
+      // short-lived file access token for this one file and is redirected to
+      // the URL that serves it. The token rides in the query string, which
+      // the audit trail records only as present.
+      const { token, tokenId, expiresAt } = issueFileAccessToken({
+        collection: 'sample_files',
+        fileRecord,
+        userId: req.user && (req.user.userID || (req.user._id && String(req.user._id)))
+      });
 
       // Registra log de download (LGPD)
       if (req.user) {
@@ -537,7 +640,9 @@ class SampleFileController {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
             fileSize: fileRecord.fileSize,
-            specimenId: specimenIdString
+            specimenId: specimenIdString,
+            accessTokenId: tokenId,
+            accessTokenExpiresAt: expiresAt.toISOString()
             // Não inclui dados sensíveis
           },
           req: req,
@@ -545,27 +650,8 @@ class SampleFileController {
         });
       }
 
-      // RNF029 - o conteúdo em disco é o ciphertext cifrado no upload;
-      // decifra antes de servir para que o download reproduza o
-      // plaintext original (round-trip prova a integridade do checksum).
-      let outputBuffer;
-      if (fileRecord.encryptionAlgorithm) {
-        const ciphertext = fs.readFileSync(fileRecord.storagePath);
-        try {
-          outputBuffer = decryptFileBuffer(ciphertext, fileRecord);
-        } catch (decryptError) {
-          logger.error('Erro ao decifrar arquivo:', decryptError.message);
-          return res.status(500).json({
-            success: false,
-            error: req.t ? req.t('sampleFiles.downloadError') : 'Erro ao fazer download do arquivo'
-          });
-        }
-      } else {
-        outputBuffer = fs.readFileSync(fileRecord.storagePath);
-      }
-
-      res.setHeader('Content-Disposition', `attachment; filename="${fileRecord.fileName}"`);
-      return res.send(outputBuffer);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.redirect(302, '/api/file-access?token=' + token);
     } catch (error) {
       logger.error('Erro ao fazer download de arquivo:', error.message);
       return res.status(500).json({
@@ -605,7 +691,7 @@ class SampleFileController {
         });
       }
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
@@ -613,9 +699,18 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId) 
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      // #1216: the URL may name the specimen by its specimenId, while a file
+      // is keyed by the sample's _id string, so resolve the sample first and
+      // compare against that. The same document serves the scope check below.
+      let resolvedSample = null;
+      try {
+        resolvedSample = await findSampleByAnyId(db.collection('samples'), specimenId);
+      } catch (_) {}
+      const specimenIdString = resolvedSample
+        ? resolvedSample._id.toString()
+        : typeof specimenId === 'string' && ObjectId.isValid(specimenId)
+          ? new ObjectId(specimenId).toString()
+          : String(specimenId);
       
       if (fileRecord.specimenId !== specimenIdString) {
         return res.status(403).json({
@@ -629,12 +724,8 @@ class SampleFileController {
       // downloadFile's identical check for why the lookup is scoped to
       // just this check and tolerant of a failed/missing lookup.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
-        let sampleForScope = null;
-        try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
-        } catch (_) {}
-        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+        const sampleForScope = resolvedSample;
+        if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
           return res.status(403).json({
             success: false,
             error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -643,19 +734,23 @@ class SampleFileController {
         }
       }
 
-      // Remove arquivo físico do sistema de arquivos
-      if (fs.existsSync(fileRecord.storagePath)) {
-        try {
-          fs.unlinkSync(fileRecord.storagePath);
-          logger.info(`Arquivo removido do sistema de arquivos: ${fileRecord.storagePath}`);
-        } catch (unlinkError) {
-          logger.error('Erro ao remover arquivo físico:', unlinkError.message);
-          // Continua mesmo se houver erro ao remover arquivo físico
-        }
+      // RF007 AC6 (#1321): a delete is logical. The row is marked and the
+      // binary at storagePath is kept as evidence (RNF029 C3), never unlinked.
+      // INFERENCE, not a citation: the `deletedAt`/`deletedByAnonId` fields
+      // follow StorageContainer's `deletedAt` logical delete.
+      const deletedAt = new Date();
+      const deletedByAnonId = await getUserAnonId(req.user, db);
+      const result = await sampleFilesCollection.updateOne(
+        { _id: fileRecord._id, deletedAt: null },
+        { $set: { deletedAt, deletedByAnonId, updatedAt: deletedAt } }
+      );
+      if (!result || result.matchedCount === 0) {
+        // A concurrent delete marked the row first: no audit for this request.
+        return res.status(404).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
+        });
       }
-
-      // Remove registro do banco de dados
-      await sampleFilesCollection.deleteOne({ _id: new ObjectId(fileID) });
 
       // Registra log de exclusão (alta severidade - LGPD)
       if (req.user) {
@@ -667,12 +762,14 @@ class SampleFileController {
           resourceId: fileID,
           status: 'success',
           severity: 'critical', // Alta severidade para exclusão
-          message: `Arquivo excluído: ${fileRecord.fileName}`,
+          message: `Arquivo removido logicamente: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
             fileSize: fileRecord.fileSize,
-            specimenId: specimenIdString
+            specimenId: specimenIdString,
+            logicalDelete: true,
+            deletedAt: deletedAt.toISOString()
             // Não inclui dados sensíveis
           },
           req: req,
@@ -744,7 +841,7 @@ class SampleFileController {
         });
       }
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         cleanupUploadedFile();
         return res.status(404).json({
           success: false,
@@ -753,9 +850,18 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId)
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      // #1216: the URL may name the specimen by its specimenId, while a file
+      // is keyed by the sample's _id string, so resolve the sample first and
+      // compare against that. The same document serves the scope check below.
+      let resolvedSample = null;
+      try {
+        resolvedSample = await findSampleByAnyId(db.collection('samples'), specimenId);
+      } catch (_) {}
+      const specimenIdString = resolvedSample
+        ? resolvedSample._id.toString()
+        : typeof specimenId === 'string' && ObjectId.isValid(specimenId)
+          ? new ObjectId(specimenId).toString()
+          : String(specimenId);
 
       if (fileRecord.specimenId !== specimenIdString) {
         cleanupUploadedFile();
@@ -768,12 +874,8 @@ class SampleFileController {
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern —
       // checked before the mutation, same as deleteFile.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
-        let sampleForScope = null;
-        try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
-        } catch (_) {}
-        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+        const sampleForScope = resolvedSample;
+        if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
           cleanupUploadedFile();
           return res.status(403).json({
             success: false,
@@ -817,26 +919,48 @@ class SampleFileController {
       // Same shape as #734's backup guard.
       assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
+      // RNF029 C4 (#1321): the plaintext passes the malware scanner before
+      // it is encrypted or stored; a refusal throws to the catch below,
+      // which removes the staging file and answers its statusCode.
+      const malwareScanVerdict = await malwareScan.scanStagedFile(malwareScan.getFileScanner(), plaintext, { fileName: file.originalname });
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
-      if (encryption) {
-        fs.writeFileSync(file.path, encryption.ciphertext);
+      // RF007 AC2 / RNF016 C4 (#1321): the new binary is a new object; the
+      // previous object is never touched.
+      const body = encryption ? encryption.ciphertext : plaintext;
+      const stored = await objectStorage.getFileObjectStore().putObject({
+        area: 'samples',
+        ownerKey: specimenIdString,
+        body
+      });
+      if (fileRecord.storagePath && path.resolve(file.path) === path.resolve(fileRecord.storagePath)) {
+        // The staging path is the previous record's binary: it is kept as
+        // evidence, so it is overwritten with the ciphertext, not unlinked.
+        logger.warn('Arquivo temporário coincide com o arquivo anterior; mantido cifrado:', fileRecord._id.toString());
+        fs.writeFileSync(file.path, body);
+      } else {
+        removeStagingFile(file.path);
       }
-      const storageUri = `objstore://samples/${specimenIdString}/files/${path.basename(file.path)}`;
+      const storageUri = stored.uri;
 
       const updatedFields = {
         fileName: file.originalname,
         fileType,
         fileFormat: SampleFileModel.getFileFormatFromType(fileType),
+        // V2E-0471 (#1321): the new binary's type. ownerId and
+        // linkedEntityRefs belong to the DataFile, not its version.
+        mimeType: canonicalMimeType(path.extname(file.originalname).toLowerCase()),
         fileSize: file.size,
-        storagePath: file.path,
+        storagePath: stored.path,
         storageUri,
+        storageObjectVersion: stored.version,
         checksum,
         checksumAlgorithm: 'sha256',
         encryptionAlgorithm: encryption ? encryption.algorithm : null,
         encryptionKeyId: encryption ? encryption.keyId : null,
         encryptionIv: encryption ? encryption.iv : null,
         encryptionTag: encryption ? encryption.tag : null,
+        malwareScan: malwareScanVerdict,
         updatedAt: new Date()
       };
       if (fileRole !== undefined) {
@@ -857,19 +981,21 @@ class SampleFileController {
         });
       }
 
-      // Remove o arquivo físico anterior só depois que o novo já está
-      // validado e gravado em disco, para que uma falha na substituição
-      // nunca deixe zero cópias no sistema de arquivos.
-      const previousStoragePath = fileRecord.storagePath;
-      if (previousStoragePath && previousStoragePath !== file.path && fs.existsSync(previousStoragePath)) {
-        try {
-          fs.unlinkSync(previousStoragePath);
-        } catch (unlinkError) {
-          logger.error('Erro ao remover arquivo anterior após substituição:', unlinkError.message);
-        }
+      // RF007 AC4, RNF029 C3 (#1321): the previous binary is kept as
+      // evidence, never unlinked, and the replace writes a DataFileVersion.
+      const { version } = await recordReplacement(db, {
+        fileRecord,
+        storageUri,
+        checksum,
+        encryption,
+        changeReason: resolveChangeReason(req.body || {})
+      });
+      try {
+        await sampleFilesCollection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
+      } catch (updateError) {
+        await discardVersion(db, version);
+        throw updateError;
       }
-
-      await sampleFilesCollection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
 
       // RF007 AC#7 - substituição é auditada, ao lado de upload/acesso/
       // remoção lógica.
@@ -881,7 +1007,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileRecord._id.toString(),
           status: 'success',
-          severity: 'medium',
+          severity: 'warning',
           message: `Substituição de arquivo de análise: ${fileRecord.fileName} -> ${file.originalname}`,
           payload: {
             previousFileName: fileRecord.fileName,
@@ -891,7 +1017,9 @@ class SampleFileController {
             fileType,
             specimenId: specimenIdString,
             checksum,
-            checksumAlgorithm: 'sha256'
+            checksumAlgorithm: 'sha256',
+            dataFileVersionId: version.dataFileVersionId,
+            versionNumber: version.versionNumber
             // Não inclui dados sensíveis
           },
           req: req,
@@ -909,12 +1037,15 @@ class SampleFileController {
           fileType: updatedFields.fileType,
           fileRole: updatedFields.fileRole !== undefined ? updatedFields.fileRole : fileRecord.fileRole,
           fileFormat: updatedFields.fileFormat,
+          mimeType: updatedFields.mimeType,
           fileSize: updatedFields.fileSize,
           uploaderAnonId: fileRecord.uploaderAnonId,
           uploadDate: fileRecord.uploadDate,
           uri: updatedFields.storageUri,
+          storageObjectVersion: updatedFields.storageObjectVersion,
           checksum: updatedFields.checksum,
           checksumAlgorithm: updatedFields.checksumAlgorithm,
+          versionNumber: version.versionNumber,
           encryption: {
             encrypted: Boolean(updatedFields.encryptionAlgorithm),
             algorithm: updatedFields.encryptionAlgorithm
@@ -956,25 +1087,26 @@ class SampleFileController {
       const sampleFilesCollection = db.collection('sample_files');
       const fileRecord = await sampleFilesCollection.findOne({ _id: new ObjectId(fileID) });
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
         });
       }
 
+      // Busca amostra. #1216: resolved before the link check, because the URL
+      // may carry the specimenId while the file is keyed by the sample's _id.
+      const samplesCollection = db.collection('samples');
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+
       // Valida vinculação à amostra
-      const specimenIdString = String(specimenId);
+      const specimenIdString = sample ? sample._id.toString() : String(specimenId);
       if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
         });
       }
-
-      // Busca amostra
-      const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -984,7 +1116,7 @@ class SampleFileController {
       }
 
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -1009,7 +1141,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação HL7 v2.x do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,
@@ -1057,25 +1189,26 @@ class SampleFileController {
       const sampleFilesCollection = db.collection('sample_files');
       const fileRecord = await sampleFilesCollection.findOne({ _id: new ObjectId(fileID) });
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
         });
       }
 
+      // Busca amostra. #1216: resolved before the link check, because the URL
+      // may carry the specimenId while the file is keyed by the sample's _id.
+      const samplesCollection = db.collection('samples');
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+
       // Valida vinculação à amostra
-      const specimenIdString = String(specimenId);
+      const specimenIdString = sample ? sample._id.toString() : String(specimenId);
       if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
         });
       }
-
-      // Busca amostra
-      const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -1085,7 +1218,7 @@ class SampleFileController {
       }
 
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -1109,7 +1242,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação FHIR do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,
@@ -1157,25 +1290,26 @@ class SampleFileController {
       const sampleFilesCollection = db.collection('sample_files');
       const fileRecord = await sampleFilesCollection.findOne({ _id: new ObjectId(fileID) });
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
         });
       }
 
+      // Busca amostra. #1216: resolved before the link check, because the URL
+      // may carry the specimenId while the file is keyed by the sample's _id.
+      const samplesCollection = db.collection('samples');
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+
       // Valida vinculação à amostra
-      const specimenIdString = String(specimenId);
+      const specimenIdString = sample ? sample._id.toString() : String(specimenId);
       if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
         });
       }
-
-      // Busca amostra
-      const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -1185,7 +1319,7 @@ class SampleFileController {
       }
 
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -1209,7 +1343,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação CDA do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,

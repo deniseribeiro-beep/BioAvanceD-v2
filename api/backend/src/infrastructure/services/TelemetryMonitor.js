@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 const { getCollection } = require('../../utils/collectionResolver');
+const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../../utils/storageIndexes');
 const {
   connectInfluxDB,
   getInfluxQueryApi,
@@ -9,6 +10,9 @@ const {
 } = require('../database/influxdb/connection');
 const EnvironmentalExcursionModel = require('../../models/EnvironmentalExcursion');
 const { quarantineByColdChainIncident } = require('../../services/equipment-sensor-quarantine.service');
+const { currentDatastreamsBySensor, datastreamEquipmentIdsBySensor, policiesByProfileId, freezerContainerIdOf } = require('../../services/sensorDatastream.service');
+const { GraphProjectionService } = require('../../services/graphProjection.service');
+const { withTransactionWhereSupported } = require('../../utils/mongoTransaction');
 
 // #688: TemperaturePolicy.schema.js's minimumDuration is in MINUTES (see
 // that file's field comment), while criticalDurationHours below is in
@@ -17,21 +21,26 @@ const { quarantineByColdChainIncident } = require('../../services/equipment-sens
 const MINUTES_PER_HOUR = 60;
 
 /**
- * Monitor de Telemetria (InfluxDB -> Neo4j)
+ * Monitor de Telemetria (InfluxDB -> outbox -> Neo4j)
  *
  * Se a temperatura ficar acima do limite crítico (ex.: -80°C) por > N horas,
- * marca amostra raiz como COMPROMETIDA e propaga para descendentes no grafo.
+ * registra no outbox o comprometimento da amostra raiz, que a projeção
+ * propaga para os descendentes no grafo (#1312).
+ *
+ * RF009 AC1 (#1317): as leituras vêm das duas measurements do InfluxDB,
+ * `temperature` (campo `value`, POST /api/iot/telemetry) e
+ * `freezer_temperature` (campo `temperatureValue`, rota de temperatura, MQTT
+ * e fila IoT), com Celsius calculado no Flux para o filtro crítico.
  */
 class TelemetryMonitor {
   constructor(options = {}) {
     this.db = options.db;
-    this.getNeo4jDriver = options.getNeo4jDriver;
+    this.graphProjection = options.graphProjection || new GraphProjectionService();
     this.cronExpression = options.cronExpression || process.env.TELEMETRY_MONITOR_CRON || '*/5 * * * *';
     this.criticalTemp = Number(options.criticalTemp ?? process.env.TELEMETRY_CRITICAL_TEMP ?? -80);
     this.criticalDurationHours = Number(options.criticalDurationHours ?? process.env.TELEMETRY_CRITICAL_DURATION_HOURS ?? 2);
     this.lookbackHours = Number(options.lookbackHours ?? process.env.TELEMETRY_LOOKBACK_HOURS ?? Math.max(3, this.criticalDurationHours + 1));
     this.triggerCooldownMinutes = Number(options.triggerCooldownMinutes ?? process.env.TELEMETRY_TRIGGER_COOLDOWN_MINUTES ?? 30);
-    this.database = options.database || process.env.NEO4J_DATABASE || 'neo4j';
     // AC#4 "leituras ausentes": a sensor with no InfluxDB point in this
     // many minutes is treated as missing, distinct from criticalDurationHours
     // (which governs the sustained out-of-range case, not absence).
@@ -80,23 +89,15 @@ class TelemetryMonitor {
       logger.error('[ISO20387][TELEMETRY] Falha ao verificar leituras ausentes:', error.message || error);
     }
 
-    const neo4jDriver = this.getNeo4jDriver ? await this.getNeo4jDriver() : null;
-    if (!neo4jDriver) {
-      logger.warn('[ISO20387][TELEMETRY] Neo4j indisponível; ciclo ignorado');
-      return;
-    }
     const criticalFreezers = await this.findCriticalFreezers();
     if (criticalFreezers.length === 0) {
       return;
     }
     for (const critical of criticalFreezers) {
-      // Aqui você pode implementar a lógica de propagação para samples comprometidas
       await this.propagateCompromise({
-        neo4jDriver,
         rootSampleId: critical.rootSampleId,
         freezerKey: critical.freezerKey,
-        breachedSince: critical.breachedSince,
-        maxObservedTemp: critical.maxObservedTemp
+        breachedSince: critical.breachedSince
       });
     }
   }
@@ -121,6 +122,13 @@ class TelemetryMonitor {
   // findSensorsWithMissingReadings uses), which marks where the current
   // above-threshold streak actually began.
   //
+  // RF009 AC1 (#1317): both reading measurements are read, `temperature`
+  // (field `value`) and `freezer_temperature` (field `temperatureValue`).
+  // criticalTemp is Celsius, so the map() converts a `freezer_temperature`
+  // point by its `temperatureUnit` tag ('°F', 'K', else Celsius) into
+  // `_value` before the threshold filter; a `temperature` point has no unit
+  // tag and stays as it is. Everything below `_value` is therefore Celsius.
+  //
   // #688: the excursion threshold itself is per-sensor now -- each sensor's
   // bound TemperaturePolicy.minimumDuration (minutes) governs when present
   // and positive; criticalDurationHours (converted to minutes) is the
@@ -131,8 +139,8 @@ class TelemetryMonitor {
     const queryApi = getInfluxQueryApi();
     const fluxQuery = `from(bucket: \"${getInfluxConfig().bucket}\")
       |> range(start: -${this.lookbackHours}h)
-      |> filter(fn: (r) => r._measurement == \"temperature\")
-      |> filter(fn: (r) => r._field == \"value\")
+      |> filter(fn: (r) => (r._measurement == \"freezer_temperature\" and r._field == \"temperatureValue\") or (r._measurement == \"temperature\" and r._field == \"value\"))
+      |> map(fn: (r) => ({r with _value: if exists r.temperatureUnit and r.temperatureUnit == \"°F\" then (r._value - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == \"K\" then r._value - 273.15 else r._value}))
       |> filter(fn: (r) => r._value > ${this.criticalTemp})
       |> sort(columns: [\"_time\"])`;
     const rows = await queryApi.collectRows(fluxQuery);
@@ -202,6 +210,12 @@ class TelemetryMonitor {
   // -- this is what keeps the seeded `minimumDuration: null` default
   // behaving exactly as it did before #688.
   //
+  // #1392: the temperature datastream valid now is read first. A sensor
+  // whose datastream's thresholdProfileId names a policy takes that
+  // policy's minimumDuration; every other sensor (unbound, or a profile
+  // naming no policy) goes through sensorMetadata as before. The
+  // usable-value rule applies to both sources.
+  //
   // Guarded on `this.db` so it degrades to "every sensor gets the global
   // default" instead of throwing when findCriticalFreezers() is exercised
   // without a Mongo db wired up (production always has one by the time
@@ -217,8 +231,28 @@ class TelemetryMonitor {
       return durationMinutesBySensor;
     }
 
+    const usableMinutes = (minimumDuration) => (
+      typeof minimumDuration === 'number' && minimumDuration > 0 ? minimumDuration : defaultMinutes
+    );
+
+    const streams = await currentDatastreamsBySensor(this.db, sensorIds);
+    const streamPolicies = await policiesByProfileId(this.db, [...streams.values()].map((stream) => stream.thresholdProfileId));
+    const legacySensorIds = [];
+    for (const sensorId of sensorIds) {
+      const stream = streams.get(String(sensorId));
+      const policy = stream?.thresholdProfileId ? streamPolicies.get(String(stream.thresholdProfileId)) : null;
+      if (policy) {
+        durationMinutesBySensor.set(sensorId, usableMinutes(policy.minimumDuration));
+      } else {
+        legacySensorIds.push(sensorId);
+      }
+    }
+    if (legacySensorIds.length === 0) {
+      return durationMinutesBySensor;
+    }
+
     const sensors = await this.db.collection('sensorMetadata')
-      .find({ sensorId: { $in: sensorIds } })
+      .find({ sensorId: { $in: legacySensorIds } })
       .toArray();
 
     const policyIdBySensorId = new Map();
@@ -234,14 +268,10 @@ class TelemetryMonitor {
       : [];
     const policyById = new Map(policies.map((policy) => [String(policy._id), policy]));
 
-    for (const sensorId of sensorIds) {
+    for (const sensorId of legacySensorIds) {
       const policyId = policyIdBySensorId.get(sensorId);
       const policy = policyId ? policyById.get(String(policyId)) : null;
-      const minimumDuration = policy?.minimumDuration;
-      durationMinutesBySensor.set(
-        sensorId,
-        typeof minimumDuration === 'number' && minimumDuration > 0 ? minimumDuration : defaultMinutes
-      );
+      durationMinutesBySensor.set(sensorId, usableMinutes(policy?.minimumDuration));
     }
 
     return durationMinutesBySensor;
@@ -257,13 +287,22 @@ class TelemetryMonitor {
   // findSensorsWithMissingReadings()'s existing pattern for sensorMetadata
   // (not in getCollection()'s canonical-name whitelist); storageContainers/
   // storageBoxes aren't in that whitelist either.
+  //
+  // #1392: the temperature datastream valid now is read first. When its
+  // storageLocationId is a mirrored freezer's location, that freezer is
+  // walked; otherwise SensorMetadata.storageContainer is, as before.
   async resolveRootSamples(freezerKey) {
-    const sensor = await this.db.collection('sensorMetadata').findOne({ sensorId: freezerKey });
-    if (!sensor?.storageContainer) {
+    const stream = (await currentDatastreamsBySensor(this.db, [freezerKey])).get(String(freezerKey));
+    let freezerContainerId = stream ? await freezerContainerIdOf(this.db, stream.storageLocationId) : null;
+    if (!freezerContainerId) {
+      const sensor = await this.db.collection('sensorMetadata').findOne({ sensorId: freezerKey });
+      freezerContainerId = sensor?.storageContainer || null;
+    }
+    if (!freezerContainerId) {
       return [];
     }
 
-    const boxIds = await this.resolveBoxIdsUnderFreezer(sensor.storageContainer);
+    const boxIds = await this.resolveBoxIdsUnderFreezer(freezerContainerId);
     if (boxIds.length === 0) {
       return [];
     }
@@ -279,6 +318,10 @@ class TelemetryMonitor {
   // physically inside the given freezer container.
   async resolveBoxIdsUnderFreezer(freezerContainerId) {
     const containers = this.db.collection('storageContainers');
+    // #1163: this walk runs per reading, the hottest reader of the parent_id
+    // lookup indexes, so they are ensured here rather than only at the
+    // one-time backfill that used to be their sole call site.
+    ensureStorageContainerIndexes(containers);
 
     const shelves = await containers.find({ parent_id: freezerContainerId, containerType: 'SHELF' }).toArray();
     const shelfIds = shelves.map(s => s._id);
@@ -292,7 +335,9 @@ class TelemetryMonitor {
       return [];
     }
 
-    const boxes = await this.db.collection('storageBoxes').find({ parent_id: { $in: rackIds } }).toArray();
+    const boxesCollection = this.db.collection('storageBoxes');
+    ensureStorageBoxIndexes(boxesCollection);
+    const boxes = await boxesCollection.find({ parent_id: { $in: rackIds } }).toArray();
     return boxes.map(b => b._id);
   }
 
@@ -305,6 +350,11 @@ class TelemetryMonitor {
   // iot.controller.js uses either — this file has no existing mongoose
   // wiring). This matches iot.controller.js's own upsertEnvironmentalExcursion,
   // which already reads/writes environmentalExcursions the same raw way.
+  //
+  // RF009 AC1 (#1317): a reading in either measurement, `temperature` or
+  // `freezer_temperature`, counts. last() runs per series, and the two
+  // measurements (and other tags) split one sensor into several series, so
+  // the newest time per sensor is kept in JS, keyed by String(sensorId).
   async findSensorsWithMissingReadings() {
     const sensors = await this.db.collection('sensorMetadata').find({}).toArray();
     if (!sensors.length) {
@@ -316,31 +366,43 @@ class TelemetryMonitor {
       ? await this.db.collection('devices').find({ _id: { $in: deviceIds } }).toArray()
       : [];
     const deviceById = new Map(devices.map(d => [String(d._id), d]));
+    // #1392: the excursion key is the equipmentId of the sensor's temperature
+    // datastream valid now, the device's deviceId the fallback.
+    const equipmentIdBySensor = await datastreamEquipmentIdsBySensor(this.db, sensors.map(s => s.sensorId));
 
     await connectInfluxDB();
     const queryApi = getInfluxQueryApi();
     const fluxQuery = `from(bucket: \"${getInfluxConfig().bucket}\")
       |> range(start: -${this.lookbackHours}h)
-      |> filter(fn: (r) => r._measurement == \"temperature\")
-      |> filter(fn: (r) => r._field == \"value\")
-      |> group(columns: [\"sensorId\"])
-      |> last()`;
+      |> filter(fn: (r) => (r._measurement == \"freezer_temperature\" and r._field == \"temperatureValue\") or (r._measurement == \"temperature\" and r._field == \"value\"))
+      |> last()
+      |> keep(columns: [\"sensorId\", \"_time\"])`;
     const rows = await queryApi.collectRows(fluxQuery);
 
     const lastReadingAtBySensor = new Map();
     for (const row of rows) {
-      lastReadingAtBySensor.set(row.sensorId, new Date(row._time));
+      if (row.sensorId === undefined || row.sensorId === null || row.sensorId === '') continue;
+      const readingAt = new Date(row._time);
+      if (Number.isNaN(readingAt.getTime())) continue;
+
+      const key = String(row.sensorId);
+      const current = lastReadingAtBySensor.get(key);
+      if (!current || readingAt.getTime() > current.getTime()) {
+        lastReadingAtBySensor.set(key, readingAt);
+      }
     }
 
     const thresholdMs = this.expectedReadingIntervalMinutes * 60 * 1000;
     const now = Date.now();
     const missing = [];
     for (const sensor of sensors) {
-      const lastReadingAt = lastReadingAtBySensor.get(sensor.sensorId) || null;
+      const lastReadingAt = lastReadingAtBySensor.get(String(sensor.sensorId)) || null;
       const elapsedMs = lastReadingAt ? now - lastReadingAt.getTime() : Infinity;
       if (elapsedMs > thresholdMs) {
         const device = sensor.device ? deviceById.get(String(sensor.device)) : null;
-        missing.push({ sensorId: sensor.sensorId, deviceId: device?.deviceId || null, lastReadingAt });
+        const deviceId = device?.deviceId || null;
+        const equipmentId = equipmentIdBySensor.get(String(sensor.sensorId)) || deviceId;
+        missing.push({ sensorId: sensor.sensorId, deviceId, equipmentId, lastReadingAt });
       }
     }
     return missing;
@@ -349,10 +411,10 @@ class TelemetryMonitor {
   // Same open/widen pattern as iot.controller.js's upsertEnvironmentalExcursion,
   // scoped to excursionType 'missing_reading' so it never collides with an
   // in-flight temperature_out_of_range excursion on the same device.
-  async upsertMissingReadingExcursion({ sensorId, deviceId, lastReadingAt }) {
+  async upsertMissingReadingExcursion({ sensorId, equipmentId, lastReadingAt }) {
     const ExcursionCollection = this.db.collection('environmentalExcursions');
     const existingExcursion = await ExcursionCollection.findOne({
-      equipmentId: deviceId,
+      equipmentId,
       excursionType: 'missing_reading',
       excursionStatus: { $in: ['open', 'under_assessment'] }
     });
@@ -361,7 +423,7 @@ class TelemetryMonitor {
       await ExcursionCollection.updateOne({ _id: existingExcursion._id }, { $set: { updatedAt: new Date() } });
     } else {
       const excursion = EnvironmentalExcursionModel.create({
-        equipmentId: deviceId,
+        equipmentId,
         startDateTime: lastReadingAt || new Date(),
         excursionStatus: 'open',
         excursionType: 'missing_reading',
@@ -386,7 +448,7 @@ class TelemetryMonitor {
   async checkMissingReadings() {
     const missingSensors = await this.findSensorsWithMissingReadings();
     for (const missing of missingSensors) {
-      if (!missing.deviceId) {
+      if (!missing.equipmentId) {
         continue;
       }
       await this.upsertMissingReadingExcursion(missing);
@@ -394,13 +456,12 @@ class TelemetryMonitor {
     return missingSensors;
   }
 
-  // AC#6 (real Neo4j write, #304): marks the root sample node COMPROMISED
-  // and propagates the same status to every descendant reachable via
-  // DERIVED_FROM (child -[:DERIVED_FROM]-> parent, per
-  // neo4jCanonicalProjection.service.js/LineageRepository.js — so
-  // descendants of root are matched by walking DERIVED_FROM backwards from
-  // root, `*0..` to include root itself in one write).
-  async propagateCompromise({ neo4jDriver, rootSampleId, freezerKey, breachedSince, maxObservedTemp }) {
+  // AC#6 (#304), through the outbox since #1312 (RF023 AC8/AC9, RNF019 C8):
+  // appends SPECIMEN_COMPROMISED for the root sample, and the projector marks
+  // it and every DERIVED_FROM descendant COMPROMISED. No request or job
+  // writes Neo4j directly, and the event carries the excursion (freezer and
+  // start), never the temperature reading itself.
+  async propagateCompromise({ rootSampleId, freezerKey, breachedSince }) {
     logger.info(`[ISO20387][TELEMETRY] Propagando comprometimento: freezer=${freezerKey}, sample=${rootSampleId}`);
 
     if (!rootSampleId) {
@@ -408,35 +469,18 @@ class TelemetryMonitor {
       return;
     }
 
-    const session = neo4jDriver.session({ database: this.database });
-    try {
-      const result = await session.run(
-        `
-          MATCH (root:Sample {id: $rootSampleId})
-          OPTIONAL MATCH (root)<-[:DERIVED_FROM*0..]-(descendant:Sample)
-          WITH collect(DISTINCT root) + collect(DISTINCT descendant) AS samples
-          UNWIND samples AS sample
-          WITH DISTINCT sample WHERE sample IS NOT NULL
-          SET sample.status = 'COMPROMISED',
-              sample.compromisedAt = coalesce(sample.compromisedAt, datetime()),
-              sample.compromiseFreezerKey = $freezerKey,
-              sample.compromiseBreachedSince = $breachedSince,
-              sample.compromiseMaxObservedTemp = $maxObservedTemp
-          RETURN count(sample) AS compromisedCount
-        `,
-        {
-          rootSampleId: String(rootSampleId),
-          freezerKey,
-          breachedSince: breachedSince ? new Date(breachedSince).toISOString() : null,
-          maxObservedTemp: maxObservedTemp ?? null
-        }
-      );
-
-      const compromisedCount = result.records[0]?.get('compromisedCount')?.toNumber?.() ?? 0;
-      logger.info(`[ISO20387][TELEMETRY] ${compromisedCount} amostra(s) marcadas COMPROMISED para freezer=${freezerKey}`);
-    } finally {
-      await session.close();
-    }
+    // #1313 (RF023 AC3, RNF019 C1): the compromise writes nothing in Mongo
+    // in this call, so the event joins no aggregate write. Its own two
+    // writes, the aggregate's version counter and the event, commit
+    // together wherever a transaction runs, so a failed insert cannot
+    // leave a version no event holds.
+    await withTransactionWhereSupported(this.db, (session) => this.graphProjection.appendSpecimenCompromiseEvent(this.db, {
+      specimenId: String(rootSampleId),
+      freezerKey,
+      breachedSince: breachedSince ? new Date(breachedSince).toISOString() : null,
+      sourceService: 'telemetry-monitor',
+    }, session ? { session } : {}));
+    logger.info(`[ISO20387][TELEMETRY] SPECIMEN_COMPROMISED registrado no outbox para freezer=${freezerKey}`);
   }
 }
 

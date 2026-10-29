@@ -174,6 +174,64 @@ describe('Security routes', () => {
     expect(res.payload.success).toBe(false);
   });
 
+  it('PUT /config passa adiante o 409 de uma ativação concorrente (RF014 AC2)', async () => {
+    const handler = getHandler(securityRoutes, 'put', '/config');
+    vi.spyOn(securityService, 'getConfig').mockResolvedValue({});
+    vi.spyOn(securityService, 'updateConfig').mockRejectedValue(Object.assign(new Error('concorrente'), { statusCode: 409 }));
+    const res = createResponse();
+
+    await handler(createRequest({ body: { session: { timeoutMinutes: 20 } } }), res);
+
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('GET /config/releases lista as releases, com o limite limitado a 200 (RF014 AC4)', async () => {
+    const handler = getHandler(securityRoutes, 'get', '/config/releases');
+    const list = vi.spyOn(securityService, 'listReleases').mockResolvedValue([{ configurationReleaseId: 'r2' }, { configurationReleaseId: 'r1' }]);
+    const res = createResponse();
+
+    await handler(createRequest({ query: { limit: '5000' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.data.map((row) => row.configurationReleaseId)).toEqual(['r2', 'r1']);
+    expect(list).toHaveBeenCalledWith(expect.anything(), { limit: 200 });
+  });
+
+  it('GET /config/catalog devolve o catálogo de configurações, sem banco (RF014 AC1)', () => {
+    const handler = getHandler(securityRoutes, 'get', '/config/catalog');
+    const req = createRequest();
+    req.app.locals.db = null;
+    const res = createResponse();
+
+    handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.data.catalogVersion).toBe('1.0.0');
+    expect(res.payload.data.settings.find(({ path }) => path === 'session.timeoutMinutes'))
+      .toEqual(expect.objectContaining({ type: 'number', scope: 'environment', allowedValues: { kind: 'range', min: 5, max: 480 }, default: 30 }));
+  });
+
+  it('POST /config/rollback exige configurationReleaseId e devolve o status do serviço (RF014 AC4)', async () => {
+    const handler = getHandler(securityRoutes, 'post', '/config/rollback');
+    const rollback = vi.spyOn(securityService, 'rollbackConfig');
+
+    const missing = createResponse();
+    await handler(createRequest({ body: {} }), missing);
+    expect(missing.statusCode).toBe(400);
+    expect(rollback).not.toHaveBeenCalled();
+
+    rollback.mockRejectedValueOnce(Object.assign(new Error('não encontrada'), { statusCode: 404 }));
+    const unknown = createResponse();
+    await handler(createRequest({ body: { configurationReleaseId: 'nope' } }), unknown);
+    expect(unknown.statusCode).toBe(404);
+
+    rollback.mockResolvedValueOnce({ configurationReleaseId: 'r3' });
+    const ok = createResponse();
+    await handler(createRequest({ body: { configurationReleaseId: 'r1' } }), ok);
+    expect(ok.statusCode).toBe(200);
+    expect(rollback).toHaveBeenLastCalledWith(expect.anything(), 'r1', expect.anything());
+  });
+
   it('GET /logs/export deve retornar CSV e header correto', async () => {
     const handler = getHandler(securityRoutes, 'get', '/logs/export');
     vi.spyOn(securityService, 'exportLogs').mockResolvedValue('timestamp,userID\n2026-01-01,admin');
@@ -237,7 +295,12 @@ describe('Security routes', () => {
 
   it('GET /permissions deve listar permissões', async () => {
     const handler = getHandler(securityRoutes, 'get', '/permissions');
-    vi.spyOn(securityService, 'getPermissions').mockResolvedValue({ '4': { manageSecurity: true } });
+    // #1341: the payload is the seeded roles and the permissions they grant.
+    const payload = {
+      roles: [{ roleCode: 'administrator', displayName: 'Administrador', hierarchyLevel: 4, permissionCodes: ['manageSystem'] }],
+      permissions: [{ permissionCode: 'manageSystem', displayName: 'Gerenciar sistema', resourceType: 'System', allowedActions: ['READ'] }],
+    };
+    vi.spyOn(securityService, 'getPermissions').mockResolvedValue(payload);
 
     const req = createRequest();
     const res = createResponse();
@@ -246,7 +309,7 @@ describe('Security routes', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.payload.success).toBe(true);
-    expect(res.payload.data['4'].manageSecurity).toBe(true);
+    expect(res.payload.data).toEqual(payload);
   });
 
   it('GET /permissions deve retornar 503 quando o banco de dados não está disponível', async () => {
@@ -275,45 +338,17 @@ describe('Security routes', () => {
     expect(res.payload.message).toBe('permissions failed');
   });
 
-  it('PUT /permissions deve retornar 503 quando o banco de dados não está disponível', async () => {
-    const handler = getHandler(securityRoutes, 'put', '/permissions');
-    const req = createRequest();
-    req.app.locals.db = null;
-    const res = createResponse();
+  // #1149: PUT /permissions wrote a `security_permissions` store that no
+  // authorization path reads, answered success, and audited a critical change
+  // that never took effect. It is removed, not softened; GET stays.
+  it('#1149: registers no PUT /permissions, while GET /permissions stays', () => {
+    const methodsFor = (path) => securityRoutes.stack
+      .filter((entry) => entry.route?.path === path)
+      .flatMap((entry) => Object.keys(entry.route.methods));
 
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(503);
-    expect(res.payload.success).toBe(false);
-  });
-
-  it('PUT /permissions deve retornar 400 quando o serviço lança erro', async () => {
-    const handler = getHandler(securityRoutes, 'put', '/permissions');
-    vi.spyOn(securityService, 'getPermissions').mockResolvedValue({ '4': { manageSecurity: true } });
-    vi.spyOn(securityService, 'updatePermissions').mockRejectedValue(new Error('bad permission update'));
-
-    const req = createRequest({ body: { '4': { manageSecurity: false } } });
-    const res = createResponse();
-
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(400);
-    expect(res.payload.success).toBe(false);
-    expect(res.payload.message).toBe('bad permission update');
-  });
-
-  it('PUT /permissions deve atualizar permissões', async () => {
-    const handler = getHandler(securityRoutes, 'put', '/permissions');
-    vi.spyOn(securityService, 'getPermissions').mockResolvedValue({ '4': { manageSecurity: true } });
-    vi.spyOn(securityService, 'updatePermissions').mockResolvedValue({ '4': { manageSecurity: false } });
-
-    const req = createRequest({ body: { '4': { manageSecurity: false } } });
-    const res = createResponse();
-
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(200);
-    expect(res.payload.success).toBe(true);
+    expect(methodsFor('/permissions')).toEqual(['get']);
+    // control: the neighbouring /config route still accepts both verbs
+    expect(methodsFor('/config').sort()).toEqual(['get', 'put']);
   });
 
   it('GET /consent-queue deve retornar status da fila', async () => {
@@ -432,32 +467,6 @@ describe('Security routes', () => {
     await handler(errReq, errRes);
     expect(errRes.statusCode).toBe(500);
     expect(errRes.payload.error).toBe('Erro ao buscar permissões');
-
-    const unavailableReq = createRequest({ t: null });
-    unavailableReq.app.locals.db = null;
-    const unavailableRes = createResponse();
-    await handler(unavailableReq, unavailableRes);
-    expect(unavailableRes.statusCode).toBe(503);
-    expect(unavailableRes.payload.error).toBe('Banco de dados não disponível');
-  });
-
-  it('PUT /permissions usa mensagens padrão quando req.t está ausente (sucesso, 503 e 400)', async () => {
-    const handler = getHandler(securityRoutes, 'put', '/permissions');
-    vi.spyOn(securityService, 'getPermissions').mockResolvedValue({ '4': { manageSecurity: true } });
-
-    vi.spyOn(securityService, 'updatePermissions').mockResolvedValue({ '4': { manageSecurity: false } });
-    const okReq = createRequest({ body: { '4': { manageSecurity: false } }, t: null });
-    const okRes = createResponse();
-    await handler(okReq, okRes);
-    expect(okRes.statusCode).toBe(200);
-    expect(okRes.payload.message).toBe('Permissões atualizadas com sucesso');
-
-    vi.spyOn(securityService, 'updatePermissions').mockRejectedValue(new Error('bad permission update'));
-    const errReq = createRequest({ body: { '4': { manageSecurity: false } }, t: null });
-    const errRes = createResponse();
-    await handler(errReq, errRes);
-    expect(errRes.statusCode).toBe(400);
-    expect(errRes.payload.error).toBe('Erro ao atualizar permissões');
 
     const unavailableReq = createRequest({ t: null });
     unavailableReq.app.locals.db = null;

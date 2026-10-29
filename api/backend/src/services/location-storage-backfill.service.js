@@ -1,25 +1,34 @@
-const StorageAssignmentModel = require('../models/StorageAssignment');
-const { ensureStorageContainerIndexes } = require('../utils/storageIndexes');
+const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
+const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
+const physicalChain = require('./physicalChain.service');
+const { ensureLocationIndexes } = require('./storageLocation.service');
+const { placeSpecimen, currentPlacement, chainPositionCode } = require('./legacyPlacementChain.service');
 
 /**
  * #461 — one-time backfill: legacy `locations` (+ Sample.locationID
- * references) into the canonical StorageContainer/StorageBox/
- * StorageAssignment chain. Design/field mapping:
- * docs/architecture/legacy-location-migration-mapping.md.
+ * references) into the StorageContainer/StorageBox topology. Design/field
+ * mapping: docs/architecture/legacy-location-migration-mapping.md.
+ *
+ * #1374 (RULE-026): each Sample.locationID specimen is placed on the
+ * physical chain through legacyPlacementChain.service.js, one transaction
+ * per specimen; no legacy placement row is written. Every index is built
+ * before the first transaction.
  *
  * `locations` stays read-only — this only reads it, never writes back.
  * Safe to run more than once: containers/boxes are found-or-created by
- * their deterministic parent+name key, and an already-open
- * StorageAssignment for the same specimen/box/position is not duplicated.
+ * their deterministic parent+name key, and a specimen the chain already
+ * places, or has released, is not placed again.
  */
 async function backfillLocationsToStorage(db) {
   const locationsCollection = db.collection('locations');
   const equipmentCollection = db.collection('equipment');
   const samplesCollection = db.collection('samples');
   const storageContainersCollection = db.collection('storageContainers');
-  ensureStorageContainerIndexes(storageContainersCollection);
+  await ensureStorageContainerIndexes(storageContainersCollection);
   const storageBoxesCollection = db.collection('storageBoxes');
-  const storageAssignmentsCollection = db.collection('storageAssignments');
+  await ensureStorageBoxIndexes(storageBoxesCollection);
+  await physicalChain.ensurePhysicalChainIndexes(db);
+  await ensureLocationIndexes(db);
 
   const locations = await locationsCollection.find({}).toArray();
 
@@ -35,7 +44,8 @@ async function backfillLocationsToStorage(db) {
     racksCreated: 0,
     drawersCreated: 0,
     boxesCreated: 0,
-    assignmentsCreated: 0,
+    specimensPlaced: 0,
+    alreadyPlaced: 0,
     skipped: [],
   };
 
@@ -56,7 +66,6 @@ async function backfillLocationsToStorage(db) {
         description: null,
         containerType: 'FREEZER',
         parent_id: null,
-        roomId: null,
         temperature: null,
         temperatureUnit: 'CELSIUS',
         capacity: null,
@@ -93,7 +102,6 @@ async function backfillLocationsToStorage(db) {
         description: null,
         containerType,
         parent_id: parentId,
-        roomId: null,
         temperature: null,
         temperatureUnit: 'CELSIUS',
         capacity: null,
@@ -143,8 +151,8 @@ async function backfillLocationsToStorage(db) {
       summary.boxesCreated += 1;
     }
 
-    boxCache.set(cacheKey, box._id);
-    return box._id;
+    boxCache.set(cacheKey, box);
+    return box;
   }
 
   for (const location of locations) {
@@ -176,30 +184,54 @@ async function backfillLocationsToStorage(db) {
       continue;
     }
 
-    const boxId = await findOrCreateBox(boxParentId, location.box);
-    locationIdToBoxId.set(location.locationID, boxId);
+    const box = await findOrCreateBox(boxParentId, location.box);
+    locationIdToBoxId.set(location.locationID, box._id);
 
     const samples = await samplesCollection.find({ locationID: location.locationID }).toArray();
     for (const sample of samples) {
-      const existing = await storageAssignmentsCollection.findOne({
-        specimenId: String(sample._id),
-        boxId: String(boxId),
-        positionCode: location.wellPosition,
-        removedAt: null,
-      });
-      if (existing) continue;
+      const specimenId = String(sample.specimenId || sample._id);
+      const skip = (reason) => summary.skipped.push({ locationID: location.locationID, specimenId, reason });
 
-      const record = StorageAssignmentModel.open({
-        specimenId: sample._id,
-        boxId,
-        positionCode: location.wellPosition,
-        equipmentId: freezerId,
-        shelfId,
-        rackId,
-        placedAt: sample.registeredAt || sample.receivedAt || sample.createdAt || undefined,
-      });
-      await storageAssignmentsCollection.insertOne(record);
-      summary.assignmentsCreated += 1;
+      if (!String(location.wellPosition ?? '').trim()) {
+        skip('missing wellPosition');
+        continue;
+      }
+
+      const current = await currentPlacement(db, sample);
+      if (current) {
+        const samePlace = String(current.boxId) === String(box._id)
+          && chainPositionCode(current.positionCode) === chainPositionCode(location.wellPosition);
+        if (!samePlace) {
+          skip(`already placed at ${current.boxId}/${current.positionCode}`);
+          continue;
+        }
+        if (current.source === 'physical_chain') {
+          summary.alreadyPlaced += 1;
+          continue;
+        }
+      } else if (await physicalChain.openSpecimenAssignment(db, specimenId)) {
+        // Loaded and not placed: released on the chain. A stale locationID
+        // must not place it again.
+        skip('released on the chain');
+        continue;
+      }
+
+      // A legacy row at this box and position is placed from its own
+      // instant, so migrate:storage-assignments-to-chain recognises it.
+      const at = current?.placedAt || sample.registeredAt || sample.receivedAt || sample.createdAt || undefined;
+      try {
+        await withTransactionWhereSupported(db, (session) => placeSpecimen(db, {
+          sample,
+          box,
+          position: location.wellPosition,
+          at,
+          sourceEventId: `legacy-location-backfill:${location.locationID}:${String(sample._id)}`,
+        }, session));
+      } catch (error) {
+        skip(error.message);
+        continue;
+      }
+      summary.specimensPlaced += 1;
     }
   }
 

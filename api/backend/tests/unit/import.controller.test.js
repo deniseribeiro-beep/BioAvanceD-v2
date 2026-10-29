@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const controller = require('../../src/controllers/import.controller');
 const importService = require('../../src/services/import.service');
 const auditLogger = require('../../src/utils/auditLogger');
+const callerCreateOrganization = require('../../src/services/callerCreateOrganization.service');
 
 function createRes() {
   return {
@@ -215,6 +216,7 @@ describe('import.controller', () => {
       const req = createReq({ body: { dataType: 'samples' }, user: { id: 'u1' } });
       const res = createRes();
       const results = { success: 3, errors: [], total: 3 };
+      vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization').mockResolvedValue({ organizationId: 'org-a' });
       vi.spyOn(importService, 'importSamples').mockResolvedValue(results);
       vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
       const auditInitSpy = vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -222,7 +224,7 @@ describe('import.controller', () => {
 
       await controller.import(req, res);
 
-      expect(importService.importSamples).toHaveBeenCalledWith(req.app.locals.db, req.file);
+      expect(importService.importSamples).toHaveBeenCalledWith(req.app.locals.db, req.file, { organizationId: 'org-a' });
       expect(auditInitSpy).toHaveBeenCalledWith(req.app.locals.db);
       expect(auditLogSpy).toHaveBeenCalledWith(
         req,
@@ -232,6 +234,53 @@ describe('import.controller', () => {
         results.success,
         results.errors.length
       );
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    // #1376: the samples import resolves the caller's organization before any row is read.
+    it('samples resolves the caller organization from req.user and the organizationId field and passes it to importSamples', async () => {
+      const req = createReq({ body: { dataType: 'samples', organizationId: ' org-a ' }, user: { userID: 'u1' } });
+      const res = createRes();
+      const db = req.app.locals.db;
+      const resolveSpy = vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization').mockResolvedValue({ organizationId: 'org-a' });
+      vi.spyOn(importService, 'importSamples').mockResolvedValue({ success: 1, errors: [], total: 1 });
+      vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'logImport').mockResolvedValue();
+
+      await controller.import(req, res);
+
+      expect(resolveSpy).toHaveBeenCalledWith(db, { userId: 'u1', requested: 'org-a' });
+      expect(importService.importSamples).toHaveBeenCalledWith(db, req.file, { organizationId: 'org-a' });
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('samples answers a scope refusal with its status, cleans the file and imports nothing', async () => {
+      const req = createReq({ body: { dataType: 'samples', organizationId: 'org-z' }, user: { userID: 'u1' } });
+      const res = createRes();
+      vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization')
+        .mockRejectedValue(Object.assign(new Error('organizationId fora do escopo'), { statusCode: 400 }));
+      const importSamplesSpy = vi.spyOn(importService, 'importSamples');
+      const cleanupSpy = vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.import(req, res);
+
+      expect(importSamplesSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledWith('/tmp/f.csv');
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'organizationId fora do escopo' });
+    });
+
+    it('patients does not resolve a caller organization', async () => {
+      const req = createReq({ body: { dataType: 'patients' } });
+      const res = createRes();
+      const resolveSpy = vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization');
+      vi.spyOn(importService, 'importPatients').mockResolvedValue({ success: 1, errors: [], total: 1 });
+      vi.spyOn(importService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.import(req, res);
+
+      expect(resolveSpy).not.toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(200);
     });
 

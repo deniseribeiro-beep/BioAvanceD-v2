@@ -179,6 +179,19 @@ describe('cid.service - ensureIndexes', () => {
     expect(collection.createIndex.mock.calls.length).toBe(firstCallCount);
   });
 
+  // #941: Cid.js declared `active: { index: true }`, inert under
+  // autoIndex:false, and measured as HARMFUL to build: explain() on mongo:7
+  // shows the planner picking { active: 1 } for getActiveSearchFilter's $or
+  // and examining ~2x the documents of the COLLSCAN it replaces. Deleted, and
+  // pinned here so the measured decision cannot quietly revert.
+  it('does NOT build an { active: 1 } index', async () => {
+    const collection = { createIndex: vi.fn(async () => {}) };
+    await cidService.ensureIndexes(collection, 'ensureIndexes-test-941-active');
+    expect(collection.createIndex).toHaveBeenCalled();
+    const built = collection.createIndex.mock.calls.map(([keys]) => Object.keys(keys));
+    expect(built.some((k) => k.includes('active'))).toBe(false);
+  });
+
   it('does nothing when collection or collectionName is falsy', async () => {
     const collection = { createIndex: vi.fn(async () => {}) };
     await cidService.ensureIndexes(null, 'some-name');

@@ -15,10 +15,12 @@
  * own scope note. interface/routes/ingestionTestSupport.routes.js
  * demonstrates the expected call shape for #670-673 to follow.
  *
- * This foundation does not persist the domain entity itself on an
- * `accepted` outcome — no entity type is wired to it yet (that's
- * #670-673's job). It only proves the gateway's own accept/quarantine/
- * replay contract.
+ * The gateway itself does not persist the domain entity on an `accepted`
+ * outcome. #1318: ingestion/productionIngestion.js is the caller that does,
+ * for the entity types ingestion/ingestionTargets.js names, passing each
+ * type's model check as `entityValidator`: a function of the payload whose
+ * violations are appended to the gateway's own. RF029 AC7 (#1318): a
+ * quarantined record also keeps the client's `missingDataReasons` as received.
  */
 const { validateProvenanceEnvelope } = require('./provenanceEnvelope');
 const { validateIngestionPayload, assertReferencesExist } = require('./canonicalGateway');
@@ -36,6 +38,8 @@ async function ingestRecord({
   idempotencyKey = null,
   references = [],
   referenceCodes = [],
+  entityValidator = null,
+  missingDataReasons = undefined,
 }) {
   if (!db) throw new Error('ingestRecord: db é obrigatório');
   if (!entityType) throw new Error('ingestRecord: entityType é obrigatório');
@@ -57,12 +61,14 @@ async function ingestRecord({
   const contractResult = validateIngestionPayload({ schemaId, payload, aliasMap });
   const referenceResult = await assertReferencesExist(db, references);
   const codeResult = await validateActiveCodes(db, referenceCodes);
+  const entityViolations = entityValidator ? entityValidator(payload) : [];
 
   const violations = [
     ...provenanceResult.violations,
     ...contractResult.violations,
     ...referenceResult.violations,
     ...codeResult.violations,
+    ...entityViolations,
   ];
 
   let outcome;
@@ -74,6 +80,7 @@ async function ingestRecord({
       payload,
       violations,
       provenance: provenanceResult.envelope,
+      missingDataReasons,
     });
     outcome = {
       status: 'quarantined',

@@ -11,9 +11,8 @@ export interface Patient {
   // only ever present via an authorized re-identification response.
   patientName?: string;
 
-  // Contato para envio do TCLE
-  email?: string;
-  phone?: string;
+  // #1166: the participant's contact (email/phone) is ParticipantIdentity
+  // data (dict-02 P1X-0352/P1X-0353) and is never returned on Patient.
 
   // 3. DATA_NASCIMENTO - Caractere - Data de nascimento (formato DD/MM/YYYY)
   // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
@@ -34,10 +33,8 @@ export interface Patient {
   unitAcronym?: string;
 
   isDeceased?: boolean;
-  representativeName?: string;
-  representativeEmail?: string;
-  representativeIdentityDocument?: string;
-  representativePhone?: string;
+  // #1168: the legal representative is ParticipantIdentity data (dict-02
+  // P1X-0357..0360) and is never returned on Patient.
   
   // 8. SEXO - Caractere - Sexo do paciente (Masculino/Feminino)
   sex: string; // 'Masculino' | 'Feminino'
@@ -168,26 +165,21 @@ export interface SampleEmbeddedStorageLocation {
   path?: string | null;
 }
 
-// dict-02 StorageAssignment (ELM-0167-0178): o registro bruto de
-// storageAssignments, anexado de forma aditiva (não substitui storageLocation)
-// em MongoStorageRepository.findSampleById/findCurrentStorageAssignment (#507,
-// #510) e em sample.service.js#createSample/intakeWizard.js no POST de criação.
-// Sem boxName/readable/path resolvidos — para isso, use SampleStorageLocationDTO.
-export interface StorageAssignmentRecord {
-  storageAssignmentId: string;
-  specimenId: string;
-  storageLocationId?: string | null;
-  facilityId?: string | null;
-  roomId?: string | null;
-  equipmentId?: string | null;
-  shelfId?: string | null;
-  rackId?: string | null;
+// The sample's current placement as the API resolves it (#1374): the physical
+// chain (SpecimenContainerAssignment, ContainerPositionAssignment,
+// RackLocationAssignment, #1314) first, the open legacy StorageAssignment row
+// (ELM-0167..0178, historical reads only) as a fallback with the chain ids
+// null. Sent under the key `storageAssignment` by the sample create responses.
+// No boxName/readable/path: for those, use SampleStorageLocationDTO.
+export interface SamplePlacement {
   boxId: string | null;
-  positionCode: string;
-  nominalTemperature?: number | null;
-  placedAt?: Date | string;
-  removedAt?: Date | string | null;
-  occupancyStatus?: 'ocupada' | 'livre' | string;
+  positionCode: string | null;
+  containerId: string | null;
+  storagePositionId: string | null;
+  storageRackId: string | null;
+  storageLocationId: string | null;
+  placedAt?: Date | string | null;
+  source: 'physical_chain' | 'legacy_storage_assignment';
 }
 
 // Resposta de GET /storage/sample/:sampleId (GetSampleStorageLocationUseCase /
@@ -245,7 +237,9 @@ export interface SpecimenPreanalyticsProfile {
 export interface Sample {
   _id?: string; // MongoDB ID
   participantId: string;
-  sampleID?: number | null; // ID da amostra (pode ser null, usar _id como fallback)
+  // #1216: the canonical business id the API names every specimen by. The
+  // legacy sampleID field is prohibited on the wire and no writer sets it.
+  specimenId?: string;
   sampleType: string;
   sampleOrigin?: string;
   extractionProtocol?: string;
@@ -272,8 +266,12 @@ export interface Sample {
   merkle_root?: string | null;
   consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
   // Canonical status (storage/custody split, #389/#409) — derive quarantine/availability
-  // UI state from this.
-  specimenStatus?: 'available' | 'reserved' | 'checked_out' | 'partial' | 'depleted' | 'quarantined' | 'destroyed' | 'unavailable' | 'disposed' | string;
+  // UI state from this. RF006 AC2: the operational state only; `closed` is
+  // set by the close route or an executed destroy/transfer disposition.
+  specimenStatus?: 'available' | 'reserved' | 'checked_out' | 'quarantined' | 'unavailable' | 'closed' | string;
+  // RF006 AC3: derived by the API from initialQuantity/currentQuantity; never
+  // sent on a write.
+  quantityStatus?: 'full' | 'partial' | 'depleted' | null;
   // quarantineReason still carries the human-readable reason text — no
   // specimenStatus equivalent exists for that, so it stays legacy-sourced (#407/#415).
   quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
@@ -318,18 +316,19 @@ export interface Sample {
   checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
   // Status de disponibilidade
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Destroyed' | 'Unusable';
-  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
+  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED';
   // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';
   withdrawalResponsible?: string;
   sampleDestination?: string;
   storageLocation?: SampleEmbeddedStorageLocation | null;
-  // dict-02 StorageAssignment, anexado de forma aditiva ao storageLocation
-  // acima (#495) — só presente em respostas específicas que já o resolvem
-  // (POST de criação); GET /samples/:id ainda não o resolve (ver #495 no
-  // dict-07/dict-08 tracking).
-  storageAssignment?: StorageAssignmentRecord | null;
+  // The current placement as the API resolves it (#1374): the physical chain
+  // (#1314) first, the open legacy StorageAssignment row (ELM-0167..0178,
+  // historical reads only) as a fallback. Added alongside storageLocation
+  // above, not replacing it; sent by the sample create responses and by the
+  // storage use cases' sample reads. GET /samples/:id does not return it.
+  storageAssignment?: SamplePlacement | null;
   // GET /samples (list view) only (#517) — batched, per-row resolution of
   // the same shape GET /storage/sample/:sampleId returns, so SamplesPageView
   // doesn't have to read storageLocation above directly nor make one
@@ -406,6 +405,14 @@ export interface ConsentPolicyPermission {
   key: string;
   label: string;
   required?: boolean;
+  // RF010 AC3 (#1349): a GA4GH DUO code, the purpose the permission covers.
+  purposeCode?: string;
+}
+
+// #1349: an active DUO concept a term's permission may name.
+export interface PurposeCode {
+  code: string;
+  display: string;
 }
 
 export interface ConsentTemplate {
@@ -416,6 +423,8 @@ export interface ConsentTemplate {
   version: string;
   versionGroupId?: string;
   caae: string;
+  // RF010 AC1 (ENUM-0043..0046): the modality the term offers.
+  consentModel?: 'specific' | 'broad' | 'tiered' | 'dynamic' | null;
   active: boolean;
   permissions: ConsentPermission[];
   granularPermissions?: ConsentPolicyPermission[];
@@ -473,6 +482,50 @@ export interface PatientConsent {
   ipAddress?: string;
   userAgent?: string;
   responses: Record<string, boolean>;
+  consentId?: string;
+  // RF010 AC5: the state derived from the consent's decision events and
+  // revocations, and what it still permits.
+  currentStateDerived?: ConsentStateDerived;
+  effectivePermissions?: Record<string, boolean>;
+  withdrawalScope?: string[];
+}
+
+export type ConsentStateDerived = 'active' | 'partially_revoked' | 'revoked' | 'superseded';
+
+export interface ConsentPermissionRow {
+  permissionCode: string;
+  purpose?: { code?: string; display?: string };
+  decision?: 'permit' | 'deny';
+}
+
+export interface ConsentDecisionEvent {
+  consentDecisionEventId: string;
+  decision: string;
+  occurredAt: Date | string;
+  channel: string;
+  signerRole: string;
+  signerId?: string | null;
+  authenticationLevel?: string | null;
+}
+
+export interface ConsentRevocationRecord {
+  consentRevocationId: string;
+  scope: string[];
+  reason: string | null;
+  effectiveAt: Date | string;
+  priorUseDisposition?: string | null;
+}
+
+/** GET /api/e-consent/consents/:id/history (RF010 AC5). */
+export interface ConsentHistory {
+  consentId: string;
+  permissions: ConsentPermissionRow[];
+  participantId: string | null;
+  currentStateDerived: ConsentStateDerived;
+  supersededByConsentId: string | null;
+  supersedesConsentId: string | null;
+  decisionEvents: ConsentDecisionEvent[];
+  revocations: ConsentRevocationRecord[];
 }
 
 export enum FileType {
@@ -535,6 +588,7 @@ export const REPORT_TEMPLATE_HANDLER_KEYS = [
   'tissueOriginHistory',
   'extracellularNetwork',
   'accessLogs',
+  'auditEvents',
 ] as const;
 
 export type ReportTemplateHandlerKey = typeof REPORT_TEMPLATE_HANDLER_KEYS[number];
@@ -560,6 +614,8 @@ export interface Collection {
   collectionId: string;
   collectionName: string;
   collectionStatus?: string;
+  // V2E-0427, RF004 AC2: set at creation, never edited.
+  governanceRegime?: 'biobank' | 'biorepository' | null;
   sampleTypes?: Array<Record<string, unknown>>;
   datasetTypes?: Array<Record<string, unknown>>;
   diseaseScope?: Array<Record<string, unknown>>;
@@ -570,6 +626,46 @@ export interface Collection {
   participantCount?: number | null;
   sampleCount?: number | null;
   relatedPublications?: Array<Record<string, unknown>>;
+}
+
+// RF004 AC3, RF020 AC3, RF021 AC2 (V2E-0067..0075): an approval a
+// collection's governance rests on.
+export type CollectionGovernanceApprovalStatus = 'draft' | 'active' | 'suspended' | 'revoked';
+
+export interface CollectionGovernanceApproval {
+  approvalId: string;
+  collectionId: string;
+  authority: string;
+  caae?: string | null;
+  documentUri: string;
+  documentChecksum: string;
+  effectivePeriod: { start: string; end?: string | null };
+  status: CollectionGovernanceApprovalStatus;
+  responsibleOrganizationId: string;
+  statusHistory?: Array<{ from: string; to: string; reason?: string | null; changedAt?: string }>;
+  createdAt?: string;
+}
+
+// RF020 AC4 (V2E-0097..0104): the event that sets or converts a regime.
+export interface CollectionGovernanceEvent {
+  collectionGovernanceEventId: string;
+  collectionId: string;
+  previousRegime: 'biobank' | 'biorepository' | null;
+  newRegime: 'biobank' | 'biorepository';
+  decisionType: 'created' | 'regime_change';
+  approvalIds: string[];
+  justification: string;
+  occurredAt: string;
+}
+
+// GET /api/collections/:collectionId/governance. The context holds the
+// regime's own fields (BiorepositoryContext or BiobankGovernanceContext).
+export interface CollectionGovernance {
+  collectionId: string;
+  governanceRegime: 'biobank' | 'biorepository' | null;
+  governanceContext: Record<string, unknown> | null;
+  approvals: CollectionGovernanceApproval[];
+  events: CollectionGovernanceEvent[];
 }
 
 export interface User {
@@ -584,6 +680,12 @@ export interface User {
   password?: string; // Não deve ser retornado em respostas GET
   accessType?: number; // Mantido para compatibilidade (1: Básico, 2: Intermediário, 3: Completo)
   roleName?: 'Coordenador' | 'Técnico' | 'Administrador' | 'Usuário Externo'; // Role conforme diagrama de caso de uso
+  // #1239: the backend's audit-trail rule (administrator or the additive
+  // auditor role), sent on login and verify. roleName cannot express it.
+  isAuditReader?: boolean;
+  // #1240: whether this user holds the additive auditor role. Read on the
+  // user list and item; written through PUT /api/users/:id only.
+  auditorRole?: boolean;
   accessIDs?: number[]; // IDs dos Access permitidos (reportID da tabela Access)
   allowedReports?: string[]; // Tipos de relatórios permitidos (preenchido pelo backend)
   status?: string;
@@ -626,6 +728,7 @@ export interface Reports {
 export interface Temperature {
   _id?: string; // MongoDB ID
   logID: string;
+  telemetryReadingId?: string;
   timestamp?: Date | string;
   temperatureValue: number;
   temperatureUnit?: string;
@@ -721,7 +824,10 @@ export interface Sensor {
   nextCalibration?: Date | string | null;
   calibrationCertificate?: string;
   locationID?: number; // Padronizado para Number (consistente com Sample e Location)
-  policyID?: number; // Padronizado para Number (consistente com Policy)
+  // #1145: _id da TemperaturePolicy, vinculado ao SensorMetadata no cadastro
+  // (é o que a telemetria lê). Substitui policyID, que gravava Sensor.policyId
+  // e não era lido por nenhum resolvedor. Exige macAddress.
+  temperaturePolicy?: string;
   macAddress?: string; // Opcional: presente => backend vincula um SensorMetadata (ver #311)
   storageContainer?: string; // ID do StorageContainer (freezer) vinculado ao SensorMetadata
   organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#634)
@@ -730,17 +836,23 @@ export interface Sensor {
 }
 
 export interface Policy {
-  _id?: string; // MongoDB ID
-  policyID: number;
-  policyName?: string;
-  minThreshold: number;
-  maxThreshold: number;
-  targetTemperature: number;
+  _id?: string; // MongoDB ID -- the id every policy route keys on (#1178)
+  // #1178: legacy numeric id. The API returns it as `policyId` (lowercase d)
+  // and it is null for any policy created since #1089, so nothing keys on it.
+  policyId?: number | null;
+  // #1139: the API's field names are the stored temperaturePolicies document's
+  // (dict-02 ThresholdProfile), with no translation in between.
+  name?: string; // dict-02 P1X-0106 profileName
+  minTemp: number; // P1X-0108 lowerLimit
+  maxTemp: number; // P1X-0109 upperLimit
   hysteresis?: number;
-  alertDelayMin?: number;
+  minimumDuration?: number | null; // P1X-0110, minutes before an excursion opens
   temperatureUnit?: string;
-  validFrom: Date | string;
-  validTo: Date | string;
+  effectivePeriod: {
+    // P1X-0111
+    start: Date | string;
+    end?: Date | string | null;
+  };
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }
@@ -964,3 +1076,96 @@ export interface SampleFile {
   messageType?: string; // Ex: "ORU^R01", "OBR"
 }
 
+
+// RF024 (#1350): an access or distribution request, as /api/access-requests
+// returns it (api/backend/src/models/AccessRequest.js).
+export type AccessRequestItemType = 'specimen' | 'dataset' | 'file';
+export type AccessDecisionStatus = 'pending' | 'approved' | 'rejected' | 'conditioned' | 'revoked';
+
+export interface AccessRequestItem {
+  itemType: AccessRequestItemType;
+  itemId: string;
+  quantity?: number | null;
+}
+
+export interface AccessRequestItemCompatibility {
+  itemId: string;
+  itemType: AccessRequestItemType;
+  participantId: string | null;
+  consentValid: boolean | null;
+  consentAuthorizationDecisionId: string | null;
+  consentAuthorizationResult: 'permit' | 'deny' | 'review_required' | null;
+  consentAuthorizationReasons: string[];
+  duoCompatible: boolean | null;
+  studyActive: boolean;
+  compatible: boolean;
+}
+
+export interface AccessRequest {
+  accessRequestId: string;
+  requesterId: string;
+  organizationId: string;
+  studyId: string;
+  protocolId: string;
+  protocolVersion: string | null;
+  requestedPurpose: string;
+  duoCode: string | null;
+  requestedItems: AccessRequestItem[];
+  consentCompatibility: AccessRequestItemCompatibility[];
+  compatibilityEvaluatedAt: string | null;
+  overallCompatible: boolean | null;
+  policyDecision: { effect: 'permit' | 'deny' | 'review_required'; reasons: string[] } | null;
+  committeeDecision: {
+    decisionId: string | null;
+    status: AccessDecisionStatus;
+    justification: string | null;
+    decidedBy: string | null;
+    decidedAt: string | null;
+    policyVersion: string | null;
+    policyEffect: string | null;
+    configurationReleaseId: string | null;
+  };
+  approvalPeriod: { start: string; end?: string | null } | null;
+  distributionStatus: 'pending' | 'released';
+  distributedAt: string | null;
+  distributionDecisionId: string | null;
+  createdAt: string;
+}
+
+export interface AccessCheck {
+  allowed: boolean;
+  reason: string;
+}
+
+// ELM-0275..0285 (#1402): BiomarkerAssociation reference data. A Coding is
+// the {systemUri, code, version, display} shape the backend model stores.
+export interface Coding {
+  systemUri: string;
+  code: string;
+  version?: string;
+  display?: string;
+}
+
+export interface BiomarkerEvidenceReference {
+  system: 'DOI' | 'PMID';
+  value: string;
+}
+
+export type BiomarkerRole = 'diagnostic' | 'prognostic' | 'risk' | 'safety' | 'monitoring' | 'response';
+
+export interface BiomarkerAssociation {
+  _id?: string;
+  biomarkerId: string;
+  analyte: Coding;
+  associatedCondition: Coding[];
+  biomarkerRole: BiomarkerRole;
+  contextOfUse: string;
+  evidenceReferences: BiomarkerEvidenceReference[];
+  biospecimenMatrix?: unknown;
+  assayMethod?: unknown;
+  cutoff?: unknown;
+  evidenceLevel?: unknown;
+  regulatoryStatus?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+}

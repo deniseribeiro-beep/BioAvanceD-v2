@@ -8,6 +8,7 @@ import type { SampleWithId } from '../hooks/samples/useSamplesPage';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { patientService, sampleService } from '../services/api';
+import { attachExternalDocument, type ExternalDocumentSampleApi } from '../hooks/samples/attachExternalDocument';
 import './SamplesPage.css';
 
 export default function SamplesPage() {
@@ -63,17 +64,13 @@ export default function SamplesPage() {
 
     const note = window.prompt(t('samples.alerts.externalDocumentPrompt', 'Descreva o documento externo anexado (opcional):'), '') || '';
     try {
-      await sampleService.update(sample.id, {
-        consentStatus: 'EXTERNAL_ATTACHED',
-        // specimenStatus must be sent explicitly — the backend's generic
-        // update path (sample.service.js updateSample) is sticky for
-        // blocked statuses (computeStatus) and won't move off 'quarantined'
-        // on its own. quarantineReason has no specimenStatus equivalent
-        // and stays legacy-sourced (#407/#408).
-        specimenStatus: 'available',
-        quarantineReason: null,
-        importedBy: user?.userID || user?.id || user?.username || null,
-      } as any);
+      await attachExternalDocument(sampleService as unknown as ExternalDocumentSampleApi, {
+        id: sample.id,
+        specimenStatus: (sample as any).specimenStatus,
+      }, {
+        actor: user?.userID || user?.id || user?.username || null,
+        reason: note || t('samples.alerts.externalDocumentReleaseReason', 'Documento externo de consentimento anexado'),
+      });
       refreshSamples();
       alert(note ? t('samples.alerts.externalDocumentAttachedWithNote', 'Documento externo anexado. {note}').replace('{note}', note) : t('samples.alerts.externalDocumentAttachedSuccess', 'Documento externo anexado e amostra liberada.'));
     } catch (error: any) {

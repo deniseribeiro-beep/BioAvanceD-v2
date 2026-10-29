@@ -27,6 +27,7 @@ import { VALIDATION_MESSAGES, VALIDATION_RULES } from '../../../config/constants
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constants/sprecDictionary';
 import { SPECIMEN_TYPES, SAMPLE_ORIGINS, EXTRACTION_PROTOCOLS } from '../../../config/constants/specimen.constants';
 import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
+import { useCreateOrganizationChoice } from '../../../hooks/useCreateOrganizationChoice';
 import './ClinicalIntakeWizard.css';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -329,6 +330,23 @@ const initialState = {
   antibioticUse: false,
   insulinUse: false,
   antiviralUse: false,
+  // #715: the rest of the Charlson index's categories (CLINICAL_COMORBIDITIES).
+  myocardialInfarction: false,
+  congestiveHeartFailure: false,
+  peripheralVascularDisease: false,
+  cerebrovascularDisease: false,
+  dementia: false,
+  connectiveTissueDisease: false,
+  pepticUlcerDisease: false,
+  mildLiverDisease: false,
+  moderateSevereLiverDisease: false,
+  hemiplegia: false,
+  diabetesWithEndOrganDamage: false,
+  solidTumor: false,
+  metastaticSolidTumor: false,
+  leukemia: false,
+  lymphoma: false,
+  aids: false,
   bloodPressure: '',
   clinicalObservations: '',
   documento: '',
@@ -357,6 +375,7 @@ const initialState = {
   ischemiaTimeMinutes: '',
   preAnalyticalUnknown: false,
   linkedProject: '',
+  parentSpecimenIds: '',
   collectionInstitution: '',
   collectionInstitutionAcronym: '',
   selectedConsentTemplateId: '',
@@ -644,9 +663,13 @@ function normalizeDiseaseBiomarker(item) {
 }
 
 function normalizeDiseasePhenotype(item) {
+  // #885: keep the terminology version /dictionary/suggest resolved, so the
+  // operator sees which HPO release the code is recorded against.
+  const version = String(item?.version || '').trim();
   return {
     hpoId: String(item?.hpoId || item?.code || '').trim(),
     label: String(item?.label || item?.display || '').trim(),
+    ...(version ? { version } : {}),
   };
 }
 
@@ -1088,11 +1111,13 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     }
 
     if (!data.isHealthyControl) {
-      const hasDiagnosisCode = [data.diagnosisCidId, data.diagnosisCidCode, data.diagnosisOrphaCode].some((value) => String(value || '').trim().length > 0);
+      // Contract: autofill must leave a real ICD-10 or ORPHA code, not just the
+      // list-row id (diagnosisCidId can be an opaque local id with neither code).
+      const hasDiagnosisCode = [data.diagnosisCidCode, data.diagnosisOrphaCode].some((value) => String(value || '').trim().length > 0);
       if (!hasDiagnosisCode) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['diagnosisCidId'],
+          path: ['diagnosisCidCode'],
           message: t('wizard.validation.requireCidOrOrpha', 'Disease search must fill ICD-10 or ORPHA'),
         });
       }
@@ -1424,6 +1449,12 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   const participantId = String(formData.patientID || '').trim() || 'placeholder';
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
   const patientDocument = normalizeDocumentForPayload(formData.documento);
+  const parentSpecimenIds = [...new Set(
+    String(formData.parentSpecimenIds || '')
+      .split(/[\s,;]+/)
+      .map((value) => value.trim())
+      .filter(Boolean),
+  )];
   const diagnosis = formData.isHealthyControl ? null : {
     diagnosisName: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
     icdCode: String(formData.diagnosisCidCode || '').trim() || null,
@@ -1555,6 +1586,10 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       linkedProject: formData.linkedProject.trim(),
       sprec: canonicalSprec,
       merkleRoot: sampleMerkleRoot,
+      // dict-02 ELM-0120 parentSpecimenIds (Reference[], 0..*): sent only
+      // when the operator names a parent, so a plain intake's payload is
+      // unchanged; the server checks each id (#1371).
+      ...(parentSpecimenIds.length > 0 ? { parentSpecimenIds } : {}),
     },
     clinical,
     consent: {
@@ -1566,7 +1601,17 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   };
 }
 
-export const _test = { buildSubmissionPayload };
+// #1376: the organization pick travels in the intake's top-level
+// organizationId; specimen.collectionSite (ELM-0128) is data and is left as
+// the form built it.
+function applyIntakeOrganization(payload, intakeOrganizationId) {
+  if (intakeOrganizationId) {
+    payload.organizationId = intakeOrganizationId;
+  }
+  return payload;
+}
+
+export const _test = { buildSubmissionPayload, applyIntakeOrganization, createClinicalStepSchema };
 
 export default function ClinicalIntakeWizard(props) {
   const { t } = useLanguage();
@@ -1579,12 +1624,17 @@ export default function ClinicalIntakeWizard(props) {
     dictionariesLoading = true,
     dictionariesError = '',
   } = props;
-  const { loadCascadeByDisease, loadingSuggest } = useSemanticCascade();
+  const { loadCascadeByDisease, loadingSuggest, suggestError } = useSemanticCascade();
   const [activeStep, setActiveStep] = useState(0);
   const [formData, setFormData] = useState(initialState);
   const [touched, setTouched] = useState(false);
   const [step1Attempted, setStep1Attempted] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  // #1354/#1355: the organization the intake stamps, sent as organizationId (#1376).
+  // Asked only when the caller has a choice; a single-organization caller's
+  // own is stamped by the backend.
+  const organizationChoice = useCreateOrganizationChoice();
+  const [intakeOrganizationId, setIntakeOrganizationId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [consentTemplates, setConsentTemplates] = useState([]);
   const [consentTemplatesLoading, setConsentTemplatesLoading] = useState(false);
@@ -1618,6 +1668,7 @@ export default function ClinicalIntakeWizard(props) {
   const [sampleLabel, setSampleLabel] = useState(null);
   const [failedClinicalEntities, setFailedClinicalEntities] = useState([]);
   const preAnalyticalUnknownBackupRef = React.useRef(null);
+  const lastSuggestionArgsRef = React.useRef(null);
 
   const stepMeta = useMemo(() => ([
     {
@@ -2341,6 +2392,67 @@ export default function ClinicalIntakeWizard(props) {
     }));
   };
 
+  // Shared by handleDiagnosisSelect and the "suggest error" retry button so
+  // a retry re-runs the exact same cascade fetch + formData mapping instead
+  // of only the hook's retryLoadCascade (whose return value would otherwise
+  // be discarded here).
+  const loadDiseaseSuggestions = async ({ orphaNumeric, normalizedOrphaCode, displayLabel, shouldInjectFabryMock }) => {
+    if (orphaNumeric) {
+      try {
+        let cascade = await loadCascadeByDisease({
+          system: 'http://www.orpha.net',
+          code: orphaNumeric,
+          display: displayLabel,
+        }, { suppressErrorToast: true });
+
+        if ((!Array.isArray(cascade?.phenotypes) || cascade.phenotypes.length === 0) && (!Array.isArray(cascade?.biomarkers) || cascade.biomarkers.length === 0)) {
+          cascade = await loadCascadeByDisease({
+            system: 'http://www.orpha.net',
+            code: normalizedOrphaCode,
+            display: displayLabel,
+          }, { suppressErrorToast: true });
+        }
+
+        const cascadePhenotypes = Array.isArray(cascade?.phenotypes) ? cascade.phenotypes.map(normalizeDiseasePhenotype) : [];
+        const cascadeBiomarkers = Array.isArray(cascade?.biomarkers) ? cascade.biomarkers.map(normalizeDiseaseBiomarker) : [];
+        const nextPhenotypes = shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry(cascadePhenotypes) : cascadePhenotypes;
+        const nextBiomarkers = shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry(cascadeBiomarkers) : cascadeBiomarkers;
+
+        setFormData((previous) => ({
+          ...previous,
+          diseasePhenotypes: nextPhenotypes,
+          diseaseBiomarkers: nextBiomarkers,
+          biomarkers_values: buildBiomarkerValuesMap(nextBiomarkers, previous.biomarkers_values),
+        }));
+      } catch (_) {
+        setFormData((previous) => ({
+          ...previous,
+          diseasePhenotypes: shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry([]) : [],
+          diseaseBiomarkers: shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry([]) : [],
+          biomarkers_values: shouldInjectFabryMock
+            ? buildBiomarkerValuesMap(mergeDiseaseBiomarkersWithFabry([]), previous.biomarkers_values)
+            : {},
+        }));
+      }
+    } else if (shouldInjectFabryMock) {
+      const fabryPhenotypes = mergeDiseasePhenotypesWithFabry([]);
+      const fabryBiomarkers = mergeDiseaseBiomarkersWithFabry([]);
+      setFormData((previous) => ({
+        ...previous,
+        diagnosisOrphaCode: previous.diagnosisOrphaCode || 'ORPHA:324',
+        diseasePhenotypes: fabryPhenotypes,
+        diseaseBiomarkers: fabryBiomarkers,
+        biomarkers_values: buildBiomarkerValuesMap(fabryBiomarkers, previous.biomarkers_values),
+      }));
+    }
+  };
+
+  const handleRetrySuggest = () => {
+    const args = lastSuggestionArgsRef.current;
+    if (!args) return;
+    loadDiseaseSuggestions(args);
+  };
+
   const handleDiagnosisSelect = async (item) => {
     setTouched(true);
     const displayValue = item.displayName || item.description || item.definition || item.orphaCode || item.code || '';
@@ -2433,54 +2545,14 @@ export default function ClinicalIntakeWizard(props) {
       }
     }
 
-    if (orphaNumeric) {
-      try {
-        let cascade = await loadCascadeByDisease({
-          system: 'http://www.orpha.net',
-          code: orphaNumeric,
-          display: normalizedDefinition || displayValue,
-        }, { suppressErrorToast: true });
-
-        if ((!Array.isArray(cascade?.phenotypes) || cascade.phenotypes.length === 0) && (!Array.isArray(cascade?.biomarkers) || cascade.biomarkers.length === 0)) {
-          cascade = await loadCascadeByDisease({
-            system: 'http://www.orpha.net',
-            code: normalizedOrphaCode,
-            display: normalizedDefinition || displayValue,
-          }, { suppressErrorToast: true });
-        }
-
-        const cascadePhenotypes = Array.isArray(cascade?.phenotypes) ? cascade.phenotypes.map(normalizeDiseasePhenotype) : [];
-        const cascadeBiomarkers = Array.isArray(cascade?.biomarkers) ? cascade.biomarkers.map(normalizeDiseaseBiomarker) : [];
-        const nextPhenotypes = shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry(cascadePhenotypes) : cascadePhenotypes;
-        const nextBiomarkers = shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry(cascadeBiomarkers) : cascadeBiomarkers;
-
-        setFormData((previous) => ({
-          ...previous,
-          diseasePhenotypes: nextPhenotypes,
-          diseaseBiomarkers: nextBiomarkers,
-          biomarkers_values: buildBiomarkerValuesMap(nextBiomarkers, previous.biomarkers_values),
-        }));
-      } catch (_) {
-        setFormData((previous) => ({
-          ...previous,
-          diseasePhenotypes: shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry([]) : [],
-          diseaseBiomarkers: shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry([]) : [],
-          biomarkers_values: shouldInjectFabryMock
-            ? buildBiomarkerValuesMap(mergeDiseaseBiomarkersWithFabry([]), previous.biomarkers_values)
-            : {},
-        }));
-      }
-    } else if (shouldInjectFabryMock) {
-      const fabryPhenotypes = mergeDiseasePhenotypesWithFabry([]);
-      const fabryBiomarkers = mergeDiseaseBiomarkersWithFabry([]);
-      setFormData((previous) => ({
-        ...previous,
-        diagnosisOrphaCode: previous.diagnosisOrphaCode || 'ORPHA:324',
-        diseasePhenotypes: fabryPhenotypes,
-        diseaseBiomarkers: fabryBiomarkers,
-        biomarkers_values: buildBiomarkerValuesMap(fabryBiomarkers, previous.biomarkers_values),
-      }));
-    }
+    const suggestionArgs = {
+      orphaNumeric,
+      normalizedOrphaCode,
+      displayLabel: normalizedDefinition || displayValue,
+      shouldInjectFabryMock,
+    };
+    lastSuggestionArgsRef.current = suggestionArgs;
+    await loadDiseaseSuggestions(suggestionArgs);
   };
 
   const handleDiseasePhenotypeToggle = (phenotype) => {
@@ -2646,6 +2718,12 @@ export default function ClinicalIntakeWizard(props) {
       return;
     }
 
+    if (organizationChoice.required && !intakeOrganizationId) {
+      setSubmitError(t('wizard.validation.organization', 'Selecione a organização da coleta: sua conta pertence a mais de uma.'));
+      setActiveStep(1);
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -2653,6 +2731,7 @@ export default function ClinicalIntakeWizard(props) {
       if (patientMatchInfo?.patient?.patientID) {
         payload.participant.participantId = String(patientMatchInfo.patient.patientID).trim();
       }
+      applyIntakeOrganization(payload, intakeOrganizationId);
       console.log('[DEBUG] Payload pronto:', payload);
 
       let response;
@@ -3002,7 +3081,22 @@ export default function ClinicalIntakeWizard(props) {
                 <span className="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-700">{quantityUnit}</span>
               </div>
             </div>
+            {organizationChoice.show && (
+              <Select
+                id="wizard-organization"
+                data-testid="wizard-organization"
+                label={organizationChoice.required ? t('wizard.fields.organization', 'Organização da coleta') : t('wizard.fields.organizationOptional', 'Organização da coleta (opcional)')}
+                value={intakeOrganizationId}
+                onChange={(event) => setIntakeOrganizationId(event.target.value)}
+              >
+                <option value="">{organizationChoice.required ? t('wizard.fields.organizationPlaceholder', 'Selecione…') : t('wizard.fields.organizationNone', 'Nenhuma')}</option>
+                {organizationChoice.options.map((option) => (
+                  <option key={option.organizationId} value={option.organizationId}>{option.officialName || option.organizationId}</option>
+                ))}
+              </Select>
+            )}
             <Input id="linkedProject" name="linkedProject" data-testid="wizard-linked-project" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.linkedProject', 'Projeto vinculado')} value={formData.linkedProject} onChange={handleFieldChange('linkedProject')} required />
+            <Input id="parentSpecimenIds" name="parentSpecimenIds" data-testid="wizard-parent-specimen-ids" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.parentSpecimenIds', 'Amostras de origem (specimenIds)')} value={formData.parentSpecimenIds} onChange={handleFieldChange('parentSpecimenIds')} />
             <Input id="institutionName" name="institutionName" data-testid="wizard-institution-name" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.institutionName', 'Nome da Instituição')} value={formData.collectionInstitution} onChange={handleFieldChange('collectionInstitution')} required />
             <Input className="w-full rounded-lg px-3 py-2 uppercase bg-gray-100" label={t('wizard.fields.institutionAcronym', 'Sigla da Instituição')} value={String(formData.collectionInstitutionAcronym || '').toUpperCase()} readOnly />
           </div>
@@ -3704,6 +3798,18 @@ export default function ClinicalIntakeWizard(props) {
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForPhenotypes', 'Selecione uma doença para carregar fenótipos HPO sugeridos.')}</div>
               ) : loadingSuggest ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.status.loadingPhenotypes', 'Buscando fenótipos...')}</div>
+              ) : suggestError ? (
+                <div className="text-sm text-rose-600 suggestion-empty" data-testid="wizard-suggest-error-phenotypes">
+                  <p>{t('wizard.labels.suggestError', 'Falha ao carregar sugestões semânticas. Você pode tentar novamente.')}</p>
+                  <button
+                    type="button"
+                    className="mt-2 font-semibold text-cyan-700 underline"
+                    data-testid="wizard-suggest-retry-phenotypes"
+                    onClick={handleRetrySuggest}
+                  >
+                    {t('wizard.labels.retrySuggest', 'Tentar novamente')}
+                  </button>
+                </div>
               ) : diseasePhenotypeSuggestions.length === 0 ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noPhenotypes', 'Nenhum fenótipo sugerido para esta doença.')}</div>
               ) : (
@@ -3720,7 +3826,11 @@ export default function ClinicalIntakeWizard(props) {
                       />
                       <span className="phenotype-card__content">
                         <span className="phenotype-card__label">{item.label}</span>
-                        {item.hpoId && <span className="phenotype-card__code">{item.hpoId}</span>}
+                        {item.hpoId && (
+                          <span className="phenotype-card__code">
+                            {item.version ? `HPO ${item.version} · ${item.hpoId}` : item.hpoId}
+                          </span>
+                        )}
                       </span>
                     </label>
                   ))}
@@ -3736,6 +3846,18 @@ export default function ClinicalIntakeWizard(props) {
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForBiomarkers', 'Selecione uma doença para carregar biomarcadores sugeridos.')}</div>
               ) : loadingSuggest ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.status.loadingBiomarkers', 'Buscando biomarcadores...')}</div>
+              ) : suggestError ? (
+                <div className="text-sm text-rose-600 suggestion-empty" data-testid="wizard-suggest-error-biomarkers">
+                  <p>{t('wizard.labels.suggestError', 'Falha ao carregar sugestões semânticas. Você pode tentar novamente.')}</p>
+                  <button
+                    type="button"
+                    className="mt-2 font-semibold text-cyan-700 underline"
+                    data-testid="wizard-suggest-retry-biomarkers"
+                    onClick={handleRetrySuggest}
+                  >
+                    {t('wizard.labels.retrySuggest', 'Tentar novamente')}
+                  </button>
+                </div>
               ) : diseaseBiomarkerSuggestions.length === 0 ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noBiomarkers', 'Nenhum biomarcador sugerido para esta doença.')}</div>
               ) : (

@@ -637,7 +637,7 @@ describe('NotificationService', () => {
   describe('sendConsentSmsFallback', () => {
     it('returns missing_phone failure when phone cannot be resolved', async () => {
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const result = await notificationService.sendConsentSmsFallback({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.sendConsentSmsFallback({ participantId: '12345678' }, 'http://link');
       expect(result).toEqual({ channel: 'sms', success: false, reason: 'missing_phone' });
     });
 
@@ -646,7 +646,7 @@ describe('NotificationService', () => {
       delete process.env.ALERT_EMAIL_TO;
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const result = await notificationService.sendConsentSmsFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: '12345678', phone: '11912345678' },
         'http://link'
       );
       expect(result).toEqual({ channel: 'sms', success: false, reason: 'missing_sms_fallback_email' });
@@ -656,11 +656,11 @@ describe('NotificationService', () => {
       notificationService.adminEmail = 'admin@example.com';
       const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
       const result = await notificationService.sendConsentSmsFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: '12345678', phone: '11912345678' },
         'http://link'
       );
       expect(sendEmailSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'admin@example.com', notificationType: 'RF_CONSENT_SMS_FALLBACK' })
+        expect.objectContaining({ to: 'admin@example.com', notificationType: 'RF_CONSENT_SMS_FALLBACK', metadata: { participantId: '12345678', phone: '+5511912345678' } })
       );
       expect(result).toEqual({ channel: 'sms', success: true, mocked: true, provider: 'resend-email-fallback' });
     });
@@ -669,13 +669,13 @@ describe('NotificationService', () => {
   describe('sendConsentWhatsappFallback', () => {
     it('returns missing_phone failure when phone cannot be resolved', async () => {
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const result = await notificationService.sendConsentWhatsappFallback({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.sendConsentWhatsappFallback({ participantId: '12345678' }, 'http://link');
       expect(result).toEqual({ channel: 'whatsapp', success: false, reason: 'missing_phone' });
     });
 
     it('reports a consolidated mocked success when a phone is resolvable (no real WhatsApp send)', async () => {
       const result = await notificationService.sendConsentWhatsappFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: '12345678', phone: '11912345678' },
         'http://link'
       );
       expect(result).toEqual({
@@ -733,13 +733,39 @@ describe('NotificationService', () => {
       vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue({ add: addMock });
       const notifySpy = vi.spyOn(notificationService, 'notifyPatientConsent');
 
-      const result = await notificationService.enqueueConsentNotification({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.enqueueConsentNotification({ participantId: '12345678' }, 'http://link');
       expect(addMock).toHaveBeenCalledWith('consent-notification', {
-        patientData: { patientID: 'P-1' },
+        patientData: { participantId: '12345678' },
         consentLink: 'http://link'
       });
       expect(notifySpy).not.toHaveBeenCalled();
       expect(result).toEqual([{ channel: 'queue', success: true, provider: 'bullmq' }]);
+    });
+
+    // #1169: the job body is persisted in Redis (24h, 7 days on failure), so
+    // it carries only what the send path reads -- never civil identity or
+    // the consent credential.
+    // #1166 slice 2 narrows #1169's list to the id alone: the name and the
+    // contact are identity data, and the worker resolves them at send time.
+    it('#1169/#1166: enqueues only the participantId, no name or contact', async () => {
+      const addMock = vi.fn().mockResolvedValue({ id: 'job-1' });
+      vi.spyOn(notificationService, 'getNotificationQueue').mockReturnValue({ add: addMock });
+
+      await notificationService.enqueueConsentNotification({
+        participantId: '12345678',
+        patientName: 'Maria',
+        email: 'maria@example.com',
+        phone: '11987654321',
+        birthDate: new Date(1990, 0, 20),
+        identityDocument: '11144477735',
+        consentToken: 'secret-token',
+        consentTemplateId: 'tpl-1',
+      }, 'http://link');
+
+      expect(addMock).toHaveBeenCalledWith('consent-notification', {
+        patientData: { participantId: '12345678' },
+        consentLink: 'http://link'
+      });
     });
   });
 
@@ -756,6 +782,55 @@ describe('NotificationService', () => {
 
       expect(notifySpy).toHaveBeenCalledWith({ patientID: 'P-9' }, 'http://link/9');
       expect(result).toEqual([{ channel: 'email', success: true }]);
+    });
+
+    // #1166 slice 2: the job carries only the participantId, so the worker
+    // resolves name and contact from the participant's identity record,
+    // decrypting a ciphertext-only one, at send time.
+    it('#1166: resolves name and contact from the decrypted identity record', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '12345678',
+        patientName: 'Maria',
+        email: 'maria@example.com',
+        phone: '11987654321',
+      });
+      const identity = { ...encrypted, patientName: null, email: null, phone: null };
+      const findOne = vi.fn(async (filter) => (filter.participantId === '12345678' ? identity : null));
+      const db = { collection: vi.fn(() => ({ findOne })) };
+      const notifySpy = vi
+        .spyOn(notificationService, 'notifyPatientConsent')
+        .mockResolvedValue([{ channel: 'email', success: true }]);
+
+      await notificationService.processConsentNotificationJob(
+        { patientData: { participantId: '12345678' }, consentLink: 'http://link/9' },
+        db
+      );
+
+      expect(db.collection).toHaveBeenCalledWith('participantIdentities');
+      expect(notifySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          participantId: '12345678',
+          patientName: 'Maria',
+          email: 'maria@example.com',
+          phone: '11987654321',
+        }),
+        'http://link/9'
+      );
+    });
+
+    // #1166 slice 4: the Patient copy is gone, and so is the worker's read of it.
+    it('#1166: does not read the contact off patients', async () => {
+      const findOne = vi.fn(async () => ({ participantId: '12345678', patientName: 'Maria' }));
+      const db = { collection: vi.fn(() => ({ findOne })) };
+      vi.spyOn(notificationService, 'notifyPatientConsent').mockResolvedValue([{ channel: 'email', success: true }]);
+
+      await notificationService.processConsentNotificationJob(
+        { patientData: { participantId: '12345678' }, consentLink: 'http://link/10' },
+        db
+      );
+
+      expect(db.collection).not.toHaveBeenCalledWith('patients');
     });
   });
 
@@ -972,6 +1047,22 @@ describe('NotificationService', () => {
         })
       );
     });
+
+    // #1203: the text used to promise "30 minutos" whatever the token said.
+    it('states the expiry the caller passes, and no fixed duration otherwise', async () => {
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      await notificationService.sendPasswordReset('a@x.com', 'https://app.example.com/reset?token=t1', { expiresInMinutes: 60 });
+      await notificationService.sendPasswordReset('a@x.com', 'https://app.example.com/reset?token=t1', { expiresInMinutes: 1440 });
+      await notificationService.sendPasswordReset('a@x.com', 'https://app.example.com/reset?token=t1');
+
+      const [hour, day, none] = sendEmailSpy.mock.calls.map(([arg]) => arg);
+      expect(hour.text).toContain('expira em 1 hora.');
+      expect(day.html).toContain('expira em 24 horas.');
+      expect(none.text).toContain('expira em breve.');
+      for (const call of [hour, day, none]) {
+        expect(call.html).not.toContain('30 minutos');
+      }
+    });
   });
 
   describe('sendTemperatureAlert', () => {
@@ -1021,19 +1112,6 @@ describe('NotificationService', () => {
         note: 'Fluxo legado de SMS redirecionado para e-mail no provedor único Resend',
         emailResult: { success: true, messageId: 'm1' }
       });
-    });
-  });
-
-  describe('sendRecoveryEmail', () => {
-    it('builds a recovery link from APP_DOMAIN and delegates to sendPasswordReset', async () => {
-      process.env.APP_DOMAIN = 'https://app.example.com/';
-      const resetSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
-
-      await notificationService.sendRecoveryEmail('a@x.com', 'tok en');
-      expect(resetSpy).toHaveBeenCalledWith(
-        'a@x.com',
-        'https://app.example.com/recover-password?token=tok%20en'
-      );
     });
   });
 

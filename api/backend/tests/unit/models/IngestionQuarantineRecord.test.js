@@ -64,5 +64,23 @@ describe('IngestionQuarantineRecordModel', () => {
       expect(doc.provenance).toEqual(provenance);
       expect(doc.idempotencyKey).toBe('key-1');
     });
+
+    // RF029 AC7 (#1318): the client's missingness declaration is kept as received.
+    it('keeps a missingDataReasons declaration as received', () => {
+      const missingDataReasons = [{ fieldPath: 'doi', reasonCode: 'withheld' }];
+      const doc = IngestionQuarantineRecordModel.create({ ...validData, missingDataReasons });
+      expect(doc.missingDataReasons).toEqual([{ fieldPath: 'doi', reasonCode: 'withheld' }]);
+    });
+
+    it('stores null when no missingDataReasons was declared', () => {
+      const doc = IngestionQuarantineRecordModel.create(validData);
+      expect(doc.missingDataReasons).toBeNull();
+    });
+
+    it('keeps a malformed missingDataReasons unchanged, and validate still passes', () => {
+      const doc = IngestionQuarantineRecordModel.create({ ...validData, missingDataReasons: 'x' });
+      expect(doc.missingDataReasons).toBe('x');
+      expect(IngestionQuarantineRecordModel.validate(doc).isValid).toBe(true);
+    });
   });
 });

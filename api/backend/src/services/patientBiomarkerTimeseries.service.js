@@ -45,7 +45,7 @@ class PatientBiomarkerTimeseriesService {
 
     try {
       await connectInfluxDB();
-      const writeApi = getInfluxWriteApi();
+      const writeApi = getInfluxWriteApi({ requestScoped: true });
 
       const point = new Point('patient_biomarkers')
         .tag('participantId', participantId)

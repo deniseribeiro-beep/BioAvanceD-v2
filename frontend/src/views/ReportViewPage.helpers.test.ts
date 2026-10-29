@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { selectTemperatureRows, selectAccessLogRows, rowKey } from './ReportViewPage.helpers';
+import { selectTemperatureRows, selectAccessLogRows, selectAuditEventRows, rowKey } from './ReportViewPage.helpers';
 
 // #949: ReportViewPage's two detail tables read `recentReadings` and
 // `recentLogs`. No report handler has ever emitted either key.
@@ -115,5 +115,41 @@ describe('#949: row keys use logId, not the logID input alias', () => {
 
   it('ignores a logID-spelled property, which no model emits', () => {
     expect(rowKey({ logID: 'WRONG', _id: 'abc' } as never, 0)).toBe('abc');
+  });
+});
+
+// #733: the `audit` report now reads the AuditEvent trail, and its handler
+// returns `{ total, auditEvents, previewLimited }`, with rows bounded to the
+// export catalog's columns.
+describe('#733: selectAuditEventRows', () => {
+  const auditPayload = {
+    total: 1,
+    auditEvents: [
+      {
+        eventId: 'E-1',
+        sequenceNumber: 3,
+        occurredAt: '2026-09-01T12:00:00.000Z',
+        recordedAt: '2026-09-01T12:00:01.000Z',
+        actorPseudonym: 'USR-1234ABCD',
+        action: 'LOGIN',
+        entityType: 'User',
+        result: 'success',
+        source: 'Autenticação',
+      },
+    ],
+    previewLimited: false,
+  };
+
+  it('reads the rows off `auditEvents`', () => {
+    expect(selectAuditEventRows(auditPayload)).toEqual(auditPayload.auditEvents);
+  });
+
+  it('CONTROL: an access-log payload yields no audit rows', () => {
+    expect(selectAuditEventRows(accessLogPayload)).toEqual([]);
+  });
+
+  it('CONTROL: a missing or malformed blob yields no rows', () => {
+    expect(selectAuditEventRows(null)).toEqual([]);
+    expect(selectAuditEventRows({ auditEvents: 'nope' })).toEqual([]);
   });
 });

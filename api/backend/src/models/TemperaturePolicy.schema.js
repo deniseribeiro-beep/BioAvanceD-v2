@@ -16,7 +16,6 @@ const mongoose = require('mongoose');
 const TemperaturePolicySchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
-    targetTemp: { type: Number, required: true },
     minTemp: { type: Number, required: true },
     maxTemp: { type: Number, required: true },
     hysteresis: { type: Number, required: true, default: 0.5 },

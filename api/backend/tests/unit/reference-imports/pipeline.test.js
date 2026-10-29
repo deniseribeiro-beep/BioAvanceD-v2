@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
-const { runImport, rollbackRelease } = require('../../../src/reference-data/reference-imports/pipeline');
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { runImport: runImportUnderTest } = require('../../../src/reference-data/reference-imports/pipeline');
+const { promoteRelease, rollbackRelease } = require('../../../src/services/referenceRelease.service');
+const auditLogger = require('../../../src/utils/auditLogger');
+const ReferenceCoverageManifestModel = require('../../../src/models/ReferenceCoverageManifest');
 const hpoSource = require('../../../src/reference-data/reference-imports/sources/hpo');
 const { normalizeRecord } = require('../../../src/reference-data/reference-imports/normalizeHpo');
 
@@ -7,13 +14,26 @@ const { normalizeRecord } = require('../../../src/reference-data/reference-impor
  * Small in-memory Mongo-collection fake matching the exact-key filters
  * pipeline.js actually issues (systemUri+code+version, datasetCode+
  * releaseStatus, idempotencyKey, etc.) — real query-matching for the shapes
- * this pipeline uses, not a stub returning canned data (per
- * build-loop's local-env "real backend" proof bar for a native-only slice).
+ * this pipeline uses, not a stub returning canned data (per this
+ * repo's "real backend" proof bar for a native-only slice).
  */
 function createFakeCollection() {
   const docs = [];
   const calls = [];
-  const matches = (doc, filter) => Object.keys(filter).every((key) => doc[key] === filter[key]);
+  // promoteRelease's claim filter also uses $or, $exists and $lt; a null
+  // condition matches a missing field, as in Mongo.
+  const matchesValue = (value, cond) => {
+    if (cond && typeof cond === 'object' && !(cond instanceof Date) && Object.keys(cond).some((op) => op.startsWith('$'))) {
+      return Object.entries(cond).every(([op, arg]) => {
+        if (op === '$exists') return (value !== undefined) === arg;
+        if (op === '$lt') return value !== undefined && value !== null && value < arg;
+        throw new Error(`unsupported operator: ${op}`);
+      });
+    }
+    return cond === null ? value === null || value === undefined : value === cond;
+  };
+  const matches = (doc, filter) => Object.entries(filter).every(([key, cond]) =>
+    (key === '$or' ? cond.some((sub) => matches(doc, sub)) : matchesValue(doc[key], cond)));
   return {
     docs,
     calls,
@@ -45,6 +65,19 @@ function createFakeCollection() {
       if (update.$set) Object.assign(doc, update.$set);
       return { matchedCount: 1, modifiedCount: 1 };
     },
+    // The outbox's per-aggregate version counter: an upserting $inc.
+    async findOneAndUpdate(filter, update, options = {}) {
+      calls.push({ method: 'findOneAndUpdate', filter, update, session: options.session });
+      let doc = docs.find((d) => matches(d, filter));
+      if (!doc) {
+        if (!options.upsert) return null;
+        doc = { ...filter };
+        docs.push(doc);
+      }
+      for (const [key, by] of Object.entries(update.$inc || {})) doc[key] = (doc[key] || 0) + by;
+      if (update.$set) Object.assign(doc, update.$set);
+      return doc;
+    },
     async countDocuments(filter = {}) {
       return docs.filter((doc) => matches(doc, filter)).length;
     },
@@ -60,6 +93,9 @@ function createFakeDb() {
     terminologyConcepts: createFakeCollection(),
     terminologyRelations: createFakeCollection(),
     graph_projection_outbox: createFakeCollection(),
+    graph_projection_outbox_aggregate_versions: createFakeCollection(),
+    referenceCoverageManifests: createFakeCollection(),
+    dataQualityAssessments: createFakeCollection(),
   };
   return {
     collections,
@@ -71,10 +107,26 @@ function createFakeDb() {
 }
 
 describe('reference-imports pipeline runImport (HPO)', () => {
+  // Every case stores its assets under a tmp root, never under STORAGE_BASE.
+  let storageRoot;
+  const runImport = (opts) => runImportUnderTest({ assetStorageRoot: storageRoot, ...opts });
+  // RF028 AC8: an import leaves its approved release for explicit promotion.
+  const promote = (db, result) => promoteRelease({ db, releaseId: result.releaseId, approvedBy: 'test-approver' });
+  beforeEach(() => {
+    storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ref-assets-'));
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue();
+  });
+  afterEach(() => {
+    fs.rmSync(storageRoot, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
   it('promotes the bundled HPO sample end to end on first run', async () => {
     const fakeDb = createFakeDb();
 
     const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+    await promote(fakeDb, result);
 
     expect(result.idempotent).toBe(false);
     expect(result.approved).toBe(true);
@@ -106,7 +158,7 @@ describe('reference-imports pipeline runImport (HPO)', () => {
     it('appends one TERMINOLOGY_CONCEPT_PROMOTED and one TERMINOLOGY_RELATION_PROMOTED event per promoted record', async () => {
       const fakeDb = createFakeDb();
 
-      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' }));
 
       const outboxDocs = fakeDb.collections.graph_projection_outbox.docs;
       expect(outboxDocs).toHaveLength(15); // 8 concepts + 7 relations, matching Mongo promotion counts
@@ -142,11 +194,53 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       });
     });
 
+    // #1313 (RF023 AC3): on a replica set each promoted record and its event
+    // are written in one transaction, a transaction per record.
+    it('writes each promoted record and its outbox event in the same transaction on a replica set', async () => {
+      const fakeDb = createFakeDb();
+      let sessionCount = 0;
+      fakeDb.client = {
+        db: () => ({ command: async () => ({ setName: 'rs0' }) }),
+        startSession: () => {
+          sessionCount += 1;
+          const session = { id: sessionCount };
+          return {
+            ...session,
+            withTransaction: async (fn) => { await fn(); },
+            endSession: async () => {},
+          };
+        },
+      };
+      const sessionsOf = (collection) => {
+        const seen = [];
+        const { insertOne, updateOne } = collection;
+        collection.insertOne = async (doc, options) => { seen.push(options?.session?.id); return insertOne.call(collection, doc, options); };
+        collection.updateOne = async (filter, update, options) => { seen.push(options?.session?.id); return updateOne.call(collection, filter, update, options); };
+        return seen;
+      };
+      const conceptSessions = sessionsOf(fakeDb.collections.terminologyConcepts);
+      const relationSessions = sessionsOf(fakeDb.collections.terminologyRelations);
+      const outboxSessions = sessionsOf(fakeDb.collections.graph_projection_outbox);
+
+      await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' }));
+
+      const recordSessions = [...conceptSessions, ...relationSessions];
+      expect(recordSessions).toHaveLength(15);
+      expect(recordSessions.every((id) => typeof id === 'number')).toBe(true);
+      expect(new Set(recordSessions).size).toBe(15);
+      expect(outboxSessions).toEqual(recordSessions);
+      // #1313: each event's aggregateVersion is taken in the same transaction.
+      const versionSessions = fakeDb.collections.graph_projection_outbox_aggregate_versions.calls
+        .filter((call) => call.method === 'findOneAndUpdate')
+        .map((call) => call.session?.id);
+      expect(versionSessions).toEqual(recordSessions);
+    });
+
     it('does not append duplicate outbox events on a second, idempotent run', async () => {
       const fakeDb = createFakeDb();
 
-      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord });
-      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord });
+      await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord }));
+      await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord }));
 
       expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(15);
     });
@@ -166,7 +260,7 @@ describe('reference-imports pipeline runImport (HPO)', () => {
         display: 'All',
       });
 
-      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' }));
 
       // 1 pre-seeded + 7 newly inserted (HP:0000001 was skipped, not re-inserted).
       expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
@@ -181,7 +275,7 @@ describe('reference-imports pipeline runImport (HPO)', () => {
   it('is idempotent on a second run against the same content and version', async () => {
     const fakeDb = createFakeDb();
 
-    await runImport({ db: fakeDb, source: hpoSource, normalizeRecord });
+    await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord }));
     const second = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord });
 
     expect(second.idempotent).toBe(true);
@@ -238,6 +332,256 @@ describe('reference-imports pipeline runImport (HPO)', () => {
     expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(1);
   });
 
+  describe('release registration (RF028 AC1)', () => {
+    it('registers before load: the release exists, downloaded, and the run carries its id at the first staging write', async () => {
+      const fakeDb = createFakeDb();
+      const staging = fakeDb.collections.referenceImportStaging;
+      const { insertMany } = staging;
+      let atFirstStage = null;
+      staging.insertMany = async (newDocs) => {
+        if (!atFirstStage) {
+          atFirstStage = {
+            releases: fakeDb.collections.referenceDatasetReleases.docs.map((doc) => ({ ...doc })),
+            runs: fakeDb.collections.referenceImportRuns.docs.map((doc) => ({ ...doc })),
+          };
+        }
+        return insertMany.call(staging, newDocs);
+      };
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, result);
+
+      expect(atFirstStage.releases).toHaveLength(1);
+      const registered = atFirstStage.releases[0];
+      expect(registered.releaseStatus).toBe('downloaded');
+      expect(registered).toMatchObject({
+        sourceId: hpoSource.sourceId,
+        datasetVersion: hpoSource.datasetVersion,
+        license: hpoSource.license,
+        retrievalUri: hpoSource.retrievalUri,
+        sourceChecksum: hpoSource.expectedChecksum,
+        parserVersion: hpoSource.parserVersion,
+        mappingVersion: hpoSource.mappingVersion,
+      });
+      expect(registered.sourceFormat.length).toBeGreaterThan(0);
+      expect(atFirstStage.runs).toHaveLength(1);
+      expect(atFirstStage.runs[0].referenceDatasetReleaseId).toBe(registered.referenceDatasetReleaseId);
+
+      const release = fakeDb.collections.referenceDatasetReleases.docs[0];
+      expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(1);
+      expect(release.referenceDatasetReleaseId).toBe(registered.referenceDatasetReleaseId);
+      expect(release.releaseStatus).toBe('active');
+      expect(result.releaseId).toBe(registered.referenceDatasetReleaseId);
+      expect(fakeDb.collections.terminologyConcepts.docs.every(
+        (concept) => concept.referenceDatasetReleaseId === registered.referenceDatasetReleaseId,
+      )).toBe(true);
+    });
+
+    it('rejected run keeps its release: the registered release ends rejected and is linked from the run and its issues', async () => {
+      const fakeDb = createFakeDb();
+      const rejectAll = () => ({ ok: false, issue: { errorCode: 'TEST_REJECT', errorMessage: 'rejected', severity: 'error' } });
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord: rejectAll, initiatedBy: 'test-actor' });
+
+      expect(result.approved).toBe(false);
+      const releases = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releases).toHaveLength(1);
+      expect(releases[0].releaseStatus).toBe('rejected');
+      const releaseId = releases[0].referenceDatasetReleaseId;
+      expect(result.releaseId).toBe(releaseId);
+
+      const runDoc = fakeDb.collections.referenceImportRuns.docs[0];
+      expect(runDoc.runStatus).toBe('failed');
+      expect(runDoc.referenceDatasetReleaseId).toBe(releaseId);
+      const issues = fakeDb.collections.referenceImportIssues.docs;
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues.every((issue) => issue.referenceDatasetReleaseId === releaseId)).toBe(true);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+    });
+
+    it.each([
+      ['a full run', false],
+      ['a dry run', true],
+    ])('invalid registration on %s writes no release, stages nothing and fails with one fatal issue', async (_label, dryRun) => {
+      const fakeDb = createFakeDb();
+      const source = { ...hpoSource, retrievalUri: undefined };
+
+      const result = await runImport({ db: fakeDb, source, normalizeRecord, dryRun, initiatedBy: 'test-actor' });
+
+      expect(result.approved).toBe(false);
+      expect(result.releaseId).toBeNull();
+      expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(0);
+      expect(fakeDb.collections.referenceImportStaging.docs).toHaveLength(0);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+      const runs = fakeDb.collections.referenceImportRuns.docs;
+      expect(runs).toHaveLength(1);
+      expect(runs[0].runStatus).toBe('failed');
+      const issues = fakeDb.collections.referenceImportIssues.docs;
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({
+        entityType: 'ReferenceDatasetRelease',
+        errorCode: 'RELEASE_REGISTRATION_INVALID',
+        severity: 'fatal',
+        referenceDatasetReleaseId: 'unresolved',
+      });
+      expect(issues[0].errorMessage).toContain('retrievalUri');
+    });
+  });
+
+  describe('asset preservation (RF028 AC2)', () => {
+    const sha256 = (filePath) => crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    const assetDir = () => path.join(storageRoot, 'reference-releases', hpoSource.datasetCode, 'sha256');
+    const assetPath = () => path.join(assetDir(), hpoSource.expectedChecksum);
+
+    const expectAssetFailure = (fakeDb, result) => {
+      expect(result.approved).toBe(false);
+      expect(result.assetUri).toBeNull();
+      const releases = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releases).toHaveLength(1);
+      // The content was never judged, so the release keeps its status.
+      expect(releases[0].releaseStatus).toBe('downloaded');
+      const releaseId = releases[0].referenceDatasetReleaseId;
+      expect(result.releaseId).toBe(releaseId);
+      const runs = fakeDb.collections.referenceImportRuns.docs;
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ runStatus: 'failed', referenceDatasetReleaseId: releaseId });
+      const issues = fakeDb.collections.referenceImportIssues.docs;
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({
+        entityType: 'ReferenceDatasetRelease',
+        errorCode: 'ASSET_PRESERVATION_FAILED',
+        severity: 'fatal',
+        referenceDatasetReleaseId: releaseId,
+        rawValue: { assetUri: `objstore://reference-releases/HPO/sha256/${hpoSource.expectedChecksum}`, checksum: hpoSource.expectedChecksum },
+      });
+      expect(fakeDb.collections.referenceImportStaging.docs).toHaveLength(0);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+    };
+
+    it('a full run stores the asset before its first staging write, content-addressed by the release checksum', async () => {
+      const fakeDb = createFakeDb();
+      const staging = fakeDb.collections.referenceImportStaging;
+      const { insertMany } = staging;
+      let storedAtFirstStage = null;
+      staging.insertMany = async (newDocs) => {
+        if (storedAtFirstStage === null) storedAtFirstStage = fs.existsSync(assetPath());
+        return insertMany.call(staging, newDocs);
+      };
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expect(storedAtFirstStage).toBe(true);
+      const release = fakeDb.collections.referenceDatasetReleases.docs[0];
+      expect(sha256(assetPath())).toBe(release.sourceChecksum);
+      expect(result.assetUri).toBe('objstore://reference-releases/HPO/sha256/' + hpoSource.expectedChecksum);
+      expect(fs.readdirSync(assetDir())).toEqual([hpoSource.expectedChecksum]);
+      expect(result.approved).toBe(true);
+    });
+
+    it.each([
+      ['a dry run', { dryRun: true }],
+      ['a checksum mismatch', { source: { ...hpoSource, expectedChecksum: 'sha256-does-not-match' } }],
+    ])('%s preserves nothing', async (_label, overrides) => {
+      const fakeDb = createFakeDb();
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, ...overrides });
+
+      expect(result.assetUri).toBeNull();
+      expect(fs.existsSync(path.join(storageRoot, 'reference-releases'))).toBe(false);
+    });
+
+    it('a second full run of content-identical source reuses the stored object', async () => {
+      const fakeDb = createFakeDb();
+
+      const first = await runImport({ db: fakeDb, source: { ...hpoSource, datasetVersion: 'v1' }, normalizeRecord });
+      const bytesAfterFirst = fs.readFileSync(assetPath());
+      const second = await runImport({ db: fakeDb, source: { ...hpoSource, datasetVersion: 'v2' }, normalizeRecord });
+
+      expect(second.idempotent).toBe(false);
+      expect(second.approved).toBe(true);
+      expect(second.assetUri).toBe(first.assetUri);
+      expect(fs.readFileSync(assetPath()).equals(bytesAfterFirst)).toBe(true);
+      expect(fs.readdirSync(assetDir())).toEqual([hpoSource.expectedChecksum]);
+    });
+
+    it('a stored object with other bytes fails the run and is left unchanged', async () => {
+      const fakeDb = createFakeDb();
+      fs.mkdirSync(assetDir(), { recursive: true });
+      fs.writeFileSync(assetPath(), 'not the HPO release');
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expectAssetFailure(fakeDb, result);
+      expect(fs.readFileSync(assetPath(), 'utf8')).toBe('not the HPO release');
+      expect(fs.readdirSync(assetDir())).toEqual([hpoSource.expectedChecksum]);
+    });
+
+    it('an unwritable storage root fails the run without throwing', async () => {
+      const fakeDb = createFakeDb();
+      const fileRoot = path.join(storageRoot, 'a-regular-file');
+      fs.writeFileSync(fileRoot, 'x');
+
+      const result = await runImportUnderTest({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', assetStorageRoot: fileRoot });
+
+      expectAssetFailure(fakeDb, result);
+      expect(fs.readFileSync(fileRoot, 'utf8')).toBe('x');
+    });
+
+    it('a run after an asset-preservation failure retries and completes', async () => {
+      const fakeDb = createFakeDb();
+      const assetRoot = path.join(storageRoot, 'asset-root');
+      fs.writeFileSync(assetRoot, 'x');
+      const failed = await runImportUnderTest({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', assetStorageRoot: assetRoot });
+      expectAssetFailure(fakeDb, failed);
+      fs.rmSync(assetRoot);
+      fs.mkdirSync(assetRoot);
+
+      const retried = await runImportUnderTest({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', assetStorageRoot: assetRoot });
+      await promote(fakeDb, retried);
+
+      expect(retried.idempotent).toBe(false);
+      expect(retried.approved).toBe(true);
+      expect(retried.run.referenceImportRunId).toBe(failed.run.referenceImportRunId);
+      expect(retried.run.runStatus).toBe('completed');
+      expect(retried.releaseId).toBe(failed.releaseId);
+      const runs = fakeDb.collections.referenceImportRuns.docs.filter(
+        (run) => run.idempotencyKey === failed.run.idempotencyKey && run.importMode === 'full',
+      );
+      expect(runs).toHaveLength(1);
+      expect(runs[0].runStatus).toBe('completed');
+      const releases = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releases).toHaveLength(1);
+      expect(releases[0].releaseStatus).toBe('active');
+      const stored = path.join(assetRoot, 'reference-releases', hpoSource.datasetCode, 'sha256', hpoSource.expectedChecksum);
+      expect(sha256(stored)).toBe(hpoSource.expectedChecksum);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+    });
+
+    it('a failed run with a fatal issue other than ASSET_PRESERVATION_FAILED still short-circuits', async () => {
+      const fakeDb = createFakeDb();
+      const seeded = {
+        referenceImportRunId: 'seeded-failed-run',
+        referenceDatasetReleaseId: null,
+        datasetCode: hpoSource.datasetCode,
+        importMode: 'full',
+        idempotencyKey: `${hpoSource.datasetCode}:${hpoSource.datasetVersion}:sha256:${hpoSource.expectedChecksum}`,
+        runStatus: 'failed',
+      };
+      fakeDb.collections.referenceImportRuns.docs.push(seeded);
+      fakeDb.collections.referenceImportIssues.docs.push(
+        { referenceImportRunId: seeded.referenceImportRunId, errorCode: 'ASSET_PRESERVATION_FAILED', severity: 'fatal' },
+        { referenceImportRunId: seeded.referenceImportRunId, errorCode: 'RELEASE_REGISTRATION_INVALID', severity: 'fatal' },
+      );
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expect(result.idempotent).toBe(true);
+      expect(result.run).toBe(seeded);
+      expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(0);
+      expect(fs.existsSync(path.join(storageRoot, 'reference-releases'))).toBe(false);
+    });
+  });
+
   describe('checkpoint/resume (AC 7)', () => {
     it('writes the checkpoint in batches as staging progresses, not once at the end', async () => {
       const fakeDb = createFakeDb();
@@ -245,7 +589,7 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       // HPO's bundled fixture stages 8 concepts + 7 relations = 15 items;
       // batchSize 5 should produce 3 incremental checkpoint writes (5, 10,
       // 15), not a single one after everything is already staged.
-      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', batchSize: 5 });
+      await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', batchSize: 5 }));
 
       const checkpointWrites = fakeDb.collections.referenceImportRuns.calls.filter(
         (call) => call.method === 'updateOne' && call.update.$set && call.update.$set.checkpoint,
@@ -285,6 +629,7 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       }
 
       const result = await runImport({ db: resumeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', batchSize: 5 });
+      await promote(resumeDb, result);
 
       // Same run resumed, not a second run created for the same idempotency key.
       expect(resumeDb.collections.referenceImportRuns.docs).toHaveLength(1);
@@ -301,6 +646,11 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       expect(resumeDb.collections.terminologyRelations.docs).toHaveLength(7);
       expect(resumeDb.collections.referenceDatasetReleases.docs).toHaveLength(1);
       expect(result.approved).toBe(true);
+      // RF028 AC1: the seeded run's stale release id names no release here,
+      // so the resumed run is linked to the release it registered.
+      const resumedRelease = resumeDb.collections.referenceDatasetReleases.docs[0];
+      expect(resumedRelease.releaseStatus).toBe('active');
+      expect(result.run.referenceDatasetReleaseId).toBe(resumedRelease.referenceDatasetReleaseId);
 
       // Checkpoint writes during resume only cover the remaining items
       // (offset continues from 5, doesn't restart at 0 or re-cover 0-5).
@@ -309,6 +659,57 @@ describe('reference-imports pipeline runImport (HPO)', () => {
         .map((call) => call.update.$set.checkpoint.offset);
       expect(checkpointOffsets).toEqual([10, 15]);
     });
+
+    // RF028 AC1 / AC 7: a release that is history is never reactivated by
+    // the resume of a run that registered it before a newer release landed.
+    it.each(['superseded', 'rolled_back', 'rejected'])(
+      'a resumed run whose registered release was since %s registers a new release',
+      async (storedStatus) => {
+        const fakeDb = createFakeDb();
+        const releases = fakeDb.collections.referenceDatasetReleases;
+        const releaseA = {
+          referenceDatasetReleaseId: 'release-a',
+          datasetCode: hpoSource.datasetCode,
+          systemUri: hpoSource.systemUri,
+          datasetVersion: hpoSource.datasetVersion,
+          sourceChecksum: hpoSource.expectedChecksum,
+          releaseStatus: storedStatus,
+          previousReleaseId: null,
+        };
+        const releaseB = {
+          referenceDatasetReleaseId: 'release-b',
+          datasetCode: hpoSource.datasetCode,
+          systemUri: hpoSource.systemUri,
+          datasetVersion: 'newer-version',
+          sourceChecksum: 'newer-checksum',
+          releaseStatus: 'active',
+          previousReleaseId: 'release-a',
+        };
+        releases.docs.push(releaseA, releaseB);
+        fakeDb.collections.referenceImportRuns.docs.push({
+          referenceImportRunId: 'seeded-run-in-progress',
+          referenceDatasetReleaseId: 'release-a',
+          datasetCode: hpoSource.datasetCode,
+          importMode: 'full',
+          idempotencyKey: `${hpoSource.datasetCode}:${hpoSource.datasetVersion}:sha256:${hpoSource.expectedChecksum}`,
+          runStatus: 'running',
+          checkpoint: null,
+        });
+
+        const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+        await promote(fakeDb, result);
+
+        expect(releases.docs).toHaveLength(3);
+        expect(releaseA).toMatchObject({ releaseStatus: storedStatus, previousReleaseId: null });
+        expect(releaseB.releaseStatus).toBe('superseded');
+        const releaseC = releases.docs.find((r) => r.referenceDatasetReleaseId !== 'release-a' && r.referenceDatasetReleaseId !== 'release-b');
+        expect(releaseC.releaseStatus).toBe('active');
+        expect(releaseC.previousReleaseId).toBe('release-b');
+        expect(releases.docs.filter((r) => r.datasetCode === hpoSource.datasetCode && r.releaseStatus === 'active')).toHaveLength(1);
+        expect(result.run.referenceDatasetReleaseId).toBe(releaseC.referenceDatasetReleaseId);
+        expect(fakeDb.collections.referenceImportRuns.docs[0].referenceDatasetReleaseId).toBe(releaseC.referenceDatasetReleaseId);
+      },
+    );
 
     it('does not lose relations on resume — staging persists both concepts and relations (not just concepts)', async () => {
       const fakeDb = createFakeDb();
@@ -328,8 +729,8 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       const v1Source = { ...hpoSource, datasetVersion: 'v1' };
       const v2Source = { ...hpoSource, datasetVersion: 'v2' };
 
-      await runImport({ db: fakeDb, source: v1Source, normalizeRecord, initiatedBy: 'test-actor' });
-      await runImport({ db: fakeDb, source: v2Source, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, await runImport({ db: fakeDb, source: v1Source, normalizeRecord, initiatedBy: 'test-actor' }));
+      await promote(fakeDb, await runImport({ db: fakeDb, source: v2Source, normalizeRecord, initiatedBy: 'test-actor' }));
 
       const releasesBefore = fakeDb.collections.referenceDatasetReleases.docs;
       expect(releasesBefore).toHaveLength(2);
@@ -366,11 +767,13 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       expect(result.rolledBack).toBe(false);
       expect(result.reason).toBe('no_active_release');
       expect(fakeDb.collections.referenceImportRuns.docs).toHaveLength(0);
+      expect(auditLogger.log).not.toHaveBeenCalled();
     });
 
     it('reports rolledBack:false when the active release has no prior release to restore', async () => {
       const fakeDb = createFakeDb();
-      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' }));
+      auditLogger.log.mockClear();
 
       const result = await rollbackRelease({ db: fakeDb, datasetCode: hpoSource.datasetCode, initiatedBy: 'test-actor' });
 
@@ -379,6 +782,316 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       // Left untouched — still active, no rollback run written.
       expect(fakeDb.collections.referenceDatasetReleases.docs[0].releaseStatus).toBe('active');
       expect(fakeDb.collections.referenceImportRuns.docs.some((r) => r.importMode === 'rollback')).toBe(false);
+      expect(auditLogger.log).not.toHaveBeenCalled();
+    });
+
+    it('rollback names the reactivated release as rollbackTargetId and writes one ROLLBACK AuditEvent', async () => {
+      const fakeDb = createFakeDb();
+      const v1 = await runImport({ db: fakeDb, source: { ...hpoSource, datasetVersion: 'v1' }, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, v1);
+      const v2 = await runImport({ db: fakeDb, source: { ...hpoSource, datasetVersion: 'v2' }, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, v2);
+      auditLogger.log.mockClear();
+
+      const result = await rollbackRelease({ db: fakeDb, datasetCode: hpoSource.datasetCode, initiatedBy: 'test-actor' });
+
+      expect(result.rolledBack).toBe(true);
+      const releases = fakeDb.collections.referenceDatasetReleases.docs;
+      const rolledBack = releases.find((r) => r.referenceDatasetReleaseId === v2.releaseId);
+      expect(rolledBack).toMatchObject({ releaseStatus: 'rolled_back', rollbackTargetId: v1.releaseId });
+      // The reactivated release keeps the approver of its original promotion.
+      expect(releases.find((r) => r.referenceDatasetReleaseId === v1.releaseId)).toMatchObject({
+        releaseStatus: 'active',
+        promotionApprovedBy: 'test-approver',
+      });
+      expect(auditLogger.log).toHaveBeenCalledTimes(1);
+      expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'ROLLBACK',
+        resourceType: 'ReferenceDatasetRelease',
+        resourceId: v2.releaseId,
+        source: 'system',
+        payload: {
+          datasetCode: hpoSource.datasetCode,
+          rolledBackReleaseId: v2.releaseId,
+          activeReleaseId: v1.releaseId,
+          initiatedBy: 'test-actor',
+        },
+      }));
+    });
+  });
+
+  describe('explicit promotion (RF028 AC8, RNF032 C8/C9)', () => {
+    it('an approved full run leaves its release approved and writes no concept, relation or outbox event', async () => {
+      const fakeDb = createFakeDb();
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expect(result.approved).toBe(true);
+      const releases = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releases).toHaveLength(1);
+      expect(releases[0]).toMatchObject({ referenceDatasetReleaseId: result.releaseId, releaseStatus: 'approved', promotionApprovedBy: null });
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+      expect(fakeDb.collections.terminologyRelations.docs).toHaveLength(0);
+      expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(0);
+      const runDoc = fakeDb.collections.referenceImportRuns.docs[0];
+      expect(runDoc.runStatus).toBe('completed');
+      expect(runDoc.validationSummary.approved).toBe(true);
+      expect(runDoc.recordsInserted).toBe(0);
+      expect(auditLogger.log).not.toHaveBeenCalled();
+    });
+
+    it('promoteRelease activates an approved release, records its approver and writes one PROMOTE AuditEvent', async () => {
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      const promotion = await promote(fakeDb, result);
+
+      expect(promotion).toMatchObject({ promoted: true, releaseId: result.releaseId, previousReleaseId: null, recordsInserted: 15 });
+      const release = fakeDb.collections.referenceDatasetReleases.docs[0];
+      expect(release).toMatchObject({ releaseStatus: 'active', promotionApprovedBy: 'test-approver', previousReleaseId: null });
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+      expect(fakeDb.collections.terminologyRelations.docs).toHaveLength(7);
+      expect(fakeDb.collections.referenceImportRuns.docs[0].recordsInserted).toBe(15);
+      expect(auditLogger.log).toHaveBeenCalledTimes(1);
+      expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'PROMOTE',
+        resourceType: 'ReferenceDatasetRelease',
+        resourceId: result.releaseId,
+        source: 'system',
+        payload: {
+          datasetCode: hpoSource.datasetCode,
+          datasetVersion: hpoSource.datasetVersion,
+          previousReleaseId: null,
+          approvedBy: 'test-approver',
+        },
+      }));
+    });
+
+    it('a second promotion of the same release is refused and writes nothing new', async () => {
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, result);
+
+      const second = await promote(fakeDb, result);
+
+      expect(second).toEqual({ promoted: false, reason: 'release_not_approved', releaseStatus: 'active' });
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+      expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(15);
+      expect(auditLogger.log).toHaveBeenCalledTimes(1);
+    });
+
+    it('promoteRelease refuses a rejected release, a dry run and an empty approver without an AuditEvent', async () => {
+      const rejectedDb = createFakeDb();
+      const rejectAll = () => ({ ok: false, issue: { errorCode: 'TEST_REJECT', errorMessage: 'rejected', severity: 'error' } });
+      const rejected = await runImport({ db: rejectedDb, source: hpoSource, normalizeRecord: rejectAll, initiatedBy: 'test-actor' });
+      expect(await promote(rejectedDb, rejected)).toEqual({ promoted: false, reason: 'release_not_approved', releaseStatus: 'rejected' });
+
+      const dryDb = createFakeDb();
+      const dry = await runImport({ db: dryDb, source: hpoSource, normalizeRecord, dryRun: true });
+      expect(dry.releaseId).toBeNull();
+      expect(await promote(dryDb, dry)).toEqual({ promoted: false, reason: 'release_not_found' });
+
+      const approvedDb = createFakeDb();
+      const approved = await runImport({ db: approvedDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      expect(await promoteRelease({ db: approvedDb, releaseId: approved.releaseId, approvedBy: '' }))
+        .toEqual({ promoted: false, reason: 'approver_required' });
+      expect(approvedDb.collections.referenceDatasetReleases.docs[0].releaseStatus).toBe('approved');
+
+      for (const db of [rejectedDb, dryDb, approvedDb]) {
+        expect(db.collections.terminologyConcepts.docs).toHaveLength(0);
+      }
+      expect(auditLogger.log).not.toHaveBeenCalled();
+    });
+
+    it('promoteRelease refuses an approved release with no completed approved run', async () => {
+      const fakeDb = createFakeDb();
+      const rejectAll = () => ({ ok: false, issue: { errorCode: 'TEST_REJECT', errorMessage: 'rejected', severity: 'error' } });
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord: rejectAll, initiatedBy: 'test-actor' });
+      fakeDb.collections.referenceDatasetReleases.docs[0].releaseStatus = 'approved';
+
+      const promotion = await promote(fakeDb, result);
+
+      expect(promotion).toEqual({ promoted: false, reason: 'approved_run_not_found' });
+      expect(fakeDb.collections.referenceDatasetReleases.docs[0].releaseStatus).toBe('approved');
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+      expect(auditLogger.log).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('promotion claim', () => {
+    it('two promotions started together insert each record once and only one promotes', async () => {
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      const outcomes = await Promise.all([promote(fakeDb, result), promote(fakeDb, result)]);
+
+      expect(outcomes.filter((outcome) => outcome.promoted)).toHaveLength(1);
+      expect(outcomes.find((outcome) => !outcome.promoted)).toEqual({ promoted: false, reason: 'promotion_in_progress' });
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+      expect(fakeDb.collections.terminologyRelations.docs).toHaveLength(7);
+      expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(15);
+      expect(fakeDb.collections.referenceDatasetReleases.docs[0]).toMatchObject({ releaseStatus: 'active', promotionClaimedAt: null });
+      expect(auditLogger.log).toHaveBeenCalledTimes(1);
+    });
+
+    it('a promotion whose release turned active before its claim writes nothing', async () => {
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      // Another caller finishes its promotion between this call's status
+      // read and its claim.
+      const staging = fakeDb.collections.referenceImportStaging;
+      const { find } = staging;
+      staging.find = (filter) => {
+        Object.assign(fakeDb.collections.referenceDatasetReleases.docs[0], { releaseStatus: 'active', promotionClaimedAt: null });
+        return find.call(staging, filter);
+      };
+
+      const promotion = await promote(fakeDb, result);
+
+      expect(promotion).toEqual({ promoted: false, reason: 'release_not_approved', releaseStatus: 'active' });
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+      expect(auditLogger.log).not.toHaveBeenCalled();
+    });
+
+    it('a fresh claim refuses a second promotion, which writes nothing', async () => {
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      const claimedAt = new Date();
+      fakeDb.collections.referenceDatasetReleases.docs[0].promotionClaimedAt = claimedAt;
+
+      const promotion = await promote(fakeDb, result);
+
+      expect(promotion).toEqual({ promoted: false, reason: 'promotion_in_progress' });
+      expect(fakeDb.collections.referenceDatasetReleases.docs[0]).toMatchObject({ releaseStatus: 'approved', promotionClaimedAt: claimedAt });
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+      expect(auditLogger.log).not.toHaveBeenCalled();
+    });
+
+    it('a stale claim, left by a crashed promotion, is retaken and the release promoted', async () => {
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      fakeDb.collections.referenceDatasetReleases.docs[0].promotionClaimedAt = new Date(Date.now() - 11 * 60 * 1000);
+
+      const promotion = await promote(fakeDb, result);
+
+      expect(promotion.promoted).toBe(true);
+      expect(fakeDb.collections.referenceDatasetReleases.docs[0]).toMatchObject({ releaseStatus: 'active', promotionClaimedAt: null });
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+    });
+  });
+
+  describe('coverage manifest and quality gate (RF028 AC6/AC7)', () => {
+    const rejectAll = () => ({ ok: false, issue: { errorCode: 'TEST_REJECT', errorMessage: 'rejected', severity: 'error' } });
+
+    it('an approved run writes its manifest and assessment before the approved flip, which names both', async () => {
+      const fakeDb = createFakeDb();
+      const releases = fakeDb.collections.referenceDatasetReleases;
+      const { updateOne } = releases;
+      let atApproval = null;
+      releases.updateOne = async (filter, update, options) => {
+        if (update.$set && update.$set.releaseStatus === 'approved') {
+          atApproval = {
+            manifests: fakeDb.collections.referenceCoverageManifests.docs.map((doc) => ({ ...doc })),
+            assessments: fakeDb.collections.dataQualityAssessments.docs.map((doc) => ({ ...doc })),
+          };
+        }
+        return updateOne.call(releases, filter, update, options);
+      };
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expect(result.approved).toBe(true);
+      const manifests = fakeDb.collections.referenceCoverageManifests.docs;
+      const assessments = fakeDb.collections.dataQualityAssessments.docs;
+      expect(manifests).toHaveLength(1);
+      expect(manifests[0]).toMatchObject({
+        referenceDatasetReleaseId: result.releaseId,
+        expectedCount: 10,
+        obtainedCount: 8,
+        coverageResult: 'justified',
+        assets: [result.assetUri],
+      });
+      expect(manifests[0].exclusions.map((exclusion) => exclusion.reason)).toEqual(['MISSING_CODE', 'MISSING_DISPLAY']);
+      expect(assessments).toHaveLength(1);
+      expect(assessments[0]).toMatchObject({ scopeType: 'dataset_release', scopeId: result.releaseId, status: 'passed' });
+      expect(releases.docs[0]).toMatchObject({
+        releaseStatus: 'approved',
+        coverageManifestId: manifests[0].referenceCoverageManifestId,
+        dataQualityAssessmentId: assessments[0].dataQualityAssessmentId,
+      });
+      expect(atApproval.manifests.map((doc) => doc.referenceCoverageManifestId)).toEqual([manifests[0].referenceCoverageManifestId]);
+      expect(atApproval.assessments.map((doc) => doc.dataQualityAssessmentId)).toEqual([assessments[0].dataQualityAssessmentId]);
+    });
+
+    it('a dry run and a checksum mismatch write no manifest and no assessment', async () => {
+      const dryDb = createFakeDb();
+      await runImport({ db: dryDb, source: hpoSource, normalizeRecord, dryRun: true });
+      const mismatchDb = createFakeDb();
+      await runImport({ db: mismatchDb, source: { ...hpoSource, expectedChecksum: 'sha256-does-not-match' }, normalizeRecord });
+
+      for (const db of [dryDb, mismatchDb]) {
+        expect(db.collections.referenceCoverageManifests.docs).toHaveLength(0);
+        expect(db.collections.dataQualityAssessments.docs).toHaveLength(0);
+      }
+    });
+
+    it('a rejected release carries its manifest and a failed assessment', async () => {
+      const fakeDb = createFakeDb();
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord: rejectAll, initiatedBy: 'test-actor' });
+
+      const manifest = fakeDb.collections.referenceCoverageManifests.docs[0];
+      const assessment = fakeDb.collections.dataQualityAssessments.docs[0];
+      expect(fakeDb.collections.referenceDatasetReleases.docs[0]).toMatchObject({
+        referenceDatasetReleaseId: result.releaseId,
+        releaseStatus: 'rejected',
+        coverageManifestId: manifest.referenceCoverageManifestId,
+        dataQualityAssessmentId: assessment.dataQualityAssessmentId,
+      });
+      expect(assessment).toMatchObject({ scopeId: result.releaseId, status: 'failed' });
+    });
+
+    describe('promoteRelease refuses a release without passing evidence, writing nothing', () => {
+      const manifestOf = (db) => db.collections.referenceCoverageManifests.docs[0];
+      const assessmentOf = (db) => db.collections.dataQualityAssessments.docs[0];
+      const releaseOf = (db) => db.collections.referenceDatasetReleases.docs[0];
+
+      it.each([
+        ['coverage_manifest_missing', 'the release names no manifest or assessment', (db) => {
+          Object.assign(releaseOf(db), { coverageManifestId: null, dataQualityAssessmentId: null });
+        }],
+        ['coverage_manifest_invalid', 'its manifest assets were changed after its checksum', (db) => {
+          manifestOf(db).assets = ['file:///tampered'];
+        }],
+        ['coverage_manifest_invalid', 'its manifest covers another release', (db) => {
+          const manifest = manifestOf(db);
+          manifest.referenceDatasetReleaseId = 'another-release';
+          manifest.checksum = ReferenceCoverageManifestModel.checksumOf(manifest);
+        }],
+        ['coverage_incomplete', 'its manifest leaves a gap no exclusion explains', (db) => {
+          const manifest = manifestOf(db);
+          const rebuilt = ReferenceCoverageManifestModel.create({ ...manifest, exclusions: manifest.exclusions.slice(1), coverageResult: null, checksum: null });
+          expect(rebuilt.coverageResult).toBe('incomplete');
+          db.collections.referenceCoverageManifests.docs[0] = rebuilt;
+        }],
+        ['quality_assessment_missing', 'the release names no assessment', (db) => {
+          releaseOf(db).dataQualityAssessmentId = null;
+        }],
+        ['quality_assessment_failed', 'its assessment failed', (db) => {
+          assessmentOf(db).status = 'failed';
+        }],
+      ])('%s when %s', async (reason, _when, alter) => {
+        const fakeDb = createFakeDb();
+        const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+        alter(fakeDb);
+
+        const promotion = await promote(fakeDb, result);
+
+        expect(promotion).toEqual({ promoted: false, reason });
+        expect(releaseOf(fakeDb)).toMatchObject({ releaseStatus: 'approved', promotionClaimedAt: null });
+        expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+        expect(auditLogger.log).not.toHaveBeenCalled();
+      });
     });
   });
 });

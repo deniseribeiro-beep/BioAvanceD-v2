@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
+import { findOrganizationInList } from './helpers/listOrganizations';
 
-// Real-backend proof for #608 (RF020, rabbit-hole tracker #605, seed #576):
+// Real-backend proof for #608 (RF020, tracker #605, seed #576):
 // #606/#607 built the Organizations/Collections CRUD UI in
 // SystemManagementPage.tsx, but the only prior coverage
 // (study-protocol-collection-crud.spec.ts) drives the API directly, never
@@ -43,14 +44,12 @@ test.describe('Organizations CRUD through the real UI (#606, #608)', () => {
     // organizationId is server-generated (buildOrganizationSubmissionPayload
     // strips it from the create payload) — resolve it from the real backend
     // to target this row's edit/delete buttons, which are keyed by that id.
-    const listResponse = await request.get(`${apiBaseURL}/api/organizations`, {
-      headers: { Authorization: `Bearer ${session.token}` },
-    });
-    expect(listResponse.ok()).toBeTruthy();
-    const list = await listResponse.json();
-    const created = list.data.find((org: Record<string, unknown>) => org.officialName === officialName);
+    // The list is sorted by officialName and paged, so page through it
+    // (#1279, #1282).
+    const created = await findOrganizationInList(request, apiBaseURL!, session.token,
+      (org) => org.officialName === officialName);
     expect(created).toBeTruthy();
-    const organizationId = created.organizationId;
+    const organizationId = created!.organizationId;
 
     try {
       await page.getByTestId(`edit-organization-button-${organizationId}`).click();
@@ -108,6 +107,7 @@ test.describe('Collections CRUD through the real UI (#607, #608)', () => {
       await page.getByTestId('collection-id-input').fill(collectionId);
       await page.getByTestId('collection-name-input').fill(collectionName);
       await page.getByTestId('collection-sample-types-input').fill('plasma; serum');
+      await page.getByTestId('collection-governance-regime-select').selectOption('biorepository');
 
       await page.getByTestId('collection-form-submit').click();
       await expect(page.getByTestId('collection-form-submit')).not.toBeVisible();

@@ -6,10 +6,12 @@ on:
   push:
     branches:
       - main
+      - feature/docker-e2e-backend-integration
 
   pull_request:
     branches:
       - main
+      - feature/docker-e2e-backend-integration
 
 permissions:
   contents: read
@@ -60,9 +62,7 @@ jobs:
         run: npm --prefix api/backend run test:architecture
 
       - name: Essential reference seed validation
-        run: |
-          npm --prefix api/backend run seed:validate:essential
-          npm --prefix api/backend run seed:essential:dry-run
+        run: npm --prefix api/backend run seed:validate:essential
 
       # #960: and no "Frontend lint" step, because there is no linter. There
       # is no eslint config or dependency anywhere in this repo -- the
@@ -120,6 +120,10 @@ jobs:
             -f compose.test.yml \
             ps
 
+      # #1413: the essential reference load that backend-app-test waits for
+      # (essential-reference-bootstrap-test, RF022 AC7 Phase 2) writes the
+      # SPREC minimal set into terminologies by design. Only a terminology
+      # outside that set counts as application data.
       - name: Verify empty MongoDB application collections
         run: |
           docker compose \
@@ -134,7 +138,6 @@ jobs:
                 "consents",
                 "medication_dictionary",
                 "orphanet_diseases",
-                "terminologies",
                 "hpo_terms",
                 "biomarker_observations",
                 "sensors",
@@ -150,6 +153,12 @@ jobs:
                 print(name + ": " + count);
                 total += count;
               }
+
+              const essentialTerminology = { sistema: "SPREC", fonte: "seed-essential-sprec-v1" };
+              const terminologies = db.getCollection("terminologies");
+              const otherTerminologies = terminologies.countDocuments({ $nor: [essentialTerminology] });
+              print("terminologies: " + otherTerminologies + " (essential SPREC set: " + terminologies.countDocuments(essentialTerminology) + ")");
+              total += otherTerminologies;
 
               if (total !== 0) {
                 print("Application collections are not empty.");
@@ -178,6 +187,16 @@ jobs:
           echo "Neo4j node count: ${NODE_COUNT}"
           test "${NODE_COUNT}" = "0"
 
+      # #1413: the dry run records a FoundationDataRun (RF022), so it needs
+      # the stack's MongoDB and runs here, not before the stack exists.
+      - name: Essential reference seed dry run
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            run --rm --no-deps foundation-bootstrap-test \
+            npm run seed:essential:dry-run
+
       - name: Run backend test suite
         run: |
           docker compose \
@@ -200,6 +219,107 @@ jobs:
         with:
           name: bioavanced-validation-failure
           path: compose-test.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove containers and isolated volumes
+        if: always()
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            down --volumes --remove-orphans
+
+  # #1324: RNF017 criterion 1 asks CI to run the unit tests; the frontend's
+  # vitest suite (`test:unit`, src/** and tests/unit/**) ran nowhere in CI.
+  frontend-unit-tests:
+    name: Frontend unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Run frontend unit tests
+        run: npm --prefix frontend run test:unit
+
+  # #1324: RNF017 criterion 1 also asks for security tests; this job audits
+  # both lockfiles for known advisories. `npm audit` reads the lockfile
+  # alone, so no install step is needed.
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            api/backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Audit frontend dependencies
+        run: npm --prefix frontend audit --audit-level=critical
+
+      - name: Audit backend dependencies
+        run: npm --prefix api/backend audit --audit-level=critical
+
+  # #284: no job ran Playwright; this one runs the in-container e2e gate the
+  # way it runs locally, on push/PR to main and to the integration branch
+  # (#599). The job's exit is the gate's: 3 build, 4 stack up, 5 one-shot,
+  # 6 projection worker, otherwise the runner's own code.
+  e2e-tests:
+    name: E2E tests (in-container Playwright)
+    runs-on: ubuntu-latest
+    needs: current-state-validation
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Remove previous e2e stack
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            down --volumes --remove-orphans
+
+      - name: Run the e2e gate
+        run: bash scripts/e2e-gate.sh e2e-gate-out
+
+      - name: Collect Compose logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            logs --no-color > e2e-gate-out/compose-test.log
+
+      - name: Upload e2e gate output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bioavanced-e2e-gate
+          path: e2e-gate-out/
           if-no-files-found: ignore
           retention-days: 7
 

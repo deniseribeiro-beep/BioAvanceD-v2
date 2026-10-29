@@ -40,23 +40,41 @@ describe('canRoleAccessRoute — the restrictive blocks still hold', () => {
     }
   });
 
-  it('keeps /logs to Administrador and Coordenador', () => {
+  // #1375: the consent revocation screen matches the backend's requireRole(3, 4).
+  it('grants /consents to Administrador and Coordenador only', () => {
+    expect(canRoleAccessRoute('Administrador', '/consents')).toBe(true);
+    expect(canRoleAccessRoute('Coordenador', '/consents')).toBe(true);
+    expect(canRoleAccessRoute('Técnico', '/consents')).toBe(false);
+    expect(canRoleAccessRoute('Usuário Externo', '/consents')).toBe(false);
+  });
+
+  // #1402: the BiomarkerAssociation entry screen matches the backend's requireRole(3, 4).
+  it('grants /biomarker-associations to Administrador and Coordenador only', () => {
+    expect(canRoleAccessRoute('Administrador', '/biomarker-associations')).toBe(true);
+    expect(canRoleAccessRoute('Coordenador', '/biomarker-associations')).toBe(true);
+    expect(canRoleAccessRoute('Técnico', '/biomarker-associations')).toBe(false);
+    expect(canRoleAccessRoute('Usuário Externo', '/biomarker-associations')).toBe(false);
+  });
+
+  // #1239: /logs follows the backend's audit-reader rule, which is not a base
+  // role, so the role map defers to ProtectedRoute's requireAuditReader.
+  it('defers /logs to the audit-reader guard rather than a base role', () => {
     for (const route of ['/logs', '/logs/123']) {
-      expect(canRoleAccessRoute('Administrador', route)).toBe(true);
-      expect(canRoleAccessRoute('Coordenador', route)).toBe(true);
-      expect(canRoleAccessRoute('Técnico', route)).toBe(false);
-      expect(canRoleAccessRoute('Usuário Externo', route)).toBe(false);
+      for (const role of ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] as const) {
+        expect(canRoleAccessRoute(role, route)).toBe(true);
+      }
     }
   });
 
   // #825: /reports widened to include Usuário Externo (declared on its
   // <Route> all along), but /reports/templates -- narrower, RF008 AC#6 --
   // must stay Administrador+Coordenador even though it sits under /reports.
-  it('keeps /reports to Administrador, Coordenador, and Usuário Externo', () => {
+  // #1408: the Técnico holds viewReports, so /reports admits it as well.
+  it('grants /reports to every role (#1408)', () => {
     expect(canRoleAccessRoute('Administrador', '/reports')).toBe(true);
     expect(canRoleAccessRoute('Coordenador', '/reports')).toBe(true);
     expect(canRoleAccessRoute('Usuário Externo', '/reports')).toBe(true);
-    expect(canRoleAccessRoute('Técnico', '/reports')).toBe(false);
+    expect(canRoleAccessRoute('Técnico', '/reports')).toBe(true);
   });
 
   it('keeps /reports/templates to Administrador and Coordenador only', () => {
@@ -97,7 +115,7 @@ describe('canRoleAccessRoute — routes reached with a concrete id', () => {
     expect(canRoleAccessRoute('Técnico', '/samples/68ab12cd34ef56ab78cd90ef')).toBe(true);
     expect(canRoleAccessRoute('Técnico', '/samples/68ab12cd34ef56ab78cd90ef/label')).toBe(true);
     expect(canRoleAccessRoute('Coordenador', '/reports/query/auditoria')).toBe(true);
-    expect(canRoleAccessRoute('Técnico', '/reports/query/auditoria')).toBe(false);
+    expect(canRoleAccessRoute('Técnico', '/reports/query/auditoria')).toBe(true);
     expect(canRoleAccessRoute('Usuário Externo', '/reports/query/auditoria')).toBe(true);
     expect(canRoleAccessRoute('Usuário Externo', '/reports/507f1f77bcf86cd799439011')).toBe(true);
   });
@@ -187,6 +205,28 @@ describe('every route declared in App.tsx is covered by the allow-list', () => {
     }
 
     expect(disagreements).toEqual([]);
+  });
+
+  // #1408: the sweep above checks only that the table grants each role a
+  // <Route> names, never the reverse, so dropping the Técnico from a report
+  // <Route> or from the sidebar item would leave it facing "Acesso Negado".
+  it('names the Técnico on the /reports routes and sidebar item (#1408)', () => {
+    const sidebarSource = fs.readFileSync(
+      path.resolve(__dirname, '..', 'components', 'Layout', 'Sidebar.tsx'),
+      'utf8'
+    );
+    const routeRoles = (route: string) => {
+      const block = Array.from(appSource.matchAll(/<Route\b[\s\S]*?\/>/g))
+        .map((m) => m[0])
+        .find((b) => b.includes(`path="${route}"`));
+      return block?.match(/requiredRole=\{\[([^\]]+)\]\}/)?.[1] ?? '';
+    };
+
+    for (const route of ['/reports', '/reports/query/:type', '/reports/:id']) {
+      expect(routeRoles(route), route).toContain("'Técnico'");
+    }
+    const sidebarItem = sidebarSource.match(/\{ path: '\/reports', [^}]*roles: \[([^\]]+)\]/)?.[1] ?? '';
+    expect(sidebarItem).toContain("'Técnico'");
   });
 });
 

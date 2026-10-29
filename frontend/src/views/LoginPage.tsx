@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
@@ -8,6 +8,7 @@ import LanguageSelector from '../components/LanguageSelector';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { authService } from '../services/api';
+import { usePasswordResetAllowed } from '../hooks/usePasswordPolicy';
 import { getPostLoginRoute } from '../utils/rolePermissions';
 import { Mail, CheckCircle, AlertCircle } from 'lucide-react';
 import { LIMITS } from '../config/constants/limits.constants';
@@ -15,12 +16,20 @@ import { VALIDATION_PATTERNS } from '../config/constants/validation.constants';
 import './LoginPage.css';
 
 export default function LoginPage() {
-  const [username, setUsername] = useState('');
+  // #1250: MFASetupPage returns here after a first-login enrolment whose
+  // password an administrator set; the next login asks for the new one.
+  const location = useLocation();
+  const loginState = (location.state || {}) as { username?: string; notice?: string };
+  const [username, setUsername] = useState(loginState.username || '');
   const [password, setPassword] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
+  // #1331: a saved recovery code, sent in the same field as a TOTP code; the
+  // backend tells the two apart by shape (8 characters against 6 digits).
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
   const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | undefined>();
   const [requiresPasswordChange, setRequiresPasswordChange] = useState(false);
+  const [passwordChangeReason, setPasswordChangeReason] = useState<string | undefined>();
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [error, setError] = useState('');
@@ -31,6 +40,8 @@ export default function LoginPage() {
   const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
   const [forgotPasswordError, setForgotPasswordError] = useState('');
   const [resetLink, setResetLink] = useState('');
+  // #1249: the forgot-password link shows unless the policy turns the flow off.
+  const allowPasswordReset = usePasswordResetAllowed();
   const { login, isAuthenticated, user } = useAuth();
   const { t } = useLanguage();
   const navigate = useNavigate();
@@ -54,10 +65,12 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      // #1252: the code accepted before a required password change rides
+      // along with the change, so an enrolled user is not asked for a second.
       const result = await login(
         username,
         password,
-        requiresTwoFactor ? twoFactorCode : undefined,
+        requiresTwoFactor || requiresPasswordChange ? twoFactorCode || undefined : undefined,
         requiresPasswordChange ? newPassword : undefined
       );
 
@@ -75,6 +88,8 @@ export default function LoginPage() {
       }
 
       if (result && result.requiresTwoFactor) {
+        // During a password change this means the carried code has expired.
+        if (requiresPasswordChange) setTwoFactorCode('');
         setRequiresTwoFactor(true);
         setLoading(false);
         return;
@@ -86,6 +101,7 @@ export default function LoginPage() {
       if (result && result.requiresPasswordChange) {
         setRequiresTwoFactor(false);
         setRequiresPasswordChange(true);
+        setPasswordChangeReason(result.passwordChangeReason);
         setLoading(false);
         return;
       }
@@ -134,8 +150,13 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="login-form" data-testid="login-form">
             {error && (
-              <div className="error-message" data-testid="login-error">
+              <div className="error-message" data-testid="login-error" role="alert">
                 {error}
+              </div>
+            )}
+            {!error && loginState.notice === 'mfaEnrolledPasswordChange' && (
+              <div role="status" data-testid="login-notice" style={{ marginBottom: '1rem' }}>
+                {t('auth.mfaEnrolledPasswordChange')}
               </div>
             )}
 
@@ -163,8 +184,13 @@ export default function LoginPage() {
 
             {requiresPasswordChange && (
               <div className="two-factor-section" data-testid="force-password-change-section">
-                <p className="two-factor-info">
-                  {t('auth.passwordChangeRequired')}
+                <p className="two-factor-info" data-testid="force-password-change-reason">
+                  {/* #1291: only a forceReset is the administrator's request. */}
+                  {passwordChangeReason === 'expired'
+                    ? t('auth.passwordChangeRequiredExpired')
+                    : passwordChangeReason === 'below_policy'
+                      ? t('auth.passwordChangeRequiredBelowPolicy')
+                      : t('auth.passwordChangeRequired')}
                 </p>
                 <Input
                   data-testid="login-new-password-input"
@@ -190,27 +216,54 @@ export default function LoginPage() {
 
             {requiresTwoFactor && (
               <div className="two-factor-section" data-testid="two-factor-section">
-                <Input
-                  data-testid="login-mfa-code-input"
-                  label={t('auth.twoFactorCode')}
-                  type="text"
-                  value={twoFactorCode}
-                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  required
-                  placeholder={t('mfa.enterCode')}
-                  autoFocus
-                  inputMode="numeric"
-                  maxLength={LIMITS.MFA_CODE_LENGTH}
-                  pattern={VALIDATION_PATTERNS.numericCode6.source}
-                />
+                {useRecoveryCode ? (
+                  <Input
+                    key="recovery-code"
+                    data-testid="login-recovery-code-input"
+                    label={t('auth.recoveryCodeLabel')}
+                    type="text"
+                    value={twoFactorCode}
+                    onChange={(e) => setTwoFactorCode(e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 9))}
+                    required
+                    autoFocus
+                    autoComplete="one-time-code"
+                    maxLength={9}
+                  />
+                ) : (
+                  <Input
+                    key="totp-code"
+                    data-testid="login-mfa-code-input"
+                    label={t('auth.twoFactorCode')}
+                    type="text"
+                    value={twoFactorCode}
+                    onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    required
+                    placeholder={t('mfa.enterCode')}
+                    autoFocus
+                    inputMode="numeric"
+                    maxLength={LIMITS.MFA_CODE_LENGTH}
+                    pattern={VALIDATION_PATTERNS.numericCode6.source}
+                  />
+                )}
                 {attemptsRemaining !== undefined && attemptsRemaining > 0 && (
                   <p className="attempts-warning">
                     {t('auth.attemptsRemaining')}: {attemptsRemaining}
                   </p>
                 )}
                 <p className="two-factor-info">
-                  {t('auth.twoFactorInfo')}
+                  {useRecoveryCode ? t('auth.recoveryCodeInfo') : t('auth.twoFactorInfo')}
                 </p>
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid="login-toggle-recovery-code"
+                  onClick={() => {
+                    setUseRecoveryCode((current) => !current);
+                    setTwoFactorCode('');
+                  }}
+                >
+                  {useRecoveryCode ? t('auth.useAuthenticatorCode') : t('auth.useRecoveryCode')}
+                </button>
               </div>
             )}
 
@@ -229,16 +282,18 @@ export default function LoginPage() {
                 : t('auth.login')}
             </Button>
 
-            <div className="forgot-password-link">
-              <button
-                type="button"
-                onClick={() => setShowForgotPassword(true)}
-                className="link-button"
-                data-testid="login-forgot-password-button"
-              >
-                {t('auth.forgotPassword')}
-              </button>
-            </div>
+            {allowPasswordReset && (
+              <div className="forgot-password-link">
+                <button
+                  type="button"
+                  onClick={() => setShowForgotPassword(true)}
+                  className="link-button"
+                  data-testid="login-forgot-password-button"
+                >
+                  {t('auth.forgotPassword')}
+                </button>
+              </div>
+            )}
           </form>
 
           <div className="login-language-selector">

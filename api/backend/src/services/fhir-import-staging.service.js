@@ -6,11 +6,17 @@ const qualityDomain = require('./quality-domain.service');
 const logger = require('../utils/logger');
 const { SampleModel } = require('../models/Sample');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const PatientModel = require('../models/Patient');
+const StudyModel = require('../models/Study');
 const participantIdentityService = require('./participantIdentity.service');
 const quarantineActionService = require('./quarantine-action.service');
+const operationalStateDecisionService = require('./operationalStateDecision.service');
 const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
+const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
+const { buildRecordRoundTripLoss, buildBundleRoundTripLoss } = require('../resources/fhir/round-trip-loss');
+const { stageMappedResources } = require('../resources/fhir/import-mappings');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -35,6 +41,7 @@ const STATUS = Object.freeze({
  * principal that holds neither of its permissions. `import-lgpd.service.js#
  * getQuarantineBatch` carries the mirror-image filter for the same reason.
  */
+const { sealedStagingCollection } = require('../utils/stagedRowCrypto');
 const FHIR_BATCH_TYPE = 'FHIR_BUNDLE';
 
 function collection(db, name) {
@@ -42,6 +49,23 @@ function collection(db, name) {
     throw new Error('Banco de dados não disponível');
   }
   return db.collection(name);
+}
+
+/**
+ * #1191: every staged record carries civil identity -- normalized.patientName,
+ * patientDocument, patientBirthDate and patientEmail, the whole FHIR Patient
+ * resource under `fhir`, and a copy of the email in `consentTracking` -- so
+ * the handle seals those fields on write and reveals them on read
+ * (stagedRowCrypto), the way the LGPD and async quarantine rows are stored
+ * since #807. Every read and write of the collection in this file goes
+ * through it.
+ */
+const FHIR_STAGING_SEALED_FIELDS = ['row', 'normalized', 'fhir', 'consentTracking'];
+
+function stagingRecords(db) {
+  return sealedStagingCollection(collection(db, 'import_staging_records'), {
+    fields: FHIR_STAGING_SEALED_FIELDS,
+  });
 }
 
 function toObjectId(id) {
@@ -530,6 +554,8 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
         axis_penalties: rcsPreview.axis_penalties || [],
         calculation_trace: rcsPreview.calculation_trace || {},
         sprec: rcsPreview.sprec || {},
+        matrix_type: rcsPreview.matrix_type,
+        rcs_input: rcsPreview.rcs_input ?? null,
       },
       consentSigned,
     },
@@ -571,7 +597,7 @@ function summarize(records) {
 }
 
 async function refreshBatchCounts(db, batchId) {
-  const records = await collection(db, 'import_staging_records').find({ batchId }).toArray();
+  const records = await stagingRecords(db).find({ batchId }).toArray();
   const counts = summarize(records);
   const status = counts.errors > 0
     ? 'VALIDATED_WITH_ERRORS'
@@ -604,12 +630,16 @@ async function stageBundle(db, payload, metadata = {}) {
   }
 
   const bundleIndex = buildBundleIndex(resources);
+  const { report: mappedResources, mapped, studyCandidates } = stageMappedResources(resources);
   const records = bundleIndex.specimens.map((specimen, index) => normalizeSpecimen(specimen, index, bundleIndex));
   if (records.length === 0) {
     throw createBadRequest('Bundle FHIR não contém Specimen para staging.');
   }
 
   const now = new Date();
+  // #1385: the organization the controller resolved from the caller's scope
+  // (#1376); null for a global caller who named none.
+  const organizationId = metadata.organizationId == null ? null : String(metadata.organizationId);
   const batchDoc = {
     type: FHIR_BATCH_TYPE,
     status: 'STAGED',
@@ -617,19 +647,35 @@ async function stageBundle(db, payload, metadata = {}) {
     source: 'FHIR',
     counts: summarize(records),
     createdBy: metadata.userID || null,
+    organizationId,
+    // RF011 AC4 (#1322): the Provenance, AuditEvent, DocumentReference and
+    // ResearchStudy resources mapped, as field names and paths only.
+    mappedResources,
+    // RF011 AC6, RNF024 C6 (#1322): the Bundle resources no record attaches
+    // and no mapping reads.
+    roundTripLoss: buildBundleRoundTripLoss(resources, records, mapped),
+    // RF011 AC4 (#1322): each valid ResearchStudy's studyId, studyTitle,
+    // studyStatus and ethicsApprovalId, the plaintext a Study stores, kept
+    // for commitStudyCandidates.
+    studyCandidates,
     createdAt: now,
     updatedAt: now,
   };
   const batchResult = await collection(db, 'import_batches').insertOne(batchDoc);
   const batchId = batchResult.insertedId;
 
+  // #1322: an Observation several records attach is walked once.
+  const roundTripLossCache = new WeakMap();
   const docs = records.map((record) => ({
     ...record,
     batchId,
+    organizationId,
+    // RF011 AC6, RNF024 C6 (#1322): paths only, kept outside the sealed fields.
+    roundTripLoss: buildRecordRoundTripLoss(record.fhir, roundTripLossCache),
     createdAt: now,
     updatedAt: now,
   }));
-  await collection(db, 'import_staging_records').insertMany(docs);
+  await stagingRecords(db).insertMany(docs);
   const refreshed = await refreshBatchCounts(db, batchId);
 
   return {
@@ -644,27 +690,36 @@ async function stageBundle(db, payload, metadata = {}) {
  * 404 rather than 403 deliberately: a FHIR endpoint should not confirm the
  * existence of a batch belonging to the LGPD import path.
  */
-async function findFhirBatch(db, batchId) {
+async function findFhirBatch(db, batchId, organizationScope) {
   const batch = await collection(db, 'import_batches').findOne({ _id: batchId, type: FHIR_BATCH_TYPE });
   if (!batch) {
     const error = new Error('Lote de importação FHIR não encontrado.');
     error.statusCode = 404;
     throw error;
   }
+  // #1385: a caller with organization scope reaches only a batch stamped with
+  // one of its organizations; an unstamped batch (legacy, or staged by a
+  // global caller who named none) only global scope reaches. No scope passed
+  // means an internal caller, which is unfiltered.
+  if (organizationScope && !isRecordInOrganizationScope(batch, organizationScope, 'organizationId')) {
+    const error = new Error('Lote de importação FHIR fora do escopo organizacional do usuário.');
+    error.statusCode = 403;
+    throw error;
+  }
   return batch;
 }
 
-async function getBatch(db, batchIdRaw) {
+async function getBatch(db, batchIdRaw, { organizationScope } = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const batch = await findFhirBatch(db, batchId);
-  const records = await collection(db, 'import_staging_records').find({ batchId }).sort({ rowNumber: 1 }).toArray();
+  const batch = await findFhirBatch(db, batchId, organizationScope);
+  const records = await stagingRecords(db).find({ batchId }).sort({ rowNumber: 1 }).toArray();
   return { batch, records };
 }
 
-async function validateBatch(db, batchIdRaw) {
+async function validateBatch(db, batchIdRaw, { organizationScope } = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const { records } = await getBatch(db, batchId);
-  const staging = collection(db, 'import_staging_records');
+  const { records } = await getBatch(db, batchId, { organizationScope });
+  const staging = stagingRecords(db);
 
   for (const record of records) {
     if (record.status === STATUS.COMMITTED) continue;
@@ -700,8 +755,8 @@ async function validateBatch(db, batchIdRaw) {
 
 async function sendConsents(db, batchIdRaw, options = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const { records } = await getBatch(db, batchId);
-  const staging = collection(db, 'import_staging_records');
+  const { records } = await getBatch(db, batchId, { organizationScope: options.organizationScope });
+  const staging = stagingRecords(db);
   const results = [];
 
   for (const record of records) {
@@ -842,7 +897,7 @@ async function validateImportConsentToken(db, tokenRaw) {
     batch = null;
   }
 
-  const record = await collection(db, 'import_staging_records').findOne({ _id: toObjectId(recordId), batchId: batchObjectId });
+  const record = await stagingRecords(db).findOne({ _id: toObjectId(recordId), batchId: batchObjectId });
 
   if (!batch || !record || String(record.normalized?.participantId || '') !== participantId) {
     const error = new Error('Registro FHIR de importação não encontrado.');
@@ -860,7 +915,7 @@ async function validateImportConsentToken(db, tokenRaw) {
 async function acceptImportConsentToken(db, tokenRaw) {
   const token = String(tokenRaw || '').trim();
   const { batch, record, tokenPayload } = await validateImportConsentToken(db, token);
-  const staging = collection(db, 'import_staging_records');
+  const staging = stagingRecords(db);
   const now = new Date();
 
   if (record.normalized?.consentSigned && record.status === STATUS.READY_TO_COMMIT) {
@@ -912,9 +967,9 @@ async function acceptImportConsentToken(db, tokenRaw) {
   return { batch, record: refreshedRecord || updatedRecord, tokenPayload, updated: true };
 }
 
-async function getConsentStatus(db, batchIdRaw) {
+async function getConsentStatus(db, batchIdRaw, { organizationScope } = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const { batch, records } = await getBatch(db, batchId);
+  const { batch, records } = await getBatch(db, batchId, { organizationScope });
   return {
     batch,
     records: records.map((record) => ({
@@ -935,12 +990,46 @@ async function getConsentStatus(db, batchIdRaw) {
   };
 }
 
-async function commitBatch(db, batchIdRaw) {
+// RF011 AC4 (#1322): a staged ResearchStudy becomes a Study only for a
+// caller the controller resolved as Coordenador or Administrador, as POST
+// /api/studies requires. A Study is matched by studyId and only inserted
+// when absent; an existing one is never changed.
+async function commitStudyCandidates(db, batchId, batchInfo, canCreateStudy) {
+  const candidates = Array.isArray(batchInfo?.studyCandidates) ? batchInfo.studyCandidates : [];
+  const studies = { created: 0, existing: 0, notCreatedReason: null };
+  if (candidates.length === 0) return studies;
+  const allowed = canCreateStudy === true;
+  if (!allowed) return { ...studies, notCreatedReason: 'ROLE' };
+
+  for (const entry of candidates) {
+    const fields = {
+      studyId: entry?.studyId,
+      studyTitle: entry?.studyTitle,
+      studyStatus: entry?.studyStatus,
+      ethicsApprovalId: entry?.ethicsApprovalId,
+    };
+    if (!StudyModel.validate(fields).isValid) continue;
+    const result = await collection(db, 'studies').updateOne(
+      { studyId: fields.studyId },
+      { $setOnInsert: StudyModel.create(fields) },
+      { upsert: true }
+    );
+    if (result?.upsertedId) {
+      studies.created += 1;
+      await audit(db, 'FHIR_IMPORT_STUDY_COMMITTED', { batchId, studyId: fields.studyId });
+    } else {
+      studies.existing += 1;
+    }
+  }
+  return studies;
+}
+
+async function commitBatch(db, batchIdRaw, { organizationScope, canCreateStudy } = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const { records } = await validateBatch(db, batchId);
+  const { records } = await validateBatch(db, batchId, { organizationScope });
   const patients = collection(db, 'patients');
   const samples = collection(db, 'samples');
-  const staging = collection(db, 'import_staging_records');
+  const staging = stagingRecords(db);
   // #838: route through findFhirBatch rather than a bare `{ _id: batchId }`
   // findOne, so this file's `type: FHIR_BATCH_TYPE` discriminator (#799) does
   // not depend on validateBatch's ordering above having already enforced it.
@@ -949,7 +1038,7 @@ async function commitBatch(db, batchIdRaw) {
   // through the same discriminated lookup), so this is a latent behaviour
   // change only, chosen to keep a single source for the discriminator
   // instead of duplicating a local not-found guard for no live caller.
-  const batchInfo = await findFhirBatch(db, batchId);
+  const batchInfo = await findFhirBatch(db, batchId, organizationScope);
 
   let committed = 0;
   for (const record of records) {
@@ -990,18 +1079,45 @@ async function commitBatch(db, batchIdRaw) {
     // — kept as an upsert (rather than a plain insertOne) to match the
     // Patient upsert above's own idempotent-on-participantId semantics.
     const identities = collection(db, 'participantIdentities');
+    // #1171: plus the contact. Since #1166 every later consent path reads it
+    // from this record alone, so a participant committed without it could
+    // never be invited again. The phone is left out when another participant
+    // already holds it: participant_identities_phone_hash_unique_v1 would
+    // refuse the upsert, and this loop has no per-record catch, so one
+    // duplicate would abort every record after it. Nothing is lost against
+    // the previous behaviour, which recorded no contact at all.
+    const contact = {};
+    if (isValidEmail(normalized.patientEmail)) contact.email = normalized.patientEmail;
+    const phone = PatientModel.normalizePhone(normalized.patientPhone);
+    if (phone) {
+      const phoneHashes = participantIdentityService.computeBlindIndexCandidates('phone', phone);
+      const holders = phoneHashes.length
+        ? await identities.find({ phoneHash: { $in: phoneHashes } }).toArray()
+        : [];
+      if (holders.some((holder) => holder.participantId !== normalized.participantId)) {
+        logger.warn('[FHIR_IMPORT] Telefone já pertence a outro participante; registro confirmado sem telefone (#1171)', {
+          batchId: String(batchId),
+          recordId: String(record._id),
+        });
+      } else {
+        contact.phone = phone;
+      }
+    }
     const identityFields = participantIdentityService.encryptIdentityFields(
       ParticipantIdentityModel.fieldsOf({
         participantId: normalized.participantId,
         patientName: normalized.patientName,
         birthDate: normalized.patientBirthDate,
         identityDocument: normalized.patientDocument,
+        ...contact,
       })
     );
     await identities.updateOne(
       { participantId: normalized.participantId },
       {
-        $setOnInsert: { ...identityFields, createdAt: new Date() },
+        // #1386: identityFields carries participantIdentityId null; the
+        // inserted record's own id must win.
+        $setOnInsert: { ...identityFields, ...ParticipantIdentityModel.onInsertFields(), createdAt: new Date() },
         $set: { updatedAt: new Date() },
       },
       { upsert: true }
@@ -1009,7 +1125,15 @@ async function commitBatch(db, batchIdRaw) {
 
     const specimenStatus = workflow.quarantineStatus === 'RELEASED' ? 'available' : 'quarantined';
     const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
-    const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+    const previousStatus = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) : null;
+    const wasQuarantined = previousStatus === 'quarantined';
+    // RF026 AC7: closed is final; a re-commit leaves an existing closed
+    // specimen's status and quarantine reason as they are, and applies,
+    // releases and records nothing for it.
+    const keepsTerminalStatus = Boolean(existingSample) && SampleModel.isTerminalSpecimen(existingSample);
+    const statusFields = keepsTerminalStatus
+      ? {}
+      : { quarantineReason: workflow.quarantineReason, specimenStatus };
 
     const upsertResult = await samples.updateOne(
       { specimenId: normalized.specimenId },
@@ -1029,12 +1153,14 @@ async function commitBatch(db, batchIdRaw) {
           axis_penalties: normalized.rcsPreview?.axis_penalties || [],
           calculation_trace: normalized.rcsPreview?.calculation_trace || {},
           fhir: record.fhir?.specimen || null,
+          // #1385: a new sample takes the batch's organization; an existing
+          // sample's is not moved.
+          organizationId: batchInfo?.organizationId ?? null,
           createdAt: new Date(),
         },
         $set: {
           consentStatus: workflow.consentStatus,
-          quarantineReason: workflow.quarantineReason,
-          specimenStatus,
+          ...statusFields,
           importBatchId: String(batchId),
           importedAt,
           importedBy,
@@ -1081,16 +1207,29 @@ async function commitBatch(db, batchIdRaw) {
         }
       }
     }
-    if (committedSample) {
+    if (committedSample && !keepsTerminalStatus) {
       if (specimenStatus === 'quarantined' && !wasQuarantined) {
         await quarantineActionService.recordAction(db, {
-          specimenIds: [String(committedSample._id)],
+          specimenIds: [quarantineActionService.canonicalSpecimenId(committedSample)],
           reasonCodes: [workflow.quarantineReason || 'FHIR_IMPORT_REVIEW_REQUIRED'],
           authorizedBy: importedBy || 'SYSTEM',
         });
       } else if (specimenStatus === 'available' && wasQuarantined) {
-        await quarantineActionService.releaseActiveAction(db, String(committedSample._id), importedBy || 'SYSTEM');
+        await quarantineActionService.releaseActiveAction(db, committedSample, importedBy || 'SYSTEM');
       }
+    }
+    // RF006 AC7: a re-commit that changes an existing specimen's status
+    // records the change, append-only. A new specimen's first status is its
+    // creation, not a change.
+    if (existingSample && !keepsTerminalStatus) {
+      await operationalStateDecisionService.recordStatusChange(db, {
+        specimenId: normalized.specimenId,
+        previousStatus,
+        newStatus: specimenStatus,
+        triggerEventId: String(record._id),
+        rulesApplied: ['fhir_import_commit'],
+        reasonCodes: [specimenStatus === 'quarantined' ? (workflow.quarantineReason || 'FHIR_IMPORT_REVIEW_REQUIRED') : 'FHIR_IMPORT_RELEASED'],
+      });
     }
 
     await staging.updateOne(
@@ -1111,14 +1250,15 @@ async function commitBatch(db, batchIdRaw) {
     committed += 1;
   }
 
+  const studies = await commitStudyCandidates(db, batchId, batchInfo, canCreateStudy);
   const refreshed = await refreshBatchCounts(db, batchId);
-  return { ...refreshed, committed };
+  return { ...refreshed, committed, studies };
 }
 
 async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {}) {
   const batchId = toObjectId(batchIdRaw);
   const recordId = toObjectId(recordIdRaw);
-  const staging = collection(db, 'import_staging_records');
+  const staging = stagingRecords(db);
   const samples = collection(db, 'samples');
 
   // #799: this is the one entry point that never resolves through getBatch, so
@@ -1126,7 +1266,7 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
   // leave open -- it marks the record RELEASED/AVAILABLE and then writes to
   // `samples` keyed on normalized.specimenId, which an LGPD quarantine record
   // does not carry.
-  await findFhirBatch(db, batchId);
+  await findFhirBatch(db, batchId, options.organizationScope);
 
   const record = await staging.findOne({ _id: recordId, batchId });
   if (!record) {
@@ -1186,7 +1326,15 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     const dbOptions = session ? { session } : undefined;
 
     const existingSample = await samples.findOne({ specimenId: normalized.specimenId }, dbOptions);
-    const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+    const previousStatus = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) : null;
+    const wasQuarantined = previousStatus === 'quarantined';
+
+    // RF026 AC7: closed is final; attaching a document does not reopen it.
+    if (existingSample && SampleModel.isTerminalSpecimen(existingSample)) {
+      const error = new Error(`Amostra em ${previousStatus} não admite mudança de specimenStatus; documentação externa não anexada.`);
+      error.statusCode = 422;
+      throw error;
+    }
 
     const sampleUpdateResult = await samples.updateOne(
       { specimenId: normalized.specimenId },
@@ -1210,7 +1358,18 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord }, dbOptions);
 
     if (existingSample && wasQuarantined) {
-      await quarantineActionService.releaseActiveAction(db, String(existingSample._id), options.userID || 'SYSTEM', undefined, session);
+      await quarantineActionService.releaseActiveAction(db, existingSample, options.userID || 'SYSTEM', undefined, session);
+    }
+    // RF006 AC7: the status change, append-only, with the release.
+    if (existingSample) {
+      await operationalStateDecisionService.recordStatusChange(db, {
+        specimenId: normalized.specimenId,
+        previousStatus,
+        newStatus: 'available',
+        triggerEventId: String(recordId),
+        rulesApplied: ['fhir_external_document_release'],
+        reasonCodes: ['EXTERNAL_ATTACHED'],
+      }, { session });
     }
   };
 

@@ -57,6 +57,12 @@ const excursionCollection = {
   findOne: vi.fn(),
   updateOne: vi.fn(),
 };
+// #1392: closeEnvironmentalExcursion reads the sensor's temperature
+// datastream valid now first; by default there is none, so the #301 cases
+// keep the device path.
+const datastreamCollection = {
+  find: vi.fn(),
+};
 
 // #426: getAlertRecipients now resolves notifiable users via
 // UserRoleAssignment -> Role instead of accessType directly. These two
@@ -79,6 +85,7 @@ const fakeDb = {
     if (name === 'sensorMetadata') return sensorMetadataCollection;
     if (name === 'devices') return deviceCollection;
     if (name === 'environmentalExcursions') return excursionCollection;
+    if (name === 'telemetryDatastreams') return datastreamCollection;
     if (name === 'roles') return rolesCollection;
     if (name === 'userRoleAssignments') return assignmentsCollection;
     throw new Error(`unexpected collection name: ${name}`);
@@ -99,6 +106,7 @@ const sendEmailSpy = vi
   .mockResolvedValue();
 
 const incidentController = require('../../src/controllers/incident.controller');
+const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 beforeEach(() => {
   tempCollection.findOne.mockReset();
@@ -111,6 +119,7 @@ beforeEach(() => {
   deviceCollection.findOne.mockReset().mockResolvedValue(null);
   excursionCollection.findOne.mockReset().mockResolvedValue(null);
   excursionCollection.updateOne.mockReset();
+  datastreamCollection.find.mockReset().mockReturnValue(buildFindChain([]));
   // default: no alert recipients unless a test overrides it
   userCollection.find.mockReturnValue(buildFindChain([]));
   rolesCollection.find.mockReset().mockReturnValue(
@@ -144,7 +153,9 @@ describe('incident.controller.getAlertRecipients', () => {
     // default beforeEach setup grants NOTIFIABLE_USER_ID an active
     // `technician` assignment) rather than an accessType $in query.
     const [userQuery] = userCollection.find.mock.calls[0];
-    expect(userQuery.status).toBe('active');
+    // #1386: active under the canonical accountStatus only.
+    expect(userQuery.accountStatus).toBe('active');
+    expect(userQuery).not.toHaveProperty('$or');
     expect(userQuery._id.$in.map((id) => id.toString())).toEqual([NOTIFIABLE_USER_ID]);
     expect(result).toEqual(['a@x.com', 'b@x.com']);
   });
@@ -345,6 +356,22 @@ describe('incident.controller.getIncidents', () => {
     });
   });
 
+  // #1332: the chain above returns whatever it is handed, so it cannot see
+  // the sort. Here the incidents sit, out of order, in a store that sorts.
+  it('pages incidents by opening time, newest first', async () => {
+    const store = createFakeDb().collection('temperatureIncidents');
+    await store.insertOne({ _id: 'mid', openedAt: new Date('2026-02-02') });
+    await store.insertOne({ _id: 'newest', openedAt: new Date('2026-02-03') });
+    await store.insertOne({ _id: 'oldest', openedAt: new Date('2026-02-01') });
+    tempCollection.find.mockImplementation((filter) => store.find(filter));
+    tempCollection.countDocuments.mockImplementation((filter) => store.countDocuments(filter));
+
+    const res = buildRes();
+    await incidentController.getIncidents({ query: { limit: '2', skip: '1' } }, res);
+
+    expect(res.json.mock.calls[0][0].incidents.map((incident) => incident._id)).toEqual(['mid', 'oldest']);
+  });
+
   it('honors explicit limit/skip query params, coercing to numbers', async () => {
     const chain = buildFindChain([]);
     tempCollection.find.mockReturnValue(chain);
@@ -531,6 +558,86 @@ describe('incident.controller.resolveIncident', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     const payload = res.json.mock.calls[0][0];
     expect(payload.environmentalExcursion).toBeNull();
+  });
+
+  // #1392: the excursion key is the equipmentId of the sensor's temperature
+  // datastream valid now, SensorMetadata's device the fallback.
+  function bindS1To(equipmentId) {
+    datastreamCollection.find.mockReturnValue(buildFindChain([{
+      telemetryDatastreamId: 'ds-1',
+      sensorId: 's1',
+      equipmentId,
+      observedProperty: 'temperature',
+      validityPeriod: { start: new Date('2026-01-01T00:00:00.000Z'), end: null },
+    }]));
+  }
+
+  function openExcursionsByKey(byKey) {
+    excursionCollection.findOne.mockImplementation(async (filter) => byKey[filter.equipmentId] || null);
+  }
+
+  function openExcursion(_id, equipmentId) {
+    return { _id, equipmentId, excursionStatus: 'open', startDateTime: new Date('2026-01-01T00:00:00.000Z') };
+  }
+
+  it('#1392: a bound sensor closes the excursion under its datastream equipmentId', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+    bindS1To('equip-ds');
+    sensorMetadataCollection.findOne.mockResolvedValue({ sensorId: 's1', device: 'device-oid-1' });
+    deviceCollection.findOne.mockResolvedValue({ _id: 'device-oid-1', deviceId: 'device-1' });
+    openExcursionsByKey({ 'equip-ds': openExcursion('excursion-ds', 'equip-ds') });
+
+    const res = buildRes();
+    await incidentController.resolveIncident({ params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } }, res);
+
+    expect(excursionCollection.findOne).toHaveBeenCalledWith({
+      equipmentId: 'equip-ds',
+      excursionStatus: { $in: ['open', 'under_assessment'] },
+    });
+    expect(excursionCollection.updateOne).toHaveBeenCalledTimes(1);
+    expect(excursionCollection.updateOne.mock.calls[0][0]).toEqual({ _id: 'excursion-ds' });
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.environmentalExcursion).toMatchObject({ _id: 'excursion-ds', excursionStatus: 'resolved' });
+  });
+
+  it('#1392: a bound sensor also closes the excursion opened under its device before it was bound', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+    bindS1To('equip-ds');
+    sensorMetadataCollection.findOne.mockResolvedValue({ sensorId: 's1', device: 'device-oid-1' });
+    deviceCollection.findOne.mockResolvedValue({ _id: 'device-oid-1', deviceId: 'device-1' });
+    openExcursionsByKey({
+      'equip-ds': openExcursion('excursion-ds', 'equip-ds'),
+      'device-1': openExcursion('excursion-device', 'device-1'),
+    });
+
+    const res = buildRes();
+    await incidentController.resolveIncident({ params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } }, res);
+
+    const closedIds = excursionCollection.updateOne.mock.calls.map(([filter]) => filter._id);
+    expect(closedIds).toEqual(['excursion-ds', 'excursion-device']);
+    for (const [, update] of excursionCollection.updateOne.mock.calls) {
+      expect(update.$set.excursionStatus).toBe('resolved');
+    }
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.environmentalExcursion._id).toBe('excursion-ds');
+  });
+
+  it('#1392: a bound sensor with no sensorMetadata row still closes its excursion', async () => {
+    tempCollection.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439011', sensorKey: 's1' });
+    tempCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+    bindS1To('equip-ds');
+    sensorMetadataCollection.findOne.mockResolvedValue(null);
+    openExcursionsByKey({ 'equip-ds': openExcursion('excursion-ds', 'equip-ds') });
+
+    const res = buildRes();
+    await incidentController.resolveIncident({ params: { incidentId: '507f1f77bcf86cd799439011' }, body: { userId: 'u1' } }, res);
+
+    expect(excursionCollection.updateOne.mock.calls.map(([filter]) => filter._id)).toEqual(['excursion-ds']);
+    expect(deviceCollection.findOne).not.toHaveBeenCalled();
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.environmentalExcursion._id).toBe('excursion-ds');
   });
 });
 

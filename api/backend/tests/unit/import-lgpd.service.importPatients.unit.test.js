@@ -24,6 +24,8 @@ const service = require('../../src/services/import-lgpd.service');
 const notificationService = require('../../src/services/notification.service');
 const patientService = require('../../src/services/patient.service');
 const PatientModel = require('../../src/models/Patient');
+const participantIdentityService = require('../../src/services/participantIdentity.service');
+const { hashConsentToken } = require('../../src/utils/consentTokenHash');
 
 const VALID_ROW = {
   patientName: 'Maria Silva',
@@ -219,7 +221,9 @@ describe('ImportLGPDService.importPatients', () => {
     const insertedPatient = patientsCollection.insertOne.mock.calls[0][0];
     expect(insertedPatient.participantId).toMatch(/^\d{8}$/);
     expect(insertedPatient.status).toBe('PENDING_CONSENT');
-    expect(insertedPatient.consentToken).toBe('tok-1');
+    // #1049: only the hash of the minted token is persisted.
+    expect(insertedPatient.consentTokenHash).toBe(hashConsentToken('tok-1'));
+    expect(insertedPatient.consentToken).toBeUndefined();
 
     expect(notificationService.enqueueConsentNotification).toHaveBeenCalledTimes(1);
     expect(patientsCollection.updateOne).toHaveBeenCalledWith(
@@ -231,7 +235,27 @@ describe('ImportLGPDService.importPatients', () => {
     expect(participantIdentitiesCollection.insertOne).toHaveBeenCalledTimes(1);
     const insertedIdentity = participantIdentitiesCollection.insertOne.mock.calls[0][0];
     expect(insertedIdentity.participantId).toBe(insertedPatient.participantId);
-    expect(insertedIdentity.patientName).toBe('Maria Silva');
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
+    const identityCrypto = require('../../src/services/participantIdentity.service');
+    expect(insertedIdentity.patientName).toBeNull();
+    expect(identityCrypto.decryptIdentity(insertedIdentity).patientName).toBe('Maria Silva');
+  });
+
+  // #1166 slice 3: the identity row is written after the Patient row, and it
+  // can now be refused on its own (the phoneHash unique index). The Patient
+  // row must not survive that with no identity.
+  it('#1166: rolls back the Patient row when the identity insert fails', async () => {
+    participantIdentitiesCollection.insertOne.mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { phoneHash: 1 } })
+    );
+    patientsCollection.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ _id: 'patient-id-1' });
   });
 
   it('still counts the row as a success when notification enqueueing fails (the failure is logged, not fatal)', async () => {
@@ -287,10 +311,14 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.errors[0].errors[0]).toMatch(/Sexo .* obrigatório/);
   });
 
-  // Pinned to current behavior: PatientModel.create() always stringifies
-  // recordNumber (`String(data.recordNumber).trim()`), regardless of what
-  // type importPatients parsed it to upstream — so a numeric-string input
-  // round-trips back to a string, not a number.
+  // #1386: the record number is stored on ParticipantIdentity alone
+  // (P1X-0355), as a string whatever type importPatients parsed it to
+  // upstream, so a numeric-string input round-trips back to a string. A
+  // blanked one leaves the identity with no number at all.
+  const insertedRecordNumbers = () => participantIdentitiesCollection.insertOne.mock.calls.map(
+    ([identity]) => participantIdentityService.decryptIdentity(identity).recordNumber
+  );
+
   it('normalizes a numeric-string recordNumber to a string, and blanks an empty/placeholder one to null', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([
       { ...VALID_ROW, recordNumber: '123' },
@@ -299,9 +327,11 @@ describe('ImportLGPDService.importPatients', () => {
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(2);
-    const [first, second] = patientsCollection.insertOne.mock.calls;
-    expect(first[0].recordNumber).toBe('123');
-    expect(second[0].recordNumber).toBeNull();
+    for (const [patient] of patientsCollection.insertOne.mock.calls) {
+      expect(patient).not.toHaveProperty('recordNumber');
+    }
+    expect(insertedRecordNumbers()).toEqual(['123', undefined]);
+    expect(participantIdentitiesCollection.insertOne.mock.calls[1][0]).not.toHaveProperty('recordNumberCiphertext');
   });
 
   it('blanks "undefined" and "NaN" placeholder recordNumber strings to null (same branch as the "null" placeholder)', async () => {
@@ -312,9 +342,10 @@ describe('ImportLGPDService.importPatients', () => {
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(2);
-    const [first, second] = patientsCollection.insertOne.mock.calls;
-    expect(first[0].recordNumber).toBeNull();
-    expect(second[0].recordNumber).toBeNull();
+    expect(insertedRecordNumbers()).toEqual([undefined, undefined]);
+    for (const [identity] of participantIdentitiesCollection.insertOne.mock.calls) {
+      expect(identity).not.toHaveProperty('recordNumberCiphertext');
+    }
   });
 
   it('keeps a non-numeric recordNumber string as-is', async () => {
@@ -322,7 +353,25 @@ describe('ImportLGPDService.importPatients', () => {
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(1);
-    expect(patientsCollection.insertOne.mock.calls[0][0].recordNumber).toBe('ABC-1');
+    expect(patientsCollection.insertOne.mock.calls[0][0]).not.toHaveProperty('recordNumber');
+    expect(insertedRecordNumbers()).toEqual(['ABC-1']);
+  });
+
+  // #1353: the tenancy key the scoped participant readers filter on.
+  it('stamps the resolved organizationId as each imported participant\'s clinicalUnitId (#1353)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN' });
+
+    expect(result.success).toBe(1);
+    expect(patientsCollection.insertOne.mock.calls[0][0].clinicalUnitId).toBe('ORG-OWN');
+  });
+
+  it('leaves clinicalUnitId unset when no organizationId was resolved (#1353)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(patientsCollection.insertOne.mock.calls[0][0].clinicalUnitId).toBeNull();
   });
 
   it('generates a clinicalUnit acronym when clinicalUnit is provided without one', async () => {
@@ -482,9 +531,11 @@ describe('ImportLGPDService.importPatients', () => {
       expect(importStagingRecordsCollection.insertMany).toHaveBeenCalledTimes(1);
       const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
       expect(staged).toHaveLength(1);
-      expect(staged[0]).toMatchObject({ batchId: 'batch-1', rowNumber: 2, status: 'ERROR' });
+      // #1295: the rows carry the batch document's own id, generated before them.
+      const batchId = importBatchesCollection.insertOne.mock.calls[0][0]._id;
+      expect(staged[0]).toMatchObject({ batchId, rowNumber: 2, status: 'ERROR' });
 
-      expect(result.stagingBatchId).toBe('batch-1');
+      expect(result.stagingBatchId).toBe(batchId);
     });
 
     it('does not open a staging batch when every row imports cleanly', async () => {

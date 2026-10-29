@@ -90,7 +90,17 @@ export default function MFASetupPage() {
       if (isFirstLogin && username && password) {
         // Primeiro acesso
         response = await authService.enableTwoFactorFirstLogin(verificationCode, username, password);
-        
+
+        // #1250: an administrator set or forced this password. The enrolment
+        // is done, but no session is issued until the user replaces it, so
+        // back to the login form, which handles MFA and the forced change.
+        if (response.data?.data?.requiresPasswordChange) {
+          localStorage.removeItem('tempUsername');
+          localStorage.removeItem('tempPassword');
+          navigate('/login', { replace: true, state: { username, notice: 'mfaEnrolledPasswordChange' } });
+          return;
+        }
+
         // Extrai token e salva
         const token = response.data?.data?.token || response.data?.token;
         const userData = response.data?.data?.user || response.data?.user;

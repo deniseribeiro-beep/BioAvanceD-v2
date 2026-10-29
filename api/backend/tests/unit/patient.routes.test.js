@@ -69,7 +69,8 @@ const CONTROLLER_METHODS = [
 for (const method of CONTROLLER_METHODS) {
   patientController[method] = (req, res) => res.status(200).json({ success: true, stub: method });
 }
-consentController.getPatientConsent = (req, res) => res.status(200).json({ success: true, stub: 'getPatientConsent' });
+// #1188: echoes req.params so a test can see which name the route binds.
+consentController.getPatientConsent = (req, res) => res.status(200).json({ success: true, stub: 'getPatientConsent', params: req.params });
 
 // Required exactly once - see comments above.
 const router = require(routePath);
@@ -152,8 +153,22 @@ describe('patient.routes authorization gates (issue #921)', () => {
     }
   });
 
+  // #1188: e2549bee renamed the controller's read to req.params.participantId
+  // and left this route on :patientId, so the controller always got undefined.
+  it('GET /:participantId/consent binds the id under the name the controller reads', async () => {
+    const { router } = loadRoute();
+    const app = buildApp(router);
+
+    const res = await request(app).get('/api/patients/12345678/consent');
+
+    expect(res.status).toBe(200);
+    expect(res.body.params).toEqual({ participantId: '12345678' });
+  });
+
   describe('requireOrganizationScope presence pinning', () => {
-    // Ten of the twelve gated registrations wire in requireOrganizationScope.
+    // Every gated registration wires in requireOrganizationScope. POST / and
+    // POST /find-for-edit were pinned as NOT carrying it (e4ed4dc9, recording
+    // the file as it stood) until #1185 scoped both.
     const GATED_CASES = [
       { label: 'GET /', method: 'get', path: '/' },
       { label: 'GET /search', method: 'get', path: '/search' },
@@ -164,6 +179,13 @@ describe('patient.routes authorization gates (issue #921)', () => {
       { label: 'POST /:id/reidentify', method: 'post', path: '/p1/reidentify' },
       { label: 'PUT /:id', method: 'put', path: '/p1' },
       { label: 'DELETE /:id', method: 'delete', path: '/p1' },
+      // #1185: find-for-edit returns a full patient for editing, so it
+      // takes the same scope gate as GET /:id rather than none.
+      { label: 'POST /find-for-edit', method: 'post', path: '/find-for-edit' },
+      // #1185: the create stamps the caller's organization, which needs the scope.
+      { label: 'POST /', method: 'post', path: '/' },
+      // #1188: the consent read had only `authenticate`.
+      { label: 'GET /:participantId/consent', method: 'get', path: '/p1/consent' },
     ];
 
     for (const { label, method, path } of GATED_CASES) {
@@ -187,33 +209,6 @@ describe('patient.routes authorization gates (issue #921)', () => {
     // GET /:id/observations sits behind requireOrganizationScope AND
     // ahead of GET /:id in file order -- included above via its own path
     // shape so it can't collide with GET /:id's registration.
-
-    // Two of the twelve gated registrations (POST / and POST
-    // /find-for-edit) carry requirePermission but explicitly do NOT wire
-    // in requireOrganizationScope -- confirmed against
-    // patient.routes.js:9 and :46. A denying requireOrganizationScope
-    // stub must therefore never fire on these; the request should sail
-    // through to the (stubbed) controller instead.
-    const UNGATED_CASES = [
-      { label: 'POST /', method: 'post', path: '/', expectedStub: 'cadastrar' },
-      { label: 'POST /find-for-edit', method: 'post', path: '/find-for-edit', expectedStub: 'findForEdit' },
-    ];
-
-    for (const { label, method, path, expectedStub } of UNGATED_CASES) {
-      it(`does not apply requireOrganizationScope on ${label}`, async () => {
-        const requireOrganizationScopeImpl = denyingRequireOrganizationScope();
-        const { router } = loadRoute({ requireOrganizationScopeImpl });
-        const app = buildApp(router);
-
-        const res = await request(app)[method](`/api/patients${path}`).send({});
-
-        // Not the 403/orgScope shape the denying stub would answer with if
-        // it had actually been reached.
-        expect(res.status).toBe(200);
-        expect(res.body.stub).toBe(expectedStub);
-        expect(requireOrganizationScopeImpl.recordedCalls).toEqual([]);
-      });
-    }
   });
 
   // GET /operational (patient.routes.js:49) is registered AFTER GET /:id

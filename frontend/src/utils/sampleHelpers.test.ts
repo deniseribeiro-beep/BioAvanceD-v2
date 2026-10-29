@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { getSpecimenStatusColor, resolveSpecimenStatus, translateSpecimenStatus } from './sampleHelpers';
+import {
+  getQuantityStatusColor,
+  getSpecimenStatusColor,
+  isSpecimenBlocked,
+  resolveQuantityStatus,
+  resolveSpecimenStatus,
+  translateQuantityStatus,
+  translateSpecimenStatus,
+} from './sampleHelpers';
 
 // #539: shared specimenStatus derivation extracted from
 // SampleWithdrawalReturnPage.tsx's #538 Phase A fix so every reader derives
-// display state from the canonical `specimenStatus` (dict-02 ELM-0123)
+// display state from the canonical `specimenStatus` (V2E-0544)
 // instead of the legacy `currentStatus`/`status` fields
-// canonical-data-contract-v1.md bans.
+// canonical-data-contract-v1.md bans. RF006 AC2/AC3 split the quantity out
+// into quantityStatus.
 describe('resolveSpecimenStatus', () => {
   it('defaults to available when specimenStatus is absent, matching the backend default', () => {
     expect(resolveSpecimenStatus(null)).toBe('available');
@@ -14,22 +23,55 @@ describe('resolveSpecimenStatus', () => {
   });
 
   it('case-folds whatever value is present', () => {
-    expect(resolveSpecimenStatus({ specimenStatus: 'DEPLETED' })).toBe('depleted');
-    expect(resolveSpecimenStatus({ specimenStatus: 'Partial' })).toBe('partial');
+    expect(resolveSpecimenStatus({ specimenStatus: 'CLOSED' })).toBe('closed');
+    expect(resolveSpecimenStatus({ specimenStatus: 'Quarantined' })).toBe('quarantined');
+  });
+
+  it('folds the v1.3.0 values the way the backend reads them', () => {
+    expect(resolveSpecimenStatus({ specimenStatus: 'DEPLETED' })).toBe('available');
+    expect(resolveSpecimenStatus({ specimenStatus: 'Partial' })).toBe('available');
+    expect(resolveSpecimenStatus({ specimenStatus: 'destroyed' })).toBe('unavailable');
+    expect(resolveSpecimenStatus({ specimenStatus: 'disposed' })).toBe('unavailable');
+  });
+});
+
+describe('resolveQuantityStatus', () => {
+  it('returns the quantityStatus the API sent, case-folded', () => {
+    expect(resolveQuantityStatus({ quantityStatus: 'partial', initialQuantity: 100, currentQuantity: 100 })).toBe('partial');
+    expect(resolveQuantityStatus({ quantityStatus: 'DEPLETED' })).toBe('depleted');
+  });
+
+  it('derives it from the quantities when the record carries none', () => {
+    expect(resolveQuantityStatus({ initialQuantity: 100, currentQuantity: 100 })).toBe('full');
+    expect(resolveQuantityStatus({ initialQuantity: 100, currentQuantity: 30 })).toBe('partial');
+    expect(resolveQuantityStatus({ initialQuantity: 100, currentQuantity: 0 })).toBe('depleted');
+    expect(resolveQuantityStatus({ quantity: 50 })).toBe('full');
+  });
+
+  it('reads a record with no quantity at all as full', () => {
+    expect(resolveQuantityStatus(null)).toBe('full');
+    expect(resolveQuantityStatus({})).toBe('full');
+  });
+});
+
+describe('isSpecimenBlocked', () => {
+  it('is true for unavailable, quarantined and closed only', () => {
+    expect(isSpecimenBlocked({ specimenStatus: 'unavailable' })).toBe(true);
+    expect(isSpecimenBlocked({ specimenStatus: 'quarantined' })).toBe(true);
+    expect(isSpecimenBlocked({ specimenStatus: 'closed' })).toBe(true);
+    expect(isSpecimenBlocked({ specimenStatus: 'available', quantityStatus: 'depleted' })).toBe(false);
+    expect(isSpecimenBlocked({ specimenStatus: 'reserved' })).toBe(false);
   });
 });
 
 describe('translateSpecimenStatus', () => {
-  it('translates every dict-02 ELM-0123 state to a Portuguese label', () => {
+  it('translates every v2 specimenStatus to a Portuguese label', () => {
     expect(translateSpecimenStatus('available')).toBe('Disponível');
     expect(translateSpecimenStatus('reserved')).toBe('Reservada');
     expect(translateSpecimenStatus('checked_out')).toBe('Retirada (Check-out)');
-    expect(translateSpecimenStatus('partial')).toBe('Parcialmente Retirada');
-    expect(translateSpecimenStatus('depleted')).toBe('Totalmente Retirada');
     expect(translateSpecimenStatus('quarantined')).toBe('Em Quarentena');
-    expect(translateSpecimenStatus('destroyed')).toBe('Destruída');
     expect(translateSpecimenStatus('unavailable')).toBe('Indisponível');
-    expect(translateSpecimenStatus('disposed')).toBe('Descartada');
+    expect(translateSpecimenStatus('closed')).toBe('Encerrada');
   });
 
   it('falls back to the raw value for an unrecognized status', () => {
@@ -38,10 +80,22 @@ describe('translateSpecimenStatus', () => {
   });
 });
 
-describe('getSpecimenStatusColor', () => {
-  it('returns danger for blocked states and text for an unrecognized value', () => {
-    expect(getSpecimenStatusColor('depleted')).toBe('var(--danger)');
+describe('translateQuantityStatus', () => {
+  it('translates every quantityStatus to a Portuguese label', () => {
+    expect(translateQuantityStatus('full')).toBe('Íntegra');
+    expect(translateQuantityStatus('partial')).toBe('Parcialmente Retirada');
+    expect(translateQuantityStatus('depleted')).toBe('Totalmente Retirada');
+    expect(translateQuantityStatus(undefined)).toBe('-');
+  });
+});
+
+describe('getSpecimenStatusColor / getQuantityStatusColor', () => {
+  it('returns danger for blocked and depleted, and text for an unrecognized value', () => {
+    expect(getSpecimenStatusColor('closed')).toBe('var(--danger)');
     expect(getSpecimenStatusColor('available')).toBe('var(--success)');
     expect(getSpecimenStatusColor('something-new')).toBe('var(--text)');
+    expect(getQuantityStatusColor('depleted')).toBe('var(--danger)');
+    expect(getQuantityStatusColor('partial')).toBe('var(--warning)');
+    expect(getQuantityStatusColor('something-new')).toBe('var(--text)');
   });
 });

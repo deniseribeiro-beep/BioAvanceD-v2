@@ -5,6 +5,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const MongoStorageRepository = require('../../src/infrastructure/persistence/mongo/MongoStorageRepository.js');
 const { createContendedCollectionMock } = require('../factories/db.factory.js');
+const { placeSpecimen, currentPlacement } = require('../../src/services/legacyPlacementChain.service.js');
 
 function makeCollection(overrides = {}) {
   return {
@@ -15,16 +16,46 @@ function makeCollection(overrides = {}) {
   };
 }
 
+// #1374: a physical-chain collection, empty at first, that keeps what is
+// inserted and matches a query by equality and `$or`.
+function matchesChainQuery(doc, filter) {
+  return Object.entries(filter).every(([key, value]) =>
+    key === '$or' ? value.some((branch) => matchesChainQuery(doc, branch)) : doc[key] === value
+  );
+}
+
+function makeChainCollection() {
+  const docs = [];
+  return makeCollection({
+    findOne: vi.fn(async (filter) => docs.find((doc) => matchesChainQuery(doc, filter)) || null),
+    find: vi.fn((filter = {}) => ({ toArray: async () => docs.filter((doc) => matchesChainQuery(doc, filter)) })),
+    insertOne: vi.fn(async (doc) => {
+      docs.push({ ...doc });
+      return { insertedId: docs.length };
+    }),
+    updateOne: vi.fn(async (filter, update) => {
+      const doc = docs.find((row) => matchesChainQuery(row, filter));
+      if (doc) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0 };
+    })
+  });
+}
+
 function makeDb(collections) {
   const defaults = {
     storagePaths: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     storageBoxes: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     storageContainers: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     rooms: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+    containers: makeChainCollection(),
+    specimenContainerAssignments: makeChainCollection(),
+    containerPositionAssignments: makeChainCollection(),
+    rackLocationAssignments: makeChainCollection(),
     storageAssignments: makeCollection({
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'stub' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue(null)
+      findOne: vi.fn().mockResolvedValue(null),
+      find: vi.fn(() => ({ toArray: async () => [] }))
     })
   };
   return {
@@ -34,60 +65,6 @@ function makeDb(collections) {
 
 describe('MongoStorageRepository', () => {
   describe('findStorageHierarchyForBox', () => {
-    // Issue #418: dict-02 StorageAssignment.facilityId/roomId (ELM-0168/0169)
-    // must resolve via the FREEZER's roomId -> Room.facilityId chain, not
-    // stay hardcoded null like #402 left them.
-    it('resolves facilityId/roomId via the freezer storageContainer and room (#418)', async () => {
-      const boxObjId = new ObjectId();
-      const freezerId = new ObjectId();
-      const roomId = new ObjectId();
-      const facilityId = new ObjectId();
-
-      const storagePaths = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({
-          rackId: new ObjectId(),
-          shelfId: new ObjectId(),
-          freezerId
-        })
-      });
-      const storageContainers = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: freezerId, roomId })
-      });
-      const rooms = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: roomId, facilityId })
-      });
-      const db = makeDb({ storagePaths, storageContainers, rooms });
-      const repo = new MongoStorageRepository(db);
-
-      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
-
-      expect(result.facilityId).toBe(String(facilityId));
-      expect(result.roomId).toBe(String(roomId));
-    });
-
-    it('leaves facilityId/roomId null when the freezer has no roomId', async () => {
-      const boxObjId = new ObjectId();
-      const freezerId = new ObjectId();
-
-      const storagePaths = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({
-          rackId: new ObjectId(),
-          shelfId: new ObjectId(),
-          freezerId
-        })
-      });
-      const storageContainers = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: freezerId, roomId: null })
-      });
-      const db = makeDb({ storagePaths, storageContainers });
-      const repo = new MongoStorageRepository(db);
-
-      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
-
-      expect(result.facilityId).toBeNull();
-      expect(result.roomId).toBeNull();
-    });
-
     it('leaves everything null when there is no StoragePath and the box itself cannot be found either', async () => {
       const boxObjId = new ObjectId();
       const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
@@ -100,23 +77,19 @@ describe('MongoStorageRepository', () => {
       expect(result).toEqual({
         rackId: null,
         shelfId: null,
-        equipmentId: null,
-        roomId: null,
-        facilityId: null
+        equipmentId: null
       });
     });
 
     // #654: storagePaths is never written anywhere in api/backend/src, so
     // every real box hits this branch -- without the live fallback, dict-02's
-    // hierarchy-enrichment fields (facilityId/roomId/equipmentId on
-    // StorageAssignment) silently never populate for any real box.
+    // hierarchy-enrichment field (equipmentId on StorageAssignment) silently
+    // never populates for any real box.
     it('#654: falls back to a live parent_id walk when there is no StoragePath document', async () => {
       const boxObjId = new ObjectId();
       const rackId = new ObjectId();
       const shelfId = new ObjectId();
       const freezerId = new ObjectId();
-      const roomId = new ObjectId();
-      const facilityId = new ObjectId();
 
       const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
       const storageBoxes = makeCollection({
@@ -126,15 +99,9 @@ describe('MongoStorageRepository', () => {
         findOne: vi.fn()
           .mockResolvedValueOnce({ _id: rackId, containerType: 'RACK', parent_id: shelfId })
           .mockResolvedValueOnce({ _id: shelfId, containerType: 'SHELF', parent_id: freezerId })
-          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null, roomId })
-          // findFacilityAndRoomForFreezer's own lookup, called with the
-          // resolved freezerId once the walk above completes.
-          .mockResolvedValueOnce({ _id: freezerId, roomId })
+          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null })
       });
-      const rooms = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: roomId, facilityId })
-      });
-      const db = makeDb({ storagePaths, storageBoxes, storageContainers, rooms });
+      const db = makeDb({ storagePaths, storageBoxes, storageContainers });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.findStorageHierarchyForBox(boxObjId, {});
@@ -142,9 +109,7 @@ describe('MongoStorageRepository', () => {
       expect(result).toEqual({
         rackId: String(rackId),
         shelfId: String(shelfId),
-        equipmentId: String(freezerId),
-        roomId: String(roomId),
-        facilityId: String(facilityId)
+        equipmentId: String(freezerId)
       });
     });
 
@@ -168,8 +133,7 @@ describe('MongoStorageRepository', () => {
           .mockResolvedValueOnce({ _id: drawerId, containerType: 'DRAWER', parent_id: rackId })
           .mockResolvedValueOnce({ _id: rackId, containerType: 'RACK', parent_id: shelfId })
           .mockResolvedValueOnce({ _id: shelfId, containerType: 'SHELF', parent_id: freezerId })
-          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null, roomId: null })
-          .mockResolvedValueOnce({ _id: freezerId, roomId: null })
+          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null })
       });
       const db = makeDb({ storagePaths, storageBoxes, storageContainers });
       const repo = new MongoStorageRepository(db);
@@ -238,10 +202,11 @@ describe('MongoStorageRepository', () => {
       expect(storageAssignmentsFindOne).not.toHaveBeenCalled();
     });
 
-    // Issue #507: findSampleById's return shape must expose the canonical
-    // StorageAssignment (dict-02 ELM-0167-0178) instead of leaving callers
-    // to read the raw embedded storageLocation.boxId/position snapshot.
-    it('attaches the open StorageAssignment as the canonical storageAssignment field (#507)', async () => {
+    // Issue #507: findSampleById's return shape must expose the current
+    // placement instead of leaving callers to read the raw embedded
+    // storageLocation.boxId/position snapshot. #1374: with no chain load the
+    // open legacy StorageAssignment row (ELM-0167-0178) is the fallback.
+    it('attaches the open legacy StorageAssignment as the storageAssignment fallback (#507, #1374)', async () => {
       const sampleId = new ObjectId().toString();
       const boxId = new ObjectId().toString();
       const openAssignment = {
@@ -266,11 +231,62 @@ describe('MongoStorageRepository', () => {
 
       const result = await repo.findSampleById(sampleId);
 
-      expect(result.storageAssignment).toEqual(openAssignment);
+      expect(result.storageAssignment).toEqual({
+        boxId,
+        positionCode: 'A1',
+        containerId: null,
+        storagePositionId: null,
+        storageRackId: null,
+        storageLocationId: null,
+        placedAt: new Date('2026-08-01'),
+        source: 'legacy_storage_assignment'
+      });
       expect(storageAssignmentsFindOne).toHaveBeenCalledWith(
         { specimenId: sampleId, removedAt: null },
-        { session: undefined }
+        undefined
       );
+    });
+
+    // #1374: the physical chain is read first, keyed by the business
+    // specimenId, and the legacy row is not read once the chain places it.
+    it('attaches the physical chain placement first, in the caller session (#1374)', async () => {
+      const sampleId = new ObjectId().toString();
+      const boxId = new ObjectId().toString();
+      const session = { id: 'sess-1' };
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId, specimenId: 'SPC-1', storageLocation: { boxId, position: 'B3' } })
+      });
+      const loadsFindOne = vi.fn().mockResolvedValueOnce({ specimenId: 'SPC-1', containerId: 'CTN-1', assignmentStatus: 'active' });
+      const placementsFindOne = vi.fn().mockResolvedValueOnce({
+        containerId: 'CTN-1', storagePositionId: `${boxId}:B03`, placedAt: new Date('2026-09-01'), assignmentStatus: 'active'
+      });
+      const rackFindOne = vi.fn().mockResolvedValueOnce({ storageRackId: boxId, storageLocationId: 'LOC-1', assignmentStatus: 'active' });
+      const storageAssignmentsFindOne = vi.fn();
+      const db = makeDb({
+        samples,
+        specimenContainerAssignments: makeCollection({ findOne: loadsFindOne }),
+        containerPositionAssignments: makeCollection({ findOne: placementsFindOne }),
+        rackLocationAssignments: makeCollection({ findOne: rackFindOne }),
+        storageAssignments: makeCollection({ findOne: storageAssignmentsFindOne })
+      });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.findSampleById(sampleId, session);
+
+      expect(result.storageAssignment).toEqual({
+        boxId,
+        positionCode: 'B3',
+        containerId: 'CTN-1',
+        storagePositionId: `${boxId}:B03`,
+        storageRackId: boxId,
+        storageLocationId: 'LOC-1',
+        placedAt: new Date('2026-09-01'),
+        source: 'physical_chain'
+      });
+      expect(samples.findOne).toHaveBeenCalledTimes(1);
+      expect(loadsFindOne).toHaveBeenCalledWith(expect.objectContaining({ specimenId: 'SPC-1' }), { session });
+      expect(placementsFindOne).toHaveBeenCalledWith(expect.objectContaining({ containerId: 'CTN-1' }), { session });
+      expect(storageAssignmentsFindOne).not.toHaveBeenCalled();
     });
 
     it('sets storageAssignment to null when the sample has no open placement', async () => {
@@ -391,6 +407,7 @@ describe('MongoStorageRepository', () => {
           .mockResolvedValueOnce({ matchedCount: 1 }) // target
       });
       const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: new ObjectId(sampleId), specimenId: 'SPC-0001' }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const db = makeDb({ storageBoxes, samples });
@@ -401,10 +418,12 @@ describe('MongoStorageRepository', () => {
       expect(samples.updateOne).toHaveBeenCalledTimes(1);
     });
 
-    // Issue #402: dict-02 StorageAssignment — a move must close the
-    // placement-history record at the source position and open a new one
-    // at the target, not just overwrite Sample.storageLocation.
-    it('closes the source StorageAssignment and opens one for the target (#402)', async () => {
+    // #1374: the move goes on the physical chain, in the caller's session:
+    // the container leaves its source position and takes the target one;
+    // no StorageAssignment row is written.
+    it('moves the specimen container on the physical chain in the session, not StorageAssignment rows (#1374)', async () => {
+      const session = {};
+      const sample = { _id: new ObjectId(sampleId), specimenId: 'SPC-0001' };
       const storageBoxes = makeCollection({
         findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'ACTIVE' }),
         updateOne: vi
@@ -413,41 +432,96 @@ describe('MongoStorageRepository', () => {
           .mockResolvedValueOnce({ matchedCount: 1 })
       });
       const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(sample),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const storageAssignmentsUpdateOne = vi.fn().mockResolvedValueOnce({ matchedCount: 1 });
-      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
-      const storageAssignments = makeCollection({
-        updateOne: storageAssignmentsUpdateOne,
-        insertOne: storageAssignmentsInsertOne
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const storageAssignments = makeCollection({ insertOne: vi.fn(), updateOne: vi.fn() });
+      const db = makeDb({
+        storageBoxes, samples, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
       });
-      const db = makeDb({ storageBoxes, samples, storagePaths, storageAssignments });
+      await placeSpecimen(db, { sample, box: { _id: fromBoxId }, position: 'A1', at: new Date('2026-01-01T00:00:00Z'), sourceEventId: 'seed' }, session);
+      const [source] = await containerPositionAssignments.find({}).toArray();
+      vi.clearAllMocks();
       const repo = new MongoStorageRepository(db);
 
-      await repo.moveSamplePosition(input, {});
+      await repo.moveSamplePosition(input, session);
 
-      expect(storageAssignmentsUpdateOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          specimenId: sampleId,
-          boxId: fromBoxId,
-          positionCode: 'A1',
-          removedAt: null
-        }),
-        expect.objectContaining({ $set: expect.objectContaining({ removedAt: expect.any(Date), occupancyStatus: 'livre' }) }),
-        { session: {} }
+      expect(samples.findOne).toHaveBeenCalledWith({ _id: expect.any(ObjectId) }, { session });
+      expect(containerPositionAssignments.updateOne).toHaveBeenCalledWith(
+        { containerPositionAssignmentId: source.containerPositionAssignmentId, assignmentStatus: 'active' },
+        { $set: expect.objectContaining({ removedAt: expect.any(Date) }) },
+        { session }
       );
-      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          specimenId: sampleId,
-          boxId: toBoxId,
-          positionCode: 'B2',
-          placedAt: expect.any(Date),
-          removedAt: null,
-          occupancyStatus: 'ocupada'
-        }),
-        { session: {} }
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ containerId: source.containerId, storagePositionId: `${toBoxId}:B02` }),
+        { session }
       );
+      expect(containers.insertOne).not.toHaveBeenCalled();
+      expect(specimenContainerAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+    });
+
+    // #1374: a specimen placed only through the legacy path is adopted
+    // first -- one container, loaded at its open legacy row -- and the move
+    // then takes that container to the target.
+    it('adopts a specimen whose only placement is an open legacy row, then moves it to the target (#1374)', async () => {
+      const session = {};
+      const sample = { _id: new ObjectId(sampleId), specimenId: 'SPC-0002' };
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'ACTIVE' }),
+        updateOne: vi
+          .fn()
+          .mockResolvedValueOnce({ matchedCount: 1 })
+          .mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(sample),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const legacyRow = {
+        storageAssignmentId: 'SA-1',
+        specimenId: sampleId,
+        boxId: fromBoxId,
+        positionCode: 'A1',
+        placedAt: new Date('2026-01-01T00:00:00Z'),
+        removedAt: null
+      };
+      const storageAssignments = makeCollection({
+        find: vi.fn(() => ({ toArray: async () => [legacyRow] })),
+        insertOne: vi.fn(),
+        updateOne: vi.fn()
+      });
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const db = makeDb({
+        storageBoxes, samples, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
+      });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.moveSamplePosition(input, session);
+
+      expect(containers.insertOne).toHaveBeenCalledTimes(1);
+      const { containerId } = containers.insertOne.mock.calls[0][0];
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'SPC-0002', containerId, sourceEventId: 'legacy-storage-assignment:SA-1' }),
+        { session }
+      );
+      const placements = await containerPositionAssignments.find({}).toArray();
+      expect(placements.map((row) => [row.storagePositionId, row.assignmentStatus])).toEqual([
+        [`${fromBoxId}:A01`, 'ended'],
+        [`${toBoxId}:B02`, 'active']
+      ]);
+      expect(placements.every((row) => row.containerId === containerId)).toBe(true);
+      for (const call of containerPositionAssignments.insertOne.mock.calls) expect(call[1]).toEqual({ session });
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.updateOne).not.toHaveBeenCalled();
     });
 
     it('throws "Origem inconsistente" when source update matchedCount is 0', async () => {
@@ -527,7 +601,7 @@ describe('MongoStorageRepository', () => {
 
     it('happy path allocates the position', async () => {
       const samples = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }),
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId, specimenId: 'SPC-0001' }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const storageBoxes = makeCollection({
@@ -568,35 +642,54 @@ describe('MongoStorageRepository', () => {
       expect(samples.updateOne).not.toHaveBeenCalled();
     });
 
-    // Issue #402: opening a position must also open a StorageAssignment
-    // placement-history record for it.
-    it('opens a StorageAssignment for the newly allocated position (#402)', async () => {
+    // #1374: the allocation places the specimen on the physical chain, keyed
+    // by its business specimenId, in the caller's session; the legacy
+    // StorageAssignment row is no longer written.
+    it('places the specimen on the physical chain in the session, not a StorageAssignment row (#1374)', async () => {
+      const session = {};
       const samples = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }),
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId, specimenId: 'SPC-0001' }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const storageBoxes = makeCollection({
         findOne: vi.fn().mockResolvedValueOnce(boxDoc),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
-      const storageAssignments = makeCollection({ insertOne: storageAssignmentsInsertOne });
-      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const storageAssignments = makeCollection({ insertOne: vi.fn() });
+      const db = makeDb({
+        samples, storageBoxes, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
+      });
       const repo = new MongoStorageRepository(db);
 
-      await repo.allocateSamplePosition(baseInput, {});
+      await repo.allocateSamplePosition(baseInput, session);
 
-      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
+      expect(containers.insertOne).toHaveBeenCalledTimes(1);
+      expect(containers.insertOne.mock.calls[0][1]).toEqual({ session });
+      const container = containers.insertOne.mock.calls[0][0];
+
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          specimenId: sampleId,
-          boxId,
-          positionCode: 'A1',
-          placedAt: expect.any(Date),
-          removedAt: null,
-          occupancyStatus: 'ocupada'
+          specimenId: 'SPC-0001',
+          containerId: container.containerId,
+          sourceEventId: expect.stringMatching(new RegExp(`^legacy-storage-allocate:${sampleId}:`))
         }),
-        { session: {} }
+        { session }
       );
+
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          containerId: container.containerId,
+          storagePositionId: `${boxId}:A01`
+        }),
+        { session }
+      );
+
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
     });
 
     it('throws when sample not found', async () => {
@@ -714,7 +807,7 @@ describe('MongoStorageRepository', () => {
 
     it('scans for the first free position and allocates it atomically', async () => {
       const samples = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null }),
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, specimenId: 'SPC-0002', storageLocation: null }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const storageBoxes = makeCollection({
@@ -838,85 +931,55 @@ describe('MongoStorageRepository', () => {
       );
     });
 
-    // #1003: auto-assign is the only one of the four storage-placement
-    // writers that never opened a StorageAssignment row -- direct analogue
-    // of allocateSamplePosition's own "#402" case above.
-    it('opens a StorageAssignment for the newly auto-assigned position (#1003)', async () => {
+    // #1374: auto-assign places the specimen on the physical chain like the
+    // other writers, keyed by its business specimenId, in the caller's
+    // session; the legacy StorageAssignment row is no longer written.
+    it('places the auto-assigned specimen on the physical chain in the session, not a StorageAssignment row (#1374)', async () => {
+      const session = {};
       const samples = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null }),
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, specimenId: 'SPC-0002', storageLocation: null }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const storageBoxes = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce(boxDoc),
+        findOne: vi.fn().mockResolvedValueOnce({ ...boxDoc, occupancyGrid: {}, currentOccupancy: 0 }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
-      const storageAssignments = makeCollection({ insertOne: storageAssignmentsInsertOne });
-      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const storageAssignments = makeCollection({ insertOne: vi.fn() });
+      const db = makeDb({
+        samples, storageBoxes, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
+      });
       const repo = new MongoStorageRepository(db);
 
-      const position = await repo.autoAssignSamplePosition({ specimenId, boxId }, {});
+      const position = await repo.autoAssignSamplePosition({ specimenId, boxId }, session);
 
-      expect(position).toBe('A2');
-      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
+      expect(position).toBe('A1');
+      expect(containers.insertOne).toHaveBeenCalledTimes(1);
+      expect(containers.insertOne.mock.calls[0][1]).toEqual({ session });
+      const container = containers.insertOne.mock.calls[0][0];
+
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          specimenId: String(specimenId),
-          boxId: String(boxId),
-          positionCode: 'A2',
-          placedAt: expect.any(Date),
-          removedAt: null,
-          occupancyStatus: 'ocupada'
+          specimenId: 'SPC-0002',
+          containerId: container.containerId,
+          sourceEventId: expect.stringMatching(new RegExp(`^legacy-storage-auto-assign:${specimenId}:`))
         }),
-        { session: {} }
+        { session }
       );
-    });
-  });
 
-  describe('rollbackAutoAssignedPosition', () => {
-    it('unsets the occupancyGrid entry and the sample storageLocation', async () => {
-      const specimenId = new ObjectId();
-      const boxId = new ObjectId();
-      const samples = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
-      const storageBoxes = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
-      const db = makeDb({ samples, storageBoxes });
-      const repo = new MongoStorageRepository(db);
-
-      await repo.rollbackAutoAssignedPosition({ specimenId, boxId, position: 'A2' }, {});
-
-      const boxUnsetCall = storageBoxes.updateOne.mock.calls[0];
-      expect(boxUnsetCall[1].$unset[`occupancyGrid.A2`]).toBe('');
-      expect(boxUnsetCall[1].$inc.currentOccupancy).toBe(-1);
-
-      const sampleUnsetCall = samples.updateOne.mock.calls[0];
-      expect(sampleUnsetCall[1].$unset.storageLocation).toBe('');
-    });
-
-    // #1003: compensates the openStorageAssignment hunk added to
-    // autoAssignSamplePosition -- a rollback must close the StorageAssignment
-    // it opened, or the specimen would be left with an OPEN placement-history
-    // record for a position it no longer occupies.
-    it('closes the StorageAssignment for the rolled-back position (#1003)', async () => {
-      const specimenId = new ObjectId();
-      const boxId = new ObjectId();
-      const samples = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
-      const storageBoxes = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
-      const storageAssignmentsUpdateOne = vi.fn().mockResolvedValueOnce({ matchedCount: 1 });
-      const storageAssignments = makeCollection({ updateOne: storageAssignmentsUpdateOne });
-      const db = makeDb({ samples, storageBoxes, storageAssignments });
-      const repo = new MongoStorageRepository(db);
-
-      await repo.rollbackAutoAssignedPosition({ specimenId, boxId, position: 'A2' }, {});
-
-      expect(storageAssignmentsUpdateOne).toHaveBeenCalledWith(
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          specimenId: String(specimenId),
-          boxId: String(boxId),
-          positionCode: 'A2',
-          removedAt: null
+          containerId: container.containerId,
+          storagePositionId: `${boxId}:A01`
         }),
-        expect.objectContaining({ $set: expect.objectContaining({ removedAt: expect.any(Date), occupancyStatus: 'livre' }) }),
-        { session: {} }
+        { session }
       );
+
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
     });
   });
 
@@ -951,11 +1014,14 @@ describe('MongoStorageRepository', () => {
       });
     });
 
-    // Issue #402: release must close the placement-history StorageAssignment
-    // record instead of just unsetting Sample.storageLocation.
-    it('closes the StorageAssignment for the released position (#402)', async () => {
+    // #1374 (was #402): release closes the specimen's position on the
+    // physical chain, in the caller's session; the container stays loaded
+    // and no StorageAssignment row is written.
+    it('closes the specimen container position on the physical chain in the session, not a StorageAssignment row (#1374)', async () => {
+      const session = {};
       const sampleDoc = {
         _id: sampleId,
+        specimenId: 'SPC-0101',
         barcode: 'BC-1',
         quantity: 10,
         unit: null,
@@ -968,23 +1034,105 @@ describe('MongoStorageRepository', () => {
       const storageBoxes = makeCollection({
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const storageAssignmentsUpdateOne = vi.fn().mockResolvedValueOnce({ matchedCount: 1 });
-      const storageAssignments = makeCollection({ updateOne: storageAssignmentsUpdateOne });
-      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const storageAssignments = makeCollection({
+        insertOne: vi.fn(),
+        updateOne: vi.fn(),
+        find: vi.fn(() => ({ toArray: async () => [] }))
+      });
+      const db = makeDb({
+        samples, storageBoxes, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
+      });
+      await placeSpecimen(db, { sample: sampleDoc, box: { _id: boxId }, position: 'A1', at: new Date('2026-01-01T00:00:00Z'), sourceEventId: 'seed' }, session);
+      const [placed] = await containerPositionAssignments.find({}).toArray();
+      vi.clearAllMocks();
       const repo = new MongoStorageRepository(db);
 
-      await repo.releaseSamplePosition({ sampleId, specimenId: sampleId }, {});
+      await repo.releaseSamplePosition({ sampleId, specimenId: sampleId }, session);
 
-      expect(storageAssignmentsUpdateOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          specimenId: sampleId,
-          boxId: String(boxId),
-          positionCode: 'A1',
-          removedAt: null
-        }),
-        expect.objectContaining({ $set: expect.objectContaining({ removedAt: expect.any(Date), occupancyStatus: 'livre' }) }),
-        { session: {} }
+      expect(containerPositionAssignments.updateOne).toHaveBeenCalledTimes(1);
+      expect(containerPositionAssignments.updateOne).toHaveBeenCalledWith(
+        { containerPositionAssignmentId: placed.containerPositionAssignmentId, assignmentStatus: 'active' },
+        { $set: expect.objectContaining({ removedAt: expect.any(Date) }) },
+        { session }
       );
+      const [closed] = await containerPositionAssignments.find({}).toArray();
+      expect(closed.assignmentStatus).toBe('ended');
+      const [load] = await specimenContainerAssignments.find({}).toArray();
+      expect(load).toEqual(expect.objectContaining({ specimenId: 'SPC-0101', containerId: placed.containerId, assignmentStatus: 'active' }));
+      expect(specimenContainerAssignments.updateOne).not.toHaveBeenCalled();
+      expect(containers.insertOne).not.toHaveBeenCalled();
+      expect(containerPositionAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+    });
+
+    // #1374: a specimen placed only through the legacy path is adopted
+    // first -- one container, loaded at its open legacy row -- and release
+    // then closes that position; the reader answers null afterwards.
+    it('adopts a specimen whose only placement is an open legacy row, then releases it (#1374)', async () => {
+      const session = {};
+      const sampleDoc = {
+        _id: sampleId,
+        specimenId: 'SPC-0102',
+        barcode: 'BC-1',
+        quantity: 10,
+        unit: null,
+        storageLocation: { boxId, position: 'A1' }
+      };
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(sampleDoc),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValue(null),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const legacyRow = {
+        storageAssignmentId: 'SA-7',
+        specimenId: sampleId,
+        boxId: String(boxId),
+        positionCode: 'A1',
+        placedAt: new Date('2026-01-01T00:00:00Z'),
+        removedAt: null
+      };
+      const storageAssignments = makeCollection({
+        findOne: vi.fn().mockResolvedValue(legacyRow),
+        find: vi.fn(() => ({ toArray: async () => [legacyRow] })),
+        insertOne: vi.fn(),
+        updateOne: vi.fn()
+      });
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const db = makeDb({
+        samples, storageBoxes, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
+      });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.releaseSamplePosition({ sampleId, specimenId: sampleId }, session);
+
+      expect(containers.insertOne).toHaveBeenCalledTimes(1);
+      const { containerId } = containers.insertOne.mock.calls[0][0];
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'SPC-0102', containerId, sourceEventId: 'legacy-storage-assignment:SA-7' }),
+        { session }
+      );
+      const placements = await containerPositionAssignments.find({}).toArray();
+      expect(placements.map((row) => [row.containerId, row.storagePositionId, row.assignmentStatus])).toEqual([
+        [containerId, `${String(boxId)}:A01`, 'ended']
+      ]);
+      for (const call of containerPositionAssignments.insertOne.mock.calls) expect(call[1]).toEqual({ session });
+      expect(containerPositionAssignments.updateOne).toHaveBeenCalledWith(
+        expect.objectContaining({ assignmentStatus: 'active' }),
+        { $set: expect.objectContaining({ removedAt: expect.any(Date) }) },
+        { session }
+      );
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+      await expect(currentPlacement(db, sampleDoc, session)).resolves.toBeNull();
     });
 
     it('preserves an explicit non-falsy unit', async () => {
@@ -1516,6 +1664,26 @@ describe('MongoStorageRepository', () => {
       expect(result.location.fullHierarchy).toBeNull();
     });
 
+    // #1220: the location echoes the canonical specimenId, not the sample's _id.
+    it('#1220: the location carries the sample\'s canonical specimenId', async () => {
+      const boxId = new ObjectId();
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: sampleId,
+          specimenId: 'SPC-1',
+          barcode: 'BC-6',
+          storageLocation: { boxId, position: 'D4' }
+        })
+      });
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const db = makeDb({ samples, storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.getSampleStorageLocation({ sampleId });
+      expect(result.found).toBe(true);
+      expect(result.location.specimenId).toBe('SPC-1');
+    });
+
     // #657: storagePaths is never written anywhere in api/backend/src (#654),
     // so every real sample hit this branch and always showed path:'N/A' --
     // reuse #654's live parent_id-walk fallback here too.
@@ -1607,6 +1775,23 @@ describe('MongoStorageRepository', () => {
 
       expect(result.get('sample-d').path).toBe('N/A');
       expect(result.get('sample-d').fullHierarchy).toBeNull();
+    });
+
+    // #1220: each location echoes the canonical specimenId; the Map stays keyed
+    // by the _id, which sample.routes.js joins on.
+    it('#1220: each location carries the canonical specimenId while the Map stays keyed by the _id', async () => {
+      const boxId = new ObjectId();
+      const toArray = vi.fn().mockResolvedValue([]);
+      const storagePaths = makeCollection({ find: vi.fn().mockReturnValue({ toArray }) });
+      const db = makeDb({ storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.resolveStorageLocationsForSamples([
+        { _id: 'sample-f', specimenId: 'SPC-1', storageLocation: { boxId, position: 'E5' } }
+      ]);
+
+      expect(result.has('SPC-1')).toBe(false);
+      expect(result.get('sample-f').specimenId).toBe('SPC-1');
     });
 
     it('skips the storagePaths query entirely when no sample has a boxId', async () => {
@@ -1719,7 +1904,7 @@ describe('MongoStorageRepository', () => {
       expect(result).toEqual([{ barcode: 'BC-9' }]);
       expect(find).toHaveBeenCalledTimes(1);
       const filter = find.mock.calls[0][0];
-      expect(filter.$and).toHaveLength(3);
+      expect(filter.$and).toHaveLength(4);
       expect(filter.$and[0].$or).toEqual([
         { barcode: expect.any(RegExp) },
         { participantId: expect.any(RegExp) },
@@ -1728,11 +1913,31 @@ describe('MongoStorageRepository', () => {
       expect(filter.$and[1]).toEqual({
         specimenStatus: { $in: ['available', 'reserved'] }
       });
-      expect(filter.$and[2].$or).toEqual([
+      // RF006 AC3: a depleted specimen has no material to place.
+      expect(filter.$and[2]).toEqual({ quantityStatus: { $ne: 'depleted' } });
+      expect(filter.$and[3].$or).toEqual([
         { 'storageLocation.boxId': { $exists: false } },
         { 'storageLocation.boxId': null }
       ]);
       expect(limit).toHaveBeenCalledWith(20);
+    });
+
+    // #1212: the query is a search term, not a pattern. Unescaped, '(' threw a
+    // SyntaxError (a 500 for the caller) and '.' matched any character.
+    it('matches regex metacharacters in the query literally', async () => {
+      const toArray = vi.fn().mockResolvedValue([]);
+      const limit = vi.fn(() => ({ toArray }));
+      const find = vi.fn(() => ({ limit }));
+      const samples = makeCollection({ find });
+      const db = makeDb({ samples });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.searchAllocatableSampleCandidates({ query: 'BC-9(' })).resolves.toEqual([]);
+      await repo.searchAllocatableSampleCandidates({ query: 'BC.9' });
+
+      const regex = find.mock.calls[1][0].$and[0].$or[0].barcode;
+      expect(regex.test('BC.9')).toBe(true);
+      expect(regex.test('BCX9')).toBe(false);
     });
   });
 });

@@ -5,8 +5,15 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getUserAnonId } = require('../utils/userAnonymization');
-const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
+const { encryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
+const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = require('../utils/uploadFormatPolicy');
+const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
+const retentionPolicyService = require('../services/retentionPolicy.service');
+const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
+const objectStorage = require('../infrastructure/objectStorage');
+const malwareScan = require('../infrastructure/malwareScan');
+const { issueFileAccessToken } = require('../services/dataFileAccessToken.service');
 
 // #643 (RF007 AC#6/gate F3-G05): generalizes sample-file.controller.js's
 // upload/list/download/delete/replace + checksum/encryption/audit shape to
@@ -45,6 +52,9 @@ function buildParentIdQuery(parentIdField, rawId) {
  * @param {string} opts.storageSubdir - e.g. 'assays' -> storage/<storageSubdir>/<parentId>/files/
  * @param {string} opts.resourceType - audit resourceType, e.g. 'AssayFile'
  * @param {string} opts.moduleLabel - audit module label, e.g. 'Ensaios'
+ * @param {string} [opts.parentEntityType] - the parent's linkedEntityRefs
+ *   entityType (RF007 AC5, #1321); defaults to resourceType without its
+ *   'File' suffix, e.g. 'Assay'
  * @param {(parentDoc: object, req: import('express').Request) => Promise<boolean>} [opts.checkOrgScope]
  *   Optional: resolve+check organization scope against the parent document.
  *   Returns true if allowed. Omit when the parent entity has no
@@ -59,7 +69,8 @@ function createLinkedFileController(opts) {
     storageSubdir,
     resourceType,
     moduleLabel,
-    checkOrgScope
+    checkOrgScope,
+    parentEntityType = resourceType.replace(/File$/, '')
   } = opts;
 
   const storage = multer.diskStorage({
@@ -85,10 +96,14 @@ function createLinkedFileController(opts) {
   });
 
   const fileFilter = (req, file, cb) => {
-    if (extensionOf(file.originalname)) {
-      cb(null, true);
-    } else {
+    const ext = extensionOf(file.originalname);
+    if (!ext) {
       cb(new Error(`Formato de arquivo inválido. Permitidos: ${ALLOWED_EXTENSIONS.join(', ')}`), false);
+    } else if (!isMimeAllowedForExtension(ext, file.mimetype)) {
+      // #1321 (RF007 AC1, RNF029 C1): the MIME must be allowed for the extension.
+      cb(new Error(`Tipo MIME ${file.mimetype} não permitido para a extensão ${ext}`), false);
+    } else {
+      cb(null, true);
     }
   };
 
@@ -101,6 +116,19 @@ function createLinkedFileController(opts) {
         if (err) {
           return res.status(400).json({ success: false, error: err.message || 'Erro ao processar upload do arquivo' });
         }
+        // #1321 (RF007 AC1, RNF029 C1): the written file's leading bytes must
+        // match its extension's format. The upload is not yet recorded by
+        // any row, so removing it destroys no evidence.
+        if (req.file) {
+          const ext = extensionOf(req.file.originalname);
+          if (!checkFileSignature(req.file.path, ext).ok) {
+            cleanupUploadedFile(req);
+            return res.status(400).json({
+              success: false,
+              error: `Conteúdo do arquivo não corresponde ao formato ${ext}`
+            });
+          }
+        }
         next();
       });
     };
@@ -109,6 +137,17 @@ function createLinkedFileController(opts) {
   async function findParent(db, rawId) {
     const collection = db.collection(parentCollectionName);
     return collection.findOne(buildParentIdQuery(parentIdField, rawId));
+  }
+
+  // RNF029 (#938, #1321): once the ciphertext is in the object store, the
+  // plaintext multer staged is removed. A failed removal is logged, never
+  // thrown, since the object and its record are already sound.
+  function removeStagingFile(stagingPath) {
+    try {
+      fs.unlinkSync(stagingPath);
+    } catch (unlinkError) {
+      logger.error('Erro ao remover arquivo temporário:', unlinkError.message);
+    }
   }
 
   function cleanupUploadedFile(req) {
@@ -167,6 +206,23 @@ function createLinkedFileController(opts) {
 
       const fileType = (extensionOf(file.originalname) || '').replace(/^\./, '').toUpperCase();
 
+      // RF007 AC5, V2E-0476 (#1321): the parent, then any consent, approval
+      // or study the upload names. Refused before the object is written and
+      // before any row, so removing the staging file destroys no evidence.
+      const { refs: linkedEntityRefs, errors: linkErrors } = await resolveLinkedEntityRefs(
+        db,
+        req.body || {},
+        { entityType: parentEntityType, entityId: String(parent[parentIdField] || parentId) }
+      );
+      if (linkErrors.length > 0) {
+        cleanupUploadedFile(req);
+        return res.status(422).json({ success: false, error: 'Vínculo inválido', details: linkErrors });
+      }
+
+      // RF007 AC3, V2E-0475 (#1321): the server records the active DataFile
+      // policy; a request field of that name is never read.
+      const retentionPolicyId = await retentionPolicyService.getActivePolicyId(db, 'dataFile');
+
       // #938: fail closed BEFORE the plaintext multer already wrote to disk
       // can be left there. This used to read `if (encryption)` as
       // "skip encryption when no key is configured", so a keyless
@@ -177,30 +233,45 @@ function createLinkedFileController(opts) {
       // Same shape as #734's backup guard.
       assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
+      // RNF029 C4 (#1321): the plaintext passes the malware scanner before
+      // it is encrypted or stored; a refusal throws to the catch below,
+      // which removes the staging file and answers its statusCode.
+      const malwareScanVerdict = await malwareScan.scanStagedFile(malwareScan.getFileScanner(), plaintext, { fileName: file.originalname });
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
-      if (encryption) {
-        fs.writeFileSync(file.path, encryption.ciphertext);
-      }
       const parentIdValue = parent[parentIdField] || parentId;
-      const storageUri = `objstore://${storageSubdir}/${parentIdValue}/files/${path.basename(file.path)}`;
+      // RF007 AC2 / RNF016 C4 (#1321): the binary goes to the object store,
+      // write-once and content-addressed; MongoDB keeps its metadata.
+      const stored = await objectStorage.getFileObjectStore().putObject({
+        area: storageSubdir,
+        ownerKey: String(parentIdValue),
+        body: encryption ? encryption.ciphertext : plaintext
+      });
+      removeStagingFile(file.path);
+      const storageUri = stored.uri;
       const uploaderAnonId = await getUserAnonId(req.user, db);
 
       const fileDoc = {
         [parentIdField]: parentIdValue,
         fileName: file.originalname,
         fileType,
+        mimeType: canonicalMimeType(extensionOf(file.originalname)),
         fileSize: file.size,
-        storagePath: file.path,
+        storagePath: stored.path,
         storageUri,
+        storageObjectVersion: stored.version,
         checksum,
         checksumAlgorithm: 'sha256',
         encryptionAlgorithm: encryption ? encryption.algorithm : null,
         encryptionKeyId: encryption ? encryption.keyId : null,
         encryptionIv: encryption ? encryption.iv : null,
         encryptionTag: encryption ? encryption.tag : null,
+        malwareScan: malwareScanVerdict,
         accessPolicy: { view: 'authenticated', manage: ['administrator', 'coordinator'] },
         uploaderAnonId,
+        ownerId: uploaderAnonId,
+        retentionPolicyId,
+        linkedEntityRefs,
         uploadDate: new Date(),
         createdAt: new Date(),
         updatedAt: new Date()
@@ -213,7 +284,7 @@ function createLinkedFileController(opts) {
         action: 'file_upload',
         resourceId: insertResult.insertedId.toString(),
         message: `Upload de arquivo: ${file.originalname} (${(file.size / 1024).toFixed(2)} KB)`,
-        payload: { fileName: file.originalname, fileSize: file.size, fileType, [parentIdField]: parentIdValue, checksum, checksumAlgorithm: 'sha256' }
+        payload: { fileName: file.originalname, fileSize: file.size, fileType, [parentIdField]: parentIdValue, checksum, checksumAlgorithm: 'sha256', linkedEntityRefs, retentionPolicyId }
       });
 
       return res.status(201).json({
@@ -224,10 +295,15 @@ function createLinkedFileController(opts) {
           [parentIdField]: parentIdValue,
           fileName: fileDoc.fileName,
           fileType: fileDoc.fileType,
+          mimeType: fileDoc.mimeType,
           fileSize: fileDoc.fileSize,
           uploaderAnonId: fileDoc.uploaderAnonId,
+          ownerId: fileDoc.ownerId,
+          retentionPolicyId: fileDoc.retentionPolicyId,
+          linkedEntityRefs: fileDoc.linkedEntityRefs,
           uploadDate: fileDoc.uploadDate,
           uri: fileDoc.storageUri,
+          storageObjectVersion: fileDoc.storageObjectVersion,
           checksum: fileDoc.checksum,
           checksumAlgorithm: fileDoc.checksumAlgorithm,
           encryption: { encrypted: Boolean(fileDoc.encryptionAlgorithm), algorithm: fileDoc.encryptionAlgorithm },
@@ -265,13 +341,14 @@ function createLinkedFileController(opts) {
 
       const parentIdValue = parent[parentIdField] || parentId;
       const collection = db.collection(fileCollectionName);
-      const files = await collection.find({ [parentIdField]: parentIdValue }).toArray();
+      const files = await collection.find({ [parentIdField]: parentIdValue, deletedAt: null }).toArray();
 
       const sanitized = files.map((file) => ({
         _id: file._id,
         [parentIdField]: file[parentIdField],
         fileName: file.fileName,
         fileType: file.fileType,
+        mimeType: file.mimeType,
         fileSize: file.fileSize,
         uri: file.storageUri,
         checksum: file.checksum,
@@ -279,6 +356,9 @@ function createLinkedFileController(opts) {
         encryption: { encrypted: Boolean(file.encryptionAlgorithm), algorithm: file.encryptionAlgorithm },
         accessPolicy: file.accessPolicy,
         uploaderAnonId: file.uploaderAnonId,
+        ownerId: file.ownerId,
+        retentionPolicyId: file.retentionPolicyId,
+        linkedEntityRefs: file.linkedEntityRefs,
         uploadDate: file.uploadDate,
         createdAt: file.createdAt
       }));
@@ -309,7 +389,7 @@ function createLinkedFileController(opts) {
       return null;
     }
 
-    if (!fileRecord) {
+    if (!fileRecord || fileRecord.deletedAt) {
       res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
       return null;
     }
@@ -344,33 +424,40 @@ function createLinkedFileController(opts) {
       if (!linked) return;
       const { fileRecord } = linked;
 
-      if (!fs.existsSync(fileRecord.storagePath)) {
+      // RF007 AC2 (#1321): a row held only in the object store has no local
+      // path; /api/file-access answers its absence with 404.
+      const storeOnly = (fileRecord.storagePath === null || fileRecord.storagePath === undefined)
+        && typeof fileRecord.storageObjectVersion === 'string' && fileRecord.storageObjectVersion.length > 0
+        && typeof fileRecord.storageUri === 'string' && fileRecord.storageUri.length > 0;
+      if (!storeOnly && !fs.existsSync(fileRecord.storagePath)) {
         logger.error(`Arquivo não encontrado no sistema de arquivos: ${fileRecord.storagePath}`);
         return res.status(404).json({ success: false, error: 'Arquivo não encontrado no sistema de arquivos' });
       }
+
+      // RNF029 C5 (#1321): the checks above passed, so the caller is
+      // redirected to a short-lived file access token URL for this one file.
+      const { token, tokenId, expiresAt } = issueFileAccessToken({
+        collection: fileCollectionName,
+        fileRecord,
+        userId: req.user && (req.user.userID || (req.user._id && String(req.user._id)))
+      });
 
       await logAudit(db, req, {
         action: 'file_download',
         resourceId: fileRecord._id.toString(),
         message: `Download de arquivo: ${fileRecord.fileName}`,
-        payload: { fileName: fileRecord.fileName, fileType: fileRecord.fileType, fileSize: fileRecord.fileSize, [parentIdField]: linked.parentIdValue }
+        payload: {
+          fileName: fileRecord.fileName,
+          fileType: fileRecord.fileType,
+          fileSize: fileRecord.fileSize,
+          [parentIdField]: linked.parentIdValue,
+          accessTokenId: tokenId,
+          accessTokenExpiresAt: expiresAt.toISOString()
+        }
       });
 
-      let outputBuffer;
-      if (fileRecord.encryptionAlgorithm) {
-        const ciphertext = fs.readFileSync(fileRecord.storagePath);
-        try {
-          outputBuffer = decryptFileBuffer(ciphertext, fileRecord);
-        } catch (decryptError) {
-          logger.error('Erro ao decifrar arquivo:', decryptError.message);
-          return res.status(500).json({ success: false, error: 'Erro ao fazer download do arquivo' });
-        }
-      } else {
-        outputBuffer = fs.readFileSync(fileRecord.storagePath);
-      }
-
-      res.setHeader('Content-Disposition', `attachment; filename="${fileRecord.fileName}"`);
-      return res.send(outputBuffer);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.redirect(302, '/api/file-access?token=' + token);
     } catch (error) {
       logger.error('Erro ao fazer download de arquivo:', error.message);
       return res.status(500).json({ success: false, error: 'Erro ao fazer download de arquivo', message: error.message });
@@ -388,22 +475,33 @@ function createLinkedFileController(opts) {
       if (!linked) return;
       const { fileRecord, collection } = linked;
 
-      if (fs.existsSync(fileRecord.storagePath)) {
-        try {
-          fs.unlinkSync(fileRecord.storagePath);
-        } catch (unlinkError) {
-          logger.error('Erro ao remover arquivo físico:', unlinkError.message);
-        }
+      // RF007 AC6 (#1321): a delete is logical. The row is marked and the
+      // binary at storagePath is kept as evidence (RNF029 C3), never unlinked.
+      // INFERENCE, not a citation: the `deletedAt`/`deletedByAnonId` fields
+      // follow StorageContainer's `deletedAt` logical delete.
+      const deletedAt = new Date();
+      const deletedByAnonId = await getUserAnonId(req.user, db);
+      const result = await collection.updateOne(
+        { _id: fileRecord._id, deletedAt: null },
+        { $set: { deletedAt, deletedByAnonId, updatedAt: deletedAt } }
+      );
+      if (!result || result.matchedCount === 0) {
+        return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
       }
-
-      await collection.deleteOne({ _id: fileRecord._id });
 
       await logAudit(db, req, {
         action: 'file_delete',
         resourceId: fileRecord._id.toString(),
         severity: 'critical',
-        message: `Arquivo excluído: ${fileRecord.fileName}`,
-        payload: { fileName: fileRecord.fileName, fileType: fileRecord.fileType, fileSize: fileRecord.fileSize, [parentIdField]: linked.parentIdValue }
+        message: `Arquivo removido logicamente: ${fileRecord.fileName}`,
+        payload: {
+          fileName: fileRecord.fileName,
+          fileType: fileRecord.fileType,
+          fileSize: fileRecord.fileSize,
+          [parentIdField]: linked.parentIdValue,
+          logicalDelete: true,
+          deletedAt: deletedAt.toISOString()
+        }
       });
 
       return res.status(200).json({ success: true, message: 'Arquivo excluído com sucesso' });
@@ -448,43 +546,70 @@ function createLinkedFileController(opts) {
       // Same shape as #734's backup guard.
       assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
+      // RNF029 C4 (#1321): the plaintext passes the malware scanner before
+      // it is encrypted or stored; a refusal throws to the catch below,
+      // which removes the staging file and answers its statusCode.
+      const malwareScanVerdict = await malwareScan.scanStagedFile(malwareScan.getFileScanner(), plaintext, { fileName: file.originalname });
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
-      if (encryption) {
-        fs.writeFileSync(file.path, encryption.ciphertext);
+      // RF007 AC2 / RNF016 C4 (#1321): the new binary is a new object; the
+      // previous object is never touched.
+      const body = encryption ? encryption.ciphertext : plaintext;
+      const stored = await objectStorage.getFileObjectStore().putObject({
+        area: storageSubdir,
+        ownerKey: String(parentIdValue),
+        body
+      });
+      if (fileRecord.storagePath && path.resolve(file.path) === path.resolve(fileRecord.storagePath)) {
+        // The staging path is the previous record's binary: it is kept as
+        // evidence, so it is overwritten with the ciphertext, not unlinked.
+        logger.warn('Arquivo temporário coincide com o arquivo anterior; mantido cifrado:', fileRecord._id.toString());
+        fs.writeFileSync(file.path, body);
+      } else {
+        removeStagingFile(file.path);
       }
-      const storageUri = `objstore://${storageSubdir}/${parentIdValue}/files/${path.basename(file.path)}`;
+      const storageUri = stored.uri;
 
       const updatedFields = {
         fileName: file.originalname,
         fileType,
+        // V2E-0471 (#1321): the new binary's type. ownerId and
+        // linkedEntityRefs belong to the DataFile, not its version.
+        mimeType: canonicalMimeType(extensionOf(file.originalname)),
         fileSize: file.size,
-        storagePath: file.path,
+        storagePath: stored.path,
         storageUri,
+        storageObjectVersion: stored.version,
         checksum,
         checksumAlgorithm: 'sha256',
         encryptionAlgorithm: encryption ? encryption.algorithm : null,
         encryptionKeyId: encryption ? encryption.keyId : null,
         encryptionIv: encryption ? encryption.iv : null,
         encryptionTag: encryption ? encryption.tag : null,
+        malwareScan: malwareScanVerdict,
         updatedAt: new Date()
       };
 
-      const previousStoragePath = fileRecord.storagePath;
-      if (previousStoragePath && previousStoragePath !== file.path && fs.existsSync(previousStoragePath)) {
-        try {
-          fs.unlinkSync(previousStoragePath);
-        } catch (unlinkError) {
-          logger.error('Erro ao remover arquivo anterior após substituição:', unlinkError.message);
-        }
+      // RF007 AC4, RNF029 C3 (#1321): the previous binary is kept as
+      // evidence, never unlinked, and the replace writes a DataFileVersion.
+      const { version } = await recordReplacement(db, {
+        fileRecord,
+        storageUri,
+        checksum,
+        encryption,
+        changeReason: resolveChangeReason(req.body || {})
+      });
+      try {
+        await collection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
+      } catch (updateError) {
+        await discardVersion(db, version);
+        throw updateError;
       }
-
-      await collection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
 
       await logAudit(db, req, {
         action: 'file_replace',
         resourceId: fileRecord._id.toString(),
-        severity: 'medium',
+        severity: 'warning',
         message: `Substituição de arquivo: ${fileRecord.fileName} -> ${file.originalname}`,
         payload: {
           previousFileName: fileRecord.fileName,
@@ -494,7 +619,9 @@ function createLinkedFileController(opts) {
           fileType,
           [parentIdField]: parentIdValue,
           checksum,
-          checksumAlgorithm: 'sha256'
+          checksumAlgorithm: 'sha256',
+          dataFileVersionId: version.dataFileVersionId,
+          versionNumber: version.versionNumber
         }
       });
 
@@ -506,12 +633,15 @@ function createLinkedFileController(opts) {
           [parentIdField]: parentIdValue,
           fileName: updatedFields.fileName,
           fileType: updatedFields.fileType,
+          mimeType: updatedFields.mimeType,
           fileSize: updatedFields.fileSize,
           uploaderAnonId: fileRecord.uploaderAnonId,
           uploadDate: fileRecord.uploadDate,
           uri: updatedFields.storageUri,
+          storageObjectVersion: updatedFields.storageObjectVersion,
           checksum: updatedFields.checksum,
           checksumAlgorithm: updatedFields.checksumAlgorithm,
+          versionNumber: version.versionNumber,
           encryption: { encrypted: Boolean(updatedFields.encryptionAlgorithm), algorithm: updatedFields.encryptionAlgorithm },
           accessPolicy: fileRecord.accessPolicy
         }

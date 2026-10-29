@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Sensor, Temperature } from '../types/models';
+import { Sensor } from '../types/models';
 import { sensorService } from '../services/api';
 import { extractResponseItems } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
@@ -45,24 +45,6 @@ export function useSensors() {
     }
   };
 
-  const collectReading = async (sensorID: string): Promise<Temperature> => {
-    // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
-    const TEMPERATURE_READING_DISABLED = true;
-    
-    if (TEMPERATURE_READING_DISABLED) {
-      throw new Error('Leitura de temperatura desativada temporariamente - não há sensores cadastrados. Cadastre sensores em "Gerenciamento de Instalações" → "Sensores" para ativar esta funcionalidade.');
-    }
-
-    try {
-      const response = await sensorService.collectReading(sensorID);
-      const responseData: any = response.data;
-      // Backend retorna { success: true, data: reading }
-      return responseData?.data || responseData;
-    } catch (err: any) {
-      throw new Error(err.message || 'Erro ao coletar leitura');
-    }
-  };
-
   const createSensor = async (data: Partial<Sensor>) => {
     try {
       const response = await sensorService.create(data);
@@ -103,7 +85,6 @@ export function useSensors() {
     loading,
     error,
     loadSensors,
-    collectReading,
     createSensor,
     updateSensor,
     deleteSensor,

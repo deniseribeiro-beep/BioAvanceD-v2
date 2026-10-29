@@ -35,11 +35,11 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
   beforeEach(() => {
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: true,
-      session: { sessionID: 'session-revoke-test-1', userID: 'qa-admin-revoke-1' }
+      session: { sessionId: 'session-revoke-test-1', userAccountId: 'qa-admin-revoke-1' }
     });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({
-      sessionID: 'session-revoke-test-1',
-      userID: 'qa-admin-revoke-1'
+      sessionId: 'session-revoke-test-1',
+      userAccountId: 'qa-admin-revoke-1'
     });
     vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue({
       sessionID: 'session-revoke-test-1',
@@ -69,7 +69,8 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
       'qa-admin-revoke-1',
       'session-revoke-test-1',
       'user_request',
-      'qa-admin-revoke-1'
+      'qa-admin-revoke-1',
+      { req: expect.anything() }
     );
   });
 
@@ -116,7 +117,7 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
     // Mock para coordenador
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: true,
-      session: { sessionID: 'session-coord-1', userID: 'qa-coord-revoke-1' }
+      session: { sessionId: 'session-coord-1', userAccountId: 'qa-coord-revoke-1' }
     });
 
     const response = await request(app)
@@ -167,10 +168,10 @@ describe('Session List and Active Sessions (GET /api/auth/sessions)', () => {
   beforeEach(() => {
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: true,
-      session: { sessionID: 'session-list-test-1' }
+      session: { sessionId: 'session-list-test-1' }
     });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({
-      sessionID: 'session-list-test-1'
+      sessionId: 'session-list-test-1'
     });
     vi.spyOn(sessionService, 'listUserSessions').mockResolvedValue([
       {
@@ -234,10 +235,10 @@ describe('Revoke All Other Sessions (DELETE /api/auth/sessions/all-others)', () 
   beforeEach(() => {
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: true,
-      session: { sessionID: 'session-current-1' }
+      session: { sessionId: 'session-current-1' }
     });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({
-      sessionID: 'session-current-1'
+      sessionId: 'session-current-1'
     });
     vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue({
       revokedCount: 2

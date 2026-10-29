@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { createRealParticipant, seedStudy, closeSeedDb } from './helpers/seedParticipant';
+import { findOrganizationInList } from './helpers/listOrganizations';
 
 // Real backend only — see specimen-quality-inventory.spec.ts for the same
 // skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -19,8 +20,9 @@ const entities = [
   // ethicsApprovalId (#588, RF021 AC#3/ELM-0060) is required on Study.
   { path: 'studies', singular: 'study', idField: 'studyId', nameField: 'studyTitle', extraFields: { ethicsApprovalId: ['CAAE-e2e-crud'] } },
   // effectivePeriod (#588, RF021 AC#3/ELM-0072) is required on Protocol.
-  { path: 'protocols', singular: 'protocol', idField: 'protocolId', nameField: 'protocolName', extraFields: { effectivePeriod: { start: '2026-01-01' } } },
-  { path: 'collections', singular: 'collection', idField: 'collectionId', nameField: 'collectionName', extraFields: {} },
+  { path: 'protocols', singular: 'protocol', idField: 'protocolId', nameField: 'protocolName', extraFields: { effectivePeriod: { start: '2026-01-01' }, protocolType: 'processing', protocolVersion: '1.0', documentUri: 'object://protocols/e2e-crud.pdf' } },
+  // governanceRegime (RF004 AC2, V2E-0427) is required on Collection.
+  { path: 'collections', singular: 'collection', idField: 'collectionId', nameField: 'collectionName', extraFields: { governanceRegime: 'biobank' } },
 ];
 
 for (const { path, singular, idField, nameField, extraFields } of entities) {
@@ -100,6 +102,8 @@ test.describe('protocol version/approvalStatus round-trip (#326)', () => {
         protocolId: id,
         protocolName: `e2e protocol ${id}`,
         protocolVersion: '2.1',
+        protocolType: 'processing',
+        documentUri: 'object://protocols/e2e-version.pdf',
         approvalStatus: 'rejected',
         effectivePeriod: { start: '2026-01-01' },
       },
@@ -121,8 +125,9 @@ test.describe('protocol version/approvalStatus round-trip (#326)', () => {
 
 // #325 (RF020, narrowed — see issue comment: full MIABIS-institutional
 // scope split out to #576 since organization.routes.js has no PUT/DELETE
-// and Collection is Fase-1-only). Covers the organization operations that
-// actually exist today: create + list via /api/organizations.
+// and Collection is Fase-1-only). Covers create + list via
+// /api/organizations; GET /:id and DELETE /:id have since landed and serve
+// the read-back and the cleanup (#1279).
 test.describe('organizations create+list (#325)', () => {
   test('creates and lists an organization, and records it on the audit trail', async ({ request }) => {
     const admin = await realLogin(request);
@@ -137,15 +142,30 @@ test.describe('organizations create+list (#325)', () => {
     expect(createResponse.status()).toBe(201);
     const created = await createResponse.json();
     expect(created.data.officialName).toBe(officialName);
+    const organizationId = created.data.organizationId as string;
 
-    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+    try {
+      await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
 
-    const listResponse = await request.get(`${apiBaseURL}/api/organizations`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    expect(listResponse.status()).toBe(200);
-    const list = await listResponse.json();
-    expect(list.data.some((item: Record<string, unknown>) => item.officialName === officialName)).toBe(true);
+      const getResponse = await request.get(`${apiBaseURL}/api/organizations/${organizationId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(getResponse.status()).toBe(200);
+      expect((await getResponse.json()).data.officialName).toBe(officialName);
+
+      // #1279: the list is sorted by officialName and paged, and the test
+      // volume persists across runs. At the default page this fixture fell
+      // past row 100 once other specs' organizations sorted ahead of it.
+      // Page through the list (#1282), and delete the fixture below so this
+      // spec stops adding to the count.
+      const listed = await findOrganizationInList(request, apiBaseURL!, admin.token,
+        (item) => item.organizationId === organizationId);
+      expect(listed).toBeTruthy();
+    } finally {
+      await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      }).catch(() => {});
+    }
   });
 
   test('rejects creating an organization missing its required countryCode', async ({ request }) => {
@@ -164,7 +184,7 @@ test.describe('organizations create+list (#325)', () => {
   });
 });
 
-// #578 (RF021, narrowed) -> #587 rabbit-hole tracker -> #590 (split into
+// #578 (RF021, narrowed) -> #587 tracker -> #590 (split into
 // #593/#594) -> #596. Study/consent/participant linkage (#593/#594) already
 // has unit coverage but no real-backend proof; this covers both the
 // existence-must-resolve requirement (#593/#594's own scope) and the

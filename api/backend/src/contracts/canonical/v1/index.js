@@ -17,7 +17,11 @@ const participantSchema = {
     phone: { type: 'string' },
     identityDocument: { type: 'string' },
     recordNumber: { type: 'string' },
-    isDeceased: { type: 'boolean' }
+    isDeceased: { type: 'boolean' },
+    // The participant's clinical unit, a Reference(Organization) and its tenancy key (#1353).
+    clinicalUnitId: { type: 'string', minLength: 1 },
+    // The consent template PatientModel.validate requires (#1318).
+    consentTemplateId: { type: 'string', minLength: 1 }
   },
   required: ['participantId']
 };
@@ -38,6 +42,11 @@ const specimenSchema = {
     registeredAt: { type: 'string' },
     specimenStatus: { type: 'string' },
     linkedProject: { type: 'string' },
+    // ELM-0128: the collection site, an Organization reference. The intake
+    // stamps the caller's resolved organization here (#1355).
+    collectionSite: { type: 'string' },
+    // dict-02 ELM-0120: the specimens this one derives from (#1371).
+    parentSpecimenIds: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
     merkleRoot: { type: 'string' },
     sprec: {
       type: 'object',
@@ -72,7 +81,13 @@ const consentSchema = {
   properties: {
     consentTemplateId: { type: 'string' },
     consentGranted: { type: 'boolean' },
-    consentAcceptedAt: { type: 'string' }
+    consentAcceptedAt: { type: 'string' },
+    // The participant and the answers PatientConsentModel.validate requires,
+    // in the consent mount's patientConsentSchema shape (#1318).
+    participantId: { type: 'string', minLength: 1 },
+    responses: { type: 'object', additionalProperties: { type: 'boolean' } },
+    // The one consent in force an ingested consent supersedes (#1318).
+    supersedesConsentId: { type: 'string', minLength: 1 }
   }
 };
 
@@ -384,6 +399,10 @@ const datasetSchema = {
 // separate file-linkage route (#716 slice 2/4), and (per #664's own
 // precedent) resolving a fileId across this repo's three per-parent file
 // collections is out of this thin slice's scope.
+// #1322 adds the v2 companions V2E-0477..0480: hardwareProfile and
+// environmentManifestUri are required, randomSeed and an unresolved
+// datasetSnapshotId optional, each checked as WorkflowRunModel.validate() does.
+// #1398: datasetSnapshotId needs a non-whitespace char; a one-letter scheme is a drive path.
 const workflowSchema = {
   $id: 'canonical.v1.workflow',
   type: 'object',
@@ -400,9 +419,13 @@ const workflowSchema = {
     outputFileIds: { type: 'array', items: { type: 'string' } },
     startedAt: { type: 'string' },
     completedAt: { type: 'string' },
-    runStatus: { type: 'string', enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] }
+    runStatus: { type: 'string', enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] },
+    hardwareProfile: { type: 'object', minProperties: 1 },
+    randomSeed: { type: 'integer', minimum: -9007199254740991, maximum: 9007199254740991 },
+    datasetSnapshotId: { type: 'string', minLength: 1, pattern: '\\S' },
+    environmentManifestUri: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9+.-]+:\\S+$' }
   },
-  required: ['workflowId', 'workflowVersion', 'createdBy', 'startedAt', 'runStatus']
+  required: ['workflowId', 'workflowVersion', 'createdBy', 'startedAt', 'runStatus', 'hardwareProfile', 'environmentManifestUri']
 };
 
 // RF029 slice 6/6 (#674): OmicsQualification per dict-02_DICIONARIO.md
@@ -468,7 +491,13 @@ const intakeSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    participant: { $ref: 'canonical.v1.participant' },
+    // The intake takes its organization from organizationId and its template
+    // from consent, so its participant still refuses both (#1318).
+    participant: {
+      type: 'object',
+      allOf: [{ $ref: 'canonical.v1.participant' }],
+      properties: { clinicalUnitId: false, consentTemplateId: false }
+    },
     legalRepresentative: {
       anyOf: [
         { type: 'null' },
@@ -484,8 +513,16 @@ const intakeSchema = {
         }
       ]
     },
-    consent: { $ref: 'canonical.v1.consent' },
+    // The intake takes its participant from participant and records no
+    // responses, so its consent still refuses both (#1318).
+    consent: {
+      type: 'object',
+      allOf: [{ $ref: 'canonical.v1.consent' }],
+      properties: { participantId: false, responses: false, supersedesConsentId: false }
+    },
     specimen: { $ref: 'canonical.v1.specimen' },
+    // The organization the intake stamps as Sample.organizationId (#1376).
+    organizationId: { type: 'string', minLength: 1 },
     diagnosis: {
       anyOf: [
         { type: 'null' },

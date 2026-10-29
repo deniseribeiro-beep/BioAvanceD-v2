@@ -1,6 +1,8 @@
 const { getCollection } = require('../utils/collectionResolver');
 const PhenotypeObservationModel = require('../models/PhenotypeObservation');
 const { validateActiveCodes } = require('../ingestion/activeCodeValidator');
+const { assertReferencesExist } = require('../ingestion/canonicalGateway');
+const { diagnosticReportReferenceChecks } = require('./diagnostic-report.service');
 
 /**
  * Persists one PhenotypeObservation (dict-02 ELM-0211..0218 +
@@ -30,11 +32,22 @@ async function createPhenotypeObservation(db, data) {
   // and discarded (#866). Stamp it onto hpoCoding when the caller didn't
   // supply one already; never overwrite an explicitly-given version, and
   // leave the field absent (not null) if the validator couldn't resolve one.
+  // Cutoff (#879): codings written before 1d6d10b2 (2026-08-28) carry no
+  // version and are deliberately not back-filled, so an absent version on an
+  // older row means "written before the cutoff", not "unversioned".
   if (!observation.hpoCoding.version) {
     const resolvedVersion = codeCheck.results[0]?.concept?.version;
     if (resolvedVersion) {
       observation.hpoCoding.version = resolvedVersion;
     }
+  }
+
+  // ELM-0218: only an entry typed `DiagnosticReport/<id>` must resolve to a
+  // real DiagnosticReport (#695); an untyped entry is stored unchecked.
+  const evidenceCheck = diagnosticReportReferenceChecks(observation.phenotypeEvidence, 'phenotypeEvidence', { typedOnly: true });
+  const evidenceReferences = await assertReferencesExist(db, evidenceCheck.references);
+  if (evidenceCheck.malformed.length || !evidenceReferences.valid) {
+    throw new Error([...evidenceCheck.malformed, ...evidenceReferences.violations.map((v) => v.message)].join(', '));
   }
 
   const collection = await getCollection(db, 'phenotypeObservations');

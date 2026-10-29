@@ -7,6 +7,10 @@
  * repositório: cada update cria uma nova versão em vez de mutar a atual.
  */
 const ALLOWED_CHANNELS = ['email', 'in_app'];
+// [inference] Bounds on a rule's retry: the window, maxDeliveryMinutes, is
+// what actually stops retrying; these only refuse a rule that would spin.
+const MAX_RETRY_ATTEMPTS = 10;
+const MAX_BACKOFF_SECONDS = 300;
 
 class NotificationRuleModel {
   static validate(data) {
@@ -49,6 +53,29 @@ class NotificationRuleModel {
       }
     }
 
+    // RF015 AC5 (#903): the purpose a rule's notifications serve, a code.
+    if (data.purpose !== undefined && data.purpose !== null
+      && (typeof data.purpose !== 'string' || data.purpose.trim().length === 0)) {
+      errors.push('purpose deve ser um código de texto quando informado');
+    }
+
+    // RNF026 AC2 (#903): "Falhas de envio utilizam retry e escalonamento
+    // configuráveis". Each channel is tried up to maxAttempts times, waiting
+    // backoffSeconds between tries, inside the rule's delivery window.
+    if (data.retry !== undefined && data.retry !== null) {
+      if (typeof data.retry !== 'object') {
+        errors.push('retry deve ser um objeto quando informado');
+      } else {
+        if (!Number.isInteger(data.retry.maxAttempts) || data.retry.maxAttempts < 1 || data.retry.maxAttempts > MAX_RETRY_ATTEMPTS) {
+          errors.push(`retry.maxAttempts deve ser um inteiro entre 1 e ${MAX_RETRY_ATTEMPTS}`);
+        }
+        if (data.retry.backoffSeconds !== undefined
+          && (!Number.isFinite(data.retry.backoffSeconds) || data.retry.backoffSeconds < 0 || data.retry.backoffSeconds > MAX_BACKOFF_SECONDS)) {
+          errors.push(`retry.backoffSeconds deve ser um número entre 0 e ${MAX_BACKOFF_SECONDS}`);
+        }
+      }
+    }
+
     // RNF026 AC#1 - alertas críticos em até 2 minutos p95; maxDeliveryMinutes
     // é o valor da regra que a proof de SLA (AC#7) compara contra a duração
     // real de entrega. Sem teto arbitrário além de positivo -- regras
@@ -80,6 +107,12 @@ class NotificationRuleModel {
       escalation: data.escalation && data.escalation.enabled
         ? { enabled: true, afterFailures: data.escalation.afterFailures, channel: data.escalation.channel }
         : { enabled: false, afterFailures: null, channel: null },
+      purpose: typeof data.purpose === 'string' ? data.purpose.trim() : null,
+      // One attempt per channel unless the rule configures more (#903).
+      retry: {
+        maxAttempts: data.retry?.maxAttempts ?? 1,
+        backoffSeconds: data.retry?.backoffSeconds ?? 0
+      },
       maxDeliveryMinutes: data.maxDeliveryMinutes,
       version: data.version.trim(),
       description: typeof data.description === 'string' ? data.description.trim() : '',

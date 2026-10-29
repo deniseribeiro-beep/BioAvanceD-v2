@@ -30,13 +30,11 @@ router.post('/telemetry', requireMachineIngestSecret, iotController.ingestTeleme
 // reachable control surface there.
 //
 // Deliberately calls checkMissingReadings() directly, not the full
-// runCycle() — runCycle() also calls getNeo4jDriver(), which retries a
-// full ~60s connectNeo4j() backoff chain on every invocation whenever the
-// driver isn't already connected (observed against this repo's Neo4j test
-// container: a "Graph not found" failure at boot leaves it permanently
-// disconnected, so every runCycle() call re-pays that ~60s retry cost —
-// unrelated to and far slower than the missing-reading check itself,
-// which doesn't touch Neo4j at all).
+// runCycle(), which also runs the critical-freezer query and appends
+// compromise events; this route proves the missing-reading check alone.
+// (runCycle() used to open a Neo4j driver and re-pay a ~60s connect
+// backoff whenever it was down; since #1312 it reaches the graph only
+// through the outbox.)
 // Defense in depth for the test-support routes below (#307, hardened by
 // #675): registration itself requires testSupportRoutesEnabled()'s two
 // independent signals (not production AND explicitly opted in), and each
@@ -62,8 +60,8 @@ if (testSupportRoutesEnabled()) {
   // findCriticalFreezers() Influx detection deterministically without
   // waiting on the cron interval. Unlike run-cycle, this deliberately does
   // NOT go through the full runCycle() — findCriticalFreezers() itself
-  // never touches Neo4j (only propagateCompromise, called from runCycle,
-  // does), so this sidesteps the same Neo4j retry cost run-cycle avoids.
+  // never touches the graph (only propagateCompromise, called from
+  // runCycle, appends to the outbox).
   // Accepts optional duration/interval overrides in the body so e2e tests
   // can prove a sustained breach without waiting out the real
   // criticalDurationHours/expectedReadingIntervalMinutes window.
@@ -92,8 +90,9 @@ if (testSupportRoutesEnabled()) {
     }
   });
 
-  // Test-support only, #304: proves the real Neo4j propagateCompromise()
-  // write end-to-end — unlike find-critical-freezers above, this
+  // Test-support only, #304: proves propagateCompromise() end-to-end (since
+  // #1312 an outbox append the projection worker applies to Neo4j, so a
+  // caller polls the graph) — unlike find-critical-freezers above, this
   // deliberately DOES go through the full runCycle() (findCriticalFreezers
   // -> propagateCompromise), since propagateCompromise is exactly what
   // this route exists to exercise. Accepts the same threshold overrides so

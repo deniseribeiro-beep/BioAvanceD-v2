@@ -221,3 +221,254 @@ describe('RcsCertificationService RCS-GOV 1.0', () => {
     expect(sample.calculationTrace.axes).toHaveLength(5);
   });
 });
+
+// RF018 AC3 (#1320): readInput keeps exactly the payload keys certify reads,
+// so the frozen input recalculates the same result.
+describe('readInput', () => {
+  const qualityCompatibility = require('../../src/services/quality-compatibility.service');
+  const F = {
+    sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+    secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A',
+  };
+
+  it.each([
+    ['matrix_type beside sprec', { matrix_type: 'fluid', sprec: F }, 'E'],
+    ['matrixType inside sprec', { sprec: { ...F, matrixType: 'fluid' } }, 'E'],
+    ['a sampleType text', { sampleType: 'plasma', sprec: F }, 'E'],
+    ['a sample wrapper', { sample: { matrix_type: 'fluid', sprec: F } }, 'E'],
+    ['secondCentrifugationRequired false', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false }, 'A'],
+    ['a workflow_context.Pcent2 rule', { matrix_type: 'fluid', sprec: F, workflow_context: { Pcent2: { workflow_rule: 'pcent2_not_required' } } }, 'A'],
+    ['an empty sprec', { sprec: {} }, 'E'],
+    ['documentationSufficient false', { matrix_type: 'fluid', sprec: F, documentationSufficient: false }, 'E'],
+  ])('certify(readInput(p)) recalculates certify(p) for %s', (_label, raw, grade) => {
+    const payload = qualityCompatibility.normalizeSample(raw);
+    const expected = rcsService.certify(payload);
+    expect(expected.final_grade).toBe(grade);
+    expect(rcsService.certify(rcsService.readInput(payload))).toEqual(expected);
+  });
+
+  it('copies no key certify does not read', () => {
+    const input = rcsService.readInput({ matrix_type: 'fluid', sprec: F, patientName: 'Maria Synthetic', cpf: '00000000000' });
+    expect(input).toEqual({ matrix_type: 'fluid', sprec: F });
+    expect(input.sprec).not.toBe(F);
+  });
+});
+
+// RF018 AC7 (#1320): the six governance criteria, read from the gate's own
+// trace re-run on the frozen input. A flag is true only where the gate
+// checked its inputs, false where it failed them, null with a reason
+// otherwise.
+describe('evaluateGovernanceEvidence', () => {
+  const qualityCompatibility = require('../../src/services/quality-compatibility.service');
+  const { RcsCertificationService } = rcsService;
+  const F = {
+    sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+    secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A',
+  };
+  const UNREAD = {
+    traceabilityOk: 'identificação, custódia e linhagem não são lidas por este cálculo (V2E-0528)',
+    monitoringOk: 'monitoramento e telemetria não são lidos por este cálculo (V2E-0529)',
+    documentationOk: 'registros, SOPs e evidências documentais não são lidos por este cálculo (V2E-0530)',
+    semanticCompatible: 'eventos não são lidos por este cálculo (V2E-0531)',
+  };
+  const flags = (overrides = {}) => ({
+    metadataComplete: true, terminologyValid: true, traceabilityOk: null,
+    monitoringOk: null, documentationOk: null, semanticCompatible: null, ...overrides,
+  });
+
+  it.each([
+    ['pass', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false }, flags(), null],
+    ['missingWf', { matrix_type: 'fluid', sprec: F }, flags(), null],
+    ['wfMismatch', { matrix_type: 'fluid', sprec: F, workflow_context: { Pcent2: { workflow_rule: 'nope' } } }, flags({ semanticCompatible: false }), 'fail'],
+    ['noMatrix', { sprec: {} }, flags({ metadataComplete: false, terminologyValid: null }), 'fail'],
+    ['noMatrixSemantic', { sprec: {}, semanticIncompatibility: true }, flags({ metadataComplete: false, terminologyValid: null, semanticCompatible: false }), 'fail'],
+    ['missingField', { matrix_type: 'fluid', sprec: { ...F, primaryContainer: '' } }, flags({ metadataComplete: false }), 'fail'],
+    ['unknownCode', { matrix_type: 'fluid', sprec: { ...F, longTermStorage: 'X' } }, flags({ terminologyValid: false }), 'fail'],
+    ['otherCode', { matrix_type: 'fluid', sprec: { ...F, longTermStorage: 'Z' } }, flags({ terminologyValid: false }), 'fail'],
+    ['incompat', { matrix_type: 'fluid', sprec: { ...F, longTermStorage: 'Q9' } }, flags({ semanticCompatible: false }), 'fail'],
+    ['docFalse', { matrix_type: 'fluid', sprec: F, documentationSufficient: false }, flags({ documentationOk: false }), 'fail'],
+    ['trace', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, traceabilityBroken: true }, flags({ traceabilityOk: false }), 'fail'],
+    ['mon', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, monitoringRequired: true }, flags({ monitoringOk: false }), 'fail'],
+  ])('reads the six flags of the %s row from the gate', (_name, raw, expectedFlags, gateResult) => {
+    const payload = qualityCompatibility.normalizeSample(raw);
+    const before = rcsService.certify(payload);
+    const input = rcsService.readInput(payload);
+    const evidence = rcsService.evaluateGovernanceEvidence(input);
+
+    expect(Object.fromEntries(Object.keys(expectedFlags).map((flag) => [flag, evidence[flag]]))).toEqual(expectedFlags);
+    expect(evidence.gateResult).toBe(gateResult);
+    const nullFlags = Object.keys(expectedFlags).filter((flag) => expectedFlags[flag] === null);
+    expect(Object.keys(evidence.unresolvedReasons).sort())
+      .toEqual([...nullFlags, ...(gateResult === null ? ['gateResult'] : [])].sort());
+    for (const flag of nullFlags) {
+      expect(evidence.unresolvedReasons[flag]).toBe(UNREAD[flag] || 'códigos SPREC não verificados: matriz não resolvida');
+    }
+    if (gateResult === 'fail') {
+      expect(before.governance_status).toBe(0);
+      expect(evidence.failureReasons).toEqual(before.governance_failure_reasons);
+    } else {
+      expect(evidence.failureReasons).toEqual([]);
+      expect(evidence.unresolvedReasons.gateResult).toBe('nem todos os seis critérios têm evidência; nenhum falhou');
+    }
+    expect(evidence.validationRuleSetVersion).toBe('RCS-GOV-1.0');
+    expect(evidence.validationRuleSetChecksum).toBe(rcsService.governanceRuleSet().checksum);
+    // No mutation of the input and no score change.
+    expect(input).toEqual(rcsService.readInput(payload));
+    expect(rcsService.certify(payload)).toEqual(before);
+  });
+
+  it.each([
+    ['docFalse', { matrix_type: 'fluid', sprec: F, documentationSufficient: false }],
+    ['pass', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false }],
+  ])('reads the %s row the same under a sample wrapper, as certify does', (_name, raw) => {
+    const input = rcsService.readInput(qualityCompatibility.normalizeSample(raw));
+    expect(rcsService.evaluateGovernanceEvidence({ sample: input })).toEqual(rcsService.evaluateGovernanceEvidence(input));
+  });
+
+  it('names the workflow-context mismatch reason for the wfMismatch row', () => {
+    const input = rcsService.readInput({ matrix_type: 'fluid', sprec: F, workflow_context: { Pcent2: { workflow_rule: 'nope' } } });
+    expect(rcsService.evaluateGovernanceEvidence(input).failureReasons)
+      .toEqual(['Analytical workflow context does not match seeded severity mapping']);
+  });
+
+  it('checksums the rule set as a stable sha256, equal across instances on the same data', () => {
+    const ruleSet = rcsService.governanceRuleSet();
+    expect(ruleSet.version).toBe('RCS-GOV-1.0');
+    expect(ruleSet.checksum).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(new RcsCertificationService(referenceData).governanceRuleSet()).toEqual(ruleSet);
+  });
+
+  it('gives another checksum when a governance rule description changes', () => {
+    const governanceRules = referenceData.governanceRules.map((rule, index) => (
+      index === 0 ? { ...rule, description: `${rule.description} (changed)` } : rule
+    ));
+    const changed = new RcsCertificationService({ ...referenceData, governanceRules });
+    expect(changed.governanceRuleSet().checksum).not.toBe(rcsService.governanceRuleSet().checksum);
+  });
+
+  it('gives another checksum with a fluid catalog entry dropped', () => {
+    const catalogs = { ...referenceData.catalogs, fluid: referenceData.catalogs.fluid.slice(1) };
+    const changed = new RcsCertificationService({ ...referenceData, catalogs });
+    expect(changed.governanceRuleSet().checksum).not.toBe(rcsService.governanceRuleSet().checksum);
+  });
+});
+
+describe('matrixMappingRelease (RF018 AC4, #1320)', () => {
+  const { RcsCertificationService } = rcsService;
+
+  it('checksums the release as a stable sha256, equal across instances on the same data', () => {
+    const release = rcsService.matrixMappingRelease();
+    expect(release).toMatchObject({
+      sprecMappingReleaseId: referenceData.matrixMapping.sprec_mapping_release_id,
+      sprecVersion: 'SPREC-2.0',
+      mappingVersion: '1.0.0',
+      compatibilityStatus: 'current_baseline',
+      status: 'active',
+    });
+    expect(release.checksum).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(new RcsCertificationService(referenceData).matrixMappingRelease()).toEqual(release);
+  });
+
+  it('gives another checksum when one rule term changes', () => {
+    const rules = referenceData.matrixMapping.rules.map((rule, index) => (
+      index === 0 ? { ...rule, contains_any: [...rule.contains_any.slice(1), 'lymph'] } : rule
+    ));
+    const changed = new RcsCertificationService({ ...referenceData, matrixMapping: { ...referenceData.matrixMapping, rules } });
+    expect(changed.matrixMappingRelease().checksum).not.toBe(rcsService.matrixMappingRelease().checksum);
+  });
+
+  it('leaves the governance rule-set checksum as it was before the release', () => {
+    expect(rcsService.governanceRuleSet().checksum)
+      .toBe('sha256:0aa3cb01efdf45f4e1d08809ba30ffad1386f56c982a5cf07088d1f26c2b52d5');
+  });
+});
+
+describe('sprecMappingRelease (RF018 AC1, #1320)', () => {
+  const { RcsCertificationService } = rcsService;
+  const checksumWith = (data) => new RcsCertificationService({ ...referenceData, ...data }).sprecMappingRelease().checksum;
+
+  it('checksums the release and its tables as a stable sha256, equal across instances on the same data', () => {
+    const release = rcsService.sprecMappingRelease();
+    expect(release).toEqual({
+      sprecMappingReleaseId: referenceData.sprecMapping.sprec_mapping_release_id,
+      sprecVersion: referenceData.sprecMapping.sprec_version,
+      mappingVersion: referenceData.sprecMapping.mapping_version,
+      compatibilityStatus: referenceData.sprecMapping.compatibility_status,
+      status: referenceData.sprecMapping.status,
+      checksum: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
+    expect(release.sprecMappingReleaseId).toBe('a5341072-35e8-4bf4-a9d1-127bc47536da');
+    expect(new RcsCertificationService(referenceData).sprecMappingRelease()).toEqual(release);
+  });
+
+  it('gives another checksum when one severity value changes', () => {
+    const index = referenceData.severityMappings.findIndex((item) => typeof item.severity_value === 'number');
+    const severityMappings = referenceData.severityMappings.map((item, i) => (
+      i === index ? { ...item, severity_value: item.severity_value + 0.5 } : item
+    ));
+    expect(checksumWith({ severityMappings })).not.toBe(rcsService.sprecMappingRelease().checksum);
+  });
+
+  it('gives another checksum when one weight changes', () => {
+    const weights = referenceData.weights.map((item, i) => (i === 0 ? { ...item, weight: Number(item.weight) + 1 } : item));
+    expect(checksumWith({ weights })).not.toBe(rcsService.sprecMappingRelease().checksum);
+  });
+
+  it('gives another checksum with a fluid catalog entry dropped', () => {
+    const catalogs = { ...referenceData.catalogs, fluid: referenceData.catalogs.fluid.slice(1) };
+    expect(checksumWith({ catalogs })).not.toBe(rcsService.sprecMappingRelease().checksum);
+  });
+
+  it('is null with no release in the data', () => {
+    const { sprecMapping, ...withoutRelease } = referenceData;
+    expect(new RcsCertificationService(withoutRelease).sprecMappingRelease()).toBeNull();
+  });
+
+  it('leaves the governance rule-set and matrix mapping checksums as they were before the release', () => {
+    expect(rcsService.governanceRuleSet().checksum)
+      .toBe('sha256:0aa3cb01efdf45f4e1d08809ba30ffad1386f56c982a5cf07088d1f26c2b52d5');
+    expect(rcsService.matrixMappingRelease().checksum)
+      .toBe('sha256:d5749ff8cc4a834c7042b6d283b3634bbb3c1a856c4a15a278d786a7391d904e');
+  });
+});
+
+describe('rulePackage (RF018 AC10, #1320)', () => {
+  const { RcsCertificationService } = rcsService;
+  const checksumWith = (data) => new RcsCertificationService({ ...referenceData, ...data }).rulePackage().checksum;
+
+  it('checksums the package as a stable sha256 named by the model code, equal across instances on the same data', () => {
+    const rulePackage = rcsService.rulePackage();
+    expect(rulePackage).toEqual({ version: 'RCS-GOV-1.0', checksum: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) });
+    expect(rcsService.rulePackage()).toBe(rulePackage);
+    expect(new RcsCertificationService(referenceData).rulePackage()).toEqual(rulePackage);
+  });
+
+  it('gives another checksum when one grade threshold changes', () => {
+    const thresholds = referenceData.thresholds.map((item, i) => (i === 0 ? { ...item, min_inclusive: item.min_inclusive + 1 } : item));
+    expect(checksumWith({ thresholds })).not.toBe(rcsService.rulePackage().checksum);
+  });
+
+  it('gives another checksum when one weight changes', () => {
+    const weights = referenceData.weights.map((item, i) => (i === 0 ? { ...item, weight: Number(item.weight) + 1 } : item));
+    expect(checksumWith({ weights })).not.toBe(rcsService.rulePackage().checksum);
+  });
+
+  it('gives another checksum when a governance rule description changes', () => {
+    const governanceRules = referenceData.governanceRules.map((rule, index) => (
+      index === 0 ? { ...rule, description: `${rule.description} (changed)` } : rule
+    ));
+    expect(checksumWith({ governanceRules })).not.toBe(rcsService.rulePackage().checksum);
+  });
+
+  it('is null with no SPREC or matrix mapping release in the data', () => {
+    const { sprecMapping, matrixMapping, ...withoutReleases } = referenceData;
+    expect(new RcsCertificationService({ ...withoutReleases, matrixMapping }).rulePackage()).toBeNull();
+    expect(new RcsCertificationService({ ...withoutReleases, sprecMapping }).rulePackage()).toBeNull();
+  });
+});
+
+describe('RCS_SCOPE_STATEMENT (RF018 AC11, #1320)', () => {
+  it('states that the RCS is not clinical validity, assay quality or a universal measure', () => {
+    expect(rcsService.RCS_SCOPE_STATEMENT).toBe('RCS qualifies the pre-analytical history of this specimen for the stated use context; it is not clinical validity, analytical assay quality or a universal quality measure.');
+  });
+});

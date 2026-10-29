@@ -2,6 +2,7 @@ const importLGPDService = require('../../services/import-lgpd.service');
 const logger = require('../../utils/logger');
 const fs = require('fs');
 const { ObjectId } = require('mongodb');
+const UserModel = require('../../models/User');
 
 async function resolveActor(db, userID) {
   if (!userID) {
@@ -13,7 +14,7 @@ async function resolveActor(db, userID) {
     const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
     return {
       userId: userID,
-      userName: user?.name || user?.email || 'IMPORT_WORKER',
+      userName: UserModel.displayNameOf(user) || user?.email || 'IMPORT_WORKER',
       userRole: user?.role || null,
     };
   } catch (error) {
@@ -56,6 +57,9 @@ class SampleWorker {
         groupFields: options.groupFields || {},
         neo4jDriver: options.neo4jDriver || null,
         actor,
+        // #1376: resolved by the controller when the job was created.
+        organizationId: options.organizationId || null,
+        organizationScope: options.organizationScope || null,
       });
 
       const processingTime = (Date.now() - startTime) / 1000;

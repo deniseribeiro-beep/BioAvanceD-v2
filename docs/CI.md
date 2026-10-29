@@ -1,9 +1,11 @@
 # CI — read this before filing a CI gap
 
-**Short version: CI is deliberately not wired yet. We are in the pre-CI
-stage, making Playwright ready first.** If you found a CI requirement in
-the documents under `docs/` and observed that `ci-pipeline.yml` does not
-implement it, that is almost certainly **sequencing, not a gap.**
+**Short version: CI is wired.** `ci-pipeline.yml` runs on push/PR to
+`main` and to `feature/docker-e2e-backend-integration`, and its
+`e2e-tests` job runs `scripts/e2e-gate.sh`, the in-container Playwright
+gate (#284, #599). If you found a CI requirement in the documents under
+`docs/` and observed that `ci-pipeline.yml` does not implement it, check
+the milestones first: it may be **sequencing, not a gap.**
 
 This note exists because that mistake was made on 2026-08-28 (issue #852,
 closed premise-corrected): a session read a real requirement out of
@@ -35,9 +37,10 @@ gh api repos/deniseribeiro-beep/BioAvanceD-v2/milestones \
 
 Read milestone #3 first. Its **"Known starting gaps"** section already
 lists the usual discoveries — that `ci-pipeline.yml`'s single job never
-invokes Playwright, and that `compose.test.yml`'s `playwright-runner` and
-`frontend-unit-runner` services are defined but unused and misconfigured.
-Those are tracked on **#284**, not undiscovered.
+invoked Playwright (closed by #284's `e2e-tests` job), and that
+`compose.test.yml`'s `playwright-runner` and `frontend-unit-runner`
+services were defined but unused and misconfigured. Those were tracked on
+**#284**, not undiscovered.
 
 A CI requirement found in the docs belongs in **milestone #3's acceptance
 criteria**, not in a new issue. Known example: the Plano Integrado's
@@ -51,11 +54,12 @@ against real containers.
 when.** Reading the first without the second reliably produces issues that
 only mean "this is scheduled for later."
 
-Note also that CI currently fires **only on push/PR to `main`** — restricted
-in `17f35eba` until the Docker e2e plumbing is ready — so pushing the
-integration branch runs no CI at all. That is intentional too.
+Note also that CI fires on **push/PR to `main` and to
+`feature/docker-e2e-backend-integration`** (#599), and on a manual
+`workflow_dispatch`. Other branches (`fix/*`, `test/*`) get no CI on push;
+a PR into either branch gets it through `pull_request`.
 
 ## Related
 
-Milestones #1, #2, #3 · issues #284, #852 · `E2E_TRACEABILITY_PLAN.md` and
-`E2E_IMPLEMENTATION_PLAN.md` at the repo root.
+Issues #284, #599, #852 · CI is planned in milestone W11; the roadmap is
+#1326.

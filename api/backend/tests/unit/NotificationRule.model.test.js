@@ -94,5 +94,30 @@ describe('NotificationRuleModel', () => {
       rule.channels.push('email');
       expect(VALID_PAYLOAD.channels).toEqual(['in_app']);
     });
+
+    it('#903: defaults retry to one attempt, and keeps a configured retry', () => {
+      expect(NotificationRuleModel.create(VALID_PAYLOAD).retry).toEqual({ maxAttempts: 1, backoffSeconds: 0 });
+      expect(NotificationRuleModel.create({ ...VALID_PAYLOAD, retry: { maxAttempts: 3, backoffSeconds: 5 } }).retry)
+        .toEqual({ maxAttempts: 3, backoffSeconds: 5 });
+    });
+  });
+
+  describe('purpose (#903, RF015 AC5)', () => {
+    it('keeps a purpose code, defaults it to null, and refuses an empty one', () => {
+      expect(NotificationRuleModel.create({ ...VALID_PAYLOAD, purpose: ' consent_governance ' }).purpose).toBe('consent_governance');
+      expect(NotificationRuleModel.create(VALID_PAYLOAD).purpose).toBeNull();
+      expect(NotificationRuleModel.validate({ ...VALID_PAYLOAD, purpose: '  ' }).errors.join()).toContain('purpose');
+    });
+  });
+
+  describe('retry (#903, RNF026 AC2)', () => {
+    it('accepts a bounded retry and refuses one out of bounds', () => {
+      expect(NotificationRuleModel.validate({ ...VALID_PAYLOAD, retry: { maxAttempts: 3, backoffSeconds: 0 } }).isValid).toBe(true);
+      const errors = (retry) => NotificationRuleModel.validate({ ...VALID_PAYLOAD, retry }).errors.join(' | ');
+      expect(errors({ maxAttempts: 0 })).toContain('retry.maxAttempts');
+      expect(errors({ maxAttempts: 11 })).toContain('retry.maxAttempts');
+      expect(errors({ maxAttempts: 2, backoffSeconds: -1 })).toContain('retry.backoffSeconds');
+      expect(errors('three')).toContain('retry deve ser um objeto');
+    });
   });
 });

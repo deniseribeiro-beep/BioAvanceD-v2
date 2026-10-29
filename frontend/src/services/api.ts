@@ -4,7 +4,9 @@ import {
   Sample,
   Result,
   ConsentTemplate,
+  PurposeCode,
   PatientConsent,
+  ConsentHistory,
   Equipment,
   Temperature,
   Sensor,
@@ -21,9 +23,16 @@ import {
   PhoneCodeEntry,
   Organization,
   Collection,
+  CollectionGovernance,
+  CollectionGovernanceApproval,
+  CollectionGovernanceEvent,
   ReportTemplate,
+  AccessRequest,
+  AccessCheck,
+  BiomarkerAssociation,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
+import { fetchWithRequestId, withRequestId } from '../api/requestId';
 
 // Opt-out for background/speculative requests (e.g. a prefetch for a later
 // wizard step) whose failure must not force-logout the user out of an
@@ -56,6 +65,16 @@ export type ApiEnvelope<T> = {
   data?: T;
 };
 
+// POST /samples/:id/close's 200 body `data` (RF026 AC7).
+export type SpecimenCloseResult = {
+  specimenId: string;
+  previousStatus: string;
+  specimenStatus: 'closed';
+  quantityStatus: 'depleted';
+  operationalStateDecisionId: string;
+  triggerEventId: string;
+};
+
 const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
 const TOKEN_OPTIONAL_ROUTES = [
   '/auth/login',
@@ -63,6 +82,8 @@ const TOKEN_OPTIONAL_ROUTES = [
   '/auth/password-reset/reset',
   '/auth/two-factor/qr-first-login',
   '/auth/two-factor/enable-first-login',
+  // #1246: the password rules, read by the reset page before any session.
+  '/auth/password-policy',
   // #809: participant-facing consent-token endpoints. Whoever follows a bulk
   // consent invitation has no account and no session -- the 64-char token in
   // the emailed link is the credential. Without these entries the request
@@ -169,7 +190,7 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    return config;
+    return withRequestId(config);
   },
   (error) => {
     return Promise.reject(error);
@@ -204,7 +225,7 @@ api.interceptors.response.use(
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 1000);
             
-            const response = await fetch(testUrl, { 
+            const response = await fetchWithRequestId(testUrl, {
               method: 'GET', 
               signal: controller.signal 
             });
@@ -323,6 +344,13 @@ export const sampleService = {
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
   create: (data: Partial<Sample>) => api.post<Sample>('/samples', data),
   update: (id: number | string, data: Partial<Sample>) => api.put<Sample>(`/samples/${id}`, data),
+  // RF019 AC5: leaving quarantine is an evidenced release, not an update.
+  releaseQuarantine: (id: number | string, data: { evidenceIds: string[]; reason?: string | null }) =>
+    api.post(`/samples/${id}/quarantine/release`, data),
+  // RF026 AC7: closes a fully consumed (quantityStatus depleted) specimen;
+  // 409 SPECIMEN_CLOSE_REFUSED otherwise.
+  close: (id: number | string) =>
+    api.post<{ success: boolean; data: SpecimenCloseResult }>(`/samples/${id}/close`, {}),
   delete: (id: number | string) => api.delete(`/samples/${id}`),
   withdraw: (sampleID: number | string, data: Partial<Withdrawal>) => 
     api.post(`/samples/${sampleID}/withdraw`, data),
@@ -508,20 +536,18 @@ export const temperatureService = {
   // `data` (`data: { temperatures, total, limit, skip }`, temperature.
   // service.js:226) -- `data` is never Temperature[] directly.
   getAll: () => api.get<ApiEnvelope<{ temperatures: Temperature[]; total: number; limit: number; skip: number }>>('/temperature'),
-  getById: (id: string) => api.get<Temperature>(`/temperature/${id}`),
+  // #1391 (RF009 AC1): a reading is read from InfluxDB by its telemetryReadingId.
+  getById: (telemetryReadingId: string) => api.get<ApiEnvelope<Temperature>>(`/temperature/${encodeURIComponent(telemetryReadingId)}`),
   viewControl: (sensorID?: string, policyID?: string) => 
     api.get<any>('/temperature/control', { 
       params: { sensorID, policyID } 
     }), // Implementa User.viewTemperatureControl()
-  create: (data: Partial<Temperature>) => api.post<Temperature>('/temperature', data),
 };
 
 // ========== SENSOR SERVICES ==========
 export const sensorService = {
   getAll: () => api.get<ApiEnvelope<Sensor[]>>('/sensors'),
   getById: (id: string) => api.get<Sensor>(`/sensors/${id}`),
-  collectReading: (id: string) => 
-    api.post<Temperature>(`/sensors/${id}/collect-reading`), // Implementa Sensor.collectReading()
   create: (data: Partial<Sensor>) => api.post<Sensor>('/sensors', data),
   update: (id: string, data: Partial<Sensor>) => api.put<Sensor>(`/sensors/${id}`, data),
   delete: (id: string) => api.delete(`/sensors/${id}`),
@@ -530,14 +556,16 @@ export const sensorService = {
 // ========== POLICY SERVICES ==========
 export const policyService = {
   getAll: () => api.get<ApiEnvelope<Policy[]>>('/policies'),
-  getById: (id: number) => api.get<Policy>(`/policies/${id}`),
-  getActiveLimit: (id: number, isMax: boolean = true) =>
+  // #1178: `id` is the policy's _id. The API never returns a `policyID`, and
+  // PUT/DELETE look up by _id only.
+  getById: (id: string) => api.get<Policy>(`/policies/${id}`),
+  getActiveLimit: (id: string, isMax: boolean = true) =>
     api.get<{ limit: number; type: string; unit: string }>(`/policies/${id}/active-limit`, {
       params: { type: isMax ? 'max' : 'min' }
     }), // Implementa Policy.getActiveLimit()
-  create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:163-167
-  update: (id: number, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
-  delete: (id: number) => api.delete(`/policies/${id}`),
+  create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:224 (#1089 moved it)
+  update: (id: string, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
+  delete: (id: string) => api.delete(`/policies/${id}`),
 };
 
 // ========== USER SERVICES ==========
@@ -560,11 +588,36 @@ export const userService = {
   resetMFA: (id: number | string) => api.post(`/users/${id}/reset-mfa`),
   disableMFA: (id: number | string) => api.post(`/users/${id}/disable-mfa`),
   forcePasswordReset: (id: number | string) => api.post(`/users/${id}/force-password-reset`),
+  // #1013: an administrator sets another user's password (off PUT /:id).
+  setPassword: (id: number | string, password: string) =>
+    api.post<ApiEnvelope<{ forceReset: boolean }>>(`/users/${id}/set-password`, { password }),
+  // #1020 / RF003 AC#5: revoke every active session; 'risk' records a
+  // suspected compromise, 'admin_action' a routine administrative revoke.
+  revokeSessions: (id: number | string, reason: 'admin_action' | 'risk') =>
+    api.post<{ success: boolean; data: { revoked: number; reason: string } }>(`/users/${id}/revoke-sessions`, { reason }),
+  // #1358: the organizations the user's role is scoped to, beyond the home one.
+  getOrganizationScopes: (id: number | string) =>
+    api.get<ApiEnvelope<UserOrganizationScopes>>(`/users/${id}/organizations`),
+  addOrganizationScope: (id: number | string, organizationId: string) =>
+    api.post<ApiEnvelope<UserOrganizationScopes>>(`/users/${id}/organizations`, { organizationId }),
+  removeOrganizationScope: (id: number | string, organizationId: string) =>
+    api.delete<ApiEnvelope<UserOrganizationScopes>>(`/users/${id}/organizations/${encodeURIComponent(organizationId)}`),
 };
+
+export interface UserOrganizationScopes {
+  homeOrganizationId: string | null;
+  global: boolean;
+  organizationIds: string[];
+}
 
 // ========== ORGANIZATION SERVICES ==========
 export const organizationService = {
-  getAll: () => api.get<ApiEnvelope<Organization[]>>('/organizations'),
+  // #1280: the route returns one sorted page (limit at most 500); useOrganizations pages through it.
+  getAll: (params?: { limit?: number; skip?: number }) =>
+    api.get<ApiEnvelope<Organization[]>>('/organizations', { params }),
+  // #1354: the caller's own organization scope, for the create forms' picker.
+  getMine: () =>
+    api.get<ApiEnvelope<{ scope: 'global' | 'organization' | 'none' | 'unassigned'; organizations: Array<{ organizationId: string; officialName: string | null }> }>>('/organizations/mine'),
   create: (data: Partial<Organization>) => api.post<Organization>('/organizations', data),
   update: (id: string, data: Partial<Organization>) => api.put<Organization>(`/organizations/${id}`, data),
   delete: (id: string) => api.delete(`/organizations/${id}`),
@@ -589,6 +642,37 @@ export const collectionsService = {
   delete: (id: string) => api.delete(`/collections/${id}`),
 };
 
+// RF004 AC3-AC5, RF020 AC2-AC4, RF021 AC2/AC3: collection-governance.routes.js.
+// The regime and context change only through recordEvent.
+export const collectionGovernanceService = {
+  get: (collectionId: string) =>
+    api.get<ApiEnvelope<CollectionGovernance>>(`/collections/${encodeURIComponent(collectionId)}/governance`),
+  createApproval: (collectionId: string, data: Record<string, unknown>) =>
+    api.post<ApiEnvelope<CollectionGovernanceApproval>>(
+      `/collections/${encodeURIComponent(collectionId)}/governance/approvals`, data),
+  setApprovalStatus: (collectionId: string, approvalId: string, data: { status: string; reason?: string }) =>
+    api.post<ApiEnvelope<CollectionGovernanceApproval>>(
+      `/collections/${encodeURIComponent(collectionId)}/governance/approvals/${encodeURIComponent(approvalId)}/status`, data),
+  recordEvent: (collectionId: string, data: Record<string, unknown>) =>
+    api.post<ApiEnvelope<{ event: CollectionGovernanceEvent; governanceRegime: string; governanceContext: Record<string, unknown> }>>(
+      `/collections/${encodeURIComponent(collectionId)}/governance/events`, data),
+};
+
+// RF024 (#1350): access and distribution requests, accessRequest.js's routes.
+// Every call needs manageAccessRequests, which only Administrador holds.
+export const accessRequestService = {
+  getAll: () => api.get<ApiEnvelope<AccessRequest[]>>('/access-requests'),
+  getById: (id: string) => api.get<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}`),
+  create: (data: Record<string, unknown>) => api.post<ApiEnvelope<AccessRequest>>('/access-requests', data),
+  evaluate: (id: string) => api.post<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}/evaluate`),
+  decide: (id: string, data: Record<string, unknown>) =>
+    api.post<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}/decision`, data),
+  distribute: (id: string) => api.post<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}/distribute`),
+  revoke: (id: string, data: { justification: string }) =>
+    api.post<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}/revoke`, data),
+  accessCheck: (id: string) => api.get<ApiEnvelope<AccessCheck>>(`/access-requests/${encodeURIComponent(id)}/access-check`),
+};
+
 // ========== ACCESS SERVICES ==========
 export const accessService = {
   getAll: () => api.get<ApiEnvelope<Access[]>>('/access'),
@@ -608,7 +692,8 @@ export const reportsService = {
   getById: (id: number) => api.get<Reports>(`/reports/${id}`),
   generate: (reportType: string) => api.post<Reports>('/reports/generate', { reportType }), // Implementa User.generateReports()
   delete: (id: number) => api.delete(`/reports/${id}`),
-  getFilters: (type: string) => api.get<{ filters: any[] }>(`/reports/${encodeURIComponent(type)}/filters`),
+  getFilters: (type: string) =>
+    api.get<{ filters: any[]; reportType?: string; handlerKey?: string; name?: string; description?: string | null }>(`/reports/${encodeURIComponent(type)}/filters`),
   previewReport: (type: string, data: { filters: any }) => 
     api.post<any>(`/reports/${encodeURIComponent(type)}/preview`, data),
   exportReport: (type: string, format: 'csv' | 'pdf', filters?: any) => {
@@ -683,6 +768,16 @@ export const extractionProtocolService = {
   create: (data: Partial<any>) => api.post<any>('/extraction-protocols', data),
 };
 
+// ========== BIOMARKER ASSOCIATION SERVICES ==========
+// ELM-0275..0285 (#1402): the mount's idField is biomarkerId, which the PUT
+// matches and never writes. No delete: the screen only creates and edits.
+export const biomarkerAssociationService = {
+  getAll: () => api.get<ApiEnvelope<BiomarkerAssociation[]>>('/biomarker-associations'),
+  create: (data: Partial<BiomarkerAssociation>) => api.post<ApiEnvelope<BiomarkerAssociation>>('/biomarker-associations', data),
+  update: (biomarkerId: string, data: Partial<BiomarkerAssociation>) =>
+    api.put<ApiEnvelope<BiomarkerAssociation>>(`/biomarker-associations/${encodeURIComponent(biomarkerId)}`, data),
+};
+
 // ========== LOG SERVICES ==========
 export const logService = {
   getAll: () => api.get<{ success: boolean; data: { logs: Log[]; total: number } }>('/logs/all'),
@@ -691,7 +786,46 @@ export const logService = {
   queryLogs: (filters: any) => api.post<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs/query', filters),
   exportCSV: (filters?: any) => api.get('/logs/export/csv', { params: filters, responseType: 'blob' }),
   exportExcel: (filters?: any) => api.get('/logs/export/xlsx', { params: filters, responseType: 'blob' }),
+  // #1005: every user's sessions, revoked ones included, pseudonymised.
+  getSessions: (filters?: SessionAuditFilters) =>
+    api.get<{ success: boolean; data: SessionAuditPage }>('/logs/sessions', { params: filters }),
 };
+
+export type SessionRevocationReason = 'user_request' | 'admin_action' | 'password_change' | 'risk' | 'expiration';
+
+export interface SessionAuditFilters {
+  revocationReason?: SessionRevocationReason | '';
+  isRevoked?: 'true' | 'false' | '';
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface SessionAuditRow {
+  id: string | null;
+  user: string;
+  ipAddress: string | null;
+  browser: string | null;
+  os: string | null;
+  deviceType: string | null;
+  createdAt: string | null;
+  lastActivity: string | null;
+  expiresAt: string | null;
+  isActive: boolean;
+  isRevoked: boolean;
+  revokedAt: string | null;
+  revokedBy: string | null;
+  revocationReason: SessionRevocationReason | null;
+}
+
+export interface SessionAuditPage {
+  sessions: SessionAuditRow[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
 
 // ========== AUDIT SERVICES ==========
 export const auditService = {
@@ -741,6 +875,8 @@ export const authService = {
     api.post('/auth/two-factor/qr-first-login', { username, password }),
   enableTwoFactorFirstLogin: (code: string, username: string, password: string) => 
     api.post('/auth/two-factor/enable-first-login', { code, username, password }),
+  // #1246: passwordRules strength keys in force (no session needed)
+  getPasswordPolicy: () => api.get('/auth/password-policy'),
   // Recuperação de senha
   requestPasswordReset: (email: string) => 
     api.post('/auth/password-reset/request', { email }),
@@ -803,6 +939,8 @@ export const consentService = {
   getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate | null; source?: string; message?: string }>('/e-consent/consent-templates/current'),
   getTemplateById: (id: string) => api.get<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`),
   updateTemplate: (id: string, data: Partial<ConsentTemplate>) => api.put<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`, data),
+  // #1349: the active DUO purposes a term's permission may name.
+  getPurposeCodes: () => api.get<{ success: boolean; data: PurposeCode[] }>('/e-consent/purpose-codes'),
   // The following endpoints are for legacy or other flows, not for TCLE builder:
   // createPolicy: (data: Partial<ConsentPolicy>) => api.post<ConsentPolicy>('/consent-policies', data),
   // updatePolicy: (id: string, data: Partial<ConsentPolicy>) => api.put<{ success: boolean; data: ConsentPolicy }>(`/consent-policies/${id}`, data),
@@ -818,7 +956,12 @@ export const consentService = {
     signatureImageBase64?: string;
     signatureMimeType?: string;
   }) => api.post<PatientConsent>('/e-consent/consents', data),
-  revokeConsent: (consentId: string) => api.post(`/e-consent/consents/${consentId}/revoke`),
+  // RF010 AC6 (#1375): `consentId` is the consent's Mongo _id. No scope means
+  // the whole consent; a scope names the permission codes to withdraw.
+  revokeConsent: (consentId: string, request: { scope?: string[]; reason?: string } = {}) =>
+    api.post<{ success: boolean; data: PatientConsent }>(`/e-consent/consents/${consentId}/revoke`, request),
+  getConsentHistory: (consentId: string) =>
+    api.get<{ success: boolean; data: ConsentHistory }>(`/e-consent/consents/${consentId}/history`),
   getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`)
 };
 
@@ -841,10 +984,20 @@ export const consentTokenService = {
       '/e-consent/consent-tokens/validate',
       { patientId: participantId, token }
     ),
-  accept: (participantId: string, token: string) =>
-    api.post<{ success: boolean; message: string; data: { success: boolean; participantId: string } }>(
+  // #821: the accept carries the manifestation -- the term shown and one
+  // answer per purpose -- which the backend records as a Consent.
+  accept: (
+    participantId: string,
+    token: string,
+    manifestation: { consentTemplateId: string; responses: Record<string, boolean> }
+  ) =>
+    api.post<{
+      success: boolean;
+      message: string;
+      data: { success: boolean; participantId: string; consentId: string; consentVersion: string | null };
+    }>(
       '/e-consent/consent-tokens/accept',
-      { patientId: participantId, token }
+      { patientId: participantId, token, ...manifestation }
     ),
 };
 
@@ -907,21 +1060,6 @@ export const importLGPDService = {
       responseType: 'blob',
     });
   },
-  smartImportPatients: (formData: FormData) => {
-    return api.post('/import-lgpd/pacientes/smart-import', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-  getSmartImportReports: (params?: { page?: number; limit?: number }) => {
-    return api.get('/import-lgpd/pacientes/smart-import/reports', {
-      params,
-    });
-  },
-  getSmartImportPatientsMetadata: () => {
-    return api.get('/import-lgpd/pacientes/smart-import/metadata');
-  },
   // #794 (RNF011 AC#4): the quarantine surface. #787 made rejected rows
   // survive and slice 1 made a batch readable by id; these are what let an
   // operator actually reach one.
@@ -931,14 +1069,26 @@ export const importLGPDService = {
   getQuarantineBatch: (batchId: string) => {
     return api.get(`/import-lgpd/batches/${encodeURIComponent(batchId)}`);
   },
+  // #1352: correct-and-resubmit one quarantined sample row through the
+  // import's own row path.
+  resubmitQuarantinedRow: (batchId: string, recordId: string, row: Record<string, string>) => {
+    return api.post(
+      `/import-lgpd/batches/${encodeURIComponent(batchId)}/records/${encodeURIComponent(recordId)}/resubmit`,
+      { row }
+    );
+  },
 };
 
 // ========== SECURITY SERVICES ==========
 export const securityService = {
   getConfig: () => api.get('/security/config'),
   updateConfig: (data: any) => api.put('/security/config', data),
+  // RF014 AC4: the configuration's releases, newest first, and a governed
+  // rollback to one of them, recorded as a new release.
+  getReleases: () => api.get('/security/config/releases'),
+  rollbackConfig: (configurationReleaseId: string) => api.post('/security/config/rollback', { configurationReleaseId }),
+  // #1149: read-only. The PUT it paired with wrote a store nothing enforced.
   getPermissions: () => api.get('/security/permissions'),
-  updatePermissions: (data: any) => api.put('/security/permissions', data),
   getSessions: () => api.get('/auth/sessions'),
   getConsentQueueStatus: () => api.get('/security/consent-queue'),
   exportLogs: (filters?: any, format: 'csv' | 'json' = 'csv') => {

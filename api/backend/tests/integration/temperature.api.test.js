@@ -7,6 +7,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
+// RF009 AC1 (#1317): the history reads InfluxDB; tests have no InfluxDB env.
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
@@ -23,14 +25,29 @@ function givenSession() {
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
 }
 
-function givenTemperatureCollection(overrides = {}) {
+function givenTemperatureCollection(overrides = {}, extraCollections = {}) {
   const coll = createCollectionMock(overrides);
   app.locals.db = createDbMock({
     temperature_readings: coll,
     temperaturereadings: coll,
+    ...extraCollections,
     ...buildRbacCollections([{ userAccountId: 'qa-tecnico-1', accessType: 2 }])
   });
   return coll;
+}
+
+// The Técnico's organization is rbac.factory's test-org-default.
+const READINGS = [{ telemetryReadingId: 'r1', sensorId: 's1', temperatureValue: 4.2 }];
+
+function givenOwnSensorAndReadings() {
+  givenTemperatureCollection({}, {
+    sensors: createCollectionMock({
+      find: vi.fn().mockImplementation(() => ({
+        toArray: vi.fn().mockResolvedValue([{ sensorId: 's1', organizationId: 'test-org-default' }]),
+      })),
+    }),
+  });
+  return vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue({ rows: READINGS, total: 1 });
 }
 
 describe('GET /api/temperature', () => {
@@ -42,22 +59,83 @@ describe('GET /api/temperature', () => {
     expect(response.status).toBe(401);
   });
 
-  it('lists temperature readings for a Técnico (accessType 2)', async () => {
-    givenTemperatureCollection({
-      find: vi.fn().mockImplementation(() => ({
-        toArray: vi.fn().mockResolvedValue([{ _id: 'r1', value: 4.2, unit: 'C', timestamp: new Date().toISOString() }]),
-        sort: vi.fn().mockReturnThis(),
-        skip: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockReturnThis(),
-        project: vi.fn().mockReturnThis(),
-      })),
-    });
+  it('lists temperature readings for a Técnico (accessType 2) from InfluxDB, scoped to their sensors', async () => {
+    const report = givenOwnSensorAndReadings();
 
     const response = await request(app)
       .get('/api/temperature')
       .set('Authorization', `Bearer ${makeToken(2)}`);
 
-    expect([200, 204]).toContain(response.status);
+    expect(response.status).toBe(200);
+    expect(response.body.data.temperatures).toEqual(READINGS);
+    expect(response.body.data.total).toBe(1);
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ sensorIds: ['s1'] }));
+  });
+});
+
+describe('GET /api/temperature/history', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('answers the InfluxDB readings under data.temperatures', async () => {
+    givenOwnSensorAndReadings();
+
+    const response = await request(app)
+      .get('/api/temperature/history')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.temperatures).toEqual(READINGS);
+  });
+});
+
+// #1391 (RF009 AC1): a reading is read from InfluxDB by its
+// telemetryReadingId, scoped to the caller's organizations' sensors.
+describe('GET /api/temperature/:id', () => {
+  const READING_ID = '0b6f7e2c-4a1d-4c3e-9f0a-1b2c3d4e5f60';
+
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function givenOwnSensorAndReading(reading) {
+    givenOwnSensorAndReadings();
+    return vi.spyOn(influxTelemetryReadRepository, 'readingById').mockResolvedValue(reading);
+  }
+
+  it('answers the InfluxDB reading of an own sensor under data', async () => {
+    const byId = givenOwnSensorAndReading({ telemetryReadingId: READING_ID, sensorId: 's1', temperatureValue: 4.2 });
+
+    const response = await request(app)
+      .get(`/api/temperature/${READING_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data).toMatchObject({ telemetryReadingId: READING_ID, sensorId: 's1' });
+    expect(byId).toHaveBeenCalledWith(READING_ID);
+  });
+
+  it('answers 403 for a reading of another organization\'s sensor', async () => {
+    givenOwnSensorAndReading({ telemetryReadingId: READING_ID, sensorId: 's-foreign', temperatureValue: 4.2 });
+
+    const response = await request(app)
+      .get(`/api/temperature/${READING_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe('Acesso negado');
+  });
+
+  it('answers 404 for a Mongo ObjectId, which is no reading id, without reading InfluxDB', async () => {
+    const byId = givenOwnSensorAndReading(null);
+
+    const response = await request(app)
+      .get('/api/temperature/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ success: false, error: 'Leitura não encontrada' });
+    expect(byId).not.toHaveBeenCalled();
   });
 });
 
@@ -77,12 +155,13 @@ describe('GET /api/temperature/control', () => {
         project: vi.fn().mockReturnThis(),
       })),
     });
+    vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue({ rows: [], total: 0 });
 
     const response = await request(app)
       .get('/api/temperature/control')
       .set('Authorization', `Bearer ${makeToken(2)}`);
 
-    // GET /:id would try `new ObjectId('control')`, which throws and 500s.
+    // GET /:id would answer 404 for `control`, not a reading id.
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ success: true, data: [] });
   });
@@ -218,7 +297,7 @@ describe('POST /api/temperature/reading stamps organizationId from the caller sc
   it('ignores a body organizationId naming another organization', async () => {
     givenScopedCaller('org-a');
     const create = vi.spyOn(temperatureService, 'createTemperatureReading')
-      .mockResolvedValue({ _id: { toString: () => 't1' }, temperatureValue: -80, temperatureUnit: 'C' });
+      .mockResolvedValue({ telemetryReadingId: 't1', temperatureValue: -80, temperatureUnit: 'C' });
 
     const res = await request(app)
       .post('/api/temperature/reading')
@@ -243,7 +322,7 @@ describe('POST /api/temperature/reading stamps organizationId from the caller sc
       organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-real' }) })
     });
     return vi.spyOn(temperatureService, 'createTemperatureReading')
-      .mockResolvedValue({ _id: { toString: () => 't2' }, temperatureValue: -70, temperatureUnit: 'C' });
+      .mockResolvedValue({ telemetryReadingId: 't2', temperatureValue: -70, temperatureUnit: 'C' });
   }
 
   it('#1080: the machine-ingest route derives organizationId from the sensor, not the body', async () => {
@@ -379,7 +458,11 @@ describe('#1062: an alert is stamped with the organization at write time', () =>
   it('checkPolicyAndAlert stamps the reading organization onto the alert', async () => {
     const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert-1' });
     const db = createDbMock({
-      policies: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ policyId: 'P-1', minThreshold: -80, maxThreshold: -60 }) }),
+      // #1089: canonical collection name and canonical bound names. The
+      // key matters less than it looks -- createDbMock substring-matches,
+      // so 'policies' would still have resolved -- but the FIELD names are
+      // load-bearing: on the legacy ones both bounds read undefined.
+      temperaturePolicies: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ policyId: 'P-1', minTemp: -80, maxTemp: -60 }) }),
       alerts: createCollectionMock({ insertOne }),
       temperature: createCollectionMock(),
     });
@@ -393,5 +476,9 @@ describe('#1062: an alert is stamped with the organization at write time', () =>
 
     expect(insertOne).toHaveBeenCalled();
     expect(insertOne.mock.calls[0][0].organizationId).toBe('org-a');
+    // #1089: without this the test passes on undefined bounds, because
+    // validateReading is false for those too. This is what makes the
+    // fixture above load-bearing rather than decorative.
+    expect(insertOne.mock.calls[0][0].threshold).toEqual({ min: -80, max: -60 });
   });
 });

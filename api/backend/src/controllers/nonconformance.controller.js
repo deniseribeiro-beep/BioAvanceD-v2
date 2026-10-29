@@ -31,7 +31,7 @@ class NonconformanceController {
       return res.status(201).json({ success: true, message: 'Não conformidade registrada com sucesso', data: nonconformance });
     } catch (error) {
       logger.error('Erro ao abrir não conformidade:', error.message);
-      return res.status(400).json({ success: false, error: 'Erro ao abrir não conformidade', message: error.message });
+      return res.status(error.statusCode === 422 ? 422 : 400).json({ success: false, error: 'Erro ao abrir não conformidade', message: error.message, details: error.details });
     }
   }
 
