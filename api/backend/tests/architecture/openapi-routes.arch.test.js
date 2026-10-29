@@ -11,8 +11,10 @@
 //   - every registration under a covered mount is in the spec, so a new
 //     route on a documented mount cannot ship undocumented.
 //
-// It READS the code, never requires it: app.js and the route files load the
-// database, queue and config modules at require time. The mounts come from
+// It READS the code and requires none of it but the router factories below
+// and the modules their mounts' option literals require: app.js and the
+// route files load the database, queue and config modules at require time.
+// The mounts come from
 // app.js's `app.use("<prefix>", require("<module>"))` calls; a limiter
 // mounted on or below a covered prefix (`app.use("/api/auth", authLimiter)`)
 // registers no route and is not a mount; each such name must be declared in
@@ -29,6 +31,34 @@
 // app itself) is refused with its file and line, rather than passed as if it
 // registered nothing.
 //
+// A mount written app.use("<prefix>", <factory>({ ... })) is read too, for a
+// factory named in KNOWN_FACTORIES, and it is the one place the guard runs
+// code: a factory's routes can differ per mount, which no reading of its
+// text settles. In app.js the second argument must be that one call with one
+// object literal and nothing after it, and app.js must bind the factory
+// once, as const <factory> = require("<module>"). Each such mount is then
+// recorded: the guard requires the factory module, evaluates the mount's
+// object literal, and calls the factory with express.Router swapped for a
+// stub that records each registration's method and path. The record fails
+// closed: exactly one router built through express.Router() and returned, a
+// string path on every registration, no path in router.use and none of its
+// arguments the record's router, a function with an array `stack` (a router)
+// or one with `handle` and `set` (an express app), and any other use of the
+// router (route, all, options, ...) or a throw is refused. The factory
+// module's text is read as well, as any route file is, and every literal
+// registration in it must be in the record, so one on a branch this mount's
+// options skip, or one run later inside a handler, is refused; so is any use
+// of `router` other than router.<method>(, its declaration and `return
+// router;`, since an alias or a hand-off could register out of both
+// readings' sight, a call on the router that anything chains onto, and a
+// router.use( argument other than a bare identifier or a call of one, since
+// an arrow or a bound handle can hide a router. The text must also hold each
+// registration as a statement of the factory's body, outside any block,
+// inner function or template literal, with no return of the factory's own
+// before its last registration, one `return router;`, and the factory
+// exported as module.exports = <factory>; so what one mount's options skip
+// is refused even where the record cannot see it.
+//
 // An uncovered mount whose prefix is a strict ancestor of a covered entry,
 // segment by segment with a {param} matching any segment, may register
 // routes that also match the covered entry's paths, so it is refused unless
@@ -39,18 +69,22 @@
 // parentheses) is refused outright, since it cannot be compared segment by
 // segment.
 //
-// Two gaps remain. Prefixes are compared case-sensitively, while Express
+// These gaps remain. Prefixes are compared case-sensitively, while Express
 // matches paths case-insensitively by default, so app.use("/API/export")
 // is not seen as above /api/export/fhir. And a route registered on app
 // itself (app.get, app.all, ...) is refused only when its literal path is
 // under a covered prefix; a pattern such as app.get("/api/*") that also
-// matches covered paths is not checked.
+// matches covered paths is not checked. A factory's registration built from
+// a string at run time (eval, new Function) inside a handler is in neither
+// reading, and neither is a router hidden by router.use(<name>(...)) where
+// that call returns a plain function wrapping the router.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { createRequire } = require('node:module');
 const { readStripped } = require('./helpers/strip-comments');
 
 const backendRoot = path.resolve(__dirname, '..', '..');
@@ -72,6 +106,9 @@ const KNOWN_LIMITERS = new Set(['authLimiter', 'consentLimiter']);
 // /api/biobanks has /:id routes that also match /api/biobanks/miabis (GET,
 // PUT and DELETE with id `miabis`); they are not documented.
 const KNOWN_ANCESTORS = new Map([['/api/biobanks', ['/api/biobanks/miabis']]]);
+// Router factories app.js mounts as app.use("<prefix>", <name>({ ... })), each
+// with the module app.js must declare it from, as const <name> = require("<module>").
+const KNOWN_FACTORIES = new Map([['createMasterDataRouter', './src/interface/routes/master-data.routes']]);
 
 const APP_CALL = /\bapp\.(use|get|post|put|patch|delete|all|options|head|route)\s*\(/g;
 const ROUTER_PATH_SHAPE = /\brouter\.(route|all|options|use)\s*\(\s*['"`]/g;
@@ -115,6 +152,185 @@ function literalOf(arg) {
 }
 
 const isUnder = (route, prefix) => route === prefix || route.startsWith(`${prefix}/`);
+
+// The index of the bracket closing the one at `open`, skipping strings; -1 if none.
+function closeOf(source, open) {
+  let depth = 0;
+  for (let i = open; i < source.length; i += 1) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === '`') {
+      for (i += 1; i < source.length && source[i] !== c; i += 1) if (source[i] === '\\') i += 1;
+    } else if ('([{'.includes(c)) {
+      depth += 1;
+    } else if (')]}'.includes(c)) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+// Bracket depth at `index`, counted from `from`, skipping strings.
+function depthAt(source, from, index) {
+  let depth = 0;
+  for (let i = from; i < index; i += 1) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === '`') {
+      for (i += 1; i < source.length && source[i] !== c; i += 1) if (source[i] === '\\') i += 1;
+    } else if ('([{'.includes(c)) {
+      depth += 1;
+    } else if (')]}'.includes(c)) {
+      depth -= 1;
+    }
+  }
+  return depth;
+}
+
+// The index past the template literal whose backtick is at `open`, its
+// ${...} substitutions and any literal nested in them included; the source
+// length when it never closes.
+function templateEnd(source, open) {
+  for (let i = open + 1; i < source.length; i += 1) {
+    if (source[i] === '\\') {
+      i += 1;
+    } else if (source[i] === '`') {
+      return i + 1;
+    } else if (source[i] === '$' && source[i + 1] === '{') {
+      let depth = 0;
+      for (i += 1; i < source.length; i += 1) {
+        const c = source[i];
+        if (c === '`') {
+          i = templateEnd(source, i) - 1;
+        } else if (c === '"' || c === "'") {
+          for (i += 1; i < source.length && source[i] !== c; i += 1) if (source[i] === '\\') i += 1;
+        } else if (c === '{') {
+          depth += 1;
+        } else if (c === '}') {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+    }
+  }
+  return source.length;
+}
+
+// The [start, end) spans of `source`'s string and template literals, each
+// template whole, with whether it is one.
+function literalSpans(source) {
+  const spans = [];
+  for (let i = 0; i < source.length; i += 1) {
+    const c = source[i];
+    if (c === '`') {
+      const end = templateEnd(source, i);
+      spans.push({ start: i, end, template: true });
+      i = end - 1;
+    } else if (c === '"' || c === "'") {
+      const start = i;
+      for (i += 1; i < source.length && source[i] !== c; i += 1) if (source[i] === '\\') i += 1;
+      spans.push({ start, end: i + 1, template: false });
+    }
+  }
+  return spans;
+}
+
+// Whether `index` lies in a function nested in the body whose `{` is at
+// `bodyOpen`: some brace enclosing it opens an arrow (=> {) or a function
+// (function [name](...) {). Any other brace is a block of the body itself.
+function inInnerFunction(source, spans, bodyOpen, index) {
+  const stack = [];
+  const parenOpen = new Map();
+  let span = 0;
+  for (let i = bodyOpen + 1; i < index; i += 1) {
+    while (span < spans.length && spans[span].end <= i) span += 1;
+    if (span < spans.length && spans[span].start <= i) {
+      i = spans[span].end - 1;
+      continue;
+    }
+    const c = source[i];
+    if ('([{'.includes(c)) stack.push(i);
+    else if (')]}'.includes(c)) parenOpen.set(i, stack.pop());
+  }
+  return stack.some((open) => {
+    if (source[open] !== '{') return false;
+    const head = source.slice(bodyOpen, open).trimEnd();
+    if (head.endsWith('=>')) return true;
+    if (!head.endsWith(')')) return false;
+    const paren = parenOpen.get(bodyOpen + head.length - 1);
+    return paren !== undefined && /\bfunction\b\s*\*?\s*(?:[A-Za-z_$][\w$]*)?\s*$/.test(source.slice(bodyOpen, paren));
+  });
+}
+
+// A factory module whose routes could differ per mount: a registration
+// outside the factory's body or nested in a block, call, inner function or
+// template literal inside it, a return of the factory's own before its last
+// registration, no module.exports of the factory, or no return of its router.
+function factoryFileRefusals(source, label, name) {
+  const refusals = [];
+  const decl = [...source.matchAll(new RegExp(`\\bfunction\\s+${name.replace(/[$]/g, '\\$&')}\\s*\\(`, 'g'))];
+  if (decl.length !== 1) return [`${label}: expected exactly one function ${name}(; found ${decl.length}`];
+  const paramsClose = closeOf(source, decl[0].index + decl[0][0].length - 1);
+  const bodyOpen = paramsClose < 0 ? -1 : source.indexOf('{', paramsClose);
+  const bodyClose = bodyOpen < 0 ? -1 : closeOf(source, bodyOpen);
+  if (bodyClose < 0 || source.slice(paramsClose + 1, bodyOpen).trim() !== '') {
+    return [`${label}: cannot find the body of function ${name}`];
+  }
+  for (const match of source.matchAll(ROUTE_START)) {
+    // A statement starts the body or follows a `;`, `{` or `}`: a registration
+    // after `)` (a brace-less if, for or while), `?`, `&`, `|`, `,`, `>` or a
+    // word (do, else) is conditional or repeated, though it sits at depth 1.
+    const before = match.index < bodyOpen ? '' : source.slice(bodyOpen + 1, match.index).trimEnd().slice(-1);
+    if (match.index < bodyOpen || match.index > bodyClose || depthAt(source, bodyOpen, match.index) !== 1 || !['', ';', '{', '}'].includes(before)) {
+      refusals.push(`${label}:${lineOf(source, match.index)} router.${match[1]}( is not a statement of ${name}'s body, so a mount may not register it`);
+    }
+  }
+  // A template literal is opaque: a registration in one, ${...} included, is
+  // refused, never read at the depth of the code around it. A return of the
+  // factory's own, at any block depth, before its last registration leaves
+  // that registration to one branch.
+  const spans = literalSpans(source);
+  const registrations = [...source.matchAll(/\brouter\s*\.\s*(get|post|put|patch|delete|head|use)\s*\(/gi)];
+  for (const match of registrations) {
+    if (spans.some((s) => s.template && s.start < match.index && match.index < s.end)) {
+      refusals.push(`${label}:${lineOf(source, match.index)} router.${match[1]}( sits inside a template literal, so a mount may not register it`);
+    }
+  }
+  const lastRegistration = Math.max(-1, ...registrations.map((m) => m.index).filter((i) => i > bodyOpen && i < bodyClose));
+  for (const match of source.slice(0, lastRegistration).matchAll(/\breturn\b/g)) {
+    if (match.index <= bodyOpen || spans.some((s) => s.start <= match.index && match.index < s.end)) continue;
+    if (!inInnerFunction(source, spans, bodyOpen, match.index)) {
+      refusals.push(`${label}:${lineOf(source, match.index)} ${name} returns before its last registration, so a mount may not register what follows`);
+    }
+  }
+  const body = source.slice(bodyOpen, bodyClose);
+  const returns = [...body.matchAll(/\breturn\b\s*([^;]*);/g)].filter((m) => depthAt(body, 0, m.index) === 1);
+  if (returns.length !== 1 || returns[0][1].trim() !== 'router') refusals.push(`${label}: ${name} must end in its one return router;`);
+  if (!new RegExp(`\\bmodule\\.exports\\s*=\\s*${name.replace(/[$]/g, '\\$&')}\\s*;`).test(source)) {
+    refusals.push(`${label}: does not export ${name} as module.exports = ${name};`);
+  }
+  return refusals;
+}
+
+// The KNOWN_FACTORIES name a mount argument calls, when the argument is
+// exactly <name>({ ... }): one call, one object literal, nothing after it.
+function factoryCall(arg) {
+  const head = /^([A-Za-z_$][\w$]*)\s*\(/.exec(arg);
+  if (!head || !KNOWN_FACTORIES.has(head[1])) return null;
+  const open = head[0].length - 1;
+  if (closeOf(arg, open) !== arg.length - 1) return null;
+  const inner = callArgs(arg, open);
+  return inner.length === 1 && inner[0].startsWith('{') && closeOf(inner[0], 0) === inner[0].length - 1 ? head[1] : null;
+}
+
+// Whether app.js binds `name` once, as const <name> = require("<its module>").
+function factoryDeclared(source, name) {
+  const escaped = name.replace(/[$]/g, '\\$&');
+  const module = KNOWN_FACTORIES.get(name).replace(/[.]/g, '\\.');
+  const bindings = [...source.matchAll(new RegExp(`(?<![\\w$.])${escaped}\\s*=(?![=>])`, 'g'))];
+  return bindings.length === 1 &&
+    new RegExp(`\\bconst\\s+${escaped}\\s*=\\s*require\\(\\s*(['"])${module}\\1\\s*\\)`).test(source);
+}
+
 const templated = (p) => p.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
 const isParam = (segment) => /^\{[^}]+\}$/.test(segment);
 // Whether `prefix` is a strict ancestor of `covered`, segment by segment, a
@@ -159,7 +375,12 @@ function appRefusals(source, label, covered) {
       if (args.length === 2 && KNOWN_LIMITERS.has(args[1])) continue;
       refusals.push(`${at}"${prefix}": a mount below the covered ${mount}; cover the mount itself or move the routes`);
     } else if (!(args.length === 2 && (/^require\(\s*(['"])[^'"]+\1\s*\)$/.test(args[1]) || KNOWN_LIMITERS.has(args[1])))) {
-      refusals.push(`${at}"${prefix}", ...): neither app.use(prefix, require(module)) nor a known limiter`);
+      const factory = args.length === 2 ? factoryCall(args[1]) : null;
+      if (!factory) {
+        refusals.push(`${at}"${prefix}", ...): neither app.use(prefix, require(module)), a known limiter, nor a known factory called with one object literal`);
+      } else if (!factoryDeclared(source, factory)) {
+        refusals.push(`${at}"${prefix}", ${factory}(...)): app.js does not bind ${factory} once, as const ${factory} = require("${KNOWN_FACTORIES.get(factory)}")`);
+      }
     }
   }
   return refusals;
@@ -212,6 +433,167 @@ function collectMounts() {
   return mounts;
 }
 
+// app.use("<prefix>", <factory>({ ... })) for a known factory app.js binds
+// once: prefix -> [{ name, options (the object literal's text), line }].
+function collectFactoryMounts(source) {
+  const mounts = new Map();
+  for (const match of source.matchAll(APP_CALL)) {
+    if (match[1] !== 'use') continue;
+    const args = callArgs(source, match.index + match[0].length - 1);
+    const literal = literalOf(args[0] || '');
+    const name = args.length === 2 ? factoryCall(args[1]) : null;
+    if (literal === null || !name || !factoryDeclared(source, name)) continue;
+    const prefix = templated(literal);
+    if (!mounts.has(prefix)) mounts.set(prefix, []);
+    mounts.get(prefix).push({ name, options: callArgs(args[1], args[1].indexOf('('))[0], line: lineOf(source, match.index) });
+  }
+  return mounts;
+}
+
+const REGISTERS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head']);
+
+// In a factory module, each `router` token other than router.<method>( with
+// a method the record reads, its declaration `const router = express.Router()`
+// or `return router;`: an alias, a computed or split member access, or the
+// router handed to other code, any of which may register out of the
+// record's and the text's sight.
+function oddRouterUses(source, label) {
+  const refusals = [];
+  for (const match of source.matchAll(/\brouter\b/g)) {
+    const after = source.slice(match.index);
+    const before = source.slice(0, match.index);
+    if (/^router\.(?:get|post|put|patch|delete|head|use)\s*\(/.test(after)) continue;
+    if (/\b(?:const|let|var)\s+$/.test(before) && /^router\s*=\s*express\.Router\s*\(\s*\)/.test(after)) continue;
+    if (/\breturn\s+$/.test(before) && /^router\s*;/.test(after)) continue;
+    refusals.push(`${label}:${lineOf(source, match.index)} router is used other than as router.<method>(, its declaration or return router;`);
+  }
+  return refusals;
+}
+
+// In a factory module, a call on the router that another call or member
+// access chains onto (router.use(a).get('/x', h)), which neither the text
+// nor, on a branch or in a handler, the record reads; and a router.use(
+// argument other than a bare identifier or a call of one (authenticate,
+// requireRole(3, 4)), since an arrow or a bound handle can hide a router.
+function routerCallRefusals(source, label) {
+  const refusals = [];
+  for (const match of source.matchAll(/\brouter\.(get|post|put|patch|delete|head|options|all|use)\s*\(/g)) {
+    const open = match.index + match[0].length - 1;
+    const close = closeOf(source, open);
+    if (close < 0 || /^\s*[.[]/.test(source.slice(close + 1))) {
+      refusals.push(`${label}:${lineOf(source, match.index)} router.${match[1]}( is chained on, so what the chain registers is not read`);
+    }
+    if (match[1] !== 'use') continue;
+    for (const arg of callArgs(source, open)) {
+      const call = /^[A-Za-z_$][\w$]*\s*\(/.exec(arg);
+      if (/^[A-Za-z_$][\w$]*$/.test(arg) || (call && closeOf(arg, call[0].length - 1) === arg.length - 1)) continue;
+      refusals.push(`${label}:${lineOf(source, match.index)} router.use(${arg}) takes neither an identifier nor a call of one, so it may hide a router`);
+    }
+  }
+  return refusals;
+}
+
+// Calls `factory(options)` with `expressModule.Router` swapped for a stub that
+// records each registration as `METHOD <path>`. It fails closed: the factory
+// must build exactly one router through expressModule.Router() and return
+// that router; every registration takes a string path; router.use takes no
+// path and no router; any other property of the router (route, all, options,
+// param, stack, ...) is refused, as is a throw.
+function recordFactory(factory, options, expressModule, label) {
+  const operations = [];
+  const refusals = [];
+  let stub = null;
+  let built = 0;
+  const handler = {
+    get(_target, prop) {
+      if (typeof prop !== 'string') return undefined;
+      if (REGISTERS.has(prop)) {
+        return (...args) => {
+          if (typeof args[0] === 'string') operations.push({ method: prop.toUpperCase(), path: args[0] });
+          else refusals.push(`${label}: router.${prop}( with a path that is not a string`);
+          return stub;
+        };
+      }
+      if (prop === 'use') {
+        return (...args) => {
+          if (typeof args[0] !== 'function') refusals.push(`${label}: router.use( with a path`);
+          for (const arg of args) {
+            if (arg === stub || (typeof arg === 'function' && Array.isArray(arg.stack))) refusals.push(`${label}: router.use( of a router`);
+            if (typeof arg === 'function' && typeof arg.handle === 'function' && typeof arg.set === 'function') refusals.push(`${label}: router.use( of an express app`);
+          }
+          return stub;
+        };
+      }
+      refusals.push(`${label}: touches router.${prop}, a shape the record does not read`);
+      return undefined;
+    },
+  };
+  const realRouter = expressModule.Router;
+  expressModule.Router = () => {
+    built += 1;
+    stub = new Proxy(function router() {}, handler);
+    return stub;
+  };
+  let returned;
+  try {
+    returned = factory(options);
+  } catch (error) {
+    refusals.push(`${label}: the factory threw ${error && error.message}`);
+  } finally {
+    expressModule.Router = realRouter;
+  }
+  if (built !== 1) refusals.push(`${label}: the factory built ${built} routers through express.Router(); expected exactly 1`);
+  else if (returned !== stub) refusals.push(`${label}: the factory did not return the router it built`);
+  return { operations, refusals };
+}
+
+// The registrations, as `METHOD /prefix/path`, the factory mounts at `prefix`
+// make, recorded by calling each factory with its mount's own options, and
+// the refusals: the record's own, and every literal registration in the
+// factory module's text that the record did not see at this mount (one on a
+// branch this mount's options skip, or one run later, inside a handler).
+function factoryOperations(prefix, entries) {
+  const operations = new Set();
+  const refusals = [];
+  const appRequire = createRequire(APP_JS);
+  for (const entry of entries) {
+    const label = `app.js:${entry.line} ${entry.name}`;
+    const file = resolveModule(KNOWN_FACTORIES.get(entry.name));
+    if (!file) {
+      refusals.push(`${label}: ${KNOWN_FACTORIES.get(entry.name)} does not resolve`);
+      continue;
+    }
+    const options = new Function('require', `return (${entry.options});`)(appRequire);
+    const checked = checkFactory(readStripped(fs, file), path.relative(backendRoot, file), entry.name, appRequire(file), options, createRequire(file)('express'), prefix, label);
+    refusals.push(...checked.refusals);
+    for (const key of checked.operations) operations.add(key);
+  }
+  return { operations, refusals };
+}
+
+// Both readings of one factory mount: the record of `factory(options)` and
+// the factory module's text `source`, the factory function `name` in it. The
+// text must hold no shape the extraction cannot read, every registration in
+// it must be a statement of the factory's body, and every literal one must be
+// in the record, so the record is the whole of what the text could register.
+function checkFactory(source, file, name, factory, options, expressModule, prefix, label) {
+  const record = recordFactory(factory, options, expressModule, label);
+  const operations = new Set(record.operations.map((op) => `${op.method} ${joinPath(prefix, op.path)}`));
+  const refusals = [
+    ...record.refusals,
+    ...routeFileRefusals(source, file),
+    ...factoryFileRefusals(source, file, name),
+    ...oddRouterUses(source, file),
+    ...routerCallRefusals(source, file),
+  ];
+  for (const match of source.matchAll(ROUTE_START)) {
+    if (match[3] === undefined) continue;
+    const key = `${match[1].toUpperCase()} ${joinPath(prefix, match[3])}`;
+    if (!operations.has(key)) refusals.push(`${file}:${lineOf(source, match.index)} ${key} is not registered when ${label} runs, so it runs on a branch or later`);
+  }
+  return { operations, refusals };
+}
+
 function joinPath(prefix, route) {
   const base = templated(prefix);
   const tail = templated(route);
@@ -252,7 +634,11 @@ test('RNF006: every operation the OpenAPI spec documents is registered under its
   // The union over every covered mount: a path under a nested mount is also
   // under the mount it is nested in, so the first prefix it is under may not
   // be the one that registers it.
-  const registered = new Set(covered.flatMap((p) => [...collectOperations(p, mounts.get(p) || [])]));
+  const factoryMounts = collectFactoryMounts(readStripped(fs, APP_JS));
+  const registered = new Set(covered.flatMap((p) => [
+    ...collectOperations(p, mounts.get(p) || []),
+    ...factoryOperations(p, factoryMounts.get(p) || []).operations,
+  ]));
   const misses = [];
   for (const operation of specOperations(spec)) {
     const prefixes = covered.filter((p) => isUnder(operation.route, p));
@@ -285,14 +671,23 @@ test('RNF006: every operation registered under a covered mount is documented', (
       misses.push(`KNOWN_LIMITERS names ${name}, which app.js does not declare as const ${name} = rateLimit(...)`);
     }
   }
+  for (const name of KNOWN_FACTORIES.keys()) {
+    if (!factoryDeclared(appSource, name)) {
+      misses.push(`KNOWN_FACTORIES names ${name}, which app.js does not bind once as const ${name} = require("${KNOWN_FACTORIES.get(name)}")`);
+    }
+  }
+  const factoryMounts = collectFactoryMounts(appSource);
   for (const prefix of covered) {
-    const files = mounts.get(prefix);
-    if (!files || files.size === 0) {
-      misses.push(`${prefix}: not mounted with require() in app.js`);
+    const files = mounts.get(prefix) || new Set();
+    const entries = factoryMounts.get(prefix) || [];
+    if (files.size === 0 && entries.length === 0) {
+      misses.push(`${prefix}: not mounted with require() or a known factory in app.js`);
       continue;
     }
     for (const file of files) misses.push(...routeFileRefusals(readStripped(fs, file), path.relative(backendRoot, file)));
-    const operations = collectOperations(prefix, files);
+    const recorded = factoryOperations(prefix, entries);
+    misses.push(...recorded.refusals);
+    const operations = new Set([...collectOperations(prefix, files), ...recorded.operations]);
     if (operations.size === 0) misses.push(`${prefix}: its route files register no operation`);
     for (const key of operations) {
       if (!documented.has(key)) misses.push(`${key}: registered but not in docs/api/openapi.json`);
@@ -333,7 +728,7 @@ test('RNF006: the spec is OpenAPI 3.0 and every path template parameter is decla
 // one the extraction cannot read; each must be refused, and the clean
 // sources, written in the covered files' own shapes, must not be.
 test('RNF006: the guard refuses each route shape it cannot read', () => {
-  const covered = ['/api/auth', '/api/backup', '/api/biobanks/miabis', '/api/export/fhir', '/api/export/fhir/samples/{specimenId}/files/{fileID}'];
+  const covered = ['/api/auth', '/api/backup', '/api/biobanks/miabis', '/api/export/fhir', '/api/export/fhir/samples/{specimenId}/files/{fileID}', '/api/studies'];
   const sub = 'require("./src/interface/routes/sub.routes")';
   const app = [
     'app.use(globalLimiter);',
@@ -345,6 +740,8 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'app.use("/api/export/fhir", require("./src/interface/routes/fhir-export.routes"));',
     'app.use("/api/biobanks/miabis", require("./src/interface/routes/miabis-export.routes"));',
     'app.use("/api/biobanks", createMasterDataRouter({ collectionName: "biobanks" }));',
+    'const createMasterDataRouter = require("./src/interface/routes/master-data.routes");',
+    'app.use("/api/studies", createMasterDataRouter({\n  collectionName: "studies",\n  idField: "studyId",\n  model: require("./src/models/Study")\n}));',
     'app.use(\n  cors({ origin: (origin, callback) => callback(null, true) })\n);',
     'app.use("/api/patients", require("./src/interface/routes/patient.routes"));',
     'app.get("/api/health", async (req, res) => { res.status(200).json({ ok: true }); });',
@@ -382,6 +779,15 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'a known ancestor above an unlisted covered prefix': `app.use("/api/biobanks/other", ${sub});`,
     'an optional-parameter mount above a covered prefix': `app.use("/api/:area?", ${sub});`,
     'a literal mount above a parameterised covered prefix': `app.use("/api/x/y", ${sub});`,
+    'a factory called with no object literal': 'app.use("/api/studies", createMasterDataRouter(options));',
+    'a factory called with a second argument': 'app.use("/api/studies", createMasterDataRouter({ collectionName: "s" }, extra));',
+    'a factory call chained': 'app.use("/api/studies", createMasterDataRouter({ collectionName: "s" }).use(other));',
+    'a factory call called again': 'app.use("/api/studies", createMasterDataRouter({ collectionName: "s" })(other));',
+    'a factory call in an expression': 'app.use("/api/studies", createMasterDataRouter({ collectionName: "s" }) || other);',
+    'an unknown factory': 'app.use("/api/studies", createOtherRouter({ collectionName: "s" }));',
+    'middleware before a factory': 'app.use("/api/studies", authenticate, createMasterDataRouter({ collectionName: "s" }));',
+    'a factory mount below a covered prefix': 'app.use("/api/studies/deep", createMasterDataRouter({ collectionName: "s" }));',
+    'a factory rebound in app.js': 'createMasterDataRouter = require("./src/interface/routes/other.routes");',
   };
   // Covered prefixes for one shape only: added to the shared list, the clean
   // /api/biobanks line would be refused too. /api/x/{id}/files puts the
@@ -401,9 +807,81 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'an aliased router': "const r = router;\nr.get('/alias', handler);",
     'a registration with no literal path': 'router.get(paths.list, handler);',
   };
+  // A factory bound from another module: the clean source with its binding swapped.
+  const otherBinding = app.replace('"./src/interface/routes/master-data.routes"', '"./src/interface/routes/other.routes"');
+  assert.notDeepStrictEqual(appRefusals(otherBinding, 'app.js', covered), []);
+  // A factory is checked by running it: each shape is a factory source,
+  // evaluated with a stand-in express whose own Router() gives a router that
+  // is not the record's, and checked as mounted at /api/studies with
+  // { collectionName: 'studies' } (scopeField unset).
+  const fakeExpress = { Router: () => ({ stack: [], get() { return this; }, use() { return this; } }) };
+  // An app as express() makes it: a function with handle and set, and no stack.
+  const expressApp = () => Object.assign(function app() {}, { handle() {}, set() {}, get() { return this; } });
+  const checkShape = (text) => {
+    const factory = new Function('express', 'expressApp', 'module', 'handler', 'authenticate', 'requireRole', 'register', 'other', `${text}\nreturn createMasterDataRouter;`)(
+      fakeExpress, expressApp, {}, () => {}, () => {}, () => () => {}, () => {}, Object.assign(() => {}, { stack: [], handle() {} })
+    );
+    return checkFactory(text, 'master-data.routes.js', 'createMasterDataRouter', factory, { collectionName: 'studies' }, fakeExpress, '/api/studies', 'app.js:1 createMasterDataRouter');
+  };
+  const factory = [
+    'function createMasterDataRouter({ collectionName, scopeField = null }) {',
+    '  const router = express.Router();',
+    '  router.use(authenticate);',
+    '  if (scopeField) {',
+    '    router.use(requireOrganizationScope);',
+    '  }',
+    "  router.get('/', async (req, res) => res.status(200).json({ name: `${collectionName}` }));",
+    "  router.delete('/:id', requireRole(3, 4), handler);",
+    '  return router;',
+    '}',
+    'module.exports = createMasterDataRouter;',
+  ].join('\n');
+  const clean = checkShape(factory);
+  assert.deepStrictEqual(clean.refusals, []);
+  assert.deepStrictEqual([...clean.operations], ['GET /api/studies', 'DELETE /api/studies/{id}']);
+  const inBody = (text) => factory.replace('  return router;', `${text}\n  return router;`);
+  const factoryShapes = {
+    'a registration inside an if': inBody("  if (scopeField) {\n    router.get('/scoped', handler);\n  }"),
+    'a registration in a brace-less if': inBody("  if (scopeField) router.get('/cond', handler);"),
+    'a registration in a ternary': inBody("  scopeField ? router.get('/cond', handler) : null;"),
+    'a registration after &&': inBody("  scopeField && router.get('/cond', handler);"),
+    'a registration in a loop with a computed path': inBody("  for (const p of ['/a']) router.get(p, handler);"),
+    'a registration inside a handler': inBody("  router.post('/', (req, res) => { router.get('/late', handler); });"),
+    'a registration inside an inner function': inBody("  function extra() {\n    router.post('/extra', handler);\n  }"),
+    'a braced early return before a registration': inBody("  if (collectionName) {\n    return router;\n  }\n  router.get('/after', handler);"),
+    'an early return of another router': inBody('  if (collectionName) {\n    return express.Router();\n  }'),
+    'a registration inside a skipped template literal': inBody("  const s = collectionName ? '' : `${router.get('/t', handler)}`;"),
+    'a regex literal with a quote before a skipped registration': inBody("  const re = /'/;\n  if (scopeField) { router.get('/re', handler); }"),
+    'a split member access': inBody("  router.post('/', (req, res) => { router\n.get('/split', handler); });"),
+    'a computed member access': inBody("  router['get']('/computed', handler);"),
+    'an aliased router': inBody("  const r = router;\n  r.get('/alias', handler);"),
+    'the router handed to other code': inBody('  register(router);'),
+    'router.route': inBody("  router.route('/chained').get(handler);"),
+    'router.all': inBody("  router.all('/anything', handler);"),
+    'router.use with a path': inBody("  router.use('/sub', handler);"),
+    'router.use of another router': inBody('  router.use(other);'),
+    'a second router built': inBody('  const r2 = express.Router();'),
+    'a registration with a regex path': inBody('  router.get(/x/, handler);'),
+    'a factory returning another router': factory.replace('  return router;', '  return other;'),
+    'a factory that throws': inBody("  throw new Error('no');"),
+    'a Router taken before the record': `const { Router } = express;\n${factory.replace('express.Router()', 'Router()')}`,
+    'a registration chained on router.use': inBody("  router.use(authenticate).get('/chained', handler);"),
+    'a chained registration after an early return': inBody("  if (scopeField) {\n    return router;\n  }\n  router.use(authenticate).get('/after', handler);"),
+    'router.use of an express app': inBody("  const sub = expressApp();\n  const p = '/hidden';\n  sub.get(p, handler);\n  router.use(sub);"),
+    'router.use of an arrow wrapping a router': inBody('  router.use((req, res, next) => other(req, res, next));'),
+    'router.use of a bound router handle': inBody('  router.use(other.handle.bind(other));'),
+    'a second return on a branch': inBody('  if (scopeField) return other;'),
+    'a factory not exported': factory.replace('module.exports = createMasterDataRouter;', 'module.exports = { createMasterDataRouter };'),
+    'a literal path with a computed tail': inBody("  router.get('/a' + collectionName, handler);"),
+    'a factory rebound to return another router': factory.replace(
+      'module.exports = createMasterDataRouter;',
+      'createMasterDataRouter = ((f) => (o) => { f(o); return other; })(createMasterDataRouter);\nmodule.exports = createMasterDataRouter;'
+    ),
+  };
   const unrefused = [
     ...Object.entries(appShapes).filter(([name, text]) => appRefusals(`${app}\n${text}`, 'app.js', shapeCovered[name] || covered).length === 0),
     ...Object.entries(routeShapes).filter(([, text]) => routeFileRefusals(`${route}\n${text}`, 'backup.routes.js').length === 0),
+    ...Object.entries(factoryShapes).filter(([, text]) => checkShape(text).refusals.length === 0),
   ].map(([name]) => name);
   assert.deepStrictEqual(unrefused, [], `These shapes pass unrefused: ${unrefused.join(', ')}`);
 });
