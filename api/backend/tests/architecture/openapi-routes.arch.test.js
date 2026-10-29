@@ -45,11 +45,31 @@
 // module.exports is named once. The module must itself be a plain route
 // file, with no refusal of its own, no import(, createRequire, module[,
 // defineProperty(module, module.constructor, module.parent or mainModule,
-// and module named only in its one module.exports = router;, so a module
-// that hands off again is refused. This fails closed: a file not in the map,
-// or one in it whose text is not exactly a modeled shape, gets the refusals
-// below unchanged, and the reading removes no refusal but the one for that
-// router.use argument.
+// and module named only in its one module.exports = router; (a `module`
+// that is an object key, as in { req, module: 'x' }, is not counted), so a
+// module that hands off again is refused. This fails closed: a file not in
+// the map, or one in it whose text is not exactly a modeled shape, gets the
+// refusals below unchanged, and the reading removes no refusal but the one
+// for that router.use argument.
+//
+// A route file KNOWN_HANDOFFS names hands all its routes to one router module
+// too, but with code of its own (helpers, middleware) around the hand-off, so
+// no exact text models it. Two readings must both hold. Its text must require
+// that module exactly once, by any spelling, bound once as const <name> =
+// require('<module>');, make no request but a relative one (./ or ../) or one
+// of the bare requests its entry lists, with no backslash in any, name <name>
+// only there and as the last argument of its one router.use(, name router
+// only in its declaration, that call and its export, name module.exports
+// once, as module.exports = router;, name module nowhere else, name neither
+// arguments nor getBuiltinModule, globalThis, global, eval or Function(, and
+// hold none of the handles listed for a router module above. And it is loaded, as a plain route file is, with the router
+// module's require.cache entry swapped for a sentinel: the sentinel must be
+// handed to router.use( exactly once, as its last argument, and any other
+// touch of it (a property read or write, a call, `in`, a prototype read) is
+// refused; the file's own registrations are recorded and compared with its
+// text, and both cache entries are put back after. A file whose text fails
+// the first reading keeps every refusal, and the router module gets the
+// router module refusals above. This fails closed the same way.
 //
 // The second claim holds only because the guard fails closed: a shape that
 // could add a route under a covered mount but that the extraction does not
@@ -107,11 +127,12 @@
 // reading, and neither is a router hidden by router.use(<name>(...)) where
 // that call returns a plain function wrapping the router. And a module other
 // than its route file that requires a router module a KNOWN_SUBROUTERS file
-// hands off to, and registers on it, is in neither reading. Nor, in a plain
-// route file, is a registration the text cannot read (a second handle, a
-// computed or spaced member, a variable path) that runs only later, inside a
-// handler, or on a branch the load skips (one gated on an environment value
-// other than the test-support gate). And a registration skipped while the
+// or a KNOWN_HANDOFFS file hands off to, and registers on it, is in neither
+// reading. Nor, in a plain route file or a KNOWN_HANDOFFS file, is a
+// registration the text cannot read (a second handle, a computed or spaced
+// member, a variable path) that runs only later, inside a handler, or on a
+// branch the load skips (one gated on an environment value other than the
+// test-support gate). And a registration skipped while the
 // test-support gate is open, or one made only by a file that detects the
 // stub, is in neither reading.
 
@@ -160,6 +181,18 @@ const KNOWN_SUBROUTERS = new Map([
       "const dictionaryRouter = require('../../../src/routes/dictionary');",
     ],
     use: 'authenticate, dictionaryRouter',
+  }],
+]);
+// Route files, relative to backendRoot, that hand every route to one router
+// module through one router.use( whose last argument is that module's
+// binding, with code of their own (helpers, middleware) around it: the exact
+// require() string of that module (request), and the exact bare requests the
+// file may make besides its relative ones (bare). Read by handoffOf and
+// recorded at load by handoffRecord.
+const KNOWN_HANDOFFS = new Map([
+  ['src/interface/routes/intakeWizard.routes.js', {
+    request: '../../../src/routes/intakeWizard',
+    bare: ['crypto', 'express', 'mongodb'],
   }],
 ]);
 
@@ -517,9 +550,20 @@ function delegationOf(source, rel) {
   return { kind: 'use', request: entry.request, name: entry.use.split(', ').pop(), index: uses[0].index };
 }
 
+// The `module` tokens of `source` other than an object key or a label: one
+// right after { or , and right before a single :, as in { req, module: 'x' }.
+const moduleReferences = (source) => [...source.matchAll(/(?<![\w$.])module(?![\w$])/g)]
+  .filter((m) => !(/[{,]\s*$/.test(source.slice(0, m.index)) && /^module\s*:(?!:)/.test(source.slice(m.index)))).length;
+
 // Ways a module can reach a router or module.exports other than through its
 // own `router` and `module.exports = router;`.
 const TARGET_HANDLES = /\bimport\s*\(|\bcreateRequire\b|\bmodule\s*\[|\bdefineProperty\s*\(\s*module\b|\bmodule\s*\.\s*constructor\b|\bmodule\s*\.\s*parent\b|\bmainModule\b/g;
+// Further ways a KNOWN_HANDOFFS file could reach its sub-router or the module
+// cache past both readings: the module wrapper's own arguments (require,
+// module), a builtin module by process.getBuiltinModule, the global object,
+// and code built at run time.
+const NAMES_ARGUMENTS = /(?<![\w$])arguments(?![\w$])/;
+const RUNTIME_HANDLES = /(?<![\w$])(?:getBuiltinModule|globalThis|global|eval)(?![\w$])|(?<![\w$])Function\s*\(/;
 
 // A router module a route file hands off to must be a plain route file: no
 // refusal of its own (so one that hands off again is refused), none of
@@ -531,10 +575,65 @@ function delegateRefusals(source, label) {
   for (const match of source.matchAll(TARGET_HANDLES)) {
     refusals.push(`${label}:${lineOf(source, match.index)} ${match[0]} may reach a router or the export out of the reading's sight`);
   }
-  if ([...source.matchAll(/(?<![\w$.])module(?![\w$])/g)].length !== 1) {
+  if (moduleReferences(source) !== 1) {
     refusals.push(`${label}: names module other than in its one module.exports = router;`);
   }
   return refusals;
+}
+
+// The string literal of each require( call in `source`, read once
+// requiresModuleOnce has held (so each is a call with one string literal).
+const requestsOf = (source) => [...source.matchAll(/\brequire\b\s*\(/g)]
+  .map((match) => literalOf(callArgs(source, match.index + match[0].length - 1)[0]));
+// Whether the require request `request` of a KNOWN_HANDOFFS file is one of
+// its entry's bare requests, exactly, or relative (./ or ../).
+const allowedRequest = (request, entry) => entry.bare.includes(request) || /^\.\.?\//.test(request);
+
+// The hand-off of the route file `rel` to the router module KNOWN_HANDOFFS
+// names for it, read from its stripped text, or null. It holds only when
+// every require is a call with one string literal and exactly one resolves to
+// that module; every request is one of the entry's bare requests, exactly, or
+// starts ./ or ../, and none holds a backslash (an escape that spells the
+// module another way); the module is bound once as
+// const <name> = require('<request>');;
+// <name> is named exactly twice (that binding and the last argument of the
+// file's one router.use( call); module.exports is named once, as
+// module.exports = router;; module is named nowhere else; router is named
+// only in const router = express.Router();, that router.use( and the export,
+// so router.use cannot be swapped and no alias of it hands the sub-router on;
+// neither `arguments` (the module wrapper's require and module) nor any of
+// RUNTIME_HANDLES (a builtin module, the global object or code built at run
+// time) appears; and none of TARGET_HANDLES appears. Any other text is null,
+// and the router.use refusal stays.
+function handoffOf(source, rel) {
+  const entry = KNOWN_HANDOFFS.get(rel);
+  if (!entry) return null;
+  const { request } = entry;
+  if (!requiresModuleOnce(source, rel, request) || !exportsOnlyRouter(source)) return null;
+  const requests = requestsOf(source);
+  if (requests.some((text) => text.includes('\\'))) return null;
+  if (!requests.every((request) => allowedRequest(request, entry))) return null;
+  if ([...source.matchAll(TARGET_HANDLES)].length !== 0 || moduleReferences(source) !== 1) return null;
+  if (NAMES_ARGUMENTS.test(source)) return null;
+  if (RUNTIME_HANDLES.test(source)) return null;
+  const routerTokens = [...source.matchAll(/(?<![\w$.])router(?![\w$])/g)].length;
+  if (routerTokens !== 3) return null;
+  if (!ROUTER_DECLARATION.test(source)) return null;
+  const binding = new RegExp(`\\bconst\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*require\\(\\s*(['"])${escapeRegExp(request)}\\2\\s*\\)\\s*;`).exec(source);
+  if (!binding) return null;
+  const name = binding[1];
+  if ([...source.matchAll(new RegExp(`(?<![\\w$.])${escapeRegExp(name)}(?![\\w$])`, 'g'))].length !== 2) return null;
+  const uses = [...source.matchAll(ROUTER_USE)];
+  if (uses.length !== 1) return null;
+  const args = callArgs(source, uses[0].index + uses[0][0].length - 1);
+  if (args[args.length - 1] !== name) return null;
+  return { kind: 'handoff', request, name, index: uses[0].index };
+}
+
+// The file the request of a hand-off from `file` names, or undefined.
+function handoffTarget(file, request) {
+  const base = path.resolve(path.dirname(file), request);
+  return [base, `${base}.js`].find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
 }
 
 // The mounted files plus the router module each hand-off names, read at the
@@ -543,10 +642,10 @@ function expandFiles(files) {
   const expanded = [...files];
   const refusals = [];
   for (const file of files) {
-    const delegation = delegationOf(readStripped(fs, file), relOf(file));
+    const source = readStripped(fs, file);
+    const delegation = delegationOf(source, relOf(file)) || handoffOf(source, relOf(file));
     if (!delegation) continue;
-    const base = path.resolve(path.dirname(file), delegation.request);
-    const target = [base, `${base}.js`].find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+    const target = handoffTarget(file, delegation.request);
     if (!target) {
       refusals.push(`${relOf(file)}: ${delegation.request} does not resolve`);
       continue;
@@ -649,7 +748,7 @@ function recordFactory(factory, options, expressModule, label) {
 // The shared stub record behind recordFactory and recordRouteFile: `run`
 // builds the router and gives back what should be it (a factory's return, a
 // route file's module.exports); `subject` and `gives` word the refusals.
-function recordRouter(run, expressModule, label, subject, gives) {
+function recordRouter(run, expressModule, label, subject, gives, handoff = null) {
   const operations = [];
   const refusals = [];
   let stub = null;
@@ -667,7 +766,12 @@ function recordRouter(run, expressModule, label, subject, gives) {
       if (prop === 'use') {
         return (...args) => {
           if (typeof args[0] !== 'function') refusals.push(`${label}: router.use( with a path`);
-          for (const arg of args) {
+          for (const [i, arg] of args.entries()) {
+            if (handoff && arg === handoff.sentinel) {
+              handoff.uses += 1;
+              if (i !== args.length - 1) refusals.push(`${label}: router.use( takes the sub-router other than as its last argument`);
+              continue;
+            }
             if (arg === stub || (typeof arg === 'function' && Array.isArray(arg.stack))) refusals.push(`${label}: router.use( of a router`);
             if (typeof arg === 'function' && typeof arg.handle === 'function' && typeof arg.set === 'function') refusals.push(`${label}: router.use( of an express app`);
           }
@@ -678,6 +782,15 @@ function recordRouter(run, expressModule, label, subject, gives) {
       return undefined;
     },
   };
+  // A hand-off file may not write the router: a swapped router.use could
+  // register on the sub-router it is handed, out of the record's sight.
+  if (handoff) {
+    const refuseWrite = (what) => (_target, prop) => {
+      refusals.push(`${label}: ${what} router.${String(prop)}, a shape the record does not read`);
+      return true;
+    };
+    Object.assign(handler, { set: refuseWrite('sets'), defineProperty: refuseWrite('defines'), deleteProperty: refuseWrite('deletes') });
+  }
   const realRouter = expressModule.Router;
   expressModule.Router = () => {
     built += 1;
@@ -694,6 +807,7 @@ function recordRouter(run, expressModule, label, subject, gives) {
   }
   if (built !== 1) refusals.push(`${label}: ${subject} built ${built} routers through express.Router(); expected exactly 1`);
   else if (returned !== stub) refusals.push(`${label}: ${subject} did not ${gives} the router it built`);
+  if (handoff && handoff.uses !== 1) refusals.push(`${label}: ${subject} hands its routes to the sub-router ${handoff.uses} times; expected exactly 1`);
   return { operations, refusals };
 }
 
@@ -702,12 +816,12 @@ function recordRouter(run, expressModule, label, subject, gives) {
 // test-support gate is held open while it loads (NODE_ENV not production,
 // ENABLE_TEST_SUPPORT_ROUTES=true), so the routes registered behind it are
 // recorded as the text reads them; both are restored after.
-function recordRouteFile(load, expressModule, label) {
+function recordRouteFile(load, expressModule, label, handoff = null) {
   const saved = { NODE_ENV: process.env.NODE_ENV, ENABLE_TEST_SUPPORT_ROUTES: process.env.ENABLE_TEST_SUPPORT_ROUTES };
   process.env.NODE_ENV = 'test';
   process.env.ENABLE_TEST_SUPPORT_ROUTES = 'true';
   try {
-    return recordRouter(load, expressModule, label, 'the route file', 'export');
+    return recordRouter(load, expressModule, label, 'the route file', 'export', handoff);
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
@@ -757,6 +871,64 @@ function routeFileRecord(file) {
     }
   }
   return routeRecords.get(file);
+}
+
+// A stand-in for the router module a KNOWN_HANDOFFS file requires: the record
+// lets it be passed only as the last argument of router.use(, and every other
+// touch of it (a property or descriptor read, a write, a call, `in`, a
+// prototype or extensibility read or change) is refused, since it could register on the real sub-router out of sight.
+function handoffSentinel(label) {
+  const touched = [];
+  const refuse = (what) => { touched.push(`${label}: ${what} the sub-router, a shape the record does not read`); };
+  const sentinel = new Proxy(function subRouter() {}, {
+    get(_t, prop) { refuse(`reads ${String(prop)} of`); return undefined; },
+    set(_t, prop) { refuse(`sets ${String(prop)} on`); return true; },
+    apply() { refuse('calls'); return undefined; },
+    construct() { refuse('constructs'); return {}; },
+    has() { refuse('tests a key of'); return false; },
+    defineProperty() { refuse('defines a property on'); return true; },
+    deleteProperty() { refuse('deletes a property of'); return true; },
+    getPrototypeOf() { refuse('reads the prototype of'); return Function.prototype; },
+    ownKeys() { refuse('lists the keys of'); return ['prototype']; },
+    getOwnPropertyDescriptor(t, prop) { refuse(`reads the descriptor of ${String(prop)} of`); return Reflect.getOwnPropertyDescriptor(t, prop); },
+    isExtensible(t) { refuse('tests the extensibility of'); return Reflect.isExtensible(t); },
+    preventExtensions() { refuse('prevents extensions of'); return false; },
+    setPrototypeOf() { refuse('sets the prototype of'); return false; },
+  });
+  return { sentinel, touched, uses: 0 };
+}
+
+// The record of a KNOWN_HANDOFFS file: loaded like a plain route file, with
+// its sub-router module's require.cache entry swapped for a handoffSentinel,
+// so its own registrations are recorded and its hand-off counted. Both cache
+// entries are put back as they were after, throw or not.
+function recordHandoff(load, expressModule, label, handoff) {
+  const record = recordRouteFile(load, expressModule, label, handoff);
+  return { operations: record.operations, refusals: [...record.refusals, ...handoff.touched] };
+}
+function handoffRecord(file) {
+  const label = relOf(file);
+  const { request } = KNOWN_HANDOFFS.get(label);
+  const target = handoffTarget(file, request);
+  if (!target) return { operations: [], refusals: [`${label}: ${request} does not resolve`] };
+  const prior = { file: require.cache[file], target: require.cache[target] };
+  const handoff = handoffSentinel(label);
+  const stand = new (require('node:module'))(target, null);
+  stand.filename = target;
+  stand.loaded = true;
+  stand.exports = handoff.sentinel;
+  try {
+    require.cache[target] = stand;
+    return recordHandoff(() => {
+      delete require.cache[file];
+      return require(file);
+    }, createRequire(file)('express'), label, handoff);
+  } finally {
+    delete require.cache[file];
+    delete require.cache[target];
+    if (prior.file) require.cache[file] = prior.file;
+    if (prior.target) require.cache[target] = prior.target;
+  }
 }
 
 // The registrations, as `METHOD /prefix/path`, the factory mounts at `prefix`
@@ -894,6 +1066,11 @@ test('RNF006: every operation registered under a covered mount is documented', (
       misses.push(`KNOWN_SUBROUTERS names ${rel}, which app.js does not mount or which no longer hands its routes to ${entry.request} in a modeled shape`);
     }
   }
+  for (const [rel, { request }] of KNOWN_HANDOFFS) {
+    if (!mountedFiles.has(rel) || !handoffOf(readStripped(fs, path.join(backendRoot, rel)), rel)) {
+      misses.push(`KNOWN_HANDOFFS names ${rel}, which app.js does not mount or which no longer hands its routes to ${request} in the modeled shape`);
+    }
+  }
   const factoryMounts = collectFactoryMounts(appSource);
   for (const prefix of covered) {
     const files = mounts.get(prefix) || new Set();
@@ -904,7 +1081,7 @@ test('RNF006: every operation registered under a covered mount is documented', (
     }
     for (const file of files) {
       const s = readStripped(fs, file);
-      misses.push(...routeFileRefusals(s, path.relative(backendRoot, file), delegationOf(s, relOf(file))));
+      misses.push(...routeFileRefusals(s, path.relative(backendRoot, file), delegationOf(s, relOf(file)) || handoffOf(s, relOf(file))));
     }
     const expanded = expandFiles(files);
     misses.push(...expanded.refusals);
@@ -916,7 +1093,7 @@ test('RNF006: every operation registered under a covered mount is documented', (
     for (const file of expanded.files) {
       const source = readStripped(fs, file);
       if (delegationOf(source, relOf(file))) continue;
-      const record = routeFileRecord(file);
+      const record = KNOWN_HANDOFFS.has(relOf(file)) ? handoffRecord(file) : routeFileRecord(file);
       misses.push(...routeRecordRefusals(source, relOf(file), record));
       for (const op of record.operations) operations.add(`${op.method} ${joinPath(prefix, op.path)}`);
     }
@@ -1214,4 +1391,93 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
       .map((text) => [`a second module.exports assignment, read by exportsOnlyRouter: ${text.slice(-40)}`]),
   ].map(([name]) => name);
   assert.deepStrictEqual(unrefused, [], `These shapes pass unrefused: ${unrefused.join(', ')}`);
+  // A route file handing its routes to one router module with code of its
+  // own around the hand-off, written as intakeWizard.routes.js is.
+  const INTAKE = 'src/interface/routes/intakeWizard.routes.js';
+  const handoffUse = 'router.use(authenticate, requirePermission(\'createSample\'), guard, intakeWizardRouter);';
+  const handoffText = [
+    "const express = require('express');",
+    "const intakeWizardRouter = require('../../../src/routes/intakeWizard');",
+    "const { authenticate } = require('../../infrastructure/middleware/auth');",
+    'const router = express.Router();',
+    'function guard(req, res, next) {',
+    "  audit({ req, module: 'Cadastro' });",
+    '  return next();',
+    '}',
+    handoffUse,
+    'module.exports = router;',
+  ].join('\n');
+  const handedOff = (text, key = INTAKE) => routeFileRefusals(text, 'intake.routes.js', handoffOf(text, key));
+  const handoffShape = (text) => {
+    const stand = { Router: () => ({ stack: [], get() { return this; }, use() { return this; } }) };
+    const handoff = handoffSentinel('intake.routes.js');
+    const load = () => {
+      const module = { exports: {} };
+      new Function('require', 'module', 'requirePermission', 'audit', 'handler', 'wrap', text)(
+        (id) => (id === 'express' ? stand : id === '../../../src/routes/intakeWizard' ? handoff.sentinel : { authenticate: () => {} }),
+        module, () => () => {}, () => {}, () => {}, (r) => () => r
+      );
+      return module.exports;
+    };
+    return routeRecordRefusals(text, 'intake.routes.js', recordHandoff(load, stand, 'intake.routes.js', handoff));
+  };
+  const intakeRoutes = path.join(backendRoot, 'src', 'interface', 'routes', 'intakeWizard.routes.js');
+  handoffRecord(intakeRoutes);
+  assert.ok(Array.isArray(require(intakeRoutes).stack), 'intakeWizard.routes.js required after its record is not an express router');
+  assert.ok(Array.isArray(require(handoffTarget(intakeRoutes, KNOWN_HANDOFFS.get(INTAKE).request)).stack), 'its sub-router required after the record is not an express router');
+  assert.notStrictEqual(handoffOf(handoffText, INTAKE), null);
+  const intakeText = readStripped(fs, intakeRoutes);
+  assert.notStrictEqual(handoffOf(intakeText, INTAKE), null, 'intakeWizard.routes.js no longer reads as a hand-off');
+  assert.deepStrictEqual(routeFileRefusals(intakeText, INTAKE, handoffOf(intakeText, INTAKE)), []);
+  assert.deepStrictEqual(handedOff(handoffText), []);
+  assert.deepStrictEqual(handoffShape(handoffText), []);
+  assert.strictEqual(moduleReferences("audit({ req, module: 'x' }); module.exports = router;"), 1);
+  const inHandoff = (text) => handoffText.replace(handoffUse, text);
+  const handoffTextShapes = {
+    'a hand-off under a key not in the map': [handoffText, 'src/interface/routes/other.routes.js'],
+    'an aliased sub-router': [inHandoff(`const alias = intakeWizardRouter;\n${handoffUse}`)],
+    'the sub-router not the last argument': [inHandoff('router.use(intakeWizardRouter, authenticate);')],
+    'a second router.use': [inHandoff(`${handoffUse}\nrouter.use(authenticate);`)],
+    'a second use of the sub-router': [inHandoff(`${handoffUse}\n${handoffUse}`)],
+    'a registration on the sub-router': [inHandoff(`${handoffUse}\nintakeWizardRouter.get(P, handler);`)],
+    'a require of the sub-router by another spelling': [inHandoff(`${handoffUse}\nconst d2 = require('../../routes/intakeWizard.js');\nd2.get(P, handler);`)],
+    'a let binding of the sub-router': [handoffText.replace('const intakeWizardRouter', 'let intakeWizardRouter')],
+    'module named outside an object key': [inHandoff(`${handoffUse}\nconst m = flag ? module : null;`)],
+    'module as a shorthand key': [inHandoff(`${handoffUse}\nconst o = { module };`)],
+    'a wrapper reassigning router.use': [inHandoff(`const realUse = router.use;\nrouter.use = function (...a) { const P = '/x'; a[a.length - 1].get(P, handler); return realUse.apply(this, a); };\n${handoffUse}`)],
+    'a router.stack read': [inHandoff(`${handoffUse}\nconst s = router.stack;`)],
+    'a fourth router token': [inHandoff(`${handoffUse}\nconst r2 = router;`)],
+    'a property set on the router': [inHandoff(`${handoffUse}\nrouter.extra = 1;`)],
+    'the sub-router required through arguments': [inHandoff(`${handoffUse}\nconst P = '/x';\nconst d2 = arguments[1]('../../../src/routes/intakeWizard');\nd2.get(P, handler);`)],
+    'a builtin module through process.getBuiltinModule': [inHandoff(`${handoffUse}\nconst M = process.getBuiltinModule('module');\nconst c = M._cache;`)],
+    'the global object': [inHandoff(`${handoffUse}\nconst g = globalThis.x;`)],
+    'a bare request not in the entry': [inHandoff(`${handoffUse}\nconst f = require('fs');`)],
+    'the module builtin by its node: name': [inHandoff(`${handoffUse}\nconst M = require('node:module');`)],
+    'a backslash-escaped relative request': [inHandoff(`${handoffUse}\nconst P = '/x';\nconst d2 = require('../../../src/routes/intake\\u0057izard');\nd2.get(P, handler);`)],
+    ...Object.fromEntries(Object.entries(handleLines).map(([name, line]) => [`${name} in a hand-off file`, [inHandoff(`${handoffUse}\nconst P = '/x';\n${line}`)]])),
+  };
+  const handoffRecordShapes = {
+    'a registration on the router with a variable path': inHandoff(`${handoffUse}\nconst P = '/x';\nrouter.get(P, handler);`),
+    'the sub-router not the last argument': inHandoff('router.use(intakeWizardRouter, authenticate);'),
+    'the sub-router handed off twice': inHandoff(`${handoffUse}\nrouter.use(intakeWizardRouter);`),
+    'the sub-router never handed off': inHandoff('router.use(authenticate);'),
+    'the sub-router wrapped': inHandoff('router.use(authenticate, wrap(intakeWizardRouter));'),
+    'a registration on the sub-router': inHandoff(`${handoffUse}\nconst P = '/x';\nintakeWizardRouter.get(P, handler);`),
+    'a property read of the sub-router': inHandoff(`${handoffUse}\nconst s = intakeWizardRouter.stack;`),
+    'a property set on the sub-router': inHandoff(`${handoffUse}\nintakeWizardRouter.extra = 1;`),
+    'a wrapper reassigning router.use': inHandoff(`const realUse = router.use;\nrouter.use = function (...a) { const P = '/x'; a[a.length - 1].get(P, handler); return realUse.apply(this, a); };\n${handoffUse}`),
+    'a property set on the router': inHandoff(`${handoffUse}\nrouter.extra = 1;`),
+    'a descriptor read of the sub-router': inHandoff(`${handoffUse}\nconst d = Object.getOwnPropertyDescriptor(intakeWizardRouter, 'stack');`),
+    'an extensibility test of the sub-router': inHandoff(`${handoffUse}\nconst e = Object.isExtensible(intakeWizardRouter);`),
+    'the sub-router exported': inHandoff(`${handoffUse}\nmodule.exports = intakeWizardRouter;`).replace(/\nmodule\.exports = router;$/, ''),
+  };
+  const unhanded = [
+    ...Object.entries(handoffTextShapes).filter(([, [text, key]]) => handedOff(text, key).length === 0),
+    ...Object.entries(handoffRecordShapes).filter(([, text]) => handoffShape(text).length === 0).map(([name]) => [`${name}, recorded`]),
+    ...['module named outside an object key in a target', 'module as a shorthand key in a target']
+      .map((name, i) => [name, target.replace(' module.exports', [' const m = flag ? module : null;', ' const o = { module };'][i] + ' module.exports')])
+      .filter(([, text]) => delegateRefusals(text, 'sub.js').length === 0),
+  ].map(([name]) => name);
+  assert.deepStrictEqual(delegateRefusals(target.replace(' module.exports', " audit({ req, module: 'x' }); module.exports"), 'sub.js'), []);
+  assert.deepStrictEqual(unhanded, [], `These hand-off shapes pass unrefused: ${unhanded.join(', ')}`);
 });

@@ -90,7 +90,8 @@
     "/api/biobanks",
     "/api/identifier-namespaces",
     "/api/interoperability-mapping-releases",
-    "/api/fhir-profiles"
+    "/api/fhir-profiles",
+    "/api/intake-wizard"
   ],
   "tags": [
     {
@@ -428,6 +429,10 @@
     {
       "name": "fhir-profiles",
       "description": "/api/fhir-profiles: the FHIR profiles (canonical URL, version, identifier systems) registered under a mapping release."
+    },
+    {
+      "name": "intake-wizard",
+      "description": "/api/intake-wizard: the integrated intake (participant match or creation, consent decision, quality grade, automatic storage position and the sample) and its participant lookup."
     }
   ],
   "paths": {
@@ -53728,6 +53733,405 @@
           }
         }
       }
+    },
+    "/api/intake-wizard": {
+      "post": {
+        "tags": [
+          "intake-wizard"
+        ],
+        "summary": "Register a sample and its participant through the intake wizard",
+        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope, then intakeGovernanceResponseGuard, which rebuilds a body whose success is true as the 200 below (its governance status read back from the stored sample) and passes any other body through unchanged. It matches the participant or creates one (a match outside the caller's organizations is linked, never updated), decides the consent, grades the quality, takes the next free storage position automatically and stores the sample, released only when the consent is active and the quality allows it, else quarantined. The 400 is an empty or non-object body, an organization pick the create rule refuses, or a matched participant with no identifier to check its consent against. The 409 is no storage box with free capacity and a free position. The 422 is a legacy alias of a canonical field, or a failed canonical.v1.intake check, with fields and details; or boxes with room, none of them in a ready freezer with an operational sensor (success false, error and details). The 403 also comes from a caller with no organization, and the 404 is a picked organization that does not exist. The 503 comes from authenticate and from the handler. Any other failure answers the statusCode it carries, else 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeWizardInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The sample is stored, released or quarantined as message says.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeWizardResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An empty or non-object body (error only, no success key), an organization pick the create rule refuses, or a matched participant with no identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "No storage box has free capacity and a free position.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "success",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A non-canonical or invalid field, or no box with room sits in a ready freezer with an operational sensor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/IntakeWizardNonCanonical"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "success": {
+                          "type": "boolean",
+                          "enum": [
+                            false
+                          ]
+                        },
+                        "error": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      },
+                      "required": [
+                        "success",
+                        "error"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/intake-wizard/intake-wizard": {
+      "post": {
+        "tags": [
+          "intake-wizard"
+        ],
+        "summary": "Register a sample through the intake wizard (alias)",
+        "description": "An alias of POST /api/intake-wizard: the same handler behind the same gates (authenticate, requirePermission('createSample'), requireOrganizationScope, then intakeGovernanceResponseGuard), with the same body, statuses and responses.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeWizardInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The sample is stored, released or quarantined as message says.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeWizardResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An empty or non-object body (error only, no success key), an organization pick the create rule refuses, or a matched participant with no identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "No storage box has free capacity and a free position.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "details": {}
+                  },
+                  "required": [
+                    "success",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A non-canonical or invalid field, or no box with room sits in a ready freezer with an operational sensor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/IntakeWizardNonCanonical"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "success": {
+                          "type": "boolean",
+                          "enum": [
+                            false
+                          ]
+                        },
+                        "error": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      },
+                      "required": [
+                        "success",
+                        "error"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/intake-wizard/patient-match": {
+      "get": {
+        "tags": [
+          "intake-wizard"
+        ],
+        "summary": "Look up the participant an intake would match",
+        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope (intakeGovernanceResponseGuard rewrites only a POST). It looks the participant up by patientID (or patientId), else by patientName (or name) with birthDate, the name compared without accents, case or repeated spaces, on the day of birth. A participant outside the caller's organizations answers as no match (matched false, patient null), so the lookup reveals neither its fields nor its existence. The 400 is neither a patientID nor both a patientName and a readable birthDate. The 503 comes from authenticate and from the handler, and a lookup failure is 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patientID",
+            "in": "query",
+            "required": false,
+            "description": "The participant id; tried first.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "patientId",
+            "in": "query",
+            "required": false,
+            "description": "The same as patientID, read when patientID is absent.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "patientName",
+            "in": "query",
+            "required": false,
+            "description": "The civil name; with birthDate, used when no participant id matches.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "description": "The same as patientName, read when patientName is absent.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "birthDate",
+            "in": "query",
+            "required": false,
+            "description": "The date of birth; only its day is compared.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether a participant in the caller's scope matches, and if so who.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "matched": {
+                      "type": "boolean"
+                    },
+                    "patient": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "patientID": {
+                          "type": "string"
+                        },
+                        "patientName": {
+                          "type": "string"
+                        },
+                        "birthDate": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Empty when nothing matches."
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "matched",
+                    "patient",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -57589,6 +57993,172 @@
         },
         "required": [
           "_id"
+        ]
+      },
+      "IntakeWizardInput": {
+        "type": "object",
+        "minProperties": 1,
+        "description": "A non-empty object checked against canonical.v1.intake. A legacy alias (patientID, patientId, pseudoId or mongoPatientId in participant; sampleID, sampleId, specimenID, mongoSampleId, parentSampleId, parentSpecimenId, registerDate, registrationDate, withdrawalDate, receivedTime, currentStatus, lifecycleStatus, tcle_id, tcle_template_id, selected_tcle, merkle_root or legacy_compat in specimen; tcle_id, tcle_template_id or selected_tcle in consent; clinical_data, pharmacology_data or biomarkers_values in clinical) answers 422.",
+        "properties": {
+          "participant": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The participant to match by its identity, or to create."
+          },
+          "specimen": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The specimen; collectionSite (ELM-0128) is kept when given, else the resolved organization."
+          },
+          "consent": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "clinical": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "organizationId": {
+            "type": "string",
+            "description": "The organization the intake is stamped with, picked by the rule POST /api/samples uses: a single-organization caller's own, a multi-organization caller's pick among its own, or a global caller's pick of any existing organization or none."
+          }
+        },
+        "additionalProperties": true
+      },
+      "IntakeWizardResult": {
+        "type": "object",
+        "description": "The body intakeGovernanceResponseGuard rebuilds from the handler's success body; nothing else of it is passed on.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Says whether the sample is released or stays blocked, and why."
+          },
+          "qualidade": {
+            "type": "string",
+            "description": "Grade <final grade>, or Indeterminada."
+          },
+          "qualityAssessment": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "patientMatch": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "matched": {
+                "type": "boolean"
+              },
+              "created": {
+                "type": "boolean"
+              },
+              "matchType": {
+                "type": "string",
+                "nullable": true
+              },
+              "patientID": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "consent": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string"
+              },
+              "consentId": {
+                "type": "string",
+                "nullable": true
+              },
+              "patientId": {
+                "type": "string",
+                "nullable": true
+              },
+              "reason": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "storageLocation": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true,
+            "description": "The automatically assigned position: equipmentID, boxId, boxName, position and readable."
+          },
+          "label": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "sampleId": {
+                "type": "string"
+              },
+              "symbologyAssetsUrl": {
+                "type": "string",
+                "nullable": true
+              },
+              "printJobUrl": {
+                "type": "string"
+              }
+            }
+          },
+          "sample": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "A summary of the stored sample (_id, specimenId, barcode, status, currentStatus, specimenStatus, quarantineReason, final_grade, rcs_score, sprec and its storage location), its governance status read back from the stored sample."
+          }
+        },
+        "required": [
+          "success",
+          "message",
+          "qualidade",
+          "qualityAssessment",
+          "patientMatch",
+          "consent",
+          "storageLocation",
+          "label",
+          "sample"
+        ]
+      },
+      "IntakeWizardNonCanonical": {
+        "type": "object",
+        "description": "A non-canonical or invalid field; no success key.",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "NON_CANONICAL_FIELD"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "error",
+          "fields",
+          "details"
         ]
       }
     },
