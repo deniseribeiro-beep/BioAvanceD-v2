@@ -16,7 +16,9 @@ module.exports = defineConfig({
     isolate: true,
     pool: 'forks',
     coverage: {
-      provider: 'v8',
+      // The stock v8 provider misreads files loaded through `require` (#1337).
+      provider: 'custom',
+      customProviderModule: './tests/support/coverage-native-require.mjs',
       reportOnFailure: true,
       reporter: ['text', 'html', 'json', 'json-summary', 'lcov'],
       reportsDirectory: './coverage',
