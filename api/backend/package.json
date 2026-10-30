@@ -53,6 +53,7 @@
     "migrate:participant-record-numbers": "node src/scripts/migrateParticipantRecordNumbers.js",
     "migrate:participant-birth-dates": "node src/scripts/migrateParticipantBirthDates.js",
     "encryption:rewrite": "node src/scripts/rewriteEncryptedFields.js",
+    "files:migrate-legacy": "node src/scripts/migrateLegacyFileBinaries.js",
     "iot:simulate": "node scripts/iot-simulator.js",
     "seed:essential:list": "node scripts/seed-essential-reference-data.js --list",
     "seed:essential:dry-run": "node scripts/seed-essential-reference-data.js --dry-run",
