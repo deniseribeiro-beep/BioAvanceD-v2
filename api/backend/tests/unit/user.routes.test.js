@@ -113,9 +113,9 @@ describe('user.routes authorization gates (issue #921)', () => {
     // the gate factory.
     const CASES = [
       { label: 'POST /register (createUser) :40', method: 'post', path: '/register', expectedArgs: ['createUser'] },
-      { label: 'GET / (createUser) :124', method: 'get', path: '/', expectedArgs: ['createUser'] },
-      { label: 'PUT /:id (createUser) :215', method: 'put', path: '/u1', expectedArgs: ['createUser'] },
-      { label: 'DELETE /:id (createUser) :526', method: 'delete', path: '/u1', expectedArgs: ['createUser'] },
+      { label: 'GET / (readUser) :124', method: 'get', path: '/', expectedArgs: ['readUser'] },
+      { label: 'PUT /:id (updateUser) :215', method: 'put', path: '/u1', expectedArgs: ['updateUser'] },
+      { label: 'DELETE /:id (deleteUser) :526', method: 'delete', path: '/u1', expectedArgs: ['deleteUser'] },
       // :604 -- note this is a Patient code (createPatient) on a User
       // router, pinned as-is; whether it is the *right* code is #888's
       // question, not this slice's.
@@ -140,10 +140,12 @@ describe('user.routes authorization gates (issue #921)', () => {
       { label: 'POST /:id/revoke-sessions (revokeSessions, UPDATE)', method: 'post', path: '/u1/revoke-sessions', expectedArgs: ['revokeSessions', 'UPDATE'] },
       // #1241: GET /:id had authenticate only, so any account could read any
       // other user's record. It now carries the list's own gate.
-      { label: 'GET /:id (createUser)', method: 'get', path: '/u1', expectedArgs: ['createUser'] },
+      // #1229: the account verbs split createUser into four codes; each
+      // user-account route takes the one its verb needs.
+      { label: 'GET /:id (readUser)', method: 'get', path: '/u1', expectedArgs: ['readUser'] },
       // #1241: likewise answered "does this id exist, and is it active" for
       // any id to any account. Its one caller is the System Management screen.
-      { label: 'GET /:id/validate-status (createUser)', method: 'get', path: '/u1/validate-status', expectedArgs: ['createUser'] },
+      { label: 'GET /:id/validate-status (readUser)', method: 'get', path: '/u1/validate-status', expectedArgs: ['readUser'] },
       // #1013: the administrator's password set, off PUT /:id.
       { label: 'POST /:id/set-password (setUserPassword, UPDATE)', method: 'post', path: '/u1/set-password', expectedArgs: ['setUserPassword', 'UPDATE'] },
     ];

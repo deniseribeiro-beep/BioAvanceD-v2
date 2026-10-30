@@ -14,11 +14,11 @@ The administration screens come first. The shared staff screens follow with a sh
 
 | Screen (pt-BR label) | Route | What you can do here | Backend gate |
 |---|---|---|---|
-| Usuários | `/system-management?tab=users` | List, edit and delete users; reset or disable a user's two-factor authentication, force a password reset, revoke a user's sessions. `/users` and `/access` redirect here; the tab is the landing screen after sign-in. | `requirePermission('createUser')`, `requirePermission('resetMFA')`, `requirePermission('disableMFA')`, `requirePermission('forcePasswordReset')`, `requirePermission('revokeSessions')` (`user.routes.js`) |
+| Usuários | `/system-management?tab=users` | List, edit and delete users; reset or disable a user's two-factor authentication, force a password reset, revoke a user's sessions. `/users` and `/access` redirect here; the tab is the landing screen after sign-in. | `requirePermission('readUser')`, `requirePermission('updateUser')`, `requirePermission('deleteUser')`, `requirePermission('resetMFA')`, `requirePermission('disableMFA')`, `requirePermission('forcePasswordReset')`, `requirePermission('revokeSessions')` (`user.routes.js`) |
 | Organizações | `/system-management?tab=organizations` | List organizations; create, edit and delete them. | authenticated only for the list; `requirePermission('manageOrganizations')` (`organization.routes.js`) |
 | Coleções | `/system-management?tab=collections` | List collections; create, edit and delete them; record governance approvals, approval status changes and events. | authenticated only for reads; `requireRole(3, 4)` (`master-data.routes.js`, mounted at `/api/collections` in `api/backend/app.js`; `collection-governance.routes.js`) |
 | Segurança | `/system-management?tab=security` | Read and change the security configuration, roll it back to an earlier release, read role permissions and the consent queue, export security logs. `/security` redirects here. | `requireRole(4)` (`security.routes.js`) |
-| Novo Usuário / Editar Usuário | `/users/new` | Create a user (which also assigns a role), edit a user (a role change also needs assignRole, checked in the handler), set a user's password. | `requirePermission('createUser')`, `requirePermission('assignRole')`, `requirePermission('setUserPassword')` (`user.routes.js`) |
+| Novo Usuário / Editar Usuário | `/users/new` | Create a user (which also assigns a role), edit a user (a role change also needs assignRole, checked in the handler), set a user's password. | `requirePermission('createUser')`, `requirePermission('updateUser')`, `requirePermission('assignRole')`, `requirePermission('setUserPassword')` (`user.routes.js`) |
 | Usuário Criado com Sucesso | `/users/new/success` | Confirmation after creating a user; makes no API call. | none (no API call) |
 | Solicitações de acesso e distribuição | `/access-requests` | Create access requests, evaluate their compatibility, record the decision, distribute, revoke, and check access. | `requirePermission('manageAccessRequests')` (`api/backend/src/routes/accessRequest.js`); `requireRole(3, 4)` for purpose codes (`api/backend/src/routes/eConsent.js`) |
 | Gerenciamento de Backup | `/backup` | Run a backup, list backups, restore one, read and change the backup policy. The procedure is in `docs/operations/backup-restore-runbook.md`. | `requirePermission('manageBackup')` (`backup.routes.js`); `requireRole(4)` (`backupPolicy.routes.js`) |
@@ -63,7 +63,10 @@ The administration screens come first. The shared staff screens follow with a sh
 
 Exactly the Administrador row of `LEGACY_ROLES_SEED`, with each code's `displayName` and `allowedActions` from `PERMISSION_CATALOG`:
 
-- `createUser`: Criar usuário; CREATE, READ, UPDATE, DELETE
+- `createUser`: Criar usuário; CREATE
+- `readUser`: Visualizar usuários; READ
+- `updateUser`: Editar usuário; UPDATE
+- `deleteUser`: Excluir usuário; DELETE
 - `assignRole`: Atribuir papel; CREATE, UPDATE
 - `createSample`: Criar amostra; CREATE, READ
 - `editSample`: Editar amostra; UPDATE

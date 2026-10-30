@@ -51,7 +51,6 @@ The screens the Técnico also opens are summarised; where the flow is the same, 
 
 Exactly the Coordenador row of `LEGACY_ROLES_SEED`, with each code's `displayName` and `allowedActions` from `PERMISSION_CATALOG`:
 
-- `createUser`: Criar usuário; CREATE, READ, UPDATE, DELETE
 - `createSample`: Criar amostra; CREATE, READ
 - `editSample`: Editar amostra; UPDATE
 - `createPatient`: Criar paciente; CREATE, READ, UPDATE, DELETE
@@ -83,11 +82,10 @@ Exactly the Coordenador row of `LEGACY_ROLES_SEED`, with each code's `displayNam
 
 A Coordenador gets no system management (users, organizations, collections, security), user creation or editing, backup, parameter, data dictionary or access request screen: those routes admit the Administrador only in `frontend/src/App.tsx` and `ROUTE_ACCESS`.
 
-On the screens it does reach, the backend refuses every action that needs a code or level outside the list above: deleting a sample (deleteSample), re-identifying a participant (reidentifyParticipant, `patient.routes.js`), managing access requests (manageAccessRequests) and the user-account actions that need assignRole, resetMFA, disableMFA, forcePasswordReset, revokeSessions or setUserPassword.
+On the screens it does reach, the backend refuses every action that needs a code or level outside the list above: deleting a sample (deleteSample), re-identifying a participant (reidentifyParticipant, `patient.routes.js`), managing access requests (manageAccessRequests) and every user-account action: listing, reading, creating, editing and deleting a user (createUser, readUser, updateUser, deleteUser, which RF003 gives the Administrador only, #1229), and those that need assignRole, resetMFA, disableMFA, forcePasswordReset, revokeSessions or setUserPassword.
 
 Some codes in the seed have no screen that calls the routes they gate, so the Coordenador can exercise them only through the API:
 
-- createUser gates the user routes of `user.routes.js`; the only screens that call them (`SystemManagementPage`, `NewUserPage`) are Administrador-only.
 - requestConsent gates `POST /api/e-consent/generate-link` (`api/backend/src/routes/eConsent.js`); no frontend file calls it.
 - viewStorageTopology and manageCustody gate the routes of `physical-chain.routes.js`; no frontend file calls `/api/physical-chain`.
 - The Arquivos de Análise screen lists and downloads results but offers no create, edit or delete of a result record, although the seed holds createResult, editResult and deleteResult (`result.routes.js`).

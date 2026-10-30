@@ -10609,7 +10609,7 @@
           "users"
         ],
         "summary": "List users",
-        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. An organization-scoped caller lists the users of its own organizations only. Each user goes through UserModel.stripSecrets.",
+        "description": "Gates: authenticate, requirePermission('readUser'), requireOrganizationScope. The 503 comes from authenticate. An organization-scoped caller lists the users of its own organizations only. Each user goes through UserModel.stripSecrets.",
         "security": [
           {
             "bearerAuth": []
@@ -10938,7 +10938,7 @@
           "users"
         ],
         "summary": "Get a user",
-        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The user goes through UserModel.stripSecrets.",
+        "description": "Gates: authenticate, requirePermission('readUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The user goes through UserModel.stripSecrets.",
         "security": [
           {
             "bearerAuth": []
@@ -11000,7 +11000,7 @@
           "users"
         ],
         "summary": "Update a user",
-        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The 403 is also a move of the user to an organization outside the caller's, a level above the caller's own, and a role change by a caller without assignRole. The 422 is a non-empty password in the body (the password is set by POST /api/users/{id}/set-password) or a validation failure. Every other failure, an unknown organizationId included, answers 400. The MFA fields are dropped from the body.",
+        "description": "Gates: authenticate, requirePermission('updateUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The 403 is also a move of the user to an organization outside the caller's, a level above the caller's own, and a role change by a caller without assignRole. The 422 is a non-empty password in the body (the password is set by POST /api/users/{id}/set-password) or a validation failure. Every other failure, an unknown organizationId included, answers 400. The MFA fields are dropped from the body.",
         "security": [
           {
             "bearerAuth": []
@@ -11132,7 +11132,7 @@
           "users"
         ],
         "summary": "Deactivate a user",
-        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. A deactivation: the account is set inactive and its sessions are revoked; the document is kept. The 403 is also a target of a higher level than the caller's.",
+        "description": "Gates: authenticate, requirePermission('deleteUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. A deactivation: the account is set inactive and its sessions are revoked; the document is kept. The 403 is also a target of a higher level than the caller's.",
         "security": [
           {
             "bearerAuth": []
@@ -11195,7 +11195,7 @@
           "users"
         ],
         "summary": "Read a user's account status",
-        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403.",
+        "description": "Gates: authenticate, requirePermission('readUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403.",
         "security": [
           {
             "bearerAuth": []
@@ -11265,7 +11265,7 @@
           "users"
         ],
         "summary": "List a user's organizations",
-        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403.",
+        "description": "Gates: authenticate, requirePermission('readUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403.",
         "security": [
           {
             "bearerAuth": []
@@ -11327,7 +11327,7 @@
           "users"
         ],
         "summary": "Grant a user an organization",
-        "description": "Gates: authenticate, requirePermission('createUser'), requirePermission('assignRole'), requireOrganizationScope. The 503 comes from authenticate. The 201 is a new grant and the 200 an organization already held. The 403 is also an organization outside the caller's. The 404 is a user or an organization not found. The 409 is a target who is an Administrador (global scope) or has no organization-scoped role. The 422 is no organizationId from a global caller (a non-global caller who names none gets 403). The error body is {success, error, message}, with no details.",
+        "description": "Gates: authenticate, requirePermission('updateUser', 'UPDATE'), requirePermission('assignRole'), requireOrganizationScope. The 503 comes from authenticate. The 201 is a new grant and the 200 an organization already held. The 403 is also an organization outside the caller's. The 404 is a user or an organization not found. The 409 is a target who is an Administrador (global scope) or has no organization-scoped role. The 422 is no organizationId from a global caller (a non-global caller who names none gets 403). The error body is {success, error, message}, with no details.",
         "security": [
           {
             "bearerAuth": []
@@ -11459,7 +11459,7 @@
           "users"
         ],
         "summary": "Revoke a user organization",
-        "description": "Gates: authenticate, requirePermission('createUser'), requirePermission('assignRole', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. The 403 is also an organization outside the caller's. The 409 is the user's home organization (changed by PUT /api/users/{id}) or its last organization. An organization the user does not hold answers 200 and changes nothing.",
+        "description": "Gates: authenticate, requirePermission('updateUser', 'UPDATE'), requirePermission('assignRole', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. The 403 is also an organization outside the caller's. The 409 is the user's home organization (changed by PUT /api/users/{id}) or its last organization. An organization the user does not hold answers 200 and changes nothing.",
         "security": [
           {
             "bearerAuth": []

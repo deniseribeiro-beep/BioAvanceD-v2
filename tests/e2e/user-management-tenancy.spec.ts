@@ -11,6 +11,14 @@ import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 // A user's organizations are its active role assignment scope ids, which
 // POST /api/users/register writes from the body's organizationId. See
 // docs/decisions/2026-10-17-org-scoped-user-management.md.
+//
+// #1229 (Dennis, 2026-10-29): the seed no longer gives the Coordenador any
+// user-account code (RF003 names the Administrador only), so no seeded
+// organization-scoped role reaches these routes any more. The organization
+// rule is proven against an org-scoped holder of the codes in
+// api/backend/tests/integration/users.org-scope.routes.test.js; this spec
+// now proves, on the real stack, that a seeded Coordenador is refused on
+// its own organization's users and another's, and that nothing is written.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
@@ -47,7 +55,7 @@ test.describe('User management is bounded by the caller organization (#1384) —
     return String(data.id || data._id);
   }
 
-  test('a Coordenador lists, reads, edits and deactivates only the users of its own organization', async ({ request }) => {
+  test('a seeded Coordenador is refused listing, reading, editing and deactivating users of its own organization and of another (#1229)', async ({ request }) => {
     const admin = await realLogin(request);
     const adminAuth = { Authorization: `Bearer ${admin.token}` };
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -68,7 +76,7 @@ test.describe('User management is bounded by the caller organization (#1384) —
     const stamp = Date.now();
     const coordUsername = `coord.1384.${stamp}`;
     const coordPassword = 'Coordenador@12345-forte';
-    const coordId = await registerUser(request, adminAuth, {
+    await registerUser(request, adminAuth, {
       username: coordUsername, password: coordPassword, accessType: 3, roleName: 'Coordenador', organizationId: ownOrg,
     });
     const ownTecId = await registerUser(request, adminAuth, {
@@ -81,39 +89,32 @@ test.describe('User management is bounded by the caller organization (#1384) —
     const coordinator = await completeFirstLoginMfa(request, apiBaseURL!, coordUsername, coordPassword);
     const coordAuth = { Authorization: `Bearer ${coordinator.token}` };
 
-    // The list names the caller and the Técnico of its own organization, and
-    // not the other organization's Técnico.
     const listRes = await request.get(`${apiBaseURL}/api/users`, { headers: coordAuth });
-    expect(listRes.status(), await listRes.text()).toBe(200);
-    const listedIds = ((await listRes.json()).data as Array<{ id?: string; _id?: string }>).map((u) => String(u.id || u._id));
-    expect(listedIds.sort()).toEqual([coordId, ownTecId].sort());
-    expect(listedIds).not.toContain(otherTecId);
+    expect(listRes.status(), await listRes.text()).toBe(403);
 
-    // Another organization's Técnico, by id.
-    const foreignRead = await request.get(`${apiBaseURL}/api/users/${otherTecId}`, { headers: coordAuth });
-    expect(foreignRead.status(), await foreignRead.text()).toBe(403);
+    for (const targetId of [ownTecId, otherTecId]) {
+      const read = await request.get(`${apiBaseURL}/api/users/${targetId}`, { headers: coordAuth });
+      expect(read.status(), await read.text()).toBe(403);
 
-    const foreignEdit = await request.put(`${apiBaseURL}/api/users/${otherTecId}`, {
-      headers: coordAuth,
-      data: { name: '#1384 renamed across organizations' },
-    });
-    expect(foreignEdit.status(), await foreignEdit.text()).toBe(403);
+      const edit = await request.put(`${apiBaseURL}/api/users/${targetId}`, {
+        headers: coordAuth,
+        data: { name: '#1384 renamed across organizations' },
+      });
+      expect(edit.status(), await edit.text()).toBe(403);
 
-    const foreignDelete = await request.delete(`${apiBaseURL}/api/users/${otherTecId}`, { headers: coordAuth });
-    expect(foreignDelete.status(), await foreignDelete.text()).toBe(403);
+      const del = await request.delete(`${apiBaseURL}/api/users/${targetId}`, { headers: coordAuth });
+      expect(del.status(), await del.text()).toBe(403);
+    }
 
-    // Control, same caller and same route: its own organization's Técnico
-    // reads, so the 403s are the scope check and not a missing permission.
-    const ownRead = await request.get(`${apiBaseURL}/api/users/${ownTecId}`, { headers: coordAuth });
-    expect(ownRead.status(), await ownRead.text()).toBe(200);
-
-    // The refused edit wrote nothing, and the refused delete left the
-    // account active: the Administrador reads it unchanged.
-    const adminRead = await request.get(`${apiBaseURL}/api/users/${otherTecId}`, { headers: adminAuth });
-    expect(adminRead.status(), await adminRead.text()).toBe(200);
-    expect((await adminRead.json()).data.name).not.toBe('#1384 renamed across organizations');
-    const adminStatus = await request.get(`${apiBaseURL}/api/users/${otherTecId}/validate-status`, { headers: adminAuth });
-    expect(adminStatus.status(), await adminStatus.text()).toBe(200);
-    expect((await adminStatus.json()).data.status).toBe('active');
+    // The refused edits wrote nothing, and the refused deletes left both
+    // accounts active: the Administrador, the control, reads them unchanged.
+    for (const targetId of [ownTecId, otherTecId]) {
+      const adminRead = await request.get(`${apiBaseURL}/api/users/${targetId}`, { headers: adminAuth });
+      expect(adminRead.status(), await adminRead.text()).toBe(200);
+      expect((await adminRead.json()).data.name).not.toBe('#1384 renamed across organizations');
+      const adminStatus = await request.get(`${apiBaseURL}/api/users/${targetId}/validate-status`, { headers: adminAuth });
+      expect(adminStatus.status(), await adminStatus.text()).toBe(200);
+      expect((await adminStatus.json()).data.status).toBe('active');
+    }
   });
 });

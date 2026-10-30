@@ -141,26 +141,53 @@ describe('rbac-catalog-seed.service', () => {
   });
 
   // #1008 (Denise, 2026-09-25): RF003 makes role assignment the
-  // Administrador's. The Coordenador keeps createUser but not assignRole.
-  it('#1008: seeds assignRole on the Administrador only, while the Coordenador keeps createUser', async () => {
+  // Administrador's. (#1229 then took createUser from the Coordenador too;
+  // see the cases below.)
+  it('#1008: seeds assignRole on the Administrador only', async () => {
     const db = createFakeDb();
     const { roles, permissions } = await seedRolesAndPermissions(db);
     const idOf = (code) => permissions.find((p) => p.permissionCode === code).permissionId;
 
     expect(roles.filter((r) => r.permissionIds.includes(idOf('assignRole'))).map((r) => r.roleCode)).toEqual(['administrator']);
-    expect(roles.find((r) => r.roleCode === 'coordinator').permissionIds).toContain(idOf('createUser'));
+  });
+
+  // #1229 (Dennis, 2026-10-29): RF003 names the Administrador as the only
+  // actor of user management, so each of the four user-account codes is
+  // seeded on the Administrador alone.
+  it.each(['createUser', 'readUser', 'updateUser', 'deleteUser'])('#1229: seeds %s on the Administrador only', async (code) => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const idOf = (c) => permissions.find((p) => p.permissionCode === c).permissionId;
+
+    expect(roles.filter((r) => r.permissionIds.includes(idOf(code))).map((r) => r.roleCode)).toEqual(['administrator']);
+  });
+
+  // #1229, #1341: no migration. A Coordenador seeded with createUser, under
+  // the old four-verb allowedActions, loses the grant at the next boot, and
+  // the Permission document narrows to CREATE.
+  it('#1229: a database seeded when the Coordenador held createUser drops it, and narrows createUser to CREATE, at the next boot', async () => {
+    const db = createFakeDb();
+    const first = await seedRolesAndPermissions(db);
+    const idOf = (c) => first.permissions.find((p) => p.permissionCode === c).permissionId;
+    db.collections.roles.docs.find((r) => r.roleCode === 'coordinator').permissionIds.push(idOf('createUser'));
+    db.collections.permissions.docs.find((p) => p.permissionCode === 'createUser').allowedActions = ['CREATE', 'READ', 'UPDATE', 'DELETE'];
+
+    const second = await seedRolesAndPermissions(db);
+
+    expect(second.roles.find((r) => r.roleCode === 'coordinator').permissionIds).not.toContain(idOf('createUser'));
+    expect(db.collections.permissions.docs.find((p) => p.permissionCode === 'createUser').allowedActions).toEqual(['CREATE']);
   });
 
   // #1229: access.routes.js moved off createUser to its own code, seeded to
-  // exactly the roles that held createUser, so no caller gains or loses.
-  it('#1229: seeds manageAccessGrants on exactly the roles that hold createUser', async () => {
+  // exactly the roles that held createUser then, so no caller gained or
+  // lost. The Coordenador keeps it after the verb split took createUser.
+  it('#1229: seeds manageAccessGrants on the Coordenador and the Administrador', async () => {
     const db = createFakeDb();
     const { roles, permissions } = await seedRolesAndPermissions(db);
     const idOf = (code) => permissions.find((p) => p.permissionCode === code).permissionId;
     const holdersOf = (code) => roles.filter((r) => r.permissionIds.includes(idOf(code))).map((r) => r.roleCode);
 
     expect(holdersOf('manageAccessGrants')).toEqual(['coordinator', 'administrator']);
-    expect(holdersOf('manageAccessGrants')).toEqual(holdersOf('createUser'));
   });
 
   // #1229, #1341: no migration. A database seeded before the code existed
@@ -210,7 +237,7 @@ describe('rbac-catalog-seed.service', () => {
     expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
     expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageBackup);
     expect([...coordinator.permissionIds].sort()).toEqual([...seededCoordinatorIds].sort());
-    expect(coordinator.permissionIds).toContain(permissionIdByCode.createUser);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.createSample);
     expect(coordinator.roleId).toBe(roleId);
     const stored = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
     expect(stored.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
@@ -354,7 +381,11 @@ describe('rbac-catalog-seed.service', () => {
       ['withdrawSample', ['UPDATE']],
       ['viewTemperature', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
       ['uploadFiles', ['CREATE', 'READ', 'UPDATE']],
-      ['createUser', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      // #1229: one verb per user-account code.
+      ['createUser', ['CREATE']],
+      ['readUser', ['READ']],
+      ['updateUser', ['UPDATE']],
+      ['deleteUser', ['DELETE']],
       // #1008: CREATE is POST /users/register, UPDATE the in-handler check on
       // PUT /users/:id.
       ['assignRole', ['CREATE', 'UPDATE']],
