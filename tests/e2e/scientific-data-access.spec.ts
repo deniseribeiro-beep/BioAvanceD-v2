@@ -12,6 +12,7 @@ import {
   seedActiveConsent,
   seedDuoConcept,
   closeSeedDb,
+  readSampleFileStorage,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -104,6 +105,19 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(uploadBody.data.fileRole).toBe('raw');
     // AC#6 - linked to the specimen it was uploaded against.
     expect(uploadBody.data.specimenId).toBeTruthy();
+    // RF007 AC2/AC3, RNF016 C4 (#1419) - the binary went to the S3 store this
+    // stack runs: the URI is the content address, and the row records no local
+    // path (the filesystem store records one, the S3 store null). The owner
+    // segment is the sample's _id or its x-<hash>, not specimenId.
+    const storageObjectVersion: string = uploadBody.data.storageObjectVersion;
+    expect(storageObjectVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const objectHex = storageObjectVersion.slice('sha256:'.length);
+    expect(uploadBody.data.uri).toMatch(new RegExp(`^objstore://samples/[A-Za-z0-9_-]+/sha256/${objectHex}$`));
+    expect(await readSampleFileStorage(String(uploadBody.data._id))).toMatchObject({
+      storageUri: uploadBody.data.uri,
+      storageObjectVersion,
+      storagePath: null,
+    });
 
     // AC#7 - upload is audited.
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);

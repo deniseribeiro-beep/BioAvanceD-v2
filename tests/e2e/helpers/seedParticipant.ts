@@ -63,6 +63,25 @@ export async function closeSeedDb(): Promise<void> {
   }
 }
 
+/**
+ * RF007 AC2 / RNF016 C4 (#1419): reads where a sample_files row says its
+ * binary lives. A row the S3 store wrote has storagePath null; one the
+ * filesystem store wrote names a local path.
+ */
+export interface SampleFileStorage {
+  storagePath?: string | null;
+  storageUri?: string | null;
+  storageObjectVersion?: string | null;
+}
+
+export async function readSampleFileStorage(fileId: string): Promise<SampleFileStorage | null> {
+  const db = await getDb();
+  return db.collection('sample_files').findOne<SampleFileStorage>(
+    { _id: new ObjectId(fileId) },
+    { projection: { _id: 0, storagePath: 1, storageUri: 1, storageObjectVersion: 1 } },
+  );
+}
+
 export async function seedActiveConsentTemplate(db: Db): Promise<string> {
   // Canonical name is `consent_templates` (snake_case), not the
   // `consentTemplates` field/param name used throughout the API layer —
