@@ -32,8 +32,12 @@ async function getDb(): Promise<Db> {
     // #1227: the driver's default server selection waits 30 s, the same as a
     // Playwright hook's budget, so a stalled connect surfaced as an anonymous
     // "afterAll hook timeout" instead of the driver's own error. 10 s leaves
-    // the hook time to report what actually stalled.
-    client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
+    // the hook time to report what actually stalled. socketTimeoutMS covers
+    // the same class once connected (a hung deleteOne never finishing).
+    client = new MongoClient(mongoUri, {
+      serverSelectionTimeoutMS: 10_000,
+      socketTimeoutMS: 10_000,
+    });
     await client.connect();
   }
   return client.db(mongoDbName);
@@ -41,9 +45,21 @@ async function getDb(): Promise<Db> {
 
 /** Closes the shared Mongo connection — call once from a suite's afterAll. */
 export async function closeSeedDb(): Promise<void> {
-  if (client) {
-    await client.close();
-    client = null;
+  if (!client) return;
+  const closing = client;
+  client = null;
+  try {
+    // #1227: client.close() has no driver-side budget; a stuck topology close
+    // would otherwise burn the whole afterAll timeout with no [e2e-cleanup] line.
+    await Promise.race([
+      closing.close(),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('closeSeedDb timed out after 5000 ms')), 5_000);
+      }),
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error(`[e2e-cleanup] ${new Date().toISOString()} closeSeedDb failed: ${message}`);
   }
 }
 
