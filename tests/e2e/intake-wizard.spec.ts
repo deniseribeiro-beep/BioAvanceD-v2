@@ -18,6 +18,7 @@ import {
 import type { SeededStorageBox } from './helpers/seedParticipant';
 import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver } from './helpers/queryNeo4j';
 import { generateValidCpf } from './helpers/cpf';
+import { waitForIntakeWizardReady } from './helpers/waitForIntakeWizardReady';
 import { MongoClient, ObjectId } from 'mongodb';
 
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
@@ -74,7 +75,7 @@ test.describe('Intake wizard (/next/intake)', () => {
   test('renders the demographic step and accepts patient data entry', async ({ page }) => {
     await page.goto('/next/intake');
 
-    await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+    await waitForIntakeWizardReady(page);
     await expect(page.getByTestId('wizard-title')).toBeVisible();
 
     await page.getByTestId('wizard-full-name').fill('Paciente Teste E2E');
@@ -112,7 +113,7 @@ test.describe('Intake wizard (/next/intake)', () => {
 
     await page.goto('/next/intake');
 
-    await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+    await waitForIntakeWizardReady(page);
     await page.getByTestId('wizard-full-name').fill('Paciente Teste E2E');
     await expect(page.getByTestId('wizard-full-name')).toHaveValue('Paciente Teste E2E');
 
@@ -346,7 +347,8 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   test('a real submission through the intake wizard creates Encounter/Condition/PhenotypeObservation/MedicationExposure with terminology coding (#693)', async ({ page, request }) => {
     await realAuthLogin(request, page);
     await page.goto('/next/intake');
-    await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+    // #1222: fill only after mount-time dictionary/consent fetches settle.
+    await waitForIntakeWizardReady(page);
 
     // Step 1 — demographics. The document must be a checksum-valid CPF (a
     // purely numeric document is always routed through the CPF checksum
@@ -704,7 +706,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
 
     await seedRealAuth(page, coordinator);
     await page.goto('/next/intake');
-    await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+    await waitForIntakeWizardReady(page);
 
     await page.getByTestId('wizard-full-name').fill(`#1354 e2e patient ${suffix}`);
     await page.getByTestId('wizard-birth-date').fill('01/01/1990');
@@ -805,7 +807,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     // The #1354 path, less the organization picker.
     const registerThroughWizard = async (label: string, parentSpecimenIds?: string) => {
       await page.goto('/next/intake');
-      await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+      await waitForIntakeWizardReady(page);
 
       await page.getByTestId('wizard-full-name').fill(patientName);
       await page.getByTestId('wizard-birth-date').fill('01/01/1990');

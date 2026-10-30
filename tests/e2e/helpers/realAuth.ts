@@ -30,9 +30,36 @@ export async function realLogin(request: APIRequestContext): Promise<RealAuthSes
   const testUser = process.env.TEST_USER || 'admin';
   const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
-  const response = await request.post(`${apiBaseURL}/api/auth/login`, {
-    data: { username: testUser, password: testPass },
-  });
+  // #1234: one retry on a transport reset (socket hang up / connection reset)
+  // before the first HTTP status. The host-side Docker Desktop proxy and the
+  // in-container forwarder have each shown a single-request stall or reset at
+  // ~1/256; a second POST on a fresh connection settles which side it was
+  // without masking a real 4xx/5xx.
+  let response;
+  let lastTransportError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      response = await request.post(`${apiBaseURL}/api/auth/login`, {
+        data: { username: testUser, password: testPass },
+      });
+      lastTransportError = undefined;
+      break;
+    } catch (error) {
+      lastTransportError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const isTransport =
+        /socket hang up|ECONNRESET|ECONNREFUSED|Request context disposed/i.test(message);
+      if (!isTransport || attempt === 2) throw error;
+      console.error(
+        `[e2e-auth] ${new Date().toISOString()} realLogin transport error on attempt ${attempt}, retrying once: ${message}`
+      );
+    }
+  }
+  if (!response) {
+    throw lastTransportError instanceof Error
+      ? lastTransportError
+      : new Error(`realAuth: login transport failed: ${String(lastTransportError)}`);
+  }
 
   if (!response.ok()) {
     const body = await response.text();

@@ -62,10 +62,43 @@ function makeSandbox() {
   };
 }
 
+// WSL's `bash` (WindowsApps) rewrites a bare `C:\...` argv into `C:Users...`
+// and fails; Git Bash accepts `C:/...`. Prefer a path the active bash can open.
+function toBashPath(winPath) {
+  if (process.platform !== 'win32') return winPath;
+  const resolved = path.resolve(winPath);
+  const uname = spawnSync('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
+  const kind = String(uname.stdout || '');
+  if (/MINGW|MSYS/i.test(kind)) {
+    return resolved.replace(/\\/g, '/');
+  }
+  const m = /^([A-Za-z]):(.*)$/.exec(resolved);
+  if (m) return `/mnt/${m[1].toLowerCase()}${m[2].replace(/\\/g, '/')}`;
+  return resolved.replace(/\\/g, '/');
+}
+
 function run(script, args, cwd) {
   // bash explicitly rather than relying on the executable bit, which does
   // not survive every checkout on every platform.
-  return spawnSync('bash', [script, ...args], { cwd, encoding: 'utf8' });
+  // cwd stays a host path (Node's spawnSync); argv paths are rewritten for
+  // WSL/Git Bash so bash can open the sandboxed script (#1418 / Windows).
+  // Flags (--upgrade) must stay literal: path.resolve would turn them into
+  // cwd/--upgrade under win32.
+  const bashArgs = args.map((arg) => (arg.startsWith('-') ? arg : toBashPath(arg)));
+  return spawnSync('bash', [toBashPath(script), ...bashArgs], {
+    cwd,
+    encoding: 'utf8',
+  });
+}
+
+// WSL bash can briefly keep a handle on /mnt/c/... sandbox dirs after exit;
+// force-rm then would raise EPERM/EBUSY and fail an otherwise-green test.
+function removeSandbox(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    if (err && err.code !== 'EPERM' && err.code !== 'EBUSY') throw err;
+  }
 }
 
 function findLine(content, prefix) {
@@ -95,7 +128,7 @@ test('running without --upgrade against an existing output refuses, and leaves t
       'the refused run must not touch the existing file\'s bytes'
     );
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeSandbox(dir);
   }
 });
 
@@ -108,7 +141,7 @@ test('--upgrade against a nonexistent output file refuses, and creates nothing',
     assert.notEqual(result.status, 0, '--upgrade with no existing file must exit non-zero');
     assert.equal(fs.existsSync(outFile), false, '--upgrade must not create the output file when none existed');
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeSandbox(dir);
   }
 });
 
@@ -156,8 +189,75 @@ test('a fresh generate mints the audit signing key, a second fresh generate reus
     const jwt2 = findLine(content2, 'JWT_SECRET=');
     assert.ok(jwt1 && jwt2, 'both runs must write a JWT_SECRET line');
     assert.notEqual(jwt1, jwt2, 'JWT_SECRET must differ between independent fresh generates');
+
+    // #1418: Git Bash mingw openssl ends base64 with CRLF; tok() must strip `\r`
+    // so MONGO_URI / passwords never embed a carriage return.
+    assert.ok(!content1.includes('\r'), 'no line of a fresh generate may contain a carriage return (#1418)');
+    assert.match(
+      jwt1.slice('JWT_SECRET='.length),
+      /^[A-Za-z0-9_-]+$/,
+      'JWT_SECRET must be base64url with no CR (#1418)',
+    );
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeSandbox(dir);
+  }
+});
+
+test('fresh generate strips CR when openssl rand -base64 ends with CRLF (#1418)', () => {
+  const { dir, script } = makeSandbox();
+  try {
+    // Resolve the real binary once so the fake never re-enters itself via PATH
+    // (`command openssl` still prefers the shim ahead on PATH).
+    const realOpenssl = String(
+      spawnSync('bash', ['-c', 'command -v openssl'], { encoding: 'utf8' }).stdout || '',
+    ).trim();
+    assert.ok(realOpenssl, 'host must provide openssl for the CRLF shim');
+
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    // Pretend to be mingw openssl: emit CRLF after every rand -base64 payload.
+    const fakeOpenssl = path.join(bin, 'openssl');
+    fs.writeFileSync(
+      fakeOpenssl,
+      `#!/usr/bin/env bash
+set -euo pipefail
+REAL='${realOpenssl.replace(/'/g, `'\\''`)}'
+if [[ "\${1:-}" == "rand" && "\${2:-}" == "-base64" ]]; then
+  "$REAL" rand -base64 "\${3:?}" | tr -d '\\r\\n' | awk '{printf "%s\\r\\n", $0}'
+  exit 0
+fi
+exec "$REAL" "\$@"
+`,
+      { mode: 0o755 },
+    );
+    if (process.platform === 'win32') {
+      // WSL/Git Bash need +x via chmod; Node mode bits alone are not enough.
+      const chmod = spawnSync('bash', ['-c', `chmod +x '${toBashPath(fakeOpenssl)}'`], {
+        encoding: 'utf8',
+      });
+      assert.equal(chmod.status, 0, `chmod +x fake openssl must succeed: ${chmod.stderr}`);
+    }
+
+    const outFile = path.join(dir, '.env.docker');
+    // Prefer the fake openssl via bash PATH (colon-separated inside WSL/Git Bash).
+    const res = spawnSync(
+      'bash',
+      ['-c', `export PATH='${toBashPath(bin)}':"$PATH"; bash '${toBashPath(script)}' '${toBashPath(outFile)}'`],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(res.status, 0, `fresh generate must succeed under CRLF openssl: ${res.stderr}\n${res.stdout}`);
+
+    const content = fs.readFileSync(outFile, 'utf8');
+    assert.ok(!content.includes('\r'), 'output must contain no carriage return even when openssl prints CRLF (#1418)');
+    const mongoPassword = findLine(content, 'MONGO_ROOT_PASSWORD=');
+    assert.ok(mongoPassword, 'MONGO_ROOT_PASSWORD must be present');
+    assert.match(
+      mongoPassword.slice('MONGO_ROOT_PASSWORD='.length),
+      /^[A-Za-z0-9_-]+$/,
+      'MONGO_ROOT_PASSWORD must not carry a trailing CR (#1418)',
+    );
+  } finally {
+    removeSandbox(dir);
   }
 });
 
@@ -184,7 +284,7 @@ test('--upgrade restores a missing rate-limit relaxation blank, and keeps a hand
     assert.deepEqual(findLines(content, 'AUTH_RATE_LIMIT_RELAXED='), ['AUTH_RATE_LIMIT_RELAXED=']);
     assert.deepEqual(findLines(content, 'CONSENT_RATE_LIMIT_RELAXED='), ['CONSENT_RATE_LIMIT_RELAXED=true']);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeSandbox(dir);
   }
 });
 
@@ -291,6 +391,6 @@ test('--upgrade preserves existing credentials, restores deleted example-sourced
       'a second --upgrade must leave the file content unchanged'
     );
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeSandbox(dir);
   }
 });
