@@ -970,8 +970,13 @@ class ImportLGPDController {
       // is not the artifact a compliance reviewer would ask for. A fully
       // clean import still deletes it, matching #787's own "no empty batch
       // for a clean file" decision.
+      // #1419: retention is best-effort and returns null when the file was
+      // not kept (no key, or the object store refused the put); the staging
+      // copy is plaintext civil data, so it is removed rather than left in
+      // temp/.
       if (results.stagingBatchId) {
-        await importLGPDService.retainSourceFileForBatch(db, file, results.stagingBatchId);
+        const retained = await importLGPDService.retainSourceFileForBatch(db, file, results.stagingBatchId);
+        if (!retained) importLGPDService.cleanupFile(file.path);
       } else {
         importLGPDService.cleanupFile(file.path);
       }
@@ -1034,7 +1039,10 @@ class ImportLGPDController {
                 groupFields: parseGroupFields(req.body?.groupFields).value || {},
               },
             });
-            await importLGPDService.retainSourceFileForBatch(db, req.file, batchId);
+            // #1419: a null retention leaves no copy kept; remove the
+            // plaintext staging file, as above.
+            const retained = await importLGPDService.retainSourceFileForBatch(db, req.file, batchId);
+            if (!retained) importLGPDService.cleanupFile(req.file.path);
           } catch (failureBatchError) {
             logger.error(
               'Falha ao registrar lote FAILED / reter arquivo de importação de amostras (RNF011 AC#4):',

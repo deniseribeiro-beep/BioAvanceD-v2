@@ -727,11 +727,11 @@ describe('import-lgpd.controller', () => {
     // same way #792 already retains a file when individual rows are
     // quarantined. `db` here is this file's own createDb() mock, whose
     // `insertOne` resolves, so the FAILED batch is created successfully;
-    // `retainSourceFileForBatch`'s real implementation then no-ops because
-    // '/tmp/s.csv' does not exist on disk in this test -- either way,
-    // `cleanupFile` must NOT be the fallback path taken. This assertion used
-    // to require cleanupSpy to have been called; #806 inverts it.
-    it('returns 500 when service throws, opens a FAILED batch instead of cleaning up if req.file present', async () => {
+    // `retainSourceFileForBatch`'s real implementation then returns null
+    // because '/tmp/s.csv' does not exist on disk in this test, and #1419
+    // removes the staging file on a null retention, so `cleanupFile` runs
+    // once, after the FAILED batch was opened.
+    it('returns 500 when service throws, opens a FAILED batch and cleans up the unretained file if req.file present', async () => {
       const db = createDb();
       const file = { path: '/tmp/s.csv', originalname: 's.csv' };
       const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
@@ -744,7 +744,8 @@ describe('import-lgpd.controller', () => {
 
       await controller.importSamples(req, res);
 
-      expect(cleanupSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledTimes(1);
+      expect(cleanupSpy).toHaveBeenCalledWith('/tmp/s.csv');
       const insertedBatch = db.__collection.insertOne.mock.calls[0][0];
       expect(insertedBatch.status).toBe('FAILED');
       expect(insertedBatch.error).toBe('sample boom');

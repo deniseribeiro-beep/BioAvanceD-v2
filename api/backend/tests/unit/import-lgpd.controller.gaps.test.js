@@ -1244,7 +1244,8 @@ describe('import-lgpd.controller gaps', () => {
         actor: expect.objectContaining({ userID: 'u-oid', userId: 'u-oid' })
       }));
       expect(retainSpy).toHaveBeenCalledWith(req.app.locals.db, req.file, 'failed-1');
-      expect(cleanupSpy).not.toHaveBeenCalled();
+      // #1419: retention returned null, so the staging file is removed.
+      expect(cleanupSpy).toHaveBeenCalledWith(req.file.path);
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith({
         success: false,
