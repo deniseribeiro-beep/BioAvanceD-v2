@@ -2992,6 +2992,27 @@ describe('sample.routes', () => {
       expect(res.status).toBe(400);
     });
 
+    it('hands returnSample the string form of req.user._id as the audit user when req.user has no id', async () => {
+      const returnSample = vi.fn().mockResolvedValue({ returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 1, movementID: 'm3' });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const authImpl = (req, res, next) => {
+        req.user = { _id: { toString: () => 'oid-77' }, name: 'Tester' };
+        next();
+      };
+      const { router } = loadRoute({ sampleServiceOverrides: { returnSample, getSample }, authImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples/000000000000000000000000/return').send({});
+
+      expect(res.status).toBe(200);
+      expect(returnSample).toHaveBeenCalledWith(
+        expect.anything(),
+        '000000000000000000000000',
+        {},
+        expect.objectContaining({ userId: 'oid-77' })
+      );
+    });
+
     it('resolves the audit actor role from req.user.role and the x-forwarded-for header, with a req.t fallback message', async () => {
       const returnSample = vi.fn().mockResolvedValue({ returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 1, movementID: 'm4' });
       const getSample = vi.fn().mockResolvedValue(null);

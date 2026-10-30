@@ -2164,6 +2164,27 @@ describe('sample.service', () => {
     });
   });
 
+  describe('getQuarantineActions for an unresolved id', () => {
+    it('queries the actions by the id as a string when no sample resolves', async () => {
+      const quarantineActions = makeCollection('quarantineActions');
+      quarantineActions.find.mockImplementation(() => makeCursor([]));
+      const db = makeDb({ quarantineActions });
+      db.collections.samples.findOne.mockResolvedValue(null);
+
+      const result = await sampleService.getQuarantineActions(db, 'SPC-NONE');
+
+      expect(result).toEqual([]);
+      expect(quarantineActions.find.mock.calls[0][0]).toEqual({ specimenIds: 'SPC-NONE' });
+    });
+
+    it('rejects an id that cannot be turned into a string', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(null);
+
+      await expect(sampleService.getQuarantineActions(db, Object.create(null))).rejects.toThrow(TypeError);
+    });
+  });
+
   describe('getStateDecisions', () => {
     it('returns the decisions keyed by specimenId and by stored _id, oldest first, and null for an unknown sample (RF006 AC7, #1315)', async () => {
       const _id = new ObjectId();
