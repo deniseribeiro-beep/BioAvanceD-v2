@@ -1460,3 +1460,286 @@ function defaultStorageContainersFindOne({ _id }) {
     });
   });
 });
+
+// #1337: the fallbacks the intake takes on sparse rows (a consent, a patient,
+// a box, a container chain, a stored sample) and on errors with no message,
+// each pinned by what the response or the write carries.
+describe('intakeWizard routes: fallbacks on sparse rows (#1337)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearCache();
+  });
+
+  const BOX = {
+    _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 },
+    currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1',
+  };
+  const CHAIN = {
+    'rack-1': { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' },
+    'shelf-1': { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' },
+    'freezer-1': { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' },
+  };
+
+  async function postIntake({
+    payload = VALID_PAYLOAD,
+    boxes = [BOX],
+    containers = CHAIN,
+    equipment = { equipmentID: 'EQ-1', status: 'active' },
+    consents = [],
+    matchOrUpsertParticipant,
+    resolveMethodologicalQuality,
+    createdSample = { _id: 'sample-1', participantId: '12345678' },
+    storedSample = { _id: 'sample-1', participantId: '12345678' },
+    recordAssessment,
+    organizationsFindOne = vi.fn().mockResolvedValue({ organizationId: 'org-1' }),
+  } = {}) {
+    const samplesCollection = { findOne: vi.fn().mockResolvedValue(storedSample), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+    const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+    const consentQueue = [...consents];
+    const consentsCollection = { findOne: vi.fn(async () => consentQueue.shift() ?? null) };
+    const getCollectionImpl = vi.fn(async (_db, key) => {
+      if (key === 'samples') return samplesCollection;
+      if (key === 'patients') return patientsCollection;
+      if (key === 'consents') return consentsCollection;
+      throw new Error(`unexpected key ${key}`);
+    });
+    const storageContainersFindOne = vi.fn(async ({ _id }) => containers[_id] || null);
+    const db = {
+      collection: (name) => {
+        if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
+        if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue(equipment) };
+        if (name === 'storageBoxes') return { find: () => makeCursor(boxes) };
+        if (name === 'storageContainers') return { findOne: storageContainersFindOne };
+        if (name === 'organizations') return { findOne: organizationsFindOne };
+        throw new Error(`unexpected collection ${name}`);
+      },
+    };
+
+    const loaded = loadRoute({ getCollectionImpl, matchOrUpsertParticipant, resolveMethodologicalQuality });
+    if (recordAssessment) loaded.rcsAssessmentServiceModule.recordAssessment = recordAssessment;
+    const sampleServiceModule = require(sampleServicePath);
+    const createSample = vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue(createdSample);
+
+    const res = await request(buildApp(loaded.router, db)).post('/api/intake-wizard').send(payload);
+    return { res, createSample, storageContainersFindOne, consentsCollection, samplesCollection, patientsCollection, ...loaded };
+  }
+
+  it('answers an active consent row with no id or participant as null ids', async () => {
+    const { res } = await postIntake({ consents: [{ status: 'ACTIVE' }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent).toEqual({ active: true, status: 'SIGNED', consentId: null, patientId: null, reason: null });
+  });
+
+  it('answers a revoked consent row with no id or participant as null ids', async () => {
+    const { res } = await postIntake({ consents: [null, { status: 'REVOKED' }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent).toEqual({ active: false, status: 'REVOKED', consentId: null, patientId: null, reason: 'Consentimento revogado.' });
+  });
+
+  it('logs an existing in-scope match as updated, and reports no patientID or matchType when the match has none', async () => {
+    const { res, auditLoggerModule, createSample } = await postIntake({
+      matchOrUpsertParticipant: async () => ({ created: false, patient: { _id: 'patient-obj-9' } }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.patientMatch).toEqual({ matched: true, created: false, patientID: null });
+    expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({
+      resourceId: null,
+      message: 'Paciente existente identificado e atualizado durante intake wizard.',
+      payload: expect.objectContaining({ created: false, outOfScope: false, matched: true, matchType: null, patientID: null }),
+    }));
+    // No participantId on the match: the sample takes the payload's own.
+    expect(createSample.mock.calls[0][1].participantId).toBe('12345678');
+  });
+
+  it('looks up consent by the patient _id alone when its participantId is blank', async () => {
+    const { res, consentsCollection } = await postIntake({
+      matchOrUpsertParticipant: async () => ({ created: false, matchType: 'exact', patient: { _id: 'patient-obj-9', participantId: '   ' } }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(consentsCollection.findOne.mock.calls[0][0]).toEqual({ participantId: { $in: ['patient-obj-9'] }, status: 'ACTIVE' });
+  });
+
+  it('persists the SPREC the quality assessment returns over the specimen one', async () => {
+    const { res, createSample } = await postIntake({
+      resolveMethodologicalQuality: () => ({ governance_status: 1, final_grade: 'A', sprec: { sampleType: 'BLD' } }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(createSample.mock.calls[0][1].sprec).toEqual({ sampleType: 'BLD' });
+  });
+
+  it('answers with the created sample and its allocated position when the stored row is not found', async () => {
+    const created = { _id: 'sample-1', participantId: '12345678', storageLocation: { boxId: 'box-1', position: 'B2' } };
+    const { res } = await postIntake({ createdSample: created, storedSample: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sample).toMatchObject({ _id: 'sample-1' });
+    expect(res.body.storageLocation).toMatchObject({ boxId: 'box-1', position: 'B2', readable: 'equipamento EQ-1 / box Box A / posição B2' });
+  });
+
+  it('builds the label links from sampleID and barcode when the stored sample has no _id', async () => {
+    const { res } = await postIntake({ storedSample: { sampleID: 'S-77', barcode: 'BC 01', participantId: '12345678' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.label).toEqual({
+      sampleId: 'S-77',
+      symbologyAssetsUrl: '/api/samples/by-barcode/BC%2001/symbology-assets',
+      printJobUrl: '/api/samples/S-77/label/print-job',
+    });
+  });
+
+  it('builds the label id from the barcode when the stored sample has neither _id nor sampleID', async () => {
+    const { res } = await postIntake({ storedSample: { barcode: 'BC-9', participantId: '12345678' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.label.sampleId).toBe('BC-9');
+    expect(res.body.label.printJobUrl).toBe('/api/samples/BC-9/label/print-job');
+  });
+
+  it('names a box by its boxID when it has no name', async () => {
+    const { res } = await postIntake({ boxes: [{ ...BOX, name: undefined, boxID: 'BX-1' }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageLocation).toMatchObject({ boxName: 'BX-1', readable: 'equipamento EQ-1 / box BX-1' });
+  });
+
+  it('leaves the box out of the readable location when it has neither name nor boxID', async () => {
+    const { res } = await postIntake({ boxes: [{ ...BOX, name: undefined }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageLocation).toMatchObject({ boxName: null, readable: 'equipamento EQ-1' });
+  });
+
+  it('walks a box in a DRAWER up through its rack to the freezer', async () => {
+    const containers = { ...CHAIN, 'drawer-1': { _id: 'drawer-1', containerType: 'DRAWER', parent_id: 'rack-1' } };
+    const { res, storageContainersFindOne } = await postIntake({ boxes: [{ ...BOX, parent_id: 'drawer-1' }], containers });
+
+    expect(res.status).toBe(200);
+    expect(storageContainersFindOne.mock.calls.map(([query]) => query._id)).toEqual(['drawer-1', 'rack-1', 'shelf-1', 'freezer-1']);
+    expect(res.body.storageLocation.equipmentID).toBe('EQ-1');
+  });
+
+  it('skips boxes with no capacity, no free position or a broken container chain, and takes the first whole one', async () => {
+    const containers = {
+      ...CHAIN,
+      'drawer-orphan': { _id: 'drawer-orphan', containerType: 'DRAWER' },
+      'rack-orphan': { _id: 'rack-orphan', containerType: 'RACK' },
+      'rack-2': { _id: 'rack-2', containerType: 'RACK', parent_id: 'shelf-orphan' },
+      'shelf-orphan': { _id: 'shelf-orphan', containerType: 'SHELF' },
+      'rack-3': { _id: 'rack-3', containerType: 'RACK', parent_id: 'shelf-3' },
+      'shelf-3': { _id: 'shelf-3', containerType: 'SHELF', parent_id: 'freezer-nocid' },
+      'freezer-nocid': { _id: 'freezer-nocid', containerType: 'FREEZER' },
+    };
+    const boxes = [
+      { ...BOX, _id: 'box-nodim', dimension: undefined },
+      { ...BOX, _id: 'box-negdim', dimension: { rows: -1, cols: -1 } },
+      { ...BOX, _id: 'box-noparent', parent_id: undefined },
+      { ...BOX, _id: 'box-drawer-orphan', parent_id: 'drawer-orphan' },
+      { ...BOX, _id: 'box-rack-orphan', parent_id: 'rack-orphan' },
+      { ...BOX, _id: 'box-shelf-orphan', parent_id: 'rack-2' },
+      { ...BOX, _id: 'box-freezer-nocid', parent_id: 'rack-3' },
+      { ...BOX, _id: 'box-ok', occupancyGrid: undefined },
+    ];
+
+    const { res } = await postIntake({ boxes, containers });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageLocation).toMatchObject({ boxId: 'box-ok', position: 'A1' });
+  });
+
+  it('reads equipment readiness from operationalStatus when status and maintenanceStatus are absent', async () => {
+    const ready = await postIntake({ equipment: { equipmentID: 'EQ-1', operationalStatus: 'active' } });
+    expect(ready.res.status).toBe(200);
+
+    vi.restoreAllMocks();
+    const blocked = await postIntake({ equipment: { equipmentID: 'EQ-1', operationalStatus: 'maintenance' } });
+    expect(blocked.res.status).toBe(422);
+  });
+
+  it('names a missing top-level section by its missingProperty', async () => {
+    const { participant, ...withoutParticipant } = VALID_PAYLOAD;
+    const { res, createSample } = await postIntake({ payload: withoutParticipant });
+
+    expect(participant).toBeDefined();
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+    expect(res.body.fields).toEqual(['participant']);
+    expect(createSample).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown top-level property as NON_CANONICAL_FIELD, creating nothing', async () => {
+    const { res, createSample } = await postIntake({ payload: { ...VALID_PAYLOAD, bogus: 1 } });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+    expect(createSample).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 403 when the organization lookup fails with no status, creating nothing', async () => {
+    const { res, createSample } = await postIntake({
+      payload: { ...VALID_PAYLOAD, organizationId: 'org-1' },
+      organizationsFindOne: vi.fn().mockRejectedValue(new Error('falha ao consultar organizações')),
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ success: false, error: 'falha ao consultar organizações' });
+    expect(createSample).not.toHaveBeenCalled();
+  });
+
+  it('still answers 200 when recording the RcsAssessment rejects with no message', async () => {
+    const { res, samplesCollection } = await postIntake({ recordAssessment: vi.fn().mockRejectedValue(new Error('')) });
+
+    expect(res.status).toBe(200);
+    expect(samplesCollection.updateOne).not.toHaveBeenCalled();
+    expect(res.body.sample.sealedRcsAssessmentId).toBeUndefined();
+  });
+
+  it('answers 500 with the generic message when a step throws an error with no message or status', async () => {
+    const { res, createSample } = await postIntake({ matchOrUpsertParticipant: async () => { throw {}; } });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({ success: false, error: 'Erro desconhecido ao finalizar o Intake Wizard.' });
+    expect(createSample).not.toHaveBeenCalled();
+  });
+
+  describe('GET /patient-match', () => {
+    function identityRouter({ candidates = [], getCollectionImpl } = {}) {
+      const identityFind = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(candidates) });
+      const impl = getCollectionImpl || vi.fn(async (_db, key) => (key === 'participantIdentities'
+        ? { findOne: vi.fn().mockResolvedValue(null), find: identityFind }
+        : { findOne: vi.fn().mockResolvedValue(null) }));
+      const loaded = loadRoute({ getCollectionImpl: impl });
+      return { app: buildApp(loaded.router, {}), identityFind, ...loaded };
+    }
+
+    it('narrows by the plaintext day range when no blind-index key is registered, and answers no match by another name', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      vi.spyOn(participantIdentityService, 'computeBlindIndexCandidates').mockReturnValue([]);
+      const { app, identityFind, auditLoggerModule } = identityRouter({
+        candidates: [{ participantId: '87654321', patientName: 'Outra Pessoa', birthDate: new Date(2000, 1, 1) }],
+      });
+
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientName: 'João Ção', birthDate: '01/02/2000' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.matched).toBe(false);
+      expect(res.body.patient).toBeNull();
+      const [clause] = identityFind.mock.calls[0][0].$or;
+      expect(clause.birthDate).toEqual({ $gte: expect.any(Date), $lt: expect.any(Date) });
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ resourceId: null }));
+    });
+
+    it('answers 500 with the generic message when the lookup throws an error with no message', async () => {
+      const { app } = identityRouter({ getCollectionImpl: vi.fn().mockRejectedValue({}) });
+
+      const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ success: false, error: 'Falha ao consultar paciente.' });
+    });
+  });
+});
