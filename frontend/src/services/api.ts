@@ -424,21 +424,13 @@ export const resultService = {
       
       // Se for JSON, pode ser uma resposta de erro ou redirecionamento
       if (contentType.includes('application/json')) {
+        let json: any;
         try {
           // Se response.data é um Blob, converte para texto
           const text = response.data instanceof Blob 
             ? await response.data.text()
             : response.data;
-          const json = typeof text === 'string' ? JSON.parse(text) : text;
-          
-          // Se for redirecionamento para URL externa
-          if (json.redirect && json.url) {
-            window.open(json.url, '_blank');
-            return;
-          }
-          
-          // Se for erro
-          throw new Error(json.error || json.message || 'Erro ao fazer download do arquivo');
+          json = typeof text === 'string' ? JSON.parse(text) : text;
         } catch (parseError: any) {
           // Se não conseguir parsear, verifica se é erro HTTP
           if (response.status >= 400) {
@@ -446,6 +438,15 @@ export const resultService = {
           }
           throw parseError;
         }
+
+        // Se for redirecionamento para URL externa
+        if (json?.redirect && json?.url) {
+          window.open(json.url, '_blank');
+          return;
+        }
+
+        // Se for erro (#1420: fora do try, o texto do servidor chega ao chamador)
+        throw new Error(json?.error || json?.message || 'Erro ao fazer download do arquivo');
       }
       
       // Cria blob URL para download
@@ -485,14 +486,16 @@ export const resultService = {
         
         // Se a resposta é um blob (pode ser JSON de erro dentro do blob)
         if (response.data instanceof Blob) {
+          let errorJson: any;
           try {
             const errorText = await response.data.text();
-            const errorJson = JSON.parse(errorText);
-            throw new Error(errorJson.error || errorJson.message || 'Erro ao fazer download do arquivo');
+            errorJson = JSON.parse(errorText);
           } catch {
             // Se não conseguir parsear, usa status HTTP
             throw new Error(`Erro ${response.status}: ${response.statusText || 'Erro ao fazer download do arquivo'}`);
           }
+          // #1420: fora do try, o texto do servidor chega ao chamador
+          throw new Error(errorJson?.error || errorJson?.message || 'Erro ao fazer download do arquivo');
         }
         
         // Se a resposta é um objeto JSON

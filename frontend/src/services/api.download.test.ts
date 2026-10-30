@@ -86,6 +86,18 @@ describe('resultService.download: a JSON answer', () => {
     expect(clicked).toEqual([]);
   });
 
+  // #1420: a JSON error body that parses reaches the caller at any status.
+  it.each([
+    ['its error from a parsed body', 403, { error: 'fora do escopo' }, 'fora do escopo'],
+    ['its message from a blob body', 410, jsonBlob({ message: 'link expirado' }), 'link expirado'],
+    ['the default text from a body with neither', 404, {}, DEFAULT_MESSAGE],
+  ])('throws %s on an error status', async (_label, status, body, expected) => {
+    vi.spyOn(api, 'get').mockResolvedValue(reply(body, { 'content-type': 'application/json' }, status));
+
+    await expect(resultService.download(9)).rejects.toHaveProperty('message', expected);
+    expect(clicked).toEqual([]);
+  });
+
   it('throws the default text for unparseable JSON on an error status', async () => {
     vi.spyOn(api, 'get').mockResolvedValue(reply('{not json', { 'content-type': 'application/json' }, 500));
 
@@ -100,10 +112,13 @@ describe('resultService.download: a JSON answer', () => {
 });
 
 describe('resultService.download: a failed request', () => {
-  // A blob body's own error text never reaches the caller today: the Error
-  // thrown with it is caught by the same try and replaced by the status line.
+  // #1420: a blob body's own error text reaches the caller; the status line
+  // stands in only when the body does not parse.
   it.each([
-    ['a blob body holding a JSON error, by its status line', { status: 404, statusText: 'Not Found', data: jsonBlob({ error: 'não encontrado' }) }, 'Erro 404: Not Found'],
+    ['a blob body holding a JSON error', { status: 404, statusText: 'Not Found', data: jsonBlob({ error: 'não encontrado' }) }, 'não encontrado'],
+    ['a blob body holding a JSON message', { status: 403, statusText: 'Forbidden', data: jsonBlob({ message: 'fora do escopo' }) }, 'fora do escopo'],
+    ['a blob body holding JSON with neither', { status: 404, statusText: 'Not Found', data: jsonBlob({}) }, DEFAULT_MESSAGE],
+    ['a blob body holding JSON null', { status: 404, statusText: 'Not Found', data: textBlob('null') }, DEFAULT_MESSAGE],
     ['a blob body that is not JSON', { status: 502, statusText: 'Bad Gateway', data: textBlob('<html>') }, 'Erro 502: Bad Gateway'],
     ['a blob body with no status text', { status: 502, data: textBlob('<html>') }, `Erro 502: ${DEFAULT_MESSAGE}`],
     ['a JSON body with an error', { status: 403, data: { error: 'proibido' } }, 'proibido'],
@@ -114,7 +129,7 @@ describe('resultService.download: a failed request', () => {
   ])('reports %s', async (_label, response, expected) => {
     vi.spyOn(api, 'get').mockRejectedValue({ response });
 
-    await expect(resultService.download(9)).rejects.toThrow(expected);
+    await expect(resultService.download(9)).rejects.toHaveProperty('message', expected);
   });
 
   it.each([
