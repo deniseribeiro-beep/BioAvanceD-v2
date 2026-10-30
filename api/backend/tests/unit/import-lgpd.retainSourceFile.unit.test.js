@@ -30,6 +30,7 @@ const path = require('path');
 const importLGPDService = require('../../src/services/import-lgpd.service');
 const controller = require('../../src/controllers/import-lgpd.controller');
 const { decryptFileBuffer } = require('../../src/utils/fileCrypto');
+const keyRegistry = require('../../src/config/keyRegistry');
 
 /** A throwaway uploads/temp/ that mirrors multer's real layout. */
 function createUploadDir() {
@@ -117,6 +118,56 @@ describe('#792: retaining the LGPD import source file when rows were quarantined
       const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
 
       await expect(importLGPDService.retainSourceFileForBatch(db, file, 'batch-gone')).resolves.toBeNull();
+    });
+
+    it('returns null without touching the batch when the upload has no path (#1337)', async () => {
+      const db = { collection: vi.fn() };
+
+      await expect(importLGPDService.retainSourceFileForBatch(db, { originalname: 'x.csv' }, 'batch-nopath')).resolves.toBeNull();
+      expect(db.collection).not.toHaveBeenCalled();
+    });
+
+    describe('with no encryption key configured (#1337)', () => {
+      const savedOptOut = process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+
+      beforeEach(() => {
+        vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+      });
+
+      afterEach(() => {
+        if (savedOptOut === undefined) delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+        else process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = savedOptOut;
+      });
+
+      it('moves the upload as plaintext when ALLOW_UNENCRYPTED_FILE_STORAGE is "true"', async () => {
+        process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = 'true';
+        const file = createUploadedFile(tempDir);
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+
+        const retained = await importLGPDService.retainSourceFileForBatch(db, file, 'batch-plain');
+
+        expect(fs.existsSync(file.path)).toBe(false);
+        expect(retained.encrypted).toBe(false);
+        expect(retained).not.toHaveProperty('encryptionAlgorithm');
+        expect(fs.readFileSync(retained.storedPath, 'utf8')).toContain('12345678900');
+        expect(updateOne).toHaveBeenCalledWith(
+          { _id: 'batch-plain' },
+          { $set: { sourceFile: retained, updatedAt: retained.retainedAt } }
+        );
+      });
+
+      it('retains nothing and leaves the upload in place without the opt-out', async () => {
+        delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+        const file = createUploadedFile(tempDir);
+        const updateOne = vi.fn();
+        const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+
+        await expect(importLGPDService.retainSourceFileForBatch(db, file, 'batch-refused')).resolves.toBeNull();
+        expect(fs.existsSync(file.path)).toBe(true);
+        expect(fs.existsSync(path.join(root, 'uploads', 'quarantine', 'batch-refused.csv'))).toBe(false);
+        expect(updateOne).not.toHaveBeenCalled();
+      });
     });
   });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require2 = createRequire(import.meta.url);
@@ -470,6 +470,179 @@ describe('ImportLGPDService', () => {
   describe('cleanupFile', () => {
     it('does not throw when the file does not exist', () => {
       expect(() => importLgpdService.cleanupFile('/definitely/does/not/exist-cleanup.tmp')).not.toThrow();
+    });
+  });
+
+  describe('parsePatientRow blank text fields (#1337)', () => {
+    it('maps a whitespace-only patientName and unitAcronym to null', () => {
+      const result = importLgpdService.parsePatientRow({ patientName: '   ', unitAcronym: '  ' });
+      expect(result.patientName).toBeNull();
+      expect(result.unitAcronym).toBeNull();
+    });
+  });
+
+  describe('parseSampleRow alias and blank arms (#1337)', () => {
+    it('maps a null or blank sourceRecordId to null and trims a set one', () => {
+      expect(importLgpdService.parseSampleRow({ sourceRecordId: null }).sourceRecordId).toBeNull();
+      expect(importLgpdService.parseSampleRow({ sourceRecordId: '   ' }).sourceRecordId).toBeNull();
+      expect(importLgpdService.parseSampleRow({ sourceRecordId: ' SRC-77 ' }).sourceRecordId).toBe('SRC-77');
+    });
+
+    it('reads the participant sex from the gender column, then from sexo', () => {
+      expect(importLgpdService.parseSampleRow({ gender: 'F' }).patientSex).toBe('F');
+      expect(importLgpdService.parseSampleRow({ sexo: 'Masculino' }).patientSex).toBe('M');
+    });
+
+    it('takes the representative name from responsavelNome alone, and null when neither column is set', () => {
+      expect(importLgpdService.parseSampleRow({ responsavelNome: ' Ana Lima ' }).representativeName).toBe('Ana Lima');
+      expect(importLgpdService.parseSampleRow({}).representativeName).toBeNull();
+    });
+
+    it('trims and lowercases a present representativeEmail', () => {
+      expect(importLgpdService.parseSampleRow({ representativeEmail: ' Rep@Example.COM ' }).representativeEmail).toBe('rep@example.com');
+    });
+  });
+
+  describe('sanitizeCorrectedRow scalar values (#1337)', () => {
+    it('keeps null, number and boolean values as they are', () => {
+      expect(importLgpdService.sanitizeCorrectedRow({ a: null, b: 3, c: false, d: 'x' }))
+        .toEqual({ a: null, b: 3, c: false, d: 'x' });
+    });
+  });
+
+  describe('assertSampleHeaders patient identification (#1337)', () => {
+    it('throws when neither participantId nor the patientName + birthDate pair is present', () => {
+      expect(() => importLgpdService.assertSampleHeaders(['sampleType', 'sampleOrigin']))
+        .toThrow('Identificação do paciente ausente');
+      expect(() => importLgpdService.assertSampleHeaders(['sampleType', 'sampleOrigin', 'patientName']))
+        .toThrow('Identificação do paciente ausente');
+    });
+
+    it('accepts the nome + dataNascimento aliases as the identification pair', () => {
+      expect(() => importLgpdService.assertSampleHeaders(['sampleType', 'sampleOrigin', 'nome', 'dataNascimento']))
+        .not.toThrow();
+    });
+  });
+
+  describe('findFirstAvailablePositionInBox (#1337)', () => {
+    it('returns null for a box with no cols', () => {
+      expect(importLgpdService.findFirstAvailablePositionInBox({ dimension: { rows: 2 } })).toBeNull();
+    });
+
+    it('reads a Map occupancyGrid through has/get', () => {
+      const box = { dimension: { rows: 1, cols: 3 }, occupancyGrid: new Map([['A1', 'sample-1'], ['A2', null]]) };
+      expect(importLgpdService.findFirstAvailablePositionInBox(box)).toBe('A2');
+    });
+
+    it('returns null when every position is occupied', () => {
+      const box = { dimension: { rows: 1, cols: 2 }, occupancyGrid: { A1: 's1', A2: 's2' } };
+      expect(importLgpdService.findFirstAvailablePositionInBox(box)).toBeNull();
+    });
+  });
+
+  describe('resolveStorageHierarchyForBox (#1337)', () => {
+    function makeDb(docs) {
+      const findOne = vi.fn(async ({ _id }) => docs[_id] || null);
+      return { db: { collection: vi.fn(() => ({ findOne })) }, findOne };
+    }
+
+    it('walks through a DRAWER with a parent_id up to its rack, shelf and freezer', async () => {
+      const { db } = makeDb({
+        'drawer-1': { _id: 'drawer-1', containerType: 'DRAWER', parent_id: 'rack-1' },
+        'rack-1': { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' },
+        'shelf-1': { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' },
+        'freezer-1': { _id: 'freezer-1', containerType: 'FREEZER' },
+      });
+
+      const result = await importLgpdService.resolveStorageHierarchyForBox(db, { parent_id: 'drawer-1' });
+
+      expect(result.rack._id).toBe('rack-1');
+      expect(result.shelf._id).toBe('shelf-1');
+      expect(result.freezer._id).toBe('freezer-1');
+    });
+
+    it('resolves no rack, shelf or freezer for a DRAWER without a parent_id', async () => {
+      const { db, findOne } = makeDb({
+        'drawer-2': { _id: 'drawer-2', containerType: 'DRAWER' },
+      });
+
+      const result = await importLgpdService.resolveStorageHierarchyForBox(db, { parent_id: 'drawer-2' });
+
+      expect(result).toEqual({ rack: null, shelf: null, freezer: null });
+      expect(findOne).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('isPlacementReady status fallbacks (#1337)', () => {
+    function makeDb({ equipment, sensors = [] }) {
+      const equipmentFindOne = vi.fn().mockResolvedValue(equipment);
+      const sensorsFind = vi.fn(() => ({ limit: () => ({ toArray: async () => sensors }) }));
+      const db = {
+        collection: vi.fn((name) => (name === 'equipment' ? { findOne: equipmentFindOne } : { find: sensorsFind })),
+      };
+      return { db, equipmentFindOne, sensorsFind };
+    }
+
+    it('looks the equipment up by the id, its string and its number form', async () => {
+      const { db, equipmentFindOne } = makeDb({ equipment: null });
+
+      await expect(importLgpdService.isPlacementReady(db, { containerID: 7 })).resolves.toBe(false);
+      expect(equipmentFindOne).toHaveBeenCalledWith({ equipmentID: { $in: [7, '7'] } });
+    });
+
+    it('blocks equipment whose only status is a blocked maintenanceStatus', async () => {
+      const { db, sensorsFind } = makeDb({ equipment: { maintenanceStatus: 'Maintenance' } });
+
+      await expect(importLgpdService.isPlacementReady(db, { containerID: 'FRZ-1' })).resolves.toBe(false);
+      expect(sensorsFind).not.toHaveBeenCalled();
+    });
+
+    it('accepts equipment whose only status is a ready operationalStatus', async () => {
+      const { db } = makeDb({ equipment: { operationalStatus: 'Active' }, sensors: [{ operationalStatus: 'ok' }] });
+
+      await expect(importLgpdService.isPlacementReady(db, { containerID: 'FRZ-1' })).resolves.toBe(true);
+    });
+
+    it('rejects a sensor whose only status is a critical maintenanceStatus', async () => {
+      const { db } = makeDb({ equipment: { status: 'Active' }, sensors: [{ maintenanceStatus: 'calibration' }] });
+
+      await expect(importLgpdService.isPlacementReady(db, { containerID: 'FRZ-1' })).resolves.toBe(false);
+    });
+
+    it('rejects a sensor whose only status is a critical operationalStatus', async () => {
+      const { db } = makeDb({ equipment: { status: 'Active' }, sensors: [{ operationalStatus: 'offline' }] });
+
+      await expect(importLgpdService.isPlacementReady(db, { containerID: 'FRZ-1' })).resolves.toBe(false);
+    });
+
+    it('treats a sensor with no status at all as operational', async () => {
+      const { db } = makeDb({ equipment: { status: 'Active' }, sensors: [{}] });
+
+      await expect(importLgpdService.isPlacementReady(db, { containerID: 'FRZ-1' })).resolves.toBe(true);
+    });
+  });
+
+  describe('recordFailedImportBatch error message (#1337)', () => {
+    function makeDb() {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'failed-batch-1' });
+      return { db: { collection: vi.fn(() => ({ insertOne })) }, insertOne };
+    }
+
+    it('stores a plain string error as it is', async () => {
+      const { db, insertOne } = makeDb();
+
+      const batchId = await importLgpdService.recordFailedImportBatch(db, { error: 'header broke' });
+
+      expect(batchId).toBe('failed-batch-1');
+      expect(insertOne.mock.calls[0][0]).toMatchObject({ status: 'FAILED', error: 'header broke' });
+    });
+
+    it('stores the default "Erro desconhecido" message when no error is given', async () => {
+      const { db, insertOne } = makeDb();
+
+      await importLgpdService.recordFailedImportBatch(db, {});
+
+      expect(insertOne.mock.calls[0][0].error).toBe('Erro desconhecido');
     });
   });
 });

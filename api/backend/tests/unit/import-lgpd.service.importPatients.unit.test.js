@@ -497,6 +497,56 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.success).toBe(1);
   });
 
+  it('reports "não informado" as the received value when a row leaves email blank (#1337)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW, { ...VALID_ROW, email: '' }]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].row).toBe(3);
+    expect(result.errors[0].errors[0]).toMatch(/Email \(email\) é obrigatório.*Valor recebido: "não informado"/);
+  });
+
+  it('normalizes a recordNumber string the row parser hands over untouched: blank and "NaN" to null, numeric to a number, other text kept (#1337)', async () => {
+    const parsePatientRow = service.parsePatientRow.bind(service);
+    vi.spyOn(service, 'parsePatientRow').mockImplementation((row) => ({ ...parsePatientRow(row), recordNumber: row.recordNumber }));
+    vi.spyOn(service, 'readFile').mockResolvedValue([
+      { ...VALID_ROW, recordNumber: '   ' },
+      { ...VALID_ROW, recordNumber: 'NaN' },
+      { ...VALID_ROW, recordNumber: ' 42 ' },
+      { ...VALID_ROW, recordNumber: 'PRT-9' },
+    ]);
+    const createSpy = vi.spyOn(PatientModel, 'create');
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(4);
+    expect(createSpy.mock.calls.map(([data]) => data.recordNumber)).toEqual([null, null, 42, 'PRT-9']);
+    expect(insertedRecordNumbers()).toEqual([undefined, undefined, '42', 'PRT-9']);
+  });
+
+  it('records the model validation errors, each prefixed with the row number, and inserts nothing (#1337)', async () => {
+    vi.spyOn(PatientModel, 'validate').mockReturnValue({ isValid: false, errors: ['participantId inválido'] });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toEqual(['Linha 2: participantId inválido']);
+    expect(patientsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('records a default row error when a row throws an error with no message (#1337)', async () => {
+    patientService.checkDuplicatePatient.mockRejectedValueOnce(new Error(''));
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.total).toBe(1);
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toEqual(['Erro desconhecido ao processar linha']);
+  });
+
   it('warns but still imports when a patientID column is present in the file (it is ignored)', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, patientID: '99999999' }]);
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });

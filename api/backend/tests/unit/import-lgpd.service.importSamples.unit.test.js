@@ -1326,6 +1326,79 @@ describe('ImportLGPDService.processSampleRow (#817)', () => {
       sampleId: 'sample-id-1',
     });
   });
+
+  it('names the drug by its name when the candidate has no generic_name (#1337)', async () => {
+    const drugService = { searchAndCacheDrug: vi.fn().mockResolvedValue([{ name: 'Acetaminofeno', atcCode: 'N02BE01' }]) };
+
+    const outcome = await service.processSampleRow(
+      db,
+      { ...VALID_ROW, treatmentStatus: 'TREATED', medicationName: 'Tylenol' },
+      rowContext({ drugService })
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(drugService.searchAndCacheDrug).toHaveBeenCalledWith('Tylenol', { limit: 5 });
+    expect(samplesCollection.insertOne.mock.calls[0][0].pharmacologyData).toMatchObject({
+      medicationName: 'Acetaminofeno',
+      atcCode: 'N02BE01',
+    });
+  });
+
+  it('keeps the row drug name when the candidate has neither generic_name nor name (#1337)', async () => {
+    const drugService = { searchAndCacheDrug: vi.fn().mockResolvedValue([{ atcCode: 'N02BE01' }]) };
+
+    const outcome = await service.processSampleRow(
+      db,
+      { ...VALID_ROW, treatmentStatus: 'TREATED', medicationName: 'Tylenol' },
+      rowContext({ drugService })
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(samplesCollection.insertOne.mock.calls[0][0].pharmacologyData).toMatchObject({
+      medicationName: 'Tylenol',
+      atcCode: 'N02BE01',
+    });
+  });
+
+  it('returns the model validation errors for an invalid row, inserting nothing (#1337)', async () => {
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, quantity: '0' }, rowContext());
+
+    expect(outcome).toEqual({
+      ok: false,
+      errors: ['quantity deve ser maior que zero'],
+      data: { participantId: '12345678' },
+    });
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects a row whose sampleOrigin is not in the reference data (#1337)', async () => {
+    ({ db, samplesCollection, patientsCollection } = makeDb({ sampleOriginFound: false }));
+
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.errors).toEqual(['Origem "VENOUS_BLOOD" não encontrada no banco de dados. Use um valor cadastrado.']);
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects a row whose extractionProtocol is not in the reference data (#1337)', async () => {
+    ({ db, samplesCollection, patientsCollection } = makeDb({ protocolFound: false }));
+
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.errors).toEqual(['Protocolo de extração "TUBE_EDTA" não encontrado no banco de dados. Use um valor cadastrado.']);
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('stamps organizationId as a string when one is set, and null when none is (#1337)', async () => {
+    await service.processSampleRow(db, VALID_ROW, rowContext({ organizationId: 77 }));
+    expect(samplesCollection.insertOne.mock.calls[0][0].organizationId).toBe('77');
+
+    ({ db, samplesCollection, patientsCollection } = makeDb());
+    await service.processSampleRow(db, VALID_ROW, rowContext());
+    expect(samplesCollection.insertOne.mock.calls[0][0].organizationId).toBeNull();
+  });
 });
 
 describe('ImportLGPDService.getNextAvailableStorageSlot (#459)', () => {
