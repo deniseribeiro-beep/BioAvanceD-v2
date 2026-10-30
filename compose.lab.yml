@@ -1,0 +1,116 @@
+# Opt-in overlay for REFERENCE_IMPORT_PROFILE=full-lab on a lab VM/host.
+# Requires host directories with the Fase-2 dumps (default: $HOME/ref-full).
+#
+#   export REFERENCE_FULL_ASSET_DIR_HOST=$HOME/ref-full
+#   export REFERENCE_FULL_CACHE_DIR_HOST=$HOME/ref-cache
+#   docker compose --env-file .env.docker -f compose.yml -f compose.dev.yml -f compose.lab.yml \
+#     up -d --wait reference-data-bootstrap
+#
+# Does not change the default compose:up / e2e-gate fixture path.
+
+x-lab-ref-env: &lab-ref-env
+  REFERENCE_IMPORT_PROFILE: full-lab
+  REFERENCE_FULL_ASSET_DIR: /ref-full
+  REFERENCE_FULL_CACHE_DIR: /ref-cache
+
+x-lab-ref-volumes: &lab-ref-volumes
+  - ${REFERENCE_FULL_ASSET_DIR_HOST:-${HOME}/ref-full}:/ref-full:ro
+  - ${REFERENCE_FULL_CACHE_DIR_HOST:-${HOME}/ref-cache}:/ref-cache
+
+services:
+  backend:
+    environment:
+      <<: *lab-ref-env
+    volumes:
+      - ${REFERENCE_FULL_ASSET_DIR_HOST:-${HOME}/ref-full}:/ref-full:ro
+      - ${REFERENCE_FULL_CACHE_DIR_HOST:-${HOME}/ref-cache}:/ref-cache
+
+  worker:
+    environment:
+      <<: *lab-ref-env
+    volumes:
+      - ${REFERENCE_FULL_ASSET_DIR_HOST:-${HOME}/ref-full}:/ref-full:ro
+      - ${REFERENCE_FULL_CACHE_DIR_HOST:-${HOME}/ref-cache}:/ref-cache
+
+  reference-data-bootstrap:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-mondo:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-orpha:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-icd11:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-icd10:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  # OMIM dump is optional for intake autofill (Orphadata crosswalk). Keep the
+  # service defined so compose graphs resolve; it will no-op/fail closed if
+  # REFERENCE_FULL_ASSET_DIR/OMIM has no dump — skip it in the lab up script.
+  reference-data-bootstrap-omim:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-hgnc:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-loinc:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-ucum:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-dcb:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-atc:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-duo:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-uberon:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-ncbitax:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-cl:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
+
+  reference-data-bootstrap-edam:
+    environment:
+      <<: *lab-ref-env
+    volumes: *lab-ref-volumes
