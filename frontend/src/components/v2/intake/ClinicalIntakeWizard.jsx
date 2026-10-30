@@ -3914,8 +3914,21 @@ export default function ClinicalIntakeWizard(props) {
           </div>
         </Card>
 
-        {dictionariesLoading && <Card className="bg-white rounded-2xl shadow-lg border border-gray-100"><div className="text-sm font-semibold text-gray-700">{t('wizard.status.loadingTerminologies', 'Carregando terminologias internas...')}</div></Card>}
-        {consentTemplatesLoading && <Card className="bg-white rounded-2xl shadow-lg border border-gray-100"><div className="text-sm font-semibold text-gray-700">{t('wizard.status.loadingConsent', 'Carregando TCLE ativo...')}</div></Card>}
+        {dictionariesLoading && (
+          <Card className="bg-white rounded-2xl shadow-lg border border-gray-100" data-testid="wizard-loading-terminologies">
+            <div className="text-sm font-semibold text-gray-700">{t('wizard.status.loadingTerminologies', 'Carregando terminologias internas...')}</div>
+          </Card>
+        )}
+        {consentTemplatesLoading && (
+          <Card className="bg-white rounded-2xl shadow-lg border border-gray-100" data-testid="wizard-loading-consent">
+            <div className="text-sm font-semibold text-gray-700">{t('wizard.status.loadingConsent', 'Carregando TCLE ativo...')}</div>
+          </Card>
+        )}
+        {/* #1222: demographic fill is safe only after both mount-time fetches settle;
+            Chromium under Playwright can stall when fill races the in-flight bodies. */}
+        {!dictionariesLoading && !consentTemplatesLoading && (
+          <span data-testid="wizard-step1-ready" hidden aria-hidden="true" />
+        )}
         {consentTemplatesError && !/Nenhum TCLE ativo/i.test(String(consentTemplatesError || '')) && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{consentTemplatesError}</div></Card>}
         {submitError && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{submitError}</div></Card>}
         {sampleLabel && (
