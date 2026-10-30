@@ -45,7 +45,10 @@ for cand in python3 python; do
 done
 [[ -n "$PYTHON" ]] || { echo "python3 é obrigatório" >&2; exit 1; }
 
-tok() { openssl rand -base64 "$1" | tr -d '\n' | tr '+/' '-_' | tr -d '='; }
+# Strip CR as well as LF: Git Bash's mingw openssl ends base64 with CRLF
+# (#1418). Leaving `\r` inside MONGO_ROOT_PASSWORD / MONGO_URI made the DB
+# and the client disagree on the credential. Same as generate-env-production-secrets.sh.
+tok() { openssl rand -base64 "$1" | tr -d '\r\n' | tr '+/' '-_' | tr -d '='; }
 
 MONGO_USER="bioavanced_root"
 MONGO_PASSWORD="$(tok 36)"
@@ -116,7 +119,10 @@ sync_from_example() {
   local target="$1"
   local line name
   SYNC_ADDED=0
-  while IFS= read -r line; do
+  while IFS= read -r line || [ -n "$line" ]; do
+    # #1418: example files checked out with CRLF must not copy a trailing CR
+    # into .env.docker (same class of credential/URI corruption as tok()).
+    line="${line%$'\r'}"
     case "$line" in
       [A-Z]*=*) ;;
       *) continue ;;
