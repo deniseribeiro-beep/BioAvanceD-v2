@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { test, expect } from './showcaseFixtures';
 import { MongoClient, Db, ObjectId } from 'mongodb';
 import { randomBytes, createHash } from 'crypto';
 import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
