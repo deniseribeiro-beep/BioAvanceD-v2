@@ -21,6 +21,7 @@ const CAPTIONS: Array<[RegExp, string, string]> = [
   [/RF010 AC6/, 'Revogação de consentimento', 'Uma revogação muda a decisão de acesso de permitir para negar'],
   [/RF009/, 'Monitoramento de freezers', 'Leitura fora da faixa gera um alerta para o operador'],
   [/RF017\/RF006/, 'Armazenamento e estado do espécime', 'Freezer, prateleira, rack, caixa e posição até o esgotamento'],
+  [/Inventário de Amostras/, 'Login e inventário de amostras', 'Acesso real, as amostras registradas, uma busca e o detalhe do espécime'],
 ];
 
 function captionFor(title: string): [string, string] {

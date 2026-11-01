@@ -1449,3 +1449,145 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
     expect(closedBody.quantityStatus).toBe('depleted');
   });
 });
+
+// Login and sample inventory reel: the real login (a rejected password, then
+// the right one) and the Inventário de Amostras listing specimens registered
+// through the real API, a search narrowing it to one, and that specimen's
+// page. Each specimen gets its own seeded box, since the seeder hands out one
+// position per box. Deliberately not demoed: batch delete and label printing,
+// which other cases cover.
+test.describe('Human-paced e2e showcase reel — login and sample inventory', () => {
+  const boxes: SeededStorageBox[] = [];
+
+  test.afterAll(async () => {
+    await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await closeSeedDb();
+  });
+
+  test('Inventário de Amostras: an operator signs in, browses the real inventory, searches a specimen and opens it', async ({ page, request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    // Off camera: one participant and a few specimens of different types.
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, session.token);
+    await seedActiveConsent(participant.participantId);
+    const kinds = [
+      { sampleType: 'PLASMA', sampleOrigin: 'VENOUS_BLOOD', extractionProtocol: 'TUBE_EDTA', quantity: 5, linkedProject: 'Coorte Doenças Raras' },
+      { sampleType: 'SERUM', sampleOrigin: 'VENOUS_BLOOD', extractionProtocol: 'TUBE_SERUM', quantity: 3, linkedProject: 'Coorte Doenças Raras' },
+      { sampleType: 'PBMC', sampleOrigin: 'VENOUS_BLOOD', extractionProtocol: 'TUBE_HEPARIN', quantity: 2, linkedProject: 'Estudo Imunogenética' },
+      { sampleType: 'DBS', sampleOrigin: 'CAPILLARY_BLOOD', extractionProtocol: 'FILTER_PAPER', quantity: 1, linkedProject: 'Triagem Neonatal' },
+    ];
+    const specimenIds: string[] = [];
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    for (const [i, kind] of kinds.entries()) {
+      const box = await seedStorageBoxLocation();
+      boxes.push(box);
+      // The storage column shows the tree's names, so they read as a real biobank's.
+      const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+      const containers = db.collection('storageContainers');
+      await containers.updateOne({ _id: new ObjectId(box.freezerId) }, { $set: { name: `Freezer -80 °C · Sala ${i < 2 ? 1 : 2}` } });
+      await containers.updateOne({ _id: new ObjectId(box.shelfId) }, { $set: { name: `Prateleira ${i + 1}` } });
+      await containers.updateOne({ _id: new ObjectId(box.rackId) }, { $set: { name: 'Rack A' } });
+      await db.collection('storageBoxes').updateOne({ _id: new ObjectId(box.boxId) }, { $set: { name: `Caixa 0${i + 1}` } });
+      const res = await request.post(`${apiBaseURL}/api/samples`, {
+        headers,
+        data: {
+          participantId: participant.participantId,
+          ...kind,
+          quality: 'GOOD',
+          registeredAt: new Date().toISOString(),
+          boxId: box.boxId,
+          positionCode: box.positionCode,
+        },
+      });
+      if ([201, 202].includes(res.status())) specimenIds.push((await res.json()).data.specimenId as string);
+    }
+    // Off camera, as in the storage case: the compliance-graph inputs, so each specimen's page shows it releasable rather than blocked.
+    const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+    await db.collection('patientConsents').updateOne(
+      { participantId: participant.participantId, status: 'ACTIVE' },
+      { $set: { consentTemplateId: participant.consentTemplateId } },
+    );
+    const samples = db.collection('samples');
+    for (const specimenId of specimenIds) {
+      await samples.updateOne({ specimenId }, {
+        $set: {
+          consentTemplateId: participant.consentTemplateId,
+          clinicalData: { orphaCode: 'ORPHA:999001', cid: 'E75.2' },
+          pharmacologyData: { treatmentStatus: 'NAIVE' },
+          matrixType: 'fluid',
+          sprec: {
+            sampleType: 'BLD',
+            primaryContainer: 'SST',
+            preCentrifugation: 'A',
+            centrifugation: 'A',
+            secondCentrifugation: 'A',
+            postCentrifugationDelay: 'A',
+            longTermStorage: 'C',
+          },
+          sealedRcsAssessmentId: null,
+          sealedSpecimenPreanalyticsId: null,
+        },
+      });
+      const stored = await samples.findOne({ specimenId });
+      expect(stored, `sample ${specimenId} not found`).not.toBeNull();
+      await samples.updateOne({ specimenId }, { $set: { merkleRoot: sampleMerkleRoot(stored!) } });
+    }
+    await client.close();
+    const graph = await request.get(`${apiBaseURL}/api/samples/${specimenIds[0]}/compliance-graph`, { headers });
+    expect(graph.status(), await graph.text()).toBe(200);
+    expect(specimenIds.length, 'at least two specimens registered').toBeGreaterThanOrEqual(2);
+
+    // 1. A rejected login, then the real one. (RF003)
+    await page.goto('/login');
+    await expect(page.getByTestId('login-page')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('login-username-input').fill(testUser);
+    await beat(page, SMALL);
+    await page.getByTestId('login-password-input').fill('senha-errada');
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await expect(page.getByTestId('login-error')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('login-password-input').fill(testPass);
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await page.waitForURL('**/system-management');
+    await beat(page, LARGE);
+
+    // 2. The inventory, reached from the sidebar, listing the registered specimens.
+    await page.getByText('Inventário de Amostras', { exact: true }).first().click();
+    await page.waitForURL('**/samples');
+    await expect(page.getByTestId('samples-page-title')).toBeVisible();
+    // The table names each specimen by its barcode, not the API's specimenId.
+    const rows = page.locator('[data-testid^="sample-row-"]');
+    await expect(rows).toHaveCount(specimenIds.length);
+    await beat(page, LARGE);
+    await page.getByTestId('samples-table').scrollIntoViewIfNeeded();
+    await beat(page, MEDIUM);
+
+    // 3. A search by barcode narrows the list to one specimen.
+    const target = (await page.getByRole('cell', { name: /^BR-\d{4}-\d{3}$/ }).last().textContent())!.trim();
+    await page.getByTestId('samples-search-input').scrollIntoViewIfNeeded();
+    await page.getByTestId('samples-search-input').fill(target);
+    await beat(page, SMALL);
+    await page.getByTestId('samples-search-button').click();
+    await expect(rows).toHaveCount(1);
+    await expect(page.getByRole('cell', { name: target, exact: true })).toBeVisible();
+    await beat(page, MEDIUM);
+
+    // 4. That specimen's own page.
+    await page.locator('[data-testid^="sample-edit-button-"]').first().click();
+    await page.waitForURL(/\/samples\/[^/]+$/);
+    await expect(page.getByText('Status Atual:', { exact: true })).toBeVisible();
+    await beat(page, LARGE);
+    await page.getByText('Armazenagem e Projeto').first().scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+  });
+});
