@@ -48,6 +48,18 @@ describe('i18n', () => {
       expect(i18n.detectLanguage(req)).toBe('pt-BR');
     });
 
+    // #1422: Brazilian browsers typically list English as a lower-q fallback.
+    // The previous includes('en')-before-includes('pt') check picked English.
+    it('prefers pt over en when Accept-Language lists both with pt first/higher q', () => {
+      const req = { headers: { 'accept-language': 'pt-BR,pt;q=0.9,en-US;q=0.8' } };
+      expect(i18n.detectLanguage(req)).toBe('pt-BR');
+    });
+
+    it('prefers the higher-q language when Accept-Language reorders tags', () => {
+      const req = { headers: { 'accept-language': 'en;q=0.5,pt-BR;q=0.9' } };
+      expect(i18n.detectLanguage(req)).toBe('pt-BR');
+    });
+
     it('falls back to req.user.language when no query/header match', () => {
       const req = { user: { language: 'en-US' } };
       expect(i18n.detectLanguage(req)).toBe('en-US');
