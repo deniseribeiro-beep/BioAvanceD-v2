@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { withRequestId } from './requestId';
+import { getLanguage } from '../i18n';
 
 export type ApiToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -59,11 +60,13 @@ export const apiClient: AxiosInstance = axios.create({
 });
 
 apiClient.interceptors.request.use((config) => {
+  config.headers = config.headers || {};
   const token = localStorage.getItem('token');
   if (token) {
-    config.headers = config.headers || {};
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // #1422: UI language governs API messages (see services/api.ts).
+  config.headers['Accept-Language'] = getLanguage();
   return withRequestId(config);
 });
 

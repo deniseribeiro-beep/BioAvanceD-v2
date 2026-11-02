@@ -33,6 +33,7 @@ import {
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 import { fetchWithRequestId, withRequestId } from '../api/requestId';
+import { getLanguage } from '../i18n';
 
 // Opt-out for background/speculative requests (e.g. a prefetch for a later
 // wizard step) whose failure must not force-logout the user out of an
@@ -190,6 +191,9 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    // #1422: tell the API the UI language so auth/error messages follow the
+    // login-page switch, not the browser's Accept-Language fallbacks.
+    config.headers['Accept-Language'] = getLanguage();
     return withRequestId(config);
   },
   (error) => {
