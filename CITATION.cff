@@ -7,8 +7,9 @@ authors:
     given-names: Denise
     email: denise.ribeiro@mail.usf.edu.br
     affiliation: "Universidade São Francisco (USF)"
-version: "ex-ante-evaluation-v1.0.1"
+version: "ex-ante-evaluation-v1.0.2"
 date-released: "2026-11-02"
+license: "CC-BY-4.0"
 abstract: >-
   Design Science Research ex-ante evaluation package for BioAvanceD-v2:
   Fase 2 full-lab reference population memo, Fase 3 evaluation evidence

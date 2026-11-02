@@ -1,0 +1,34 @@
+BioAvanceD ex-ante evaluation evidence package
+Copyright (c) 2026 Denise Ribeiro — Universidade São Francisco (USF)
+
+This deposit is a research evidence package (documentation, metrics, screenshots,
+and the BioAvanceD Lab Population Pattern (BLPP) scripts included for
+reproducibility of the evaluation). The BioAvanceD product repository remains
+private (including software registration / INPI considerations) and is not
+opened by this deposit.
+
+## Documentation and evidence artefacts
+Files under `docs/evidencias/` (markdown memos, checklists, UI screenshots, and
+`ZENODO.md`) are licensed under Creative Commons Attribution 4.0 International
+(CC BY 4.0).
+
+You are free to share and adapt those materials provided you give appropriate
+credit. Full legal code: https://creativecommons.org/licenses/by/4.0/
+
+## Software snippets in this deposit (BLPP and compose overlay)
+Source files under `api/backend/scripts/`, `api/backend/tests/unit/scripts/`,
+`compose.lab-rs.yml`, and `infra/mongo/` are included solely so that the
+evaluation method can be inspected and reproduced in a laboratory setting.
+
+Copyright (c) 2026 Denise Ribeiro. All rights reserved for those software
+files, except that recipients of this Zenodo deposit may use them for
+non-commercial research reproducibility of the reported ex-ante evaluation.
+Any other use (including redistribution as a product, incorporation into
+commercial systems, or new software registration filings) requires prior
+written permission from the copyright holder.
+
+## Citation
+Please cite this package using `CITATION.cff` and the Zenodo DOI assigned to
+tag `ex-ante-evaluation-v1.0.2` (or later).
+
+Contact: denise.ribeiro@mail.usf.edu.br

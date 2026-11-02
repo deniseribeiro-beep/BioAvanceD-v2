@@ -6,8 +6,8 @@ Premissas explícitas (lab tese, não contrato comercial). Valores em BRL aproxi
 
 | Item | Premissa | R$/mês | R$/ano |
 |---|---|---:|---:|
-| VM GCP (e2-equivalente 16 GB) | lab contínuo | 900 | 10 800 |
-| Disco + snapshots | 100–200 GB | 80 | 960 |
+| VM GCP (`e2-highcpu-16`, 16 vCPU / 16 GiB) | lab contínuo | 900 | 10 800 |
+| Disco + snapshots | boot 450 GB (lab) | 80 | 960 |
 | Egress / misc | baixo | 50 | 600 |
 | Operador (tempo parcial) | 8 h/mês × R$80/h | 640 | 7 680 |
 | Licenças vocab. (LOINC etc.) | conforme contrato real | 0–500 | 0–6 000 |

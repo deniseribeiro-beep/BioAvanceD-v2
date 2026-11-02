@@ -1,12 +1,12 @@
-# Zenodo deposit — BioAvanceD ex-ante evaluation (v1.0.0)
+# Zenodo deposit — BioAvanceD ex-ante evaluation (v1.0.2)
 
 | Field | Value |
 |---|---|
 | Title | BioAvanceD ex-ante evaluation evidence package (BLPP + lab evaluation artefacts) |
-| Version | `ex-ante-evaluation-v1.0.1` |
+| Version | `ex-ante-evaluation-v1.0.2` |
 | Authors | Denise Ribeiro (Universidade São Francisco — USF) |
 | Contact | denise.ribeiro@mail.usf.edu.br |
-| License (this package) | Same as the BioAvanceD-v2 repository license at deposit time |
+| License (this package) | See root `LICENSE` — docs/evidence CC BY 4.0; BLPP/compose all-rights-reserved with research-reproducibility grant |
 | Scope | Design Science Research (DSR) **ex-ante** evaluation artefacts and lab run evidence |
 | Software artefact | BioAvanceD Lab Population Pattern (BLPP) `schemaVersion` **1.0.0** |
 | Privacy | **VAL-027** / synthetic lab population only — **no real PII**; LGPD Identity path for fixture patients |
@@ -18,11 +18,14 @@
 |---|---|
 | Provider / zone | Google Cloud Platform · `us-central1-a` |
 | Instance name | `instance-20261029-155615` |
+| Machine type | `e2-highcpu-16` (**16 vCPU**, **16 GiB RAM**) |
+| Boot disk | **450 GB** persistent disk |
 | Role | Ephemeral lab host for Fase 2 reference population + Fase 3 BLPP / UI evidence |
 | Stack | Docker Compose: `compose.yml` + `compose.dev.yml` + `compose.lab-rs.yml` (+ `compose.lab.yml` for full-lab reference imports) |
 | Mongo | Single-node replica set `rs0` with keyFile (RF006 transactions / `applyMode=service`) |
 | Access pattern | Local SSH tunnel to UI/API ports; do **not** treat ephemeral public IPs as a reproducibility dependency |
 | Data stores named in runs | Mongo DB `bioavanced_dev` (synthetic) |
+| Instance status at deposit | `TERMINATED` after lab close-down (expected) |
 
 Generate the Mongo keyFile locally as documented in `infra/mongo/README.md` — the keyfile itself is **not** deposited.
 
@@ -37,16 +40,17 @@ Generate the Mongo keyFile locally as documented in `infra/mongo/README.md` — 
 
 ## Package layout
 
+- `LICENSE` — dual-scope licence for this deposit  
+- `CITATION.cff` — citation metadata  
 - `docs/evidencias/2026-10-30-fase2-full-lab-populacao.md` — Fase 2 full-lab reference population memo  
 - `docs/evidencias/2026-11-01-fase3-lab-population-ex-ante.md` — Fase 3 ex-ante index / evaluation checklist  
- 
 - `docs/evidencias/fase3/**` — capacity, what-if, AIR/LGPD, RIPD lab, STRIDE, TCO, walkthrough, UI screenshots, RCS/liberação, prototipagem, CI/E2E vs lab, service re-seed metrics  
 - `api/backend/scripts/lab-population/**` + `seed-lab-population.js` + unit test — BLPP method (self-contained ZIP)  
 - `compose.lab-rs.yml` + `infra/mongo/README.md` — replica-set overlay for RF006  
 
 ## How to cite
 
-Prefer the Zenodo DOI assigned to tag `ex-ante-evaluation-v1.0.1` once minted. Until then, cite the GitHub tag and this file. Software citation metadata: root `CITATION.cff`.
+Prefer the Zenodo DOI assigned to tag `ex-ante-evaluation-v1.0.2` once minted. Until then, cite the GitHub tag and this file. Software citation metadata: root `CITATION.cff`.
 
 ## Limits (DSR honesty)
 

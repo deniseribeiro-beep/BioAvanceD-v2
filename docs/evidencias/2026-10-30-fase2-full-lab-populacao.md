@@ -17,6 +17,8 @@
 |---|---|
 | Provedor / zona | Google Cloud Platform · `us-central1-a` |
 | Instância | `instance-20261029-155615` (lab efêmero; IP público **não** é dependência de reprodução) |
+| Machine type | `e2-highcpu-16` — **16 vCPU**, **16 GiB RAM** |
+| Disco boot | **450 GB** persistent disk |
 | Papel | Host de laboratório para população full-lab de referências (RF028) e evidência DSR |
 | Stack | Docker Compose: `compose.yml` + `compose.dev.yml` + `compose.lab.yml` (+ `compose.lab-rs.yml` quando RF006/`replSet` é necessário) |
 | Persistência nomeada | MongoDB DB `bioavanced_dev`; Neo4j via outbox de projeção (não é fonte de verdade das contagens §3) |
@@ -223,4 +225,4 @@ Catálogo alinhado ao dicionário de fontes/referências do BioAvanceD (`docs/do
 
 ### 8.3 Como citar este memo
 
-Junto com as fontes acima, citar o pacote de evidência ex ante (`CITATION.cff` / DOI Zenodo da tag `ex-ante-evaluation-v1.0.1`) e declarar limites de lab da §5 (proxy ICD-10-CM, ATC CSV, NCBITAX genus+, OMIM skip).
+Junto com as fontes acima, citar o pacote de evidência ex ante (`CITATION.cff` / DOI Zenodo da tag `ex-ante-evaluation-v1.0.2`) e declarar limites de lab da §5 (proxy ICD-10-CM, ATC CSV, NCBITAX genus+, OMIM skip).
