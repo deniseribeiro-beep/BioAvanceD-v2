@@ -341,7 +341,7 @@ export const phoneCodeService = {
 // ========== SAMPLE SERVICES ==========
 export const sampleService = {
   getAll: () => api.get<ApiEnvelope<Sample[]>>('/samples'),
-  getById: (id: number) => api.get<Sample>(`/samples/${id}`),
+  getById: (id: number | string) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
   getResults: (id: number) => api.get<ApiEnvelope<Result[]>>(`/samples/${id}/results`), // Implementa Sample.getResults()

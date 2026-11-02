@@ -124,45 +124,67 @@ export default function SampleDetailsPage() {
     };
   };
 
-  // Busca a amostra quando os dados são carregados
+  // Resolve sample from in-memory list, then fall back to GET /samples/:id
+  // (inventory is capped; deep-links and seed churn can miss the local window).
   useEffect(() => {
-    if (!loading && id && samples !== undefined) {
-      // Se não há amostras carregadas (array vazio após carregar)
-      if (!samples || samples.length === 0) {
-        setSample(null);
-        return;
-      }
+    let cancelled = false;
 
-      // Tenta encontrar a amostra por _id ou sampleID
+    const applySample = (foundSample: Sample) => {
+      setSample(foundSample);
+      setForm({
+        linkedProject: foundSample.linkedProject || '',
+        currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
+        sampleOrigin: foundSample.sampleOrigin || '',
+        extractionProtocol: foundSample.extractionProtocol || '',
+        participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
+      });
+    };
+
+    const resolveSample = async () => {
+      if (!id || loading || samples === undefined) return;
+
       const searchId = String(id || '').trim();
-      const foundSample = samples.find(s => {
-        const sampleId = String(s._id || '').trim();
+      const foundSample = (samples || []).find(s => {
+        const sampleId = String(s._id || (s as any).id || '').trim();
         const specimenIdStr = String(s.specimenId || '').trim();
-        
-        return sampleId === searchId || 
+        return sampleId === searchId ||
                specimenIdStr === searchId ||
                sampleId.toLowerCase() === searchId.toLowerCase() ||
                specimenIdStr.toLowerCase() === searchId.toLowerCase();
       });
-      
+
       if (foundSample) {
-        setSample(foundSample);
-        setForm({
-          linkedProject: foundSample.linkedProject || '',
-          currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
-          sampleOrigin: foundSample.sampleOrigin || '',
-          extractionProtocol: foundSample.extractionProtocol || '',
-          participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
-        });
-      } else {
-        // Se carregou mas não encontrou, define como null
-        console.warn('Amostra não encontrada:', { 
-          searchId: id, 
-          availableIds: samples.map(s => ({ _id: s._id, specimenId: s.specimenId }))
+        if (!cancelled) applySample(foundSample);
+        return;
+      }
+
+      if (!samples || samples.length === 0) {
+        // still try direct fetch below
+      }
+
+      try {
+        const response = await sampleService.getById(searchId);
+        const payload = (response as any)?.data ?? response;
+        const remote = (payload?.data ?? payload?.sample ?? payload) as Sample | null;
+        if (!cancelled && remote && (remote._id || (remote as any).specimenId)) {
+          applySample(remote);
+          return;
+        }
+      } catch (err) {
+        console.warn('Amostra não encontrada via API:', { searchId, err });
+      }
+
+      if (!cancelled) {
+        console.warn('Amostra não encontrada:', {
+          searchId: id,
+          availableIds: (samples || []).map(s => ({ _id: s._id, specimenId: s.specimenId })),
         });
         setSample(null);
       }
-    }
+    };
+
+    void resolveSample();
+    return () => { cancelled = true; };
   }, [samples, id, loading]);
 
   useEffect(() => {
