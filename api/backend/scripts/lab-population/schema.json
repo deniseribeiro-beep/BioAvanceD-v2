@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bioavanced.local/schemas/lab-population/v1.json",
+  "title": "BioAvanceD Lab Population Pattern (BLPP)",
+  "description": "Canonical synthetic operational population for lab validation and thesis evidence. Inspired by REF-032/Synthea concepts only — not Synthea runtime.",
+  "type": "object",
+  "required": ["schemaVersion", "seed", "generatedAt", "sourceSystem", "runId", "participants", "specimens"],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "1.0.0" },
+    "seed": { "type": "integer" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "sourceSystem": { "type": "string", "const": "bioavanced-lab-population" },
+    "runId": { "type": "string" },
+    "nTarget": { "type": "integer", "minimum": 1 },
+    "chunkSize": { "type": "integer", "minimum": 1 },
+    "participants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sourceRecordId", "patientName", "birthDate", "sex", "email"],
+        "properties": {
+          "sourceRecordId": { "type": "string" },
+          "patientName": { "type": "string" },
+          "birthDate": { "type": "string" },
+          "sex": { "type": "string", "enum": ["M", "F", "O", "U"] },
+          "email": { "type": "string" }
+        }
+      }
+    },
+    "specimens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sourceRecordId", "participantSourceRecordId", "sampleType", "sampleOrigin", "extractionProtocol", "quantity", "quality"],
+        "properties": {
+          "sourceRecordId": { "type": "string" },
+          "participantSourceRecordId": { "type": "string" },
+          "sampleType": { "type": "string" },
+          "sampleOrigin": { "type": "string" },
+          "extractionProtocol": { "type": "string" },
+          "quantity": { "type": "number" },
+          "quality": { "type": "string" },
+          "linkedProject": { "type": "string" }
+        }
+      }
+    },
+    "negatives": { "type": "array" },
+    "clinicalSubset": { "type": "array" }
+  }
+}
