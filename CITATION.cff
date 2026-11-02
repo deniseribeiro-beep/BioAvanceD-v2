@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: "BioAvanceD ex-ante evaluation evidence package (BLPP + gold-matrix lab)"
+message: "If you use this evidence package or the BioAvanceD Lab Population Pattern (BLPP), please cite it using these metadata."
+type: dataset
+authors:
+  - family-names: Ribeiro
+    given-names: Denise
+    email: denise.ribeiro@mail.usf.edu.br
+    affiliation: "Universidade São Francisco (USF)"
+version: "ex-ante-evaluation-v1.0.0"
+date-released: "2026-11-02"
+abstract: >-
+  Design Science Research ex-ante evaluation package for BioAvanceD-v2:
+  Fase 2 full-lab reference population memo, Fase 3 gold-matrix evidence
+  (capacity, what-if, AIR/LGPD, RIPD lab, STRIDE, TCO, cognitive walkthrough,
+  UI screenshots, RCS/liberação), and the BioAvanceD Lab Population Pattern
+  (BLPP) synthetic seed pipeline. Lab data are synthetic (VAL-027); no real PII.
+keywords:
+  - biobank
+  - Design Science Research
+  - synthetic data
+  - LGPD
+  - BioAvanceD
+  - BLPP
+license: SEE-LICENSE-IN-REPO
+repository-code: "https://github.com/deniseribeiro-beep/BioAvanceD-v2"
+url: "https://github.com/deniseribeiro-beep/BioAvanceD-v2/tree/deposit/ex-ante-evaluation"
+contact:
+  - family-names: Ribeiro
+    given-names: Denise
+    email: denise.ribeiro@mail.usf.edu.br
