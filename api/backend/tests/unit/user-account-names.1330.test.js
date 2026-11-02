@@ -96,6 +96,9 @@ function expectOnlyCanonicalNames(doc) {
 }
 
 describe('#1330/#1386: a user still carrying legacy names', () => {
+  // #1421: processLogin bcrypt-compares under the default 5 s vitest budget.
+  // In a loaded full-coverage run (import phase ~857 s, other vitest workers
+  // on the same machine) this case timed out at 5000 ms while passing alone.
   it('signs in, and the sign-in moves the document to the canonical names with the legacy ones $unset', async () => {
     const users = usersStore([legacyUser()]);
     const db = makeDb(users);
@@ -121,7 +124,7 @@ describe('#1330/#1386: a user still carrying legacy names', () => {
 
     const move = users.updateOne.mock.calls.find(([, update]) => update.$unset && update.$unset.name === '');
     expect(move[0]).toMatchObject({ _id: USER_ID, displayName: { $exists: false }, name: { $exists: true } });
-  });
+  }, 15_000);
 
   it('signs in again after the move, now through the canonical names', async () => {
     const users = usersStore([legacyUser()]);

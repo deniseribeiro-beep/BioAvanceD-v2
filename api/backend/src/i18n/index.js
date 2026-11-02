@@ -48,6 +48,48 @@ function getDefaultLanguage() {
 }
 
 /**
+ * Maps one BCP-47 tag (or prefix) onto a supported backend locale.
+ * @param {string} tag
+ * @returns {'en-US'|'pt-BR'|null}
+ */
+function mapLanguageTag(tag) {
+  const normalized = String(tag || '').toLowerCase();
+  if (normalized === 'en' || normalized.startsWith('en-')) return 'en-US';
+  if (normalized === 'pt' || normalized.startsWith('pt-')) return 'pt-BR';
+  return null;
+}
+
+/**
+ * Parses Accept-Language into preference-ordered tags (RFC 7231 §5.3.5).
+ * Higher q wins; equal q keeps header order. Tags with q=0 are dropped.
+ * @param {string} header
+ * @returns {string[]}
+ */
+function parseAcceptLanguage(header) {
+  const entries = String(header)
+    .split(',')
+    .map((part, index) => {
+      const segments = part.trim().split(';').map((s) => s.trim()).filter(Boolean);
+      if (segments.length === 0) return null;
+      const tag = segments[0].toLowerCase();
+      let q = 1;
+      for (let i = 1; i < segments.length; i += 1) {
+        const match = /^q\s*=\s*([0-9]*\.?[0-9]+)$/i.exec(segments[i]);
+        if (match) {
+          q = Number(match[1]);
+          break;
+        }
+      }
+      if (!Number.isFinite(q) || q <= 0) return null;
+      return { tag, q, index };
+    })
+    .filter(Boolean);
+
+  entries.sort((a, b) => b.q - a.q || a.index - b.index);
+  return entries.map((entry) => entry.tag);
+}
+
+/**
  * Detecta o idioma a partir de várias fontes
  * @param {Object} req - Objeto de requisição Express
  * @returns {string} Código do idioma (pt-BR ou en-US)
@@ -55,16 +97,18 @@ function getDefaultLanguage() {
 function detectLanguage(req) {
   // 1. Query string ?lang=
   if (req.query && req.query.lang) {
-    const lang = req.query.lang.toLowerCase();
-    if (lang === 'en' || lang === 'en-us') return 'en-US';
-    if (lang === 'pt' || lang === 'pt-br') return 'pt-BR';
+    const fromQuery = mapLanguageTag(req.query.lang);
+    if (fromQuery) return fromQuery;
   }
 
-  // 2. Header Accept-Language
+  // 2. Header Accept-Language — honour order and q-values (#1422).
+  // Do not substring-match the raw header: "pt-BR,...,en-US;q=0.8" used to
+  // resolve to en-US because "en" appeared anywhere in the string.
   if (req.headers && req.headers['accept-language']) {
-    const acceptLang = req.headers['accept-language'].toLowerCase();
-    if (acceptLang.includes('en')) return 'en-US';
-    if (acceptLang.includes('pt')) return 'pt-BR';
+    for (const tag of parseAcceptLanguage(req.headers['accept-language'])) {
+      const mapped = mapLanguageTag(tag);
+      if (mapped) return mapped;
+    }
   }
 
   // 3. Idioma salvo no usuário (se autenticado)
