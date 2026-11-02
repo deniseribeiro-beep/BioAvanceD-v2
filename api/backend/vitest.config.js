@@ -24,11 +24,12 @@ module.exports = defineConfig({
       reportsDirectory: './coverage',
       include: ['src/**/*.js'],
       exclude: ['**/node_modules/**', 'tests/**', 'src/seeders/**'],
+      // The 90% floor on all four metrics (#1337).
       thresholds: {
-        statements: 25,
-        branches: 25,
-        functions: 27,
-        lines: 25,
+        statements: 90,
+        branches: 90,
+        functions: 90,
+        lines: 90,
       },
     },
     exclude: [
