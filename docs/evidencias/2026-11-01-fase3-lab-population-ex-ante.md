@@ -1,4 +1,4 @@
-# Evidência Fase 3 — Avaliação ex ante completa (BLPP + matriz ouro)
+# Evidência Fase 3 — Avaliação ex ante completa (BLPP)
 
 **Data:** 2026-11-01 (pacote fechado na mesma linha de execução)  
 **VM (metadados):** GCP `us-central1-a` · instância `instance-20261029-155615` (IP efêmero não é dependência de reprodução — ver [fase3/ZENODO.md](fase3/ZENODO.md))  
@@ -84,7 +84,7 @@
 
 ---
 
-## Matriz ouro — status final
+## Checklist de avaliação ex ante — status final
 
 | # | Item | Status | Onde |
 |---|---|---|---|
@@ -111,7 +111,7 @@
 
 ## Como citar
 
-1. Preferir o DOI Zenodo da tag `ex-ante-evaluation-v1.0.0` (metadados em [fase3/ZENODO.md](fase3/ZENODO.md) e `CITATION.cff`).  
+1. Preferir o DOI Zenodo da tag `ex-ante-evaluation-v1.0.1` (metadados em [fase3/ZENODO.md](fase3/ZENODO.md) e `CITATION.cff`).  
 2. Anexar tabelas dos arquivos `fase3/*.md` e figuras `fase3/ui/`.  
 3. Declarar BLPP como artefato criado; REF-032 só fundamento conceitual.  
 4. Declarar evolução `lab-direct` → `replSet` + `service` ([ci-e2e-lab.md](fase3/ci-e2e-lab.md), [service-reseed-metrics.md](fase3/service-reseed-metrics.md)).

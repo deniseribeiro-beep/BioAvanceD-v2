@@ -1,13 +1,30 @@
 # Fase 2 full-lab — população de referência na VM GCP
 
 **Status final:** `FINAL_FAIL=0` — Fase 2 completa (verificado 2026-11-01 ~22:15Z / BRT ~19:15)  
-**Host:** GCP `instance-20261029-155615` · DB `bioavanced_dev`  
+**Host:** GCP `instance-20261029-155615` · zona `us-central1-a` · DB `bioavanced_dev`  
 **Perfil:** `REFERENCE_IMPORT_PROFILE=full-lab` (`compose.lab.yml`)  
 **Assets:** `~/ref-full/<DATASET>/` · cache `~/ref-cache/`  
 **Script da rodada completa:** `scripts/lab-vm-fase2-complete.sh` (nohup → `~/fase2-complete-run.log`)  
 **Evidência de fila:** `~/evidencias-dsr-lab-20261030/fase2-complete-summary.txt`
 
-> Documento para inclusão em resultados/DSR. Contagens finais na §3.0 / §8.
+> Documento para inclusão em resultados/DSR. Contagens finais na §3.0. Fontes e citações na §8.
+
+---
+
+## 0. Ambiente de testes (ficha)
+
+| Item | Valor |
+|---|---|
+| Provedor / zona | Google Cloud Platform · `us-central1-a` |
+| Instância | `instance-20261029-155615` (lab efêmero; IP público **não** é dependência de reprodução) |
+| Papel | Host de laboratório para população full-lab de referências (RF028) e evidência DSR |
+| Stack | Docker Compose: `compose.yml` + `compose.dev.yml` + `compose.lab.yml` (+ `compose.lab-rs.yml` quando RF006/`replSet` é necessário) |
+| Persistência nomeada | MongoDB DB `bioavanced_dev`; Neo4j via outbox de projeção (não é fonte de verdade das contagens §3) |
+| Perfil de import | `REFERENCE_IMPORT_PROFILE=full-lab` |
+| Assets / cache | `~/ref-full/<DATASET>/` · `~/ref-cache/` |
+| Acesso operacional | SSH + tunnel local para UI/API; sem exposição permanente de :5173/:3000 |
+| Escopo de dados | Vocabulários de referência versionados; **sem PII de participantes reais** nesta fase |
+| Reprodutibilidade | Contagens e `FINAL_FAIL=0` (§3.0); scripts e registry em §7; fontes oficiais em §8 |
 
 ---
 
@@ -167,3 +184,43 @@ Ordem em `lab-vm-fase2-complete.sh` após HGNC:
 - Promoção: `api/backend/src/services/referenceRelease.service.js`
 - Registry lab: `api/backend/src/reference-data/reference-imports/lab/fullLabSources.js`
 - Decisão essencial vs full pack: `docs/decisions/2026-10-29-production-reference-data.md`
+
+---
+
+## 8. Nomenclaturas, fontes e referências bibliográficas
+
+Catálogo alinhado ao dicionário de fontes/referências do BioAvanceD (`docs/docs-7-27-2026/extracted/dict-01_FONTES.md`, `dict-05_REFERENCIAS.md`). As contagens desta rodada estão na §3.0; abaixo, a **identidade normativa** de cada pacote carregado (ou essential da Fase 1).
+
+### 8.1 Full-lab (`active`, 15 releases — OMIM dump fora)
+
+| Código | Fonte (SRC) | Papel no lab | Referência / citação |
+|---|---|---|---|
+| **LOINC** | SRC_LOINC | Observações/lab | Regenstrief Institute. *LOINC*. https://loinc.org/ — **REF-041** |
+| **ICD10** | SRC_ICD10 | Diagnósticos legados (lab: proxy CMS ICD-10-CM → `systemUri` FHIR ICD-10) | WHO. *ICD-10*. https://icd.who.int/browse10/2019/en — ver honestidade §5.2 |
+| **ICD11** | SRC_ICD11 | CID-11 MMS | WHO. *ICD-11*. https://icd.who.int/en — **REF-040** |
+| **MONDO** | SRC_MONDO | Mediação de doenças (OBO) | Monarch Initiative. *Mondo Disease Ontology*. https://mondo.monarchinitiative.org/ (CC BY 4.0) |
+| **HPO** | SRC_HPO | Fenótipos humanos | Monarch Initiative / HPO. *Human Phenotype Ontology*. https://human-phenotype-ontology.github.io/ |
+| **ORPHA** | SRC_ORPHA | Doenças raras + intake crosswalk | ORPHAcode Team. *Orphanet Nomenclature Pack*. https://www.orphacode.org/pack-nomenclature/ — **REF-043** |
+| **HGNC** | SRC_HGNC | Genes humanos | Tweedie et al. Genenames.org: the HGNC and VGNC resources in 2021. *Nucleic Acids Res.* — **REF-035** / https://www.genenames.org/ |
+| **ATC** | SRC_ATC | Classificação ATC/DDD | WHO Collaborating Centre for Drug Statistics Methodology. *ATC/DDD Index*. https://www.whocc.no/atc_ddd_index/ — lab: CSV ATC-DDD (§5.3) |
+| **DCB** | SRC_DCB | Denominação Comum Brasileira | ANVISA. *DCB*. https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb |
+| **UCUM** | SRC_UCUM | Unidades de medida | UCUM Organization. *The Unified Code for Units of Measure*. https://ucum.org/ — **REF-042** |
+| **DUO** | SRC_DUO | Uso/consentimento de dados | GA4GH. *Data Use Ontology (DUO)*. https://www.ga4gh.org/product/data-use-ontology-duo/ — **REF-039** |
+| **EDAM** | SRC_EDAM | Dados/formatos/ops bioinformática | *EDAM Ontology*. https://edamontology.org/ |
+| **CL** | SRC_CL | Tipos celulares | OBO Foundry. *Cell Ontology*. https://obofoundry.org/ontology/cl.html |
+| **UBERON** | SRC_UBERON | Anatomia multi-espécie | OBO Foundry. *Uberon*. https://obofoundry.org/ontology/uberon.html |
+| **NCBITAX** | SRC_NCBITAX | Organismos (genus+ nesta rodada) | NCBI. *Taxonomy*. https://www.ncbi.nlm.nih.gov/taxonomy — §5.4 |
+
+**OMIM:** dump oficial **não** ingerido nesta rodada; códigos OMIM no wizard vêm do mapeamento Orphadata (`ORPHA_OMIM_mapping`) — §1.3.
+
+### 8.2 Essential (Fase 1 — já `active`)
+
+| Código | Fonte (SRC) | Papel | Referência / citação |
+|---|---|---|---|
+| **miabis-minimal** | SRC_MIABIS3 | Metadados estruturais de biobanco/coleção | BBMRI-ERIC. *MIABIS*. https://github.com/BBMRI-ERIC/miabis — **REF-044** |
+| **sprec-minimal** | SRC_SPREC2 | Pré-analítico (baseline RCS) | ISBER Working Group. SPREC 2.0 — https://pmc.ncbi.nlm.nih.gov/articles/PMC6463986/ |
+| **rcs-gov-1.0** | SRC_RCS | Governança RCS | Ribeiro et al. RCS / materiais suplementares — **REF-045** (atualizar DOI quando publicado) |
+
+### 8.3 Como citar este memo
+
+Junto com as fontes acima, citar o pacote de evidência ex ante (`CITATION.cff` / DOI Zenodo da tag `ex-ante-evaluation-v1.0.1`) e declarar limites de lab da §5 (proxy ICD-10-CM, ATC CSV, NCBITAX genus+, OMIM skip).

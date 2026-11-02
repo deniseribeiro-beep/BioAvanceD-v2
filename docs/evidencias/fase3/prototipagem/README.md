@@ -22,4 +22,4 @@ Arquivos:
 
 ## Limite
 
-Não substitui estudo formal de UX com usuários finais pré-código; fecha o item 2.1 da matriz ouro com honestidade DSR.
+Não substitui estudo formal de UX com usuários finais pré-código; fecha o item 2.1 do checklist de avaliação ex ante com honestidade DSR.

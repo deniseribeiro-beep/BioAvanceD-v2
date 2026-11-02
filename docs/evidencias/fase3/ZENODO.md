@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Title | BioAvanceD ex-ante evaluation evidence package (BLPP + gold-matrix lab) |
-| Version | `ex-ante-evaluation-v1.0.0` |
+| Title | BioAvanceD ex-ante evaluation evidence package (BLPP + lab evaluation artefacts) |
+| Version | `ex-ante-evaluation-v1.0.1` |
 | Authors | Denise Ribeiro (Universidade São Francisco — USF) |
 | Contact | denise.ribeiro@mail.usf.edu.br |
 | License (this package) | Same as the BioAvanceD-v2 repository license at deposit time |
@@ -38,14 +38,15 @@ Generate the Mongo keyFile locally as documented in `infra/mongo/README.md` — 
 ## Package layout
 
 - `docs/evidencias/2026-10-30-fase2-full-lab-populacao.md` — Fase 2 full-lab reference population memo  
-- `docs/evidencias/2026-11-01-fase3-lab-population-ex-ante.md` — Fase 3 ex-ante index / gold matrix  
+- `docs/evidencias/2026-11-01-fase3-lab-population-ex-ante.md` — Fase 3 ex-ante index / evaluation checklist  
+ 
 - `docs/evidencias/fase3/**` — capacity, what-if, AIR/LGPD, RIPD lab, STRIDE, TCO, walkthrough, UI screenshots, RCS/liberação, prototipagem, CI/E2E vs lab, service re-seed metrics  
 - `api/backend/scripts/lab-population/**` + `seed-lab-population.js` + unit test — BLPP method (self-contained ZIP)  
 - `compose.lab-rs.yml` + `infra/mongo/README.md` — replica-set overlay for RF006  
 
 ## How to cite
 
-Prefer the Zenodo DOI assigned to tag `ex-ante-evaluation-v1.0.0` once minted. Until then, cite the GitHub tag and this file. Software citation metadata: root `CITATION.cff`.
+Prefer the Zenodo DOI assigned to tag `ex-ante-evaluation-v1.0.1` once minted. Until then, cite the GitHub tag and this file. Software citation metadata: root `CITATION.cff`.
 
 ## Limits (DSR honesty)
 
