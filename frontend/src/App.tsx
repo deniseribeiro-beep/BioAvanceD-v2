@@ -84,6 +84,58 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/mfa-setup" element={<MFASetupPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          {/* Sample static paths must be registered before /samples/:id or
+              withdrawal-return / custody-reports are captured as an :id. */}
+          <Route
+            path="/samples/withdrawal-return"
+            element={
+              <Layout>
+                <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
+                  <SampleWithdrawalReturnPage />
+                </ProtectedRoute>
+              </Layout>
+            }
+          />
+          <Route
+            path="/samples/custody-reports"
+            element={
+              <Layout>
+                <ProtectedRoute>
+                  <SampleCustodyReportsPage />
+                </ProtectedRoute>
+              </Layout>
+            }
+          />
+          <Route
+            path="/samples/:id/label"
+            element={
+              <Layout>
+                <ProtectedRoute>
+                  <SampleLabelPage />
+                </ProtectedRoute>
+              </Layout>
+            }
+          />
+          <Route
+            path="/samples/:id/chain"
+            element={
+              <Layout>
+                <ProtectedRoute>
+                  <SampleChainPage />
+                </ProtectedRoute>
+              </Layout>
+            }
+          />
+          <Route
+            path="/samples/:id/movements"
+            element={
+              <Layout>
+                <ProtectedRoute>
+                  <SampleMovementsPage />
+                </ProtectedRoute>
+              </Layout>
+            }
+          />
           <Route
             path="/samples/:id"
             element={
