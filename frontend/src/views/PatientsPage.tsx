@@ -10,10 +10,8 @@ import SignaturePad from '../components/Consent/SignaturePad';
 import { Patient } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useAuth } from '../contexts/AuthContext';
-import { dataImportService, patientService } from '../services/api';
+import { patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
-import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
-import { convertExcelFileToFhirBundle, downloadFhirExcelTemplate } from '../utils/fhirExcelImport';
 import { hasConsentRecord, normalizeConsentStatus } from './patientsConsentStatus';
 
 const styles: Record<string, CSSProperties> = {
@@ -34,13 +32,6 @@ const styles: Record<string, CSSProperties> = {
   consentHint: {
     fontSize: '0.8rem',
     color: 'var(--text-light)'
-  },
-  importInfoPanel: {
-    marginBottom: '1rem',
-    padding: '0.9rem 1rem',
-    border: '1px solid var(--border)',
-    borderRadius: '8px',
-    backgroundColor: 'var(--surface)'
   }
 };
 
@@ -221,189 +212,10 @@ export default function PatientsPage() {
     }
   };
 
-  const getButtonLabel = (key: string, en: string, es: string) => {
-    if (language === 'en-US') return en;
-    if (language === 'es-ES') return es;
-    return t(key);
-  };
-
   const getPatientsActionLabel = (key: string, en: string, es: string) => {
     if (language === 'en-US') return en;
     if (language === 'es-ES') return es;
     return t(key);
-  };
-
-  // Estado para importação FHIR
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [importedFile, setImportedFile] = useState<File | null>(null);
-  const [importedJson, setImportedJson] = useState<any>(null);
-  const [importExcelFile, setImportExcelFile] = useState<File | null>(null);
-  const [fhirImportStep, setFhirImportStep] = useState(1);
-  const [fhirBatchId, setFhirBatchId] = useState('');
-  const [fhirBatch, setFhirBatch] = useState<any>(null);
-  const [fhirStagingRows, setFhirStagingRows] = useState<any[]>([]);
-  const [fhirConsentSummary, setFhirConsentSummary] = useState<any>(null);
-  const [importLoading, setImportLoading] = useState(false);
-  const [importResult, setImportResult] = useState<ImportResultSummaryData | null>(null);
-
-  const resetFhirImportState = () => {
-    setIsImportModalOpen(false);
-    setImportedFile(null);
-    setImportedJson(null);
-    setImportExcelFile(null);
-    setFhirImportStep(1);
-    setFhirBatchId('');
-    setFhirBatch(null);
-    setFhirStagingRows([]);
-    setFhirConsentSummary(null);
-    setImportResult(null);
-  };
-
-  const getFhirResourceCount = (resourceType: string) => {
-    if (!importedJson?.entry || !Array.isArray(importedJson.entry)) return 0;
-    return importedJson.entry.filter((entry: any) => entry?.resource?.resourceType === resourceType).length;
-  };
-
-  const getReadyToCommitCount = () => fhirStagingRows.filter((row) => row.status === 'READY_TO_COMMIT').length;
-  const getValidWithEmailCount = () => fhirStagingRows.filter((row) => row.status === 'VALID' && row.normalized?.patientEmail).length;
-  const getFhirValidationSummary = () => {
-    const counts = fhirBatch?.counts || {};
-    return {
-      total: counts.total ?? fhirStagingRows.length,
-      valid: counts.valid ?? fhirStagingRows.filter((row) => row.status === 'VALID').length,
-      pendingConsent: counts.pendingConsent ?? fhirStagingRows.filter((row) => row.status === 'PENDING_CONSENT').length,
-      errors: counts.errors ?? fhirStagingRows.filter((row) => row.status === 'ERROR' || row.status === 'NEEDS_EMAIL' || row.status === 'CONSENT_SEND_FAILED').length,
-      readyToCommit: counts.readyToCommit ?? fhirStagingRows.filter((row) => row.status === 'READY_TO_COMMIT').length,
-    };
-  };
-
-  const refreshFhirBatchState = (data: any) => {
-    const batch = data?.batch || data?.data?.batch || null;
-    const records = data?.records || data?.data?.records || [];
-    setFhirBatch(batch);
-    setFhirStagingRows(Array.isArray(records) ? records : []);
-    const nextBatchId = String(batch?._id || batch?.id || data?.batchId || data?.data?.batchId || fhirBatchId || '');
-    if (nextBatchId) setFhirBatchId(nextBatchId);
-  };
-
-  const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setImportExcelFile(e.target.files?.[0] || null);
-  };
-
-  const handleConvertExcelToFhir = async () => {
-    if (!importExcelFile) {
-      alert('Selecione um arquivo Excel preenchido com o modelo.');
-      return;
-    }
-
-    setImportLoading(true);
-    try {
-      const bundle = await convertExcelFileToFhirBundle(importExcelFile);
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/fhir+json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'importacao-fhir-bundle.json';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      setImportedJson(bundle);
-      setImportedFile(new File([blob], 'importacao-fhir-bundle.json', { type: 'application/fhir+json' }));
-      setFhirImportStep(2);
-    } catch (err: any) {
-      alert(err?.message || 'Não foi possível converter o Excel para JSON FHIR.');
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
-  // Handler para leitura do arquivo
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type === 'application/json') {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const json = JSON.parse(ev.target?.result as string);
-          setImportedFile(file);
-          setImportedJson(json);
-          setFhirImportStep(2);
-          setFhirBatchId('');
-          setFhirBatch(null);
-          setFhirStagingRows([]);
-          setFhirConsentSummary(null);
-        } catch (err) {
-          alert('Arquivo JSON inválido');
-          setImportedFile(null);
-          setImportedJson(null);
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      alert('Selecione um arquivo .json válido');
-      setImportedFile(null);
-      setImportedJson(null);
-    }
-  };
-
-  const handleValidateFhirBatch = async () => {
-    if (!importedJson) return;
-    setImportLoading(true);
-    setImportResult(null);
-    try {
-      const stagedResponse = fhirBatchId
-        ? await dataImportService.validateFhirBatch(fhirBatchId)
-        : await dataImportService.stageFhirBundle(importedJson);
-      const data = stagedResponse?.data || {};
-      refreshFhirBatchState(data);
-      setFhirImportStep(3);
-    } catch (err: any) {
-      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
-      setImportResult({ success: false, error: errorMessage || 'A importação em lote exige um FHIR R4 Bundle JSON.' });
-      alert('Erro ao validar lote: ' + (errorMessage || 'A importação em lote exige um FHIR R4 Bundle JSON.'));
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
-  const handleSendFhirConsents = async () => {
-    if (!fhirBatchId) return;
-    setImportLoading(true);
-    try {
-      const response = await dataImportService.sendFhirBatchConsents(fhirBatchId);
-      const data = response?.data || {};
-      refreshFhirBatchState(data);
-      const results = data.consentResults || [];
-      setFhirConsentSummary({
-        sent: results.filter((item: any) => item.sent).length,
-        failed: results.filter((item: any) => item.sent === false).length,
-        pending: (data.records || []).filter((row: any) => row.status === 'PENDING_CONSENT').length,
-      });
-      setFhirImportStep(5);
-    } catch (err: any) {
-      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
-      setImportResult({ success: false, error: errorMessage || 'Erro ao enviar TCLEs' });
-      alert('Erro ao enviar TCLEs: ' + (errorMessage || 'Erro desconhecido'));
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
-  const handleCommitFhirBatch = async () => {
-    if (!fhirBatchId || getReadyToCommitCount() === 0) return;
-    setImportLoading(true);
-    try {
-      const response = await dataImportService.commitFhirBatch(fhirBatchId);
-      refreshFhirBatchState(response?.data || {});
-      setImportResult({ success: true, message: 'Registros assinados salvos com sucesso.' });
-      await loadPatients();
-    } catch (err: any) {
-      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
-      setImportResult({ success: false, error: errorMessage || 'Erro ao salvar registros assinados' });
-    } finally {
-      setImportLoading(false);
-    }
   };
 
   return (
@@ -604,9 +416,11 @@ export default function PatientsPage() {
                             data-testid={`resend-consent-button-${participantId}`}
                             variant="secondary"
                             onClick={async () => {
-                              setResendingConsentFor(participantId);
+                              const trimmedId = String(participantId || '').trim();
+                              if (!trimmedId) return;
+                              setResendingConsentFor(trimmedId);
                               try {
-                                await patientService.resendConsentNotification(participantId);
+                                await patientService.resendConsentNotification(trimmedId);
                                 await loadPatients();
                                 alert(t('patients.notificationsResent'));
                               } catch (err: any) {

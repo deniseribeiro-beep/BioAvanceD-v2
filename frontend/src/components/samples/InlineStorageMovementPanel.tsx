@@ -197,16 +197,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
   );
 
   const handleConfirm = async () => {
-    if (!selectedBoxId) {
-      setConfirmError(t('samples.storageInline.selectDestination'));
-      return;
-    }
-
-    if (useSpecificPosition && !positionValid) {
-      setConfirmError(t('samples.storageInline.invalidPosition'));
-      return;
-    }
-
+    // Destination / position validity is enforced by canConfirm (button disabled).
     setSaving(true);
     setConfirmError(null);
 

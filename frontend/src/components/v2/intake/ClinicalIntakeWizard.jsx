@@ -286,18 +286,6 @@ const STEP_META_BASE = [
   },
 ];
 
-const FABRY_MOCK_PHENOTYPES = [
-  { hpoId: 'HP:0001066', label: 'Angioqueratoma' },
-  { hpoId: 'HP:0012471', label: 'Acroparestesia' },
-  { hpoId: 'HP:0001131', label: 'Cornea verticilata' },
-  { hpoId: 'HP:0000093', label: 'Proteinuria' },
-];
-
-const FABRY_MOCK_BIOMARKERS = [
-  { code: 'ALPHA_GALACTOSIDASE_A', label: 'Atividade de Alfa-galactosidase A', unit: 'µmol/hr/L', value: '' },
-  { code: 'LYSO_GB3', label: 'Lyso-Gb3', unit: 'ng/mL', value: '' },
-];
-
 // CORREÇÃO: Removidas as declarações de função daqui. 
 // initialState deve ser apenas um objeto com os valores iniciais.
 const initialState = {
@@ -674,42 +662,6 @@ function normalizeDiseasePhenotype(item) {
 
 function getDiseaseBiomarkerKey(item) {
   return String(item?.code || item?.label || '').trim();
-}
-
-function mergeDiseasePhenotypesWithFabry(phenotypes = []) {
-  const normalized = (Array.isArray(phenotypes) ? phenotypes : []).map(normalizeDiseasePhenotype);
-  const map = new Map();
-  normalized.forEach((item) => {
-    const key = String(item.hpoId || item.label || '').trim();
-    if (key) {
-      map.set(key, item);
-    }
-  });
-  FABRY_MOCK_PHENOTYPES.forEach((item) => {
-    const key = String(item.hpoId || item.label || '').trim();
-    if (key) {
-      map.set(key, item);
-    }
-  });
-  return Array.from(map.values());
-}
-
-function mergeDiseaseBiomarkersWithFabry(biomarkers = []) {
-  const normalized = (Array.isArray(biomarkers) ? biomarkers : []).map(normalizeDiseaseBiomarker);
-  const map = new Map();
-  normalized.forEach((item) => {
-    const key = getDiseaseBiomarkerKey(item);
-    if (key) {
-      map.set(key, item);
-    }
-  });
-  FABRY_MOCK_BIOMARKERS.forEach((item) => {
-    const key = getDiseaseBiomarkerKey(item);
-    if (key) {
-      map.set(key, item);
-    }
-  });
-  return Array.from(map.values());
 }
 
 function buildBiomarkerValuesMap(biomarkers = [], currentValues = {}) {
@@ -1654,7 +1606,6 @@ export default function ClinicalIntakeWizard(props) {
   const [procedureDraft, setProcedureDraft] = useState({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
   const [observationDraft, setObservationDraft] = useState({ testName: '', loincCode: '', value: '', unit: '', effectiveDate: '' });
   const [outcomeDraft, setOutcomeDraft] = useState({ outcomeType: '', outcomeDate: '' });
-  const [isConsentPreviewOpen, setIsConsentPreviewOpen] = useState(false);
   const [isBiomarkerRequestOpen, setIsBiomarkerRequestOpen] = useState(false);
   const [isBiomarkerRequestSubmitting, setIsBiomarkerRequestSubmitting] = useState(false);
   const [biomarkerRequestForm, setBiomarkerRequestForm] = useState({
@@ -1786,7 +1737,6 @@ export default function ClinicalIntakeWizard(props) {
     return consentTemplates.find((template) => template._id === formData.selectedConsentTemplateId) || null;
   }, [consentTemplates, formData.selectedConsentTemplateId]);
 
-  const consentPreview = useMemo(() => buildConsentPreview(selectedConsentTemplate, formData, t), [selectedConsentTemplate, formData, t]);
   const biomarkerRequestSchemaDynamic = useMemo(() => createBiomarkerRequestSchema(t), [t]);
   const biomarkerRequestValidation = useMemo(
     () => biomarkerRequestSchemaDynamic.safeParse(biomarkerRequestForm),
@@ -2002,30 +1952,6 @@ export default function ClinicalIntakeWizard(props) {
       return next;
     });
   }, [formData.preAnalyticalUnknown, sprecCode, sprecPreCentrifugationOptions, sprecCentrifugationOptions, sprecSecondCentrifugationOptions, sprecPostCentrifugationDelayOptions]);
-
-  useEffect(() => {
-    setFormData((previous) => {
-      if (!previous.preAnalyticalUnknown) {
-        if (previous.ischemiaTimeMinutes === '') {
-          return previous;
-        }
-
-        return {
-          ...previous,
-          ischemiaTimeMinutes: '',
-        };
-      }
-
-      if (previous.ischemiaTimeMinutes === 'Indeterminado') {
-        return previous;
-      }
-
-      return {
-        ...previous,
-        ischemiaTimeMinutes: 'Indeterminado',
-      };
-    });
-  }, [formData.preAnalyticalUnknown]);
 
   useEffect(() => {
     let active = true;
@@ -2395,53 +2321,39 @@ export default function ClinicalIntakeWizard(props) {
   // a retry re-runs the exact same cascade fetch + formData mapping instead
   // of only the hook's retryLoadCascade (whose return value would otherwise
   // be discarded here).
-  const loadDiseaseSuggestions = async ({ orphaNumeric, normalizedOrphaCode, displayLabel, shouldInjectFabryMock }) => {
-    if (orphaNumeric) {
-      try {
-        let cascade = await loadCascadeByDisease({
+  const loadDiseaseSuggestions = async ({ orphaNumeric, normalizedOrphaCode, displayLabel }) => {
+    if (!orphaNumeric) return;
+
+    try {
+      let cascade = await loadCascadeByDisease({
+        system: 'http://www.orpha.net',
+        code: orphaNumeric,
+        display: displayLabel,
+      }, { suppressErrorToast: true });
+
+      if ((!Array.isArray(cascade?.phenotypes) || cascade.phenotypes.length === 0) && (!Array.isArray(cascade?.biomarkers) || cascade.biomarkers.length === 0)) {
+        cascade = await loadCascadeByDisease({
           system: 'http://www.orpha.net',
-          code: orphaNumeric,
+          code: normalizedOrphaCode,
           display: displayLabel,
         }, { suppressErrorToast: true });
-
-        if ((!Array.isArray(cascade?.phenotypes) || cascade.phenotypes.length === 0) && (!Array.isArray(cascade?.biomarkers) || cascade.biomarkers.length === 0)) {
-          cascade = await loadCascadeByDisease({
-            system: 'http://www.orpha.net',
-            code: normalizedOrphaCode,
-            display: displayLabel,
-          }, { suppressErrorToast: true });
-        }
-
-        const cascadePhenotypes = Array.isArray(cascade?.phenotypes) ? cascade.phenotypes.map(normalizeDiseasePhenotype) : [];
-        const cascadeBiomarkers = Array.isArray(cascade?.biomarkers) ? cascade.biomarkers.map(normalizeDiseaseBiomarker) : [];
-        const nextPhenotypes = shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry(cascadePhenotypes) : cascadePhenotypes;
-        const nextBiomarkers = shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry(cascadeBiomarkers) : cascadeBiomarkers;
-
-        setFormData((previous) => ({
-          ...previous,
-          diseasePhenotypes: nextPhenotypes,
-          diseaseBiomarkers: nextBiomarkers,
-          biomarkers_values: buildBiomarkerValuesMap(nextBiomarkers, previous.biomarkers_values),
-        }));
-      } catch (_) {
-        setFormData((previous) => ({
-          ...previous,
-          diseasePhenotypes: shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry([]) : [],
-          diseaseBiomarkers: shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry([]) : [],
-          biomarkers_values: shouldInjectFabryMock
-            ? buildBiomarkerValuesMap(mergeDiseaseBiomarkersWithFabry([]), previous.biomarkers_values)
-            : {},
-        }));
       }
-    } else if (shouldInjectFabryMock) {
-      const fabryPhenotypes = mergeDiseasePhenotypesWithFabry([]);
-      const fabryBiomarkers = mergeDiseaseBiomarkersWithFabry([]);
+
+      const nextPhenotypes = Array.isArray(cascade?.phenotypes) ? cascade.phenotypes.map(normalizeDiseasePhenotype) : [];
+      const nextBiomarkers = Array.isArray(cascade?.biomarkers) ? cascade.biomarkers.map(normalizeDiseaseBiomarker) : [];
+
       setFormData((previous) => ({
         ...previous,
-        diagnosisOrphaCode: previous.diagnosisOrphaCode || 'ORPHA:324',
-        diseasePhenotypes: fabryPhenotypes,
-        diseaseBiomarkers: fabryBiomarkers,
-        biomarkers_values: buildBiomarkerValuesMap(fabryBiomarkers, previous.biomarkers_values),
+        diseasePhenotypes: nextPhenotypes,
+        diseaseBiomarkers: nextBiomarkers,
+        biomarkers_values: buildBiomarkerValuesMap(nextBiomarkers, previous.biomarkers_values),
+      }));
+    } catch (_) {
+      setFormData((previous) => ({
+        ...previous,
+        diseasePhenotypes: [],
+        diseaseBiomarkers: [],
+        biomarkers_values: {},
       }));
     }
   };
@@ -2468,8 +2380,6 @@ export default function ClinicalIntakeWizard(props) {
       .map((value) => String(value || '').trim())
       .find((value) => value && !/^\d+$/.test(value)) || '';
     const fallbackId = String(item.id || normalizedOrphaCode || normalizedCidCode || item.code || '').trim();
-    const shouldInjectFabryMock = false;
-
     setFormData((previous) => ({
       ...previous,
       diagnosisCidId: fallbackId,
@@ -2548,7 +2458,6 @@ export default function ClinicalIntakeWizard(props) {
       orphaNumeric,
       normalizedOrphaCode,
       displayLabel: normalizedDefinition || displayValue,
-      shouldInjectFabryMock,
     };
     lastSuggestionArgsRef.current = suggestionArgs;
     await loadDiseaseSuggestions(suggestionArgs);

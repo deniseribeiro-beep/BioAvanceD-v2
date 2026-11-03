@@ -19,6 +19,7 @@ import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
 import { storageApi } from '../services/storageApi';
 import { resolveLegacySampleStatus } from '../foundation/contracts';
+import { readSampleQuantities, resolveQuantityStatus } from '../utils/sampleHelpers';
 
 type SampleEditForm = {
   linkedProject: string;
@@ -93,24 +94,37 @@ export default function SampleDetailsPage() {
   const canEdit = hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
   const computeAvailability = (s: Sample | null | undefined) => {
-    const initial = s?.initialQuantity ?? s?.quantity ?? 0;
-    const current = s?.currentQuantity ?? s?.quantity ?? 0;
+    const { initial, current } = readSampleQuantities(s);
+    const quantityStatus = resolveQuantityStatus(s);
 
-    if (current <= 0) {
+    // #1436: missing quantities are unknown, not "0,0 µL / Indisponível".
+    if (quantityStatus === 'unknown' || current == null) {
+      return {
+        label: t('samples.detail.availability.unknown', 'Não registrada'),
+        className: 'availability-unknown',
+        current: null as number | null,
+        initial,
+        displayAmount: '—',
+      };
+    }
+
+    if (quantityStatus === 'depleted' || current <= 0) {
       return {
         label: t('samples.detail.availability.unavailable', 'Indisponível'),
         className: 'availability-indisponível',
         current,
-        initial,
+        initial: initial ?? 0,
+        displayAmount: `${Number(current).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL`,
       };
     }
 
-    if (current < initial) {
+    if (quantityStatus === 'partial' || (initial != null && current < initial)) {
       return {
         label: t('samples.detail.availability.partial', 'Parcialmente Disponível'),
         className: 'availability-parcialmente-disponível',
         current,
-        initial,
+        initial: initial ?? current,
+        displayAmount: `${Number(current).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL`,
       };
     }
 
@@ -118,7 +132,8 @@ export default function SampleDetailsPage() {
       label: t('samples.detail.availability.available', 'Disponível'),
       className: 'availability-disponível',
       current,
-      initial,
+      initial: initial ?? current,
+      displayAmount: `${Number(current).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL`,
     };
   };
 
@@ -679,7 +694,9 @@ export default function SampleDetailsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.totalQuantity', 'Quantidade Total')}:</span>
               <span style={{ color: 'var(--text)' }}>
-                {availabilityPreview.initial.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
+                {availabilityPreview.initial == null
+                  ? '—'
+                  : `${availabilityPreview.initial.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL`}
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
@@ -697,7 +714,7 @@ export default function SampleDetailsPage() {
                 </div>
               ) : (
                 <span style={{ color: 'var(--text)' }}>
-                  {availabilityPreview.current.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
+                  {availabilityPreview.displayAmount}
                 </span>
               )}
             </div>

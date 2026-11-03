@@ -3,6 +3,7 @@ import {
   getQuantityStatusColor,
   getSpecimenStatusColor,
   isSpecimenBlocked,
+  readSampleQuantities,
   resolveQuantityStatus,
   resolveSpecimenStatus,
   translateQuantityStatus,
@@ -48,9 +49,23 @@ describe('resolveQuantityStatus', () => {
     expect(resolveQuantityStatus({ quantity: 50 })).toBe('full');
   });
 
-  it('reads a record with no quantity at all as full', () => {
-    expect(resolveQuantityStatus(null)).toBe('full');
-    expect(resolveQuantityStatus({})).toBe('full');
+  it('reads a record with no quantity at all as unknown (#1436)', () => {
+    expect(resolveQuantityStatus(null)).toBe('unknown');
+    expect(resolveQuantityStatus({})).toBe('unknown');
+    expect(resolveQuantityStatus({ initialQuantity: null, currentQuantity: null })).toBe('unknown');
+  });
+});
+
+describe('readSampleQuantities', () => {
+  it('keeps null when nothing was recorded (#1436)', () => {
+    expect(readSampleQuantities(null)).toEqual({ initial: null, current: null });
+    expect(readSampleQuantities({})).toEqual({ initial: null, current: null });
+  });
+
+  it('prefers volume* then *Quantity then quantity', () => {
+    expect(readSampleQuantities({ volumeInitial: 10, volumeCurrent: 7 })).toEqual({ initial: 10, current: 7 });
+    expect(readSampleQuantities({ initialQuantity: 20, currentQuantity: 5 })).toEqual({ initial: 20, current: 5 });
+    expect(readSampleQuantities({ quantity: 15 })).toEqual({ initial: 15, current: 15 });
   });
 });
 
@@ -85,6 +100,7 @@ describe('translateQuantityStatus', () => {
     expect(translateQuantityStatus('full')).toBe('Íntegra');
     expect(translateQuantityStatus('partial')).toBe('Parcialmente Retirada');
     expect(translateQuantityStatus('depleted')).toBe('Totalmente Retirada');
+    expect(translateQuantityStatus('unknown')).toBe('Não registrada');
     expect(translateQuantityStatus(undefined)).toBe('-');
   });
 });

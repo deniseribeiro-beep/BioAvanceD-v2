@@ -62,9 +62,13 @@ export function mapStatus(sample: Sample): Sample['status'] {
 }
 
 function computeVolume(sample: Sample) {
-  const initial = sample.initialQuantity ?? sample.quantity ?? 0;
-  const current = sample.currentQuantity ?? sample.quantity ?? 0;
-  return { initial, current };
+  const initialRaw = sample.volumeInitial ?? sample.initialQuantity ?? sample.quantity;
+  const currentRaw = sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity;
+  // #1436: keep null when nothing was recorded; do not coerce to 0.
+  return {
+    initial: initialRaw == null ? null : Number(initialRaw),
+    current: currentRaw == null ? null : Number(currentRaw),
+  };
 }
 
 export default function SamplesPageView({
@@ -245,8 +249,13 @@ export default function SamplesPageView({
                       </td>
                       <td>
                         <strong>
-                          {current.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} /{' '}
-                          {initial.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                          {current == null
+                            ? '—'
+                            : current.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                          {' / '}
+                          {initial == null
+                            ? '—'
+                            : initial.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
                         </strong>
                       </td>
                       <td>{participantId ?? 'N/A'}</td>
