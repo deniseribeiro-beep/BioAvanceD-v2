@@ -233,10 +233,10 @@ const DIAGNOSIS_SEARCH_ITEM = {
   Codigos_CID10: 'E75.2',
 };
 
-function mockApiClient({ suggestImpl } = {}) {
+function mockApiClient({ suggestImpl, terminologyItems = [DIAGNOSIS_SEARCH_ITEM] } = {}) {
   apiClient.get.mockImplementation((url) => {
     if (url === '/terminologies') {
-      return Promise.resolve({ data: { results: [DIAGNOSIS_SEARCH_ITEM] }, status: 200 });
+      return Promise.resolve({ data: { results: terminologyItems }, status: 200 });
     }
     if (url === '/dictionary/disease-profile') {
       return Promise.resolve({ data: { disease: null }, status: 200 });
@@ -290,8 +290,8 @@ async function fillStep2() {
   await waitFor(() => expect(screen.getByTestId('wizard-diagnosis-search')).toBeInTheDocument());
 }
 
-async function selectDiagnosis() {
-  fireEvent.change(screen.getByTestId('wizard-diagnosis-search'), { target: { value: 'Fabry' } });
+async function selectDiagnosis(term = 'Fabry') {
+  fireEvent.change(screen.getByTestId('wizard-diagnosis-search'), { target: { value: term } });
   await waitFor(
     () => expect(screen.getByTestId('wizard-diagnosis-option-0')).toBeInTheDocument(),
     { timeout: 2000 }
@@ -399,5 +399,38 @@ describe('ClinicalIntakeWizard -- suggested phenotype terminology version (#885)
     );
     expect(screen.getByText('HPO 2026-08-01 · HP:0001066')).toBeInTheDocument();
     expect(screen.getByText('HP:0012471')).toBeInTheDocument();
+  });
+});
+
+// A /terminologies hit carrying only an ICD-10 code: normalizeCidOption
+// derives code 'G71.0' from Codigos_CID10 and an empty orphaCode.
+const CID10_ONLY_SEARCH_ITEM = {
+  id: 'cid-g71-0',
+  descricao: 'Distrofia muscular',
+  Codigos_CID10: 'G71.0',
+};
+
+describe('ClinicalIntakeWizard -- a diagnosis hit with no ORPHA code (#1433)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a CID-10-only hit gets no ORPHA value and queries no ORPHA-keyed lookup', async () => {
+    mockApiClient({ terminologyItems: [CID10_ONLY_SEARCH_ITEM] });
+    renderWizard();
+    await fillStep1();
+    await fillStep2();
+    await selectDiagnosis('Distrofia');
+
+    await waitFor(() => expect(screen.getByPlaceholderText('CID-10')).toHaveValue('G71.0'));
+    expect(screen.getByPlaceholderText('ORPHA')).toHaveValue('');
+
+    const urls = apiClient.get.mock.calls.map(([url]) => url);
+    expect(urls).not.toContain('/dictionary/disease-profile');
+    expect(urls).not.toContain('/dictionary/suggest');
+    const orphaQueries = apiClient.get.mock.calls.filter(
+      ([url, options]) => url === '/terminologies' && /^ORPHA:/i.test(String(options?.params?.q || ''))
+    );
+    expect(orphaQueries).toEqual([]);
   });
 });

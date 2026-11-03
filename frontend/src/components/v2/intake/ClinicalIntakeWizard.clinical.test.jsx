@@ -333,8 +333,7 @@ describe('ClinicalIntakeWizard step 3 -- diagnosis select', () => {
   });
 
   it('a hit with no code at all makes no disease-profile and no suggest call', async () => {
-    // The select falls back to the hit's code for the ORPHA code, so only a
-    // hit with no code at all leaves ORPHA empty.
+    // A hit with no orphaCode and no raw.ORPHA leaves the ORPHA code empty.
     mockApiClient({
       searchImpl: () => Promise.resolve({ data: { results: [{ id: 'local-7', descricao: 'Distrofia muscular' }] }, status: 200 }),
     });

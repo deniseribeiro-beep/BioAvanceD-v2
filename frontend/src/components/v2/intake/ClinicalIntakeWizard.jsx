@@ -2458,7 +2458,7 @@ export default function ClinicalIntakeWizard(props) {
     const displayValue = item.displayName || item.description || item.definition || item.orphaCode || item.code || '';
     setDiagnosisQuery(displayValue);
     setDiagnosisOpen(false);
-    const normalizedOrphaCode = normalizeOrphaCode(item.orphaCode || item.code || item.raw?.ORPHA || '');
+    const normalizedOrphaCode = normalizeOrphaCode(item.orphaCode || item.raw?.ORPHA || '');
     const orphaNumeric = getOrphaNumeric(normalizedOrphaCode);
     let normalizedCidCode = normalizeCidCode(item.cidCode || item.raw?.relacoes?.cid10 || item.raw?.relacoes?.cid || item.raw?.Codigos_CID10 || '');
     let normalizedOmimCode = normalizeOmimCode(item.omimCode || item.raw?.relacoes?.omim || item.raw?.OMIM || '');
