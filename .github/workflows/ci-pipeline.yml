@@ -88,12 +88,24 @@ jobs:
             -f compose.test.yml \
             down --volumes --remove-orphans
 
+      # Large compose.test image matrix exhausted the ubuntu-latest disk
+      # (~83 MB left) during layer export. Free runner bulk and avoid a
+      # forced no-cache rebuild that duplicates every intermediate layer.
+      - name: Free runner disk before image build
+        run: |
+          df -h
+          docker system prune -af --volumes || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost || true
+          df -h
+
       - name: Build validation stack
+        env:
+          COMPOSE_PARALLEL_LIMIT: "2"
         run: |
           docker compose \
             --env-file .env.test.example \
             -f compose.test.yml \
-            build --no-cache
+            build
 
       - name: Start application stack
         run: |
