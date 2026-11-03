@@ -13,7 +13,6 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { validatePassword } from '../utils/passwordValidator';
 import { getPasswordIssues, passwordRequirementItems } from '../utils/passwordRules';
 import { usePasswordPolicy } from '../hooks/usePasswordPolicy';
-import './NewUserPage.css';
 
 /**
  * Monta o payload a ser enviado ao backend a partir do formData bruto:

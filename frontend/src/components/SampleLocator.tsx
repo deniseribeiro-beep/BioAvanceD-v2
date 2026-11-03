@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Search, MapPin, AlertCircle, Loader, QrCode } from 'lucide-react';
 import { storageApi } from '../services/storageApi';
 import type { SampleStorageLocationDTO } from '../types/models';
-import './SampleLocator.css';
 
 interface SampleLocatorProps {}
 

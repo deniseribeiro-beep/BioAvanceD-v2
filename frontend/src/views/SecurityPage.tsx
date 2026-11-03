@@ -7,7 +7,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
 import ConfigurationReleasesPanel from '../components/security/ConfigurationReleasesPanel';
-import './SecurityPage.css';
 
 // #1248: the retention keys are decided by the active RetentionPolicy, so
 // they render read-only with a line naming it.

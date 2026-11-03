@@ -21,7 +21,6 @@ import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import { storageApi } from '../services/storageApi';
 import { MAINTENANCE_STATUS_OPTIONS, getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import IncidentManagementPage from './IncidentManagementPage';
-import './FacilityManagementPage.css';
 
 type TabType = 'equipment' | 'temperature' | 'history' | 'sensors' | 'policies' | 'incidents';
 
@@ -60,7 +59,7 @@ export default function FacilityManagementPage() {
   ];
 
   return (
-    <div className="page facility-management-page flex flex-col md:flex-row w-full min-w-0">
+    <div className="page-shell facility-management-page flex w-full min-w-0 flex-col md:flex-row">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t('facility.title', 'Gerenciamento de Instalações')}</h1>

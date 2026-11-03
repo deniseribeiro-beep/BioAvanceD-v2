@@ -23,7 +23,6 @@ import { useToast } from '../components/UI/ToastContainer';
 import { consentService } from '../services/api';
 import type { ConsentTemplate, ConsentPolicy, PurposeCode } from '../types/models';
 import { describeConsentPublication, type ConsentNotificationCounts } from './tclePublication';
-import './TcleBuilderPage.css';
 
 type PreviewValueMap = Record<string, string>;
 

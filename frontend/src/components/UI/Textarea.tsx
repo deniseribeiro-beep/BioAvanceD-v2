@@ -1,37 +1,43 @@
 import { TextareaHTMLAttributes, useId } from 'react';
-import './Textarea.css';
+import { Textarea as ShadcnTextarea } from '@/components/shadcn/textarea';
+import { Label } from '@/components/shadcn/label';
+import { cn } from '@/lib/utils';
 
 interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   label?: string;
   error?: string;
 }
 
-export default function Textarea({ label, error, className = '', id, name, ...props }: TextareaProps) {
+export default function Textarea({
+  label,
+  error,
+  className = '',
+  id,
+  name,
+  ...props
+}: TextareaProps) {
   const generatedId = useId();
   const textareaId = id || generatedId;
   const textareaName = name || textareaId;
 
   return (
-    <div className="textarea-group">
-      {label && (
-        <label htmlFor={textareaId} className="textarea-label mb-1.5 text-sm font-semibold text-gray-700">
+    <div className="flex w-full flex-col gap-1.5">
+      {label ? (
+        <Label htmlFor={textareaId} className="text-sm font-medium text-foreground">
           {label}
-        </label>
-      )}
-      <textarea
+        </Label>
+      ) : null}
+      <ShadcnTextarea
         id={textareaId}
         name={textareaName}
-        className={`textarea w-full rounded-lg border border-gray-300 px-3 py-2 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${error ? 'textarea-error' : ''} ${className}`}
-        aria-label={label || props.placeholder || 'Campo de texto'}
-        aria-describedby={error ? `${textareaId}-error` : undefined}
+        className={cn(error && 'border-destructive focus-visible:ring-destructive', className)}
         {...props}
       />
-      {error && (
-        <span id={`${textareaId}-error`} className="textarea-error-message" role="alert">
+      {error ? (
+        <span className="text-xs text-destructive" role="alert">
           {error}
         </span>
-      )}
+      ) : null}
     </div>
   );
 }
-

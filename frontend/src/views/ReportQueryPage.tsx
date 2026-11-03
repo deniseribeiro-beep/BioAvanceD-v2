@@ -12,7 +12,6 @@ import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../constants/sprecDictionary';
 import { SPECIMEN_TYPES, SAMPLE_ORIGINS } from '../config/constants/specimen.constants';
 import { ArrowLeft, Download, Filter, Search, X } from 'lucide-react';
-import './ReportQueryPage.css';
 
 type LookupOption = {
   system?: string;

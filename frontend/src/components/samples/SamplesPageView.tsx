@@ -100,7 +100,7 @@ export default function SamplesPageView({
   const hasSearch = search.trim().length > 0;
 
   return (
-    <div className="page samples-page" data-testid="sample-list-root">
+    <div className="page-shell samples-page" data-testid="sample-list-root">
       <div className="page-header">
         <h1 data-testid="samples-page-title">{t('samples.title')}</h1>
       </div>

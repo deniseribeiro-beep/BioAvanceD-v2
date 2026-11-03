@@ -15,7 +15,6 @@ import {
   CheckCircle,
   AlertCircle
 } from 'lucide-react';
-import './LogsPage.css';
 
 export default function LogDetailPage() {
   const { id } = useParams<{ id: string }>();

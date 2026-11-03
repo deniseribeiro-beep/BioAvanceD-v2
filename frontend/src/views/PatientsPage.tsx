@@ -15,7 +15,6 @@ import { useLanguage } from '../contexts/LanguageContext';
 import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
 import { convertExcelFileToFhirBundle, downloadFhirExcelTemplate } from '../utils/fhirExcelImport';
 import { hasConsentRecord, normalizeConsentStatus } from './patientsConsentStatus';
-import './PatientsPage.css';
 
 const styles: Record<string, CSSProperties> = {
   consentActions: {
@@ -408,7 +407,7 @@ export default function PatientsPage() {
   };
 
   return (
-    <div className="page patients-page" data-testid="patients-page">
+    <div className="page-shell patients-page" data-testid="patients-page">
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <Button data-testid="patients-back-button" aria-label={t('common.back')} onClick={() => navigate('/dashboard')} variant="secondary" style={{ minWidth: 'auto' }}>

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import { apiClient } from '../api/client';
-import '../components/UI/Button.css';
 
 type SymbologyAsset = {
   payload: string;

@@ -11,7 +11,6 @@ import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import { resolveSpecimenStatus, translateSpecimenStatus } from '../utils/sampleHelpers';
 import { selectTemperatureRows, selectAccessLogRows, selectAuditEventRows, rowKey } from './ReportViewPage.helpers';
-import './ReportViewPage.css';
 
 export default function ReportViewPage() {
   const { id } = useParams<{ id: string }>();

@@ -8,7 +8,6 @@ import { Plus, Edit, Trash2, FileText, Lock } from 'lucide-react';
 import { useReportTemplates } from '../hooks/useReportTemplates';
 import { useLanguage } from '../contexts/LanguageContext';
 import { ReportTemplate, REPORT_TEMPLATE_HANDLER_KEYS } from '../types/models';
-import './ReportTemplatesPage.css';
 
 // #726 (RF008 AC#6): free-form config per handler (e.g. temperature's
 // `{ mode: 'control' | 'report' }` — see report-template-seed.service.js),

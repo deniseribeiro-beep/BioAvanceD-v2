@@ -1,5 +1,11 @@
 import { ReactNode, CSSProperties } from 'react';
-import './Card.css';
+import {
+  Card as ShadcnCard,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/shadcn/card';
+import { cn } from '@/lib/utils';
 
 interface CardProps {
   children: ReactNode;
@@ -10,13 +16,27 @@ interface CardProps {
   'data-testid'?: string;
 }
 
-export default function Card({ children, title, className = '', onClick, style, 'data-testid': testId }: CardProps) {
+export default function Card({
+  children,
+  title,
+  className = '',
+  onClick,
+  style,
+  'data-testid': testId,
+}: CardProps) {
   return (
-    <div className={`card ${className}`} onClick={onClick} style={style} data-testid={testId}>
-      {title && <div className="card-header"><h2 className="card-title">{title}</h2></div>}
-      <div className="card-body">{children}</div>
-    </div>
+    <ShadcnCard
+      className={cn(onClick && 'cursor-pointer transition-colors hover:bg-accent/40', className)}
+      onClick={onClick}
+      style={style}
+      data-testid={testId}
+    >
+      {title ? (
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">{title}</CardTitle>
+        </CardHeader>
+      ) : null}
+      <CardContent className={cn(!title && 'p-5', title && 'pt-0')}>{children}</CardContent>
+    </ShadcnCard>
   );
 }
-
-

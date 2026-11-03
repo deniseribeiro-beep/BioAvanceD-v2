@@ -18,7 +18,6 @@ import {
   isSpecimenBlocked,
   resolveQuantityStatus,
 } from '../utils/sampleHelpers';
-import './SampleWithdrawalReturnPage.css';
 
 // #539: shared with every other specimenStatus reader (SampleDetailsPage,
 // ReportViewPage, ...) via sampleHelpers.ts — re-exported here so this

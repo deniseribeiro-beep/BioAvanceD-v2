@@ -2,7 +2,6 @@
 // @ts-ignore: No type definitions for ClinicalIntakeWizard
 import ClinicalIntakeWizard from '../../../components/v2/intake/ClinicalIntakeWizard';
 import { useIntakeDictionaryData } from '../../../hooks/useIntakeDictionaryData';
-import './intakeWizard.css';
 
 export default function IntakeWizardPage() {
   const { dictionaries, loading, error } = useIntakeDictionaryData();

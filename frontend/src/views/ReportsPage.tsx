@@ -7,7 +7,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { REPORT_TYPE_DEFINITIONS, mergeCustomTemplates } from '../config/constants/report.constants';
 import { useReportTemplates } from '../hooks/useReportTemplates';
-import './ReportsPage.css';
 
 // REPORT_TYPES será definido dentro do componente para ter acesso ao t()
 

@@ -28,7 +28,6 @@ import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constan
 import { SPECIMEN_TYPES, SAMPLE_ORIGINS, EXTRACTION_PROTOCOLS } from '../../../config/constants/specimen.constants';
 import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
 import { useCreateOrganizationChoice } from '../../../hooks/useCreateOrganizationChoice';
-import './ClinicalIntakeWizard.css';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CANONICAL_PREVIEW_UNAVAILABLE = Object.freeze({

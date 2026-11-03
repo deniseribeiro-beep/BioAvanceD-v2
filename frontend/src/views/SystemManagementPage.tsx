@@ -15,7 +15,6 @@ import { userService } from '../services/api';
 import { Organization, Collection } from '../types/models';
 import SecurityPage from './SecurityPage';
 import CollectionGovernancePanel from './CollectionGovernancePanel';
-import './SystemManagementPage.css';
 
 type TabType = 'users' | 'organizations' | 'collections' | 'security';
 

@@ -1,26 +1,29 @@
 import { useEffect, useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { canRoleAccessRoute } from '@/utils/rolePermissions';
-import { 
-  Menu, 
-  X, 
-  LayoutDashboard, 
+import {
+  Menu,
+  LayoutDashboard,
   Stethoscope,
-  FlaskConical, 
+  FlaskConical,
   Workflow,
-  FileText, 
-  Box, 
-  Shield, 
-  BarChart3, 
-  FileSearch, 
+  FileText,
+  Box,
+  Shield,
+  BarChart3,
+  FileSearch,
   Database,
   UserCog,
   FileWarning,
-  Upload
+  Upload,
 } from 'lucide-react';
-import './Sidebar.css';
+import { Button } from '@/components/shadcn/button';
+import { ScrollArea } from '@/components/shadcn/scroll-area';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/shadcn/sheet';
+import { cn } from '@/lib/utils';
+import logo from '@/LOGO_BIOAVANCED_CORE.png';
 
 type MenuItem = {
   path: string;
@@ -28,9 +31,52 @@ type MenuItem = {
   label: string;
   roles: string[];
   featured?: boolean;
-  // #1239: shown only to the backend's audit readers, whatever the base role.
   auditReader?: boolean;
 };
+
+function NavItems({
+  items,
+  onNavigate,
+  ariaLabel,
+}: {
+  items: MenuItem[];
+  onNavigate?: () => void;
+  ariaLabel: string;
+}) {
+  const navigate = useNavigate();
+
+  return (
+    <nav className="flex flex-col gap-0.5 px-2 py-2" aria-label={ariaLabel}>
+      {items.map((item) => {
+        const Icon = item.icon;
+        return (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            onClick={(e) => {
+              onNavigate?.();
+              if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+                e.preventDefault();
+                navigate(item.path);
+              }
+            }}
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
+                item.featured && 'border border-primary/15 bg-primary-soft/70 text-primary',
+                isActive && 'bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground'
+              )
+            }
+            aria-label={item.label}
+          >
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">{item.label}</span>
+          </NavLink>
+        );
+      })}
+    </nav>
+  );
+}
 
 export default function Sidebar() {
   const { user } = useAuth();
@@ -39,72 +85,33 @@ export default function Sidebar() {
   const [isOpen, setIsOpen] = useState(false);
 
   useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen]);
-
-  useEffect(() => {
     setIsOpen(false);
   }, [location.pathname]);
 
-  useEffect(() => {
-    const isMobileOrTablet = window.matchMedia('(max-width: 1024px)').matches;
-    if (!isMobileOrTablet) return;
-
-    const previousOverflow = document.body.style.overflow;
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = previousOverflow || '';
-    }
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [isOpen]);
-  
-  // Mapeia accessType para roleName se não tiver roleName
   let roleName = user?.roleName;
   if (!roleName && user?.accessType) {
     const roleNameMap: Record<number, string> = {
       1: 'Usuário Externo',
       2: 'Técnico',
       3: 'Coordenador',
-      4: 'Administrador'
+      4: 'Administrador',
     };
     roleName = roleNameMap[user.accessType] as any;
   }
 
+  const allRoles = ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] as const;
   const allMenuItems: MenuItem[] = [
-    { path: '/dashboard', icon: LayoutDashboard, label: t('navigation.dashboard'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
+    { path: '/dashboard', icon: LayoutDashboard, label: t('navigation.dashboard'), roles: [...allRoles] },
     { path: '/next/intake', icon: Workflow, label: t('navigation.newIntake', 'New Registration'), roles: ['Administrador', 'Coordenador', 'Técnico'], featured: true },
     { path: '/patients', icon: Stethoscope, label: t('navigation.patients') || 'Diretório de Pacientes', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/samples', icon: FlaskConical, label: t('navigation.samples') || 'Inventário de Amostras', roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
     { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
-    // #808: the LGPD import's entry point. Same #659 reasoning as the
-    // quarantine entry below -- and without it the only import an operator
-    // can find is /import, which posts to the importer that discards
-    // rejected rows (#813).
     { path: '/import/lgpd', icon: Upload, label: t('navigation.importLGPD', 'Importação LGPD'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
-    // #794 item 2 (RNF011 AC#4): without a nav entry the quarantine review
-    // page is reachable only by typing the URL, which is the #659 defect and
-    // would leave the rejected rows about as reachable as they were in Mongo.
     { path: '/import/quarantine', icon: FileWarning, label: t('navigation.importQuarantine', 'Quarentena de Importação'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
-    // RF024 (#1350): access and distribution requests.
     { path: '/access-requests', icon: Shield, label: t('navigation.accessRequests', 'Solicitações de Acesso'), roles: ['Administrador'] },
     { path: '/admin/tcle/new', icon: FileText, label: t('navigation.tcleBuilder', 'Construtor de TCLE'), roles: ['Administrador', 'Coordenador'] },
-    // RF010 AC5/AC6 (#1375): a consent's revocation and its history.
     { path: '/consents', icon: FileText, label: t('navigation.consentHistory', 'Consentimentos (TCLE)'), roles: ['Administrador', 'Coordenador'] },
-    // ELM-0275..0285 (#1402)
     { path: '/biomarker-associations', icon: Database, label: t('navigation.biomarkerAssociations', 'Associações de Biomarcadores'), roles: ['Administrador', 'Coordenador'] },
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
@@ -115,83 +122,62 @@ export default function Sidebar() {
     { path: '/backup', icon: Database, label: t('navigation.backup'), roles: ['Administrador'] },
   ];
 
-  // Filtra itens baseado na role do usuário
-  const menuItems = allMenuItems.filter(item => {
+  const menuItems = allMenuItems.filter((item) => {
     if (!roleName) {
-      // Se não tem roleName nem accessType, não mostra nada (exceto dashboard)
-      if (item.path === '/dashboard') return true;
-      return false;
+      return item.path === '/dashboard';
     }
     if (item.auditReader && user?.isAuditReader !== true) return false;
-    // Verifica se a role do usuário está na lista de roles permitidas
     return item.roles.includes(roleName) && canRoleAccessRoute(roleName, item.path);
   });
 
+  const brand = (
+    <div className="flex items-center gap-2.5 px-1">
+      <img src={logo} alt="" className="h-8 w-8 rounded-md object-contain" />
+      <div className="min-w-0">
+        <p className="truncate text-sm font-semibold text-foreground">{t('app.title')}</p>
+        <p className="truncate text-xs text-muted-foreground">{t('app.subtitle')}</p>
+      </div>
+    </div>
+  );
+
   return (
     <>
-      {/* Menu hambúrguer para mobile */}
-      <button 
-        className="sidebar-toggle"
-        onClick={() => setIsOpen(!isOpen)}
+      <Button
+        variant="outline"
+        size="icon"
+        className="fixed left-3 top-3 z-50 lg:hidden"
+        onClick={() => setIsOpen(true)}
         aria-label={t('layout.toggleMenu', 'Alternar menu')}
         aria-controls="app-sidebar"
       >
-        {isOpen ? <X size={24} /> : <Menu size={24} />}
-      </button>
-      
-      {/* Overlay para fechar sidebar no mobile */}
-      {isOpen && (
-        <div 
-          className="sidebar-overlay"
-          onClick={() => setIsOpen(false)}
-        />
-      )}
-      
-      <aside id="app-sidebar" className={`sidebar ${isOpen ? 'open' : ''}`}>
-        <div className="sidebar-header">
-          <h1 className="sidebar-title">{t('app.title')}</h1>
-          <p className="sidebar-subtitle">{t('app.subtitle')}</p>
-        </div>
-        <nav className="sidebar-nav" aria-label={t('layout.mainNavigation', 'Navegação principal')}>
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                className={({ isActive }) =>
-                  `sidebar-link ${item.featured ? 'sidebar-link--featured' : ''} ${isActive ? 'active' : ''}`
-                }
-                onClick={e => {
-                  setIsOpen(false);
-                  // fallback manual se o NavLink não funcionar
-                  if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-                    e.preventDefault();
-                    window.history.pushState({}, '', item.path);
-                    window.dispatchEvent(new PopStateEvent('popstate'));
-                  }
-                }}
-                aria-label={item.label}
-                tabIndex={0}
-                role="link"
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    setIsOpen(false);
-                    window.history.pushState({}, '', item.path);
-                    window.dispatchEvent(new PopStateEvent('popstate'));
-                  }
-                }}
-              >
-                <span className="sidebar-link__icon" aria-hidden="true">
-                  <Icon size={18} />
-                </span>
-                <span className="sidebar-link__label">{item.label}</span>
-              </NavLink>
-            );
-          })}
-        </nav>
+        <Menu className="h-4 w-4" />
+      </Button>
+
+      <Sheet open={isOpen} onOpenChange={setIsOpen}>
+        <SheetContent side="left" className="w-72 p-0">
+          <SheetHeader>
+            <SheetTitle className="sr-only">{t('layout.mainNavigation', 'Navegação principal')}</SheetTitle>
+            {brand}
+          </SheetHeader>
+          <ScrollArea className="h-[calc(100vh-4rem)]">
+            <NavItems
+              items={menuItems}
+              onNavigate={() => setIsOpen(false)}
+              ariaLabel={t('layout.mainNavigation', 'Navegação principal')}
+            />
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
+
+      <aside
+        id="app-sidebar"
+        className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-border bg-card lg:flex lg:flex-col"
+      >
+        <div className="border-b border-border px-4 py-3">{brand}</div>
+        <ScrollArea className="flex-1">
+          <NavItems items={menuItems} ariaLabel={t('layout.mainNavigation', 'Navegação principal')} />
+        </ScrollArea>
       </aside>
     </>
   );
 }
-

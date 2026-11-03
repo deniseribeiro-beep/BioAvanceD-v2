@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { FileDown, Printer } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import './DataDictionaryPage.css';
 
 export default function DataDictionaryPage() {
   const { t } = useLanguage();

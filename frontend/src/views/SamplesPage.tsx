@@ -9,7 +9,6 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { patientService, sampleService } from '../services/api';
 import { attachExternalDocument, type ExternalDocumentSampleApi } from '../hooks/samples/attachExternalDocument';
-import './SamplesPage.css';
 
 export default function SamplesPage() {
   const navigate = useNavigate();
@@ -95,7 +94,7 @@ export default function SamplesPage() {
   }
 
   return (
-    <>
+    <div className="page-shell">
       <div className="samples-view-switch" data-testid="samples-view-switch">
         <button
           type="button"
@@ -153,7 +152,7 @@ export default function SamplesPage() {
         onViewPending={handleViewPending}
       />
       )}
-    </>
+    </div>
   );
 }
 

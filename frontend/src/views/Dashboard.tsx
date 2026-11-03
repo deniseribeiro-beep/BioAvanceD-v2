@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import Card from '../components/UI/Card';
 import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, FileSearch, Boxes, BarChart3, UserCog, ShieldCheck, ScrollText, Settings } from 'lucide-react';
 import { usePatients } from '../hooks/usePatients';
 import { useSamples } from '../hooks/useSamples';
@@ -14,7 +13,8 @@ import { apiClient } from '../api/client';
 import { DASHBOARD_CARDS, dashboardRole, needsReportCount, type DashboardCardKey } from './dashboardCards';
 import { activeIncidents, buildTemperatureSeries } from './dashboardTemperature';
 import { onDashboardDataChanged } from '../utils/dashboardRefresh';
-import './Dashboard.css';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/shadcn/card';
+import { cn } from '@/lib/utils';
 
 type DashboardIncident = {
   _id: string;
@@ -60,14 +60,16 @@ function DashboardTemperatureChart() {
   const innerHeight = chartHeight - chartPadding.top - chartPadding.bottom;
   const chartRange = domain.max - domain.min;
   const timeSpan = timeRange.end - timeRange.start;
-  const xOf = (time: number) => (timeSpan > 0
-    ? chartPadding.left + ((time - timeRange.start) / timeSpan) * innerWidth
-    : chartPadding.left + innerWidth / 2);
-  const yOf = (celsius: number) => chartPadding.top + ((domain.max - celsius) / chartRange) * innerHeight;
+  const xOf = (time: number) =>
+    timeSpan > 0
+      ? chartPadding.left + ((time - timeRange.start) / timeSpan) * innerWidth
+      : chartPadding.left + innerWidth / 2;
+  const yOf = (celsius: number) =>
+    chartPadding.top + ((domain.max - celsius) / chartRange) * innerHeight;
 
   const tickCount = 5;
   const chartTicks = Array.from({ length: tickCount }, (_, index) => {
-    const value = domain.max - ((chartRange / (tickCount - 1)) * index);
+    const value = domain.max - (chartRange / (tickCount - 1)) * index;
     return { value, y: yOf(value) };
   });
   const timeLabels = (timeSpan > 0 ? [timeRange.start, timeRange.end] : [timeRange.start]).map((time) => ({
@@ -77,17 +79,13 @@ function DashboardTemperatureChart() {
   }));
 
   return (
-    <div className="temperature-chart-svg-wrap">
-      <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={t('dashboard.temperatureChartAria', 'Gráfico de temperatura em tempo real')}>
-        <defs>
-          <linearGradient id="chartAreaGradient" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
-            <stop offset="100%" stopColor="rgba(236,253,245,0.8)" />
-          </linearGradient>
-        </defs>
-
-        <rect x="0" y="0" width={chartWidth} height={chartHeight} rx="18" fill="url(#chartAreaGradient)" />
-
+    <div className="space-y-3">
+      <svg
+        viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+        role="img"
+        aria-label={t('dashboard.temperatureChartAria', 'Gráfico de temperatura em tempo real')}
+        className="h-auto w-full rounded-md border border-border bg-card"
+      >
         {chartTicks.map((tick) => (
           <g key={tick.value}>
             <line
@@ -95,30 +93,17 @@ function DashboardTemperatureChart() {
               y1={tick.y}
               x2={chartWidth - chartPadding.right}
               y2={tick.y}
-              stroke="rgba(15, 23, 42, 0.08)"
+              stroke="#E2E8F0"
               strokeDasharray="4 6"
             />
-            <text
-              x={chartPadding.left - 10}
-              y={tick.y + 4}
-              textAnchor="end"
-              fontSize="12"
-              fill="rgba(15, 23, 42, 0.72)"
-            >
+            <text x={chartPadding.left - 10} y={tick.y + 4} textAnchor="end" fontSize="12" fill="#64748B">
               {`${tick.value}°C`}
             </text>
           </g>
         ))}
 
         {timeLabels.map((item) => (
-          <text
-            key={item.time}
-            x={item.x}
-            y={chartHeight - 14}
-            textAnchor="middle"
-            fontSize="11"
-            fill="rgba(15, 23, 42, 0.6)"
-          >
+          <text key={item.time} x={item.x} y={chartHeight - 14} textAnchor="middle" fontSize="11" fill="#64748B">
             {item.label}
           </text>
         ))}
@@ -129,20 +114,27 @@ function DashboardTemperatureChart() {
             data-testid={`dashboard-temperature-line-${item.sensorId}`}
             points={item.points.map((point) => `${xOf(point.time)},${yOf(point.celsius)}`).join(' ')}
             fill="none"
-            stroke={CHART_COLORS[index]}
-            strokeWidth="3"
+            stroke={CHART_COLORS[index % CHART_COLORS.length]}
+            strokeWidth="2.5"
             strokeLinejoin="round"
             strokeLinecap="round"
           />
         ))}
       </svg>
 
-      <div className="temperature-chart-legend">
+      <div className="flex flex-wrap gap-3">
         {series.map((item, index) => (
-          <div key={item.sensorId} data-testid={`dashboard-temperature-sensor-${item.sensorId}`} className="temperature-chart-legend__item">
-            <span className="temperature-chart-legend__swatch" style={{ backgroundColor: CHART_COLORS[index] }} />
-            <span>{item.sensorId}</span>
-            <strong>{`${item.latest.temperatureCelsius.toFixed(1)}°C`}</strong>
+          <div
+            key={item.sensorId}
+            data-testid={`dashboard-temperature-sensor-${item.sensorId}`}
+            className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-sm"
+          >
+            <span
+              className="h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
+            />
+            <span className="text-muted-foreground">{item.sensorId}</span>
+            <strong className="text-foreground">{`${item.latest.temperatureCelsius.toFixed(1)}°C`}</strong>
           </div>
         ))}
       </div>
@@ -299,122 +291,131 @@ export default function Dashboard() {
     return DASHBOARD_CARDS[role].map((key) => ({ key, ...cards[key] }));
   }, [role, stats, t, incidentRead, reportCount]);
 
-  return (
-    <div className="dashboard-bento">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">{t('dashboard.title')}</h1>
-          <p className="page-subtitle">{t('dashboard.subtitle')}</p>
-        </div>
-      </div>
+  const iconTone: Record<string, string> = {
+    primary: 'bg-primary text-primary-foreground',
+    success: 'bg-success text-success-foreground',
+    secondary: 'bg-primary text-primary-foreground',
+    action: 'bg-brand-violet text-white',
+    danger: 'bg-destructive text-destructive-foreground',
+  };
 
-      {/* KPIs Top */}
-      <div className="kpi-grid">
+  return (
+    <div className="page-shell">
+      <Card>
+        <CardHeader>
+          <CardTitle className="page-title">{t('dashboard.title')}</CardTitle>
+          <CardDescription>{t('dashboard.subtitle')}</CardDescription>
+        </CardHeader>
+      </Card>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {statCards.map((stat) => {
           const Icon = stat.icon;
           const handleClick = () => {
             if (stat.link) navigate(stat.link);
           };
           const isAlert = stat.link === '/temperature';
-          const variant = stat.link === '/patients'
-            ? 'primary'
-            : stat.link === '/samples'
-            ? 'success'
-            : stat.link === '/results'
-            ? 'secondary'
-            : stat.link === '/sensors'
-            ? 'action'
-            : stat.link === '/temperature'
-            ? 'danger'
-            : 'primary';
+          const variant =
+            stat.link === '/patients'
+              ? 'primary'
+              : stat.link === '/samples'
+                ? 'success'
+                : stat.link === '/results'
+                  ? 'secondary'
+                  : stat.link === '/sensors'
+                    ? 'action'
+                    : stat.link === '/temperature'
+                      ? 'danger'
+                      : 'primary';
           return (
             <Card
               key={stat.key}
               data-testid={`dashboard-card-${stat.key}`}
-              className={`kpi-card ${isAlert ? 'alert' : ''} ${stat.link ? 'is-clickable' : ''}`}
+              className={cn(isAlert && 'border-destructive/40', stat.link && 'cursor-pointer hover:bg-accent/30')}
               onClick={handleClick}
             >
-              <div className={`kpi-icon kpi-icon--${variant}`}>
-                <Icon size={22} />
-              </div>
-              <div className="kpi-info">
-                <p className="kpi-title">{stat.title}</p>
-                <p className="kpi-value">{loading ? '...' : stat.value}</p>
-              </div>
+              <CardContent className="flex items-center gap-3 p-4">
+                <div className={cn('flex h-10 w-10 items-center justify-center rounded-md', iconTone[variant])}>
+                  <Icon size={18} />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">{stat.title}</p>
+                  <p className="kpi-value text-2xl font-semibold text-foreground">{loading ? '...' : stat.value}</p>
+                </div>
+              </CardContent>
             </Card>
           );
         })}
       </div>
 
-      {/* Main Area: Temperature Chart + Alerts. RF002 AC4: not for an external user. */}
       {role !== 'external' && (
-      <div className="content-grid">
-        <Card
-          className="temperature-card"
-        >
-          <div className="temperature-card-header">
-            <h2 className="temperature-card-title">{t('dashboard.temperatureChartTitle', 'Gráfico de Temperatura')}</h2>
-            <p className="temperature-card-subtitle">{t('dashboard.temperatureChartSubtitle', 'Monitoramento térmico contínuo')}</p>
-          </div>
-          <div className="temperature-chart-slot">
-            {role && <DashboardTemperatureChart />}
-          </div>
-        </Card>
-
-        <div className="side-card-stack">
-          <Card
-            className="side-card"
-          >
-            <h3 className="side-card-title">{t('dashboard.activeTemperatureAlertsTitle', 'Alertas de Temperatura Ativos')}</h3>
-            {incidentRead.status === 'loading' ? (
-              <p className="side-card-text" data-testid="dashboard-alerts-loading">{t('dashboard.queueLoading', 'Carregando...')}</p>
-            ) : incidentRead.status === 'error' ? (
-              <p className="side-card-text" role="alert" data-testid="dashboard-alerts-error">Falha ao carregar os incidentes de temperatura.</p>
-            ) : incidentRead.items.length > 0 ? (
-              <div className="alert-list">
-                {incidentRead.items.map((incident) => (
-                  <div key={incident._id} data-testid={`dashboard-alert-${incident._id}`} className="alert-item alert-item--critical">
-                    <AlertTriangle size={18} className="alert-item-icon" />
-                    <p className="alert-item-text">
-                      <strong>{incident.sensorName}</strong> atingiu <strong>{incident.currentTemperature}°C</strong> às <strong>{new Date(incident.openedAt).toLocaleString(locale)}</strong>
-                    </p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="side-card-text" data-testid="dashboard-alerts-empty">{t('dashboard.noActiveAlerts', 'Nenhum alerta ativo.')}</p>
-            )}
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <Card className="temperature-card">
+            <CardHeader>
+              <CardTitle className="text-base">{t('dashboard.temperatureChartTitle', 'Gráfico de Temperatura')}</CardTitle>
+              <CardDescription>{t('dashboard.temperatureChartSubtitle', 'Monitoramento térmico contínuo')}</CardDescription>
+            </CardHeader>
+            <CardContent>{role ? <DashboardTemperatureChart /> : null}</CardContent>
           </Card>
 
-          {isAdmin && (
-            <Card
-              className="side-card consent-queue-card"
-            >
-              <h3 className="side-card-title">{t('dashboard.consentQueueTitle', 'Fila de Consentimentos')}</h3>
-              {loadingConsentQueue ? (
-                <p className="side-card-text">{t('dashboard.queueLoading', 'Carregando...')}</p>
-              ) : consentQueueStats?.available ? (
-                <div className="consent-queue-metrics">
-                  <div>
-                    <span className="consent-queue-label">{t('dashboard.queueWaiting', 'Na fila')}</span>
-                    <strong>{consentQueueStats.totalQueued ?? 0}</strong>
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t('dashboard.activeTemperatureAlertsTitle', 'Alertas de Temperatura Ativos')}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {incidentRead.status === 'loading' ? (
+                  <p className="text-sm text-muted-foreground" data-testid="dashboard-alerts-loading">{t('dashboard.queueLoading', 'Carregando...')}</p>
+                ) : incidentRead.status === 'error' ? (
+                  <p className="text-sm text-destructive" role="alert" data-testid="dashboard-alerts-error">Falha ao carregar os incidentes de temperatura.</p>
+                ) : incidentRead.items.length > 0 ? (
+                  <div className="space-y-2">
+                    {incidentRead.items.map((incident) => (
+                      <div key={incident._id} data-testid={`dashboard-alert-${incident._id}`} className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-2.5 text-sm">
+                        <AlertTriangle size={16} className="mt-0.5 text-destructive" />
+                        <p>
+                          <strong>{incident.sensorName}</strong> atingiu <strong>{incident.currentTemperature}°C</strong> às <strong>{new Date(incident.openedAt).toLocaleString(locale)}</strong>
+                        </p>
+                      </div>
+                    ))}
                   </div>
-                  <div>
-                    <span className="consent-queue-label">{t('dashboard.queueSending', 'Em envio')}</span>
-                    <strong>{consentQueueStats.active ?? 0}</strong>
-                  </div>
-                  <div>
-                    <span className="consent-queue-label">{t('dashboard.queueFailures', 'Falhas')}</span>
-                    <strong>{consentQueueStats.failed ?? 0}</strong>
-                  </div>
-                </div>
-              ) : (
-                <p className="side-card-text">{t('dashboard.queueUnavailable', 'Fila indisponível (Redis não configurado).')}</p>
-              )}
+                ) : (
+                  <p className="text-sm text-muted-foreground" data-testid="dashboard-alerts-empty">{t('dashboard.noActiveAlerts', 'Nenhum alerta ativo.')}</p>
+                )}
+              </CardContent>
             </Card>
-          )}
+
+            {isAdmin ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">{t('dashboard.consentQueueTitle', 'Fila de Consentimentos')}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {loadingConsentQueue ? (
+                    <p className="text-sm text-muted-foreground">{t('dashboard.queueLoading', 'Carregando...')}</p>
+                  ) : consentQueueStats?.available ? (
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-md border border-border p-2">
+                        <p className="text-xs text-muted-foreground">{t('dashboard.queueWaiting', 'Na fila')}</p>
+                        <p className="text-lg font-semibold">{consentQueueStats.totalQueued ?? 0}</p>
+                      </div>
+                      <div className="rounded-md border border-border p-2">
+                        <p className="text-xs text-muted-foreground">{t('dashboard.queueSending', 'Em envio')}</p>
+                        <p className="text-lg font-semibold">{consentQueueStats.active ?? 0}</p>
+                      </div>
+                      <div className="rounded-md border border-border p-2">
+                        <p className="text-xs text-muted-foreground">{t('dashboard.queueFailures', 'Falhas')}</p>
+                        <p className="text-lg font-semibold">{consentQueueStats.failed ?? 0}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">{t('dashboard.queueUnavailable', 'Fila indisponível (Redis não configurado).')}</p>
+                  )}
+                </CardContent>
+              </Card>
+            ) : null}
+          </div>
         </div>
-      </div>
       )}
     </div>
   );

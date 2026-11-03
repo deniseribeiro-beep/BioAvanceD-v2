@@ -19,7 +19,6 @@ import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
 import { storageApi } from '../services/storageApi';
 import { resolveLegacySampleStatus } from '../foundation/contracts';
-import './SamplesPage.css';
 
 type SampleEditForm = {
   linkedProject: string;
