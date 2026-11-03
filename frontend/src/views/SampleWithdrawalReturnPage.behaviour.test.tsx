@@ -239,6 +239,8 @@ describe('SampleWithdrawalReturnPage withdrawal', () => {
       observations: 'urgente',
     });
     await waitFor(() => expect(screen.getByLabelText('Responsável pela Retirada *')).toHaveValue(''));
+    // #1431: the reload after the save used to clear this message.
+    expect(screen.getByText('Retirada registrada com sucesso! Quantidade retirada: 2 mL')).toBeInTheDocument();
   });
 
   it('cancels the confirmation modal without sending, and reports a refused total withdrawal', async () => {
@@ -329,6 +331,9 @@ describe('SampleWithdrawalReturnPage return', () => {
       condition: 'Inutilizada',
       observations: 'tubo rachado',
     });
+    await waitFor(() => expect(screen.getByLabelText('Responsável pela Devolução *')).toHaveValue(''));
+    // #1431: the reload after the save used to clear this message.
+    expect(screen.getByText('Devolução registrada com sucesso! Quantidade devolvida: 4 mL')).toBeInTheDocument();
   });
 
   it('reports a refused partial return', async () => {

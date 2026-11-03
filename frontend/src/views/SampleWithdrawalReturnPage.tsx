@@ -170,14 +170,15 @@ export default function SampleWithdrawalReturnPage() {
   });
 
   // Buscar amostra por código de barras
-  const handleSearch = async () => {
+  // #1431: the reload after a withdrawal or return keeps its success message.
+  const handleSearch = async (options: { keepMessage?: boolean } = {}) => {
     if (!searchBarcode.trim()) {
       setMessage({ type: 'error', text: t('samples.barcodeRequired') || 'Código de barras é obrigatório' });
       return;
     }
 
     setSearchLoading(true);
-    setMessage(null);
+    if (!options.keepMessage) setMessage(null);
     setSample(null);
     setPatientInfo(null);
     setMovements([]);
@@ -332,7 +333,7 @@ export default function SampleWithdrawalReturnPage() {
           text: `Retirada registrada com sucesso! Quantidade retirada: ${response.data.data?.withdrawnQuantity || '-'} ${sample.unit || 'µL'}` 
         });
         // Recarregar dados da amostra
-        await handleSearch();
+        await handleSearch({ keepMessage: true });
         // Limpar formulário
         setWithdrawForm({
           withdrawalType: '',
@@ -377,7 +378,7 @@ export default function SampleWithdrawalReturnPage() {
           text: `Devolução registrada com sucesso! Quantidade devolvida: ${response.data.data?.returnedQuantity || '-'} ${sample.unit || 'µL'}` 
         });
         // Recarregar dados da amostra
-        await handleSearch();
+        await handleSearch({ keepMessage: true });
         // Limpar formulário
         setReturnForm({
           returnType: '',
@@ -436,7 +437,7 @@ export default function SampleWithdrawalReturnPage() {
             onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
           />
           <Button 
-            onClick={handleSearch} 
+            onClick={() => handleSearch()}
             disabled={searchLoading}
             variant="primary"
           >
