@@ -365,6 +365,35 @@ describe('InlineStorageMovementPanel', () => {
     expect(props.onCompleted).not.toHaveBeenCalled();
   });
 
+  it('keeps the destination fields after a refused or failed confirm, so the operator can change the box and confirm again (#1435)', async () => {
+    mocks.autoAssignSampleToBox
+      .mockResolvedValueOnce({ success: false, message: 'Caixa cheia' })
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce({ success: true, data: { position: 'C3' } });
+    const { props } = renderPanel();
+    await pickBox('B-1');
+    fireEvent.click(confirmButton());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Caixa cheia');
+    // The refusal leaves the shelf, rack and box fields in place, still holding the pick.
+    expect(screen.getByLabelText('samples.storageInline.box')).toHaveValue('B-1');
+    fireEvent.change(screen.getByLabelText('samples.storageInline.box'), { target: { value: 'B-2' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(confirmButton()).toBeEnabled();
+    fireEvent.click(confirmButton());
+    expect(await screen.findByRole('alert')).toHaveTextContent('samples.storageInline.allocateError');
+    expect(screen.getByLabelText('samples.storageInline.box')).toHaveValue('B-2');
+    // A retry on the same position is open too, without leaving the freezer.
+    expect(confirmButton()).toBeEnabled();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(props.onCompleted).toHaveBeenCalledTimes(1));
+    expect(mocks.autoAssignSampleToBox.mock.calls).toEqual([
+      ['S-1', 'B-1'],
+      ['S-1', 'B-2'],
+      ['S-1', 'B-2'],
+    ]);
+    expect(mocks.getFreezerTree).toHaveBeenCalledTimes(1);
+  });
+
   it('cancels through the cancel button', async () => {
     const { props } = renderPanel();
     await screen.findByLabelText('samples.storageInline.shelf');
