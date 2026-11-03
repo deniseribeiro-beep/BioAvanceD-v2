@@ -942,7 +942,7 @@ describe('backup.service', () => {
       vi.spyOn(fs.promises, 'readdir').mockResolvedValue(['samples.json', 'manifest.json']);
 
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
-        cb({ message: 'ENOENT' }, '', '');
+        cb({ message: 'mongorestore: not found' }, '', '');
       });
 
       const fakeCollection = {
@@ -1619,7 +1619,8 @@ describe('backup.service', () => {
     // JSON backup" test above uses.
     function mockMongodumpAndMongorestoreMissing() {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
-        cb({ message: "'mongodump' is not recognized as an internal or external command" }, '', 'is not recognized');
+        const binary = command.startsWith('mongorestore') ? 'mongorestore' : 'mongodump';
+        cb({ message: `'${binary}' is not recognized as an internal or external command` }, '', 'is not recognized');
       });
     }
 

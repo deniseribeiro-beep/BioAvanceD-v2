@@ -100,25 +100,40 @@ async function prepareDecryptedRestoreCopy(backupPath, manifest) {
   const scratchBase = getRestoreScratchBaseDir();
   ensureDirSync(scratchBase);
   const scratchDir = await fs.promises.mkdtemp(path.join(scratchBase, 'bioavanced-restore-decrypt-'));
-  await fs.promises.cp(backupPath, scratchDir, {
-    recursive: true,
-    filter: (src) => path.basename(src) !== CHECKSUM_MANIFEST_FILE
-  });
+  // #1426: a failure past mkdtemp never reaches the caller's cleanup, which
+  // only knows the directory once this returns, so the copy (and any file
+  // already decrypted into it) is removed here before the error goes on.
+  try {
+    await fs.promises.cp(backupPath, scratchDir, {
+      recursive: true,
+      filter: (src) => path.basename(src) !== CHECKSUM_MANIFEST_FILE
+    });
 
-  const encryptedFiles = Array.isArray(manifest?.encryptedFiles) ? manifest.encryptedFiles : [];
-  for (const entry of encryptedFiles) {
-    if (!entry || typeof entry.file !== 'string') continue;
-    // eslint-disable-next-line no-await-in-loop
-    const filePath = path.join(scratchDir, ...entry.file.split('/'));
-    // eslint-disable-next-line no-await-in-loop
-    const ciphertext = await fs.promises.readFile(filePath);
-    const plaintext = decryptFileBuffer(ciphertext, entry);
-    // eslint-disable-next-line no-await-in-loop
-    await fs.promises.writeFile(filePath, plaintext);
+    const encryptedFiles = Array.isArray(manifest?.encryptedFiles) ? manifest.encryptedFiles : [];
+    for (const entry of encryptedFiles) {
+      if (!entry || typeof entry.file !== 'string') continue;
+      // eslint-disable-next-line no-await-in-loop
+      const filePath = path.join(scratchDir, ...entry.file.split('/'));
+      // eslint-disable-next-line no-await-in-loop
+      const ciphertext = await fs.promises.readFile(filePath);
+      const plaintext = decryptFileBuffer(ciphertext, entry);
+      // eslint-disable-next-line no-await-in-loop
+      await fs.promises.writeFile(filePath, plaintext);
+    }
+  } catch (error) {
+    await cleanupDecryptedRestoreCopy(scratchDir);
+    throw error;
   }
 
   return scratchDir;
 }
+
+// #1426: what a shell prints when the mongorestore executable itself is
+// missing -- sh's "not found", bash's "command not found", cmd.exe's
+// "'mongorestore' is not recognized", and a direct spawn's
+// "spawn mongorestore ENOENT". A bare ENOENT is not one of them: any file
+// the restore reads can carry it.
+const RESTORE_BINARY_MISSING = /mongorestore: (?:command )?not found|mongorestore'? is not recognized|spawn mongorestore ENOENT/i;
 
 // A decrypt-scratch teardown failure must never mask the restore's own
 // result, same reasoning as dropScratch() below for the scratch database.
@@ -957,7 +972,15 @@ async function restoreBackup(backupPath) {
 
   try {
     if (isEncryptedMongodumpManifest(manifest)) {
-      scratchDecryptDir = await prepareDecryptedRestoreCopy(backupPath, manifest);
+      // #1426: a decryption failure (a bad key, a corrupt or missing file)
+      // answers like every other failure here, never as a rejection.
+      try {
+        scratchDecryptDir = await prepareDecryptedRestoreCopy(backupPath, manifest);
+      } catch (decryptError) {
+        const decryptDetails = decryptError?.message || String(decryptError);
+        logger.error('Erro ao descriptografar backup para restauração:', decryptDetails);
+        return { success: false, error: decryptDetails };
+      }
       restoreSourcePath = scratchDecryptDir;
     }
 
@@ -974,7 +997,7 @@ async function restoreBackup(backupPath) {
       };
     } catch (err) {
       const details = err && err.error ? err.error.message : err?.message;
-      const restoreBinaryMissing = /mongorestore: not found|is not recognized|ENOENT/i.test(String(details || ''));
+      const restoreBinaryMissing = RESTORE_BINARY_MISSING.test(String(details || ''));
 
       if (restoreBinaryMissing) {
         try {
@@ -1163,7 +1186,7 @@ async function runControlledRestoreTest(backupPath) {
     };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
-    const restoreBinaryMissing = /mongorestore: not found|is not recognized|ENOENT/i.test(String(details || ''));
+    const restoreBinaryMissing = RESTORE_BINARY_MISSING.test(String(details || ''));
 
     if (restoreBinaryMissing) {
       try {

@@ -191,6 +191,43 @@ describe('backup.service branches (#1337)', () => {
       expect(result.error).toMatch(/authenticate/i);
       expect(seen).toHaveLength(0);
     });
+
+    // #1426: the decrypt step sat in a try with only a finally, so its throw
+    // rejected restoreBackup instead of answering { success: false, error }.
+    it('restoreBackup answers a decryption failure with { success: false, error } and leaves no scratch copy (#1426)', async () => {
+      const seen = [];
+      const { backupService, backupPath } = await encryptedDump(tempDir('bioavanced-1426-rbtag-'), seen);
+      const manifestPath = path.join(backupPath, 'manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.encryptedFiles[0].encryptionTag = Buffer.alloc(16).toString('base64');
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      const result = await backupService.restoreBackup(backupPath);
+
+      expect(result).toEqual({ success: false, error: expect.stringMatching(/authenticate/i) });
+      expect(seen).toHaveLength(0);
+      expect(fs.readdirSync(backupService.getRestoreScratchBaseDir())).toEqual([]);
+    });
+
+    // #1426: an ENOENT from a missing dump file is not a missing mongorestore.
+    it.each([
+      ['restoreBackup', (svc, p) => svc.restoreBackup(p)],
+      ['testRestoreBackup', (svc, p) => svc.testRestoreBackup(p)],
+    ])('%s reports a missing encrypted dump file as the error, not as a missing mongorestore (#1426)', async (_label, run) => {
+      const seen = [];
+      fakeMongo();
+      const { backupService, backupPath } = await encryptedDump(tempDir('bioavanced-1426-gone-'), seen);
+      fs.rmSync(path.join(backupPath, 'mydb', 'patients.bson'));
+
+      const result = await run(backupService, backupPath);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/ENOENT/);
+      expect(result.mode).toBeUndefined();
+      expect(seen).toHaveLength(0);
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('mongorestore indisponível'));
+      expect(fs.readdirSync(backupService.getRestoreScratchBaseDir())).toEqual([]);
+    });
   });
 
   describe('getLatestBackupPath', () => {
@@ -378,6 +415,30 @@ describe('backup.service branches (#1337)', () => {
 
       expect(result).toEqual({ success: false, error: 'mongo-down' });
     });
+
+    // #1426: only a missing mongorestore executable starts the JSON fallback.
+    it('takes the JSON fallback when cmd.exe does not recognise mongorestore (#1426)', async () => {
+      const backupPath = plainBackup();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb({ message: `Command failed: ${command}\r\n'mongorestore' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n` }, '', ''));
+      fakeMongo({ connectError: 'mongo-down' });
+
+      const result = await freshBackupService().restoreBackup(backupPath);
+
+      expect(result).toEqual({ success: false, error: 'mongo-down' });
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('mongorestore indisponível'));
+    });
+
+    it('restoreBackup answers a mongorestore ENOENT naming another file with that error, not the JSON fallback (#1426)', async () => {
+      const backupPath = plainBackup();
+      const message = "ENOENT: no such file or directory, open 'mydb/patients.bson'";
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb({ message }, '', ''));
+      fakeMongo();
+
+      const result = await freshBackupService().restoreBackup(backupPath);
+
+      expect(result).toEqual({ success: false, error: message });
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('mongorestore indisponível'));
+    });
   });
 
   describe('testRestoreBackup failure arms', () => {
@@ -429,6 +490,19 @@ describe('backup.service branches (#1337)', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('mongo-down');
+    });
+
+    it('testRestoreBackup answers a mongorestore ENOENT naming another file with that error, not the JSON fallback (#1426)', async () => {
+      const backupPath = plainBackup();
+      const message = "ENOENT: no such file or directory, open 'mydb/patients.bson'";
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb({ message }, '', ''));
+      fakeMongo();
+
+      const result = await freshBackupService().testRestoreBackup(backupPath);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe(message);
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('mongorestore indisponível'));
     });
 
     it('names the scratch db after bioavanced for an unparseable URI and a manifest that does not parse', async () => {
