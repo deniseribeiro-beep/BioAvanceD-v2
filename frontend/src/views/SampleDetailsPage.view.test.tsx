@@ -90,8 +90,8 @@ const baseSample = {
   extractionProtocol: 'Prot-1',
   linkedProject: 'Projeto Z',
   participantId: 'PAT-9',
-  volumeInitial: 10,
-  volumeCurrent: 10,
+  initialQuantity: 10,
+  currentQuantity: 10,
 };
 
 const graph = (isReleasable: boolean) => ({
@@ -239,7 +239,7 @@ describe('SampleDetailsPage id fallbacks', () => {
 
 describe('SampleDetailsPage read-only view', () => {
   it('renders the sample fields, quantities and status for a non-editor', async () => {
-    renderWith({ ...baseSample, volumeCurrent: 4, quantityStatus: 'partial', registeredAt: '2026-01-15T12:00:00Z' });
+    renderWith({ ...baseSample, currentQuantity: 4, quantityStatus: 'partial', registeredAt: '2026-01-15T12:00:00Z' });
     expect(await title()).toHaveTextContent('Detalhes da Amostra - BC-1');
     expect(screen.getByText('SPC-1')).toBeInTheDocument();
     expect(screen.getByText('Sangue')).toBeInTheDocument();
@@ -257,8 +257,17 @@ describe('SampleDetailsPage read-only view', () => {
     expect(screen.getByTestId('files-section')).toHaveTextContent('oid-1');
   });
 
+  it('reads the available amount and the status from the same canonical quantities', async () => {
+    // A stale volume* alias on the record must not override currentQuantity.
+    renderWith({ ...baseSample, initialQuantity: 10, currentQuantity: 4, volumeInitial: 10, volumeCurrent: 10 });
+    expect(await title()).toHaveTextContent('BC-1');
+    expect(screen.getByText('10,0 µL')).toBeInTheDocument();
+    expect(screen.getByText('4,0 µL')).toBeInTheDocument();
+    expect(screen.getByText('Parcialmente Retirada')).toBeInTheDocument();
+  });
+
   it('falls back to N/A for missing fields and to registrationDate', async () => {
-    renderWith({ _id: 'oid-2', specimenId: 'SPC-2', registrationDate: '2025-06-01T12:00:00Z', volumeCurrent: 0 });
+    renderWith({ _id: 'oid-2', specimenId: 'SPC-2', registrationDate: '2025-06-01T12:00:00Z', currentQuantity: 0 });
     expect(await title()).toHaveTextContent('SPC-2');
     expect(screen.getAllByText('N/A').length).toBeGreaterThanOrEqual(6);
     expect(screen.getByText(new Date('2025-06-01T12:00:00Z').toLocaleDateString('pt-BR'))).toBeInTheDocument();
@@ -378,7 +387,7 @@ describe('SampleDetailsPage storage', () => {
 describe('SampleDetailsPage editing', () => {
   it('saves the edited fields and shows the record the backend returns', async () => {
     h.canEdit = true;
-    h.updateSample.mockResolvedValue({ ...baseSample, sampleOrigin: 'Do servidor', volumeCurrent: 7 });
+    h.updateSample.mockResolvedValue({ ...baseSample, sampleOrigin: 'Do servidor', currentQuantity: 7 });
     renderWith(baseSample);
     await title();
     fireEvent.click(screen.getByTestId('sample-detail-edit-button'));
@@ -397,7 +406,6 @@ describe('SampleDetailsPage editing', () => {
       extractionProtocol: 'Prot-2',
       participantId: 'PAT-10',
       currentQuantity: 7,
-      volumeCurrent: 7,
     });
     expect(screen.queryByTestId('sample-detail-save-button')).not.toBeInTheDocument();
   });

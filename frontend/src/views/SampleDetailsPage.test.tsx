@@ -34,10 +34,9 @@ describe('buildSampleUpdatePayload', () => {
     expect(payload.extractionProtocol).toBe('Protocol');
     expect(payload.participantId).toBe('participant-1');
     expect(payload.currentQuantity).toBe(5);
-    expect(payload.volumeCurrent).toBe(5);
   });
 
-  it('omits currentQuantity/volumeCurrent when parsedAvailable is null', () => {
+  it('omits currentQuantity when parsedAvailable is null', () => {
     const payload = buildSampleUpdatePayload(makeForm(), null);
 
     expect('currentQuantity' in payload).toBe(false);

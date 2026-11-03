@@ -42,7 +42,6 @@ export function buildSampleUpdatePayload(form: SampleEditForm, parsedAvailable: 
 
   if (parsedAvailable !== null) {
     payload.currentQuantity = parsedAvailable;
-    payload.volumeCurrent = parsedAvailable;
   }
 
   return payload;
@@ -95,8 +94,8 @@ export default function SampleDetailsPage() {
   const canEdit = hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
   const computeAvailability = (s: Sample | null | undefined) => {
-    const initial = s?.volumeInitial ?? s?.initialQuantity ?? s?.quantity ?? 0;
-    const current = s?.volumeCurrent ?? s?.currentQuantity ?? s?.quantity ?? 0;
+    const initial = s?.initialQuantity ?? s?.quantity ?? 0;
+    const current = s?.currentQuantity ?? s?.quantity ?? 0;
 
     if (current <= 0) {
       return {
@@ -133,7 +132,7 @@ export default function SampleDetailsPage() {
       setSample(foundSample);
       setForm({
         linkedProject: foundSample.linkedProject || '',
-        currentQuantity: (foundSample.volumeCurrent ?? foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
+        currentQuantity: (foundSample.currentQuantity ?? foundSample.quantity ?? '').toString(),
         sampleOrigin: foundSample.sampleOrigin || '',
         extractionProtocol: foundSample.extractionProtocol || '',
         participantId: (foundSample as any).participantId ? String((foundSample as any).participantId) : String((foundSample as any).patientID || ''),
@@ -262,7 +261,6 @@ export default function SampleDetailsPage() {
     return {
       ...sample,
       currentQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.currentQuantity,
-      volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
       linkedProject: form.linkedProject || sample?.linkedProject,
     } as Sample;
   }, [isEditing, sample, form.currentQuantity, form.linkedProject]);
@@ -404,7 +402,7 @@ export default function SampleDetailsPage() {
     if (sample) {
       setForm({
         linkedProject: sample.linkedProject || '',
-        currentQuantity: (sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? '').toString(),
+        currentQuantity: (sample.currentQuantity ?? sample.quantity ?? '').toString(),
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
         participantId: sample.participantId ? String(sample.participantId) : '',
@@ -436,7 +434,6 @@ export default function SampleDetailsPage() {
         ...prev!,
         ...payload,
         currentQuantity: payload.currentQuantity ?? prev?.currentQuantity,
-        volumeCurrent: payload.volumeCurrent ?? prev?.volumeCurrent,
       }));
       // Se backend retornou amostra, sincroniza
       if (updated) {
