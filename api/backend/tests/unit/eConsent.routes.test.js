@@ -19,6 +19,12 @@ const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 const routePath = require.resolve('../../src/routes/eConsent');
 
+// #1428: the first require(routePath) loads the route's whole graph cold
+// (12543 ms under a loaded coverage run, past the 5000 ms case timeout).
+// Loading it once here leaves each loader to re-evaluate only auth, rbac and
+// eConsent, which clearRouteCache drops; no case's timeout is raised.
+require(routePath);
+
 function clearRouteCache() {
   delete require.cache[authPath];
   delete require.cache[rbacPath];
