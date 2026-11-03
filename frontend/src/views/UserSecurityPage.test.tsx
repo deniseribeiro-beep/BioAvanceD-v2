@@ -302,6 +302,19 @@ describe('UserSecurityPage recovery codes', () => {
     expect(await screen.findByText('8 left')).toBeInTheDocument();
   });
 
+  it('clears the codes and reloads when Close is pressed (#1434)', async () => {
+    await renderPage(strong);
+    h.generateRecoveryCodes.mockResolvedValue(env({ codes: ['EEEE-5555'] }));
+    fireEvent.click(screen.getByTestId('generate-recovery-codes-button'));
+    await screen.findByText('EEEE-5555');
+    expect(screen.getByTestId('download-recovery-codes-button')).toBeInTheDocument();
+    const loadsBefore = h.getMFAStatus.mock.calls.length;
+    fireEvent.click(screen.getByTestId('close-recovery-codes-button'));
+    await waitFor(() => expect(h.getMFAStatus.mock.calls.length).toBe(loadsBefore + 1));
+    await waitFor(() => expect(screen.queryByTestId('download-recovery-codes-button')).toBeNull());
+    expect(screen.getByText('8 left')).toBeInTheDocument();
+  });
+
   it('shows the no-codes line when the account had no MFA record to hold them', async () => {
     serve({});
     // A non-object response is the one the hook reads as no MFA record at all.
@@ -414,6 +427,23 @@ describe('UserSecurityPage sessions', () => {
     fireEvent.click(screen.getByTestId('security-confirm-proceed-button'));
     await waitFor(() => expect(screen.getAllByTestId('session-item')).toHaveLength(1));
     expect(h.revokeAllSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("toasts the server's error when revoking a session fails (#1434)", async () => {
+    await renderPage(strong);
+    h.revokeSession.mockRejectedValue({ response: { data: { error: 'Sessão não encontrada' } } });
+    fireEvent.click(screen.getByTestId('revoke-session-button-1'));
+    fireEvent.click(screen.getByTestId('security-confirm-proceed-button'));
+    await waitFor(() => expect(h.showToast).toHaveBeenCalledWith('Sessão não encontrada', 'error'));
+    expect(h.revokeSession).toHaveBeenCalledWith('s2');
+  });
+
+  it('toasts an error when revoking every other session fails (#1434)', async () => {
+    await renderPage(strong);
+    h.revokeAllSessions.mockRejectedValue('offline');
+    fireEvent.click(screen.getByTestId('revoke-all-sessions-button'));
+    fireEvent.click(screen.getByTestId('security-confirm-proceed-button'));
+    await waitFor(() => expect(h.showToast).toHaveBeenCalledWith('Erro ao revogar todas as sessões', 'error'));
   });
 
   it('logs the current session out after the confirmation', async () => {

@@ -29,7 +29,11 @@ const extractResponseData = <T>(response: unknown, fallback: T): T => {
   }
 
   const typed = response as ResponseEnvelope<T>;
-  return typed.data?.data ?? (typed as unknown as { data?: T }).data ?? fallback;
+  // #1434: { data: { data: null } } is a null payload, not the record { data: null }.
+  if (typeof typed.data === 'object' && typed.data !== null && 'data' in typed.data) {
+    return typed.data.data ?? fallback;
+  }
+  return (typed as unknown as { data?: T }).data ?? fallback;
 };
 
 const extractErrorMessage = (error: unknown, fallback: string): string => {

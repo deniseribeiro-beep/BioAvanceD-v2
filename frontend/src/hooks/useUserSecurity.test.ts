@@ -72,6 +72,16 @@ describe('useUserSecurity refreshData', () => {
     expect(result.current.sessions).toEqual([]);
   });
 
+  it('reads a null payload inside the envelope as nothing, not as a record (#1434)', async () => {
+    serve(env(null), env(null), env(null), env(null));
+    const { result } = await loaded();
+    expect(result.current.securityStatus).toBeNull();
+    expect(result.current.mfaStatus).toBeNull();
+    expect(result.current.passwordStatus).toBeNull();
+    expect(result.current.sessions).toEqual([]);
+    expect(result.current.error).toBeNull();
+  });
+
   it('maps each session field from its alternative names', async () => {
     serve(env(null), env(null), env(null), env([
       { id: 'a', deviceName: 'Laptop', browser: 'Firefox', os: 'Linux', location: 'Campinas', ipAddress: '10.0.0.1', lastAccess: 'L', isCurrent: true },
@@ -197,6 +207,16 @@ describe('useUserSecurity mutations', () => {
     });
     expect(codes).toEqual(['X1', 'X2', 'X3']);
     expect(result.current.mfaStatus?.recoveryCodes).toEqual({ remaining: 3, codes: ['X1', 'X2', 'X3'] });
+  });
+
+  it('generateRecoveryCodes writes no codes into a null MFA payload (#1434)', async () => {
+    h.getMFAStatus.mockResolvedValue(env(null));
+    const { result } = await loaded();
+    h.generateRecoveryCodes.mockResolvedValue({ data: { codes: ['Z1', 'Z2'] } });
+    await act(async () => {
+      await result.current.generateRecoveryCodes();
+    });
+    expect(result.current.mfaStatus).toBeNull();
   });
 
   it('generateRecoveryCodes throws when the server sends no codes, or fails', async () => {
