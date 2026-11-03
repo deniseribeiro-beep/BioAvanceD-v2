@@ -113,6 +113,13 @@ describe('buildBiomarkerObservationPayloads', () => {
     expect(payloads[0].biomarkerType).toBe('alphaGal');
     expect(payloads[0].collectedAt.getTime()).toBeGreaterThanOrEqual(before);
   });
+
+  it('falls back to the specimen registeredAt for a null row instead of throwing (#1427)', () => {
+    const registeredAt = new Date('2025-01-02T00:00:00Z');
+    const spy = vi.spyOn(engine, 'parseDateValue');
+    expect(engine.buildBiomarkerObservationPayloads(null, {}, { registeredAt })).toEqual({ payloads: [], warnings: [] });
+    expect(spy).toHaveBeenCalledWith(registeredAt);
+  });
 });
 
 describe('readXlsxRows', () => {

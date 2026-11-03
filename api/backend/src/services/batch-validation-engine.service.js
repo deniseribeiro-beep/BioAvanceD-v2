@@ -616,11 +616,11 @@ class BatchValidationEngine {
     // is literally spelled `registrationDate` still reaches them -- those are
     // real user input, not a dead internal name.
     const collectedAt = this.parseDateValue(
-      rawRow.collectedAt
-      || rawRow.effectiveDateTime
-      || rawRow.issuedAt
-      || rawRow.registrationDate
-      || rawRow.registerDate
+      rawRow?.collectedAt
+      || rawRow?.effectiveDateTime
+      || rawRow?.issuedAt
+      || rawRow?.registrationDate
+      || rawRow?.registerDate
       || specimen?.registeredAt
       || new Date()
     ) || new Date();
