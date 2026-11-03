@@ -377,6 +377,58 @@ describe('backup.service branches (#1337)', () => {
       expect(result).toEqual({ success: false, error: 'mongo-down' });
     });
 
+    // #1437: only a missing mongodump executable starts the JSON fallback.
+    it.each([
+      ['sh', () => '/bin/sh: 1: mongodump: not found'],
+      ['bash', () => '/bin/bash: line 1: mongodump: command not found'],
+      ['cmd.exe', (command) => `Command failed: ${command}\r\n'mongodump' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n`],
+      ['spawn', () => 'spawn mongodump ENOENT'],
+    ])('takes the JSON fallback when the shell reports mongodump missing: %s (#1437)', async (_label, messageFor) => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.BACKUP_DIR = tempDir('bioavanced-1437-missing-');
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb({ message: messageFor(command) }, '', ''));
+      fakeMongo({ connectError: 'mongo-down' });
+
+      const result = await freshBackupService().runBackup(policyDb(false));
+
+      expect(result).toEqual({ success: false, error: 'mongo-down' });
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('mongodump indisponível'));
+    });
+
+    it('reports a mongodump ENOENT naming another file as that error, not as a missing mongodump (#1437)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.BACKUP_DIR = tempDir('bioavanced-1437-file-');
+      const message = "ENOENT: no such file or directory, open 'mydb/patients.bson'";
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb({ message }, '', ''));
+      const { client } = fakeMongo();
+
+      const result = await freshBackupService().runBackup(policyDb(false));
+
+      expect(result).toEqual({ success: false, error: message });
+      expect(client.connect).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('mongodump indisponível'));
+    });
+
+    it('reports an encryption ENOENT after mongodump succeeds as that error, with no JSON fallback (#1437)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.BACKUP_DIR = tempDir('bioavanced-1437-enc-');
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        const outDir = /--out="([^"]+)"/.exec(command)[1];
+        fs.mkdirSync(path.join(outDir, 'mydb'), { recursive: true });
+        fs.writeFileSync(path.join(outDir, 'mydb', 'patients.bson'), 'BSON-PAYLOAD');
+        cb(null, 'ok', '');
+      });
+      vi.spyOn(backupStores, 'encryptFileInPlace')
+        .mockRejectedValueOnce(new Error("ENOENT: no such file or directory, open 'patients.bson'"));
+      const { client } = fakeMongo();
+
+      const result = await freshBackupService().runBackup(policyDb(true));
+
+      expect(result).toEqual({ success: false, error: "ENOENT: no such file or directory, open 'patients.bson'" });
+      expect(client.connect).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('mongodump indisponível'));
+    });
+
     it('returns the generic message when mongodump fails with no message', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.BACKUP_DIR = tempDir('bioavanced-1337-nomsg-');

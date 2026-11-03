@@ -228,7 +228,7 @@ describe('backup.service', () => {
       vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
 
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
-        cb({ message: 'ENOENT' }, '', '');
+        cb({ message: 'mongodump: not found' }, '', '');
       });
 
       const fakeClient = {
@@ -291,8 +291,9 @@ describe('backup.service', () => {
       expect(JSON.parse(manifestWrite[1]).stores).toEqual(EXPORTED_STORES);
     });
 
-    // #1325: the outer catch's dumpBinaryMissing test matches ENOENT, so a
-    // store error carrying it must be answered before that catch.
+    // #1325: the outer catch's dumpBinaryMissing test matched ENOENT before
+    // #1437, so a store error carrying it was answered before that catch;
+    // the inner catch also keeps the result shape.
     it('fails the run naming the store, with no manifest and no JSON fallback, when a store export rejects with ENOENT (#1325)', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = undefined;
@@ -386,8 +387,9 @@ describe('backup.service', () => {
       expect(result.offsite).toEqual({ status: 'skipped', reason: 'not_configured' });
     });
 
-    // #1325: the outer catch's dumpBinaryMissing test matches ENOENT, so an
-    // off-site error carrying it must be answered before that catch.
+    // #1325: the outer catch's dumpBinaryMissing test matched ENOENT before
+    // #1437, so an off-site error carrying it was answered before that catch;
+    // the inner catch also keeps the result shape.
     it('fails the run keeping path and checksum, with no retention and no JSON fallback, when the off-site upload rejects with ENOENT (#1325)', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = undefined;
@@ -1943,10 +1945,10 @@ describe('backup.service', () => {
       }
     });
 
-    // #1325 (RNF010 C1): mongodump writes a plaintext dump file, its
-    // encryption throws ENOENT, and the JSON fallback reuses the folder. The
-    // leftover dump file is in no manifest entry, so the off-site copy sends
-    // nothing and the run fails.
+    // #1325 (RNF010 C1): a missing mongodump leaves a plaintext dump file
+    // behind, and the JSON fallback reuses the folder. The leftover dump file
+    // is in no manifest entry, so the off-site copy sends nothing and the run
+    // fails.
     it('sends no leftover plaintext dump file off-site when the JSON fallback reuses the folder (#1325)', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = 'mydb';
@@ -1978,10 +1980,8 @@ describe('backup.service', () => {
           const outDir = /--out="([^"]+)"/.exec(command)[1];
           fs.mkdirSync(path.join(outDir, 'biobank'), { recursive: true });
           fs.writeFileSync(path.join(outDir, 'biobank', 'patients.bson'), 'PLAINTEXT-PATIENT-RECORD');
-          cb(null, 'ok', '');
+          cb({ message: 'mongodump: not found' }, '', '');
         });
-        vi.spyOn(backupStores, 'encryptFileInPlace')
-          .mockRejectedValueOnce(new Error('ENOENT: no such file or directory, open patients.bson'));
         const fakeCollection = {
           find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 1, name: 'x' }]) }))
         };

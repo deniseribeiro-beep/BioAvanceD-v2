@@ -135,6 +135,11 @@ async function prepareDecryptedRestoreCopy(backupPath, manifest) {
 // the restore reads can carry it.
 const RESTORE_BINARY_MISSING = /mongorestore: (?:command )?not found|mongorestore'? is not recognized|spawn mongorestore ENOENT/i;
 
+// #1437: the same messages for the mongodump executable. A bare ENOENT is
+// not one of them: any file the dump, its encryption or the manifest write
+// touches can carry it.
+const DUMP_BINARY_MISSING = /mongodump: (?:command )?not found|mongodump'? is not recognized|spawn mongodump ENOENT/i;
+
 // A decrypt-scratch teardown failure must never mask the restore's own
 // result, same reasoning as dropScratch() below for the scratch database.
 async function cleanupDecryptedRestoreCopy(scratchDir) {
@@ -836,10 +841,9 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
     // #1325: the Neo4j and InfluxDB exports run after the dump tree is
     // encrypted, so their files are encrypted once, by their own module, and
     // before the checksum, so it covers them. A store error is answered here,
-    // never by the catch below: its dumpBinaryMissing test matches ENOENT,
-    // which a store's fs or socket error can carry, and would send the run to
-    // the JSON fallback. No manifest.json is written for this folder, so a
-    // restore test of it fails.
+    // before the catch below, so no retention or JSON fallback runs on it.
+    // No manifest.json is written for this folder, so a restore test of it
+    // fails.
     let stores;
     try {
       stores = await backupStores.exportSecondaryStores(backupDir, encryptionEnabled);
@@ -865,8 +869,8 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
 
     // #1325 (RNF010 C1): the off-site copy runs once the manifest is written
     // and before retention. Its error is answered here, as a store error is,
-    // so an ENOENT in its message never starts the JSON fallback. The local
-    // copy is complete, so the run keeps its path and checksum.
+    // before the catch below, so no retention or JSON fallback runs on it.
+    // The local copy is complete, so the run keeps its path and checksum.
     let offsite;
     try {
       offsite = await backupOffsite.uploadBackupRunOffsite(backupDir, encryptionEnabled);
@@ -882,7 +886,8 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
     return { success: true, path: backupDir, mode: 'mongodump', checksum, stores, offsite };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
-    const dumpBinaryMissing = /mongodump: not found|is not recognized|ENOENT/i.test(String(details || ''));
+    // #1437: a bare ENOENT is any file's, not mongodump's.
+    const dumpBinaryMissing = DUMP_BINARY_MISSING.test(String(details || ''));
 
     if (dumpBinaryMissing) {
       try {
