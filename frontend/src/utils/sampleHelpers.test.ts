@@ -62,9 +62,14 @@ describe('readSampleQuantities', () => {
     expect(readSampleQuantities({})).toEqual({ initial: null, current: null });
   });
 
-  it('prefers volume* then *Quantity then quantity', () => {
+  it('prefers *Quantity over volume* aliases, then quantity', () => {
+    expect(readSampleQuantities({
+      initialQuantity: 10,
+      currentQuantity: 4,
+      volumeInitial: 10,
+      volumeCurrent: 10,
+    })).toEqual({ initial: 10, current: 4 });
     expect(readSampleQuantities({ volumeInitial: 10, volumeCurrent: 7 })).toEqual({ initial: 10, current: 7 });
-    expect(readSampleQuantities({ initialQuantity: 20, currentQuantity: 5 })).toEqual({ initial: 20, current: 5 });
     expect(readSampleQuantities({ quantity: 15 })).toEqual({ initial: 15, current: 15 });
   });
 });

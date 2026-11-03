@@ -102,8 +102,9 @@ export function readSampleQuantities(sample: {
   currentQuantity?: number | null;
   quantity?: number | null;
 } | null | undefined): { initial: number | null; current: number | null } {
-  const initialRaw = sample?.volumeInitial ?? sample?.initialQuantity ?? sample?.quantity;
-  const currentRaw = sample?.volumeCurrent ?? sample?.currentQuantity ?? sample?.quantity;
+  // Prefer canonical *Quantity over stale volume* aliases (#1436 / sample detail tests).
+  const initialRaw = sample?.initialQuantity ?? sample?.volumeInitial ?? sample?.quantity;
+  const currentRaw = sample?.currentQuantity ?? sample?.volumeCurrent ?? sample?.quantity;
   return {
     initial: initialRaw == null ? null : Number(initialRaw),
     current: currentRaw == null ? null : Number(currentRaw),

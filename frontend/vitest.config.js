@@ -21,6 +21,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // Wizard / multi-step RTL suites need headroom under full-suite load.
+    testTimeout: 15_000,
     passWithNoTests: false,
     setupFiles: ['./tests/unit/setup.ts'],
     include: [

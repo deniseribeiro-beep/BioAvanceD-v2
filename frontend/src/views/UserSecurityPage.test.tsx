@@ -254,7 +254,7 @@ describe('UserSecurityPage change password', () => {
     expect(screen.getByTestId('current-password-input')).toHaveValue('');
     expect(screen.queryByText('userSecurity.password.allFieldsRequired')).toBeNull();
     fill('typed', '', '');
-    fireEvent.click(container.ownerDocument.querySelector('.modal-overlay')!);
+    fireEvent.click(container.ownerDocument.querySelector('.modal-close')!);
     expect(screen.queryByTestId('current-password-input')).toBeNull();
     open();
     expect(screen.getByTestId('current-password-input')).toHaveValue('');
@@ -297,7 +297,7 @@ describe('UserSecurityPage recovery codes', () => {
     fireEvent.click(screen.getByTestId('generate-recovery-codes-button'));
     await screen.findByText('CCCC-3333');
     const loadsBefore = h.getStatus.mock.calls.length;
-    fireEvent.click(container.ownerDocument.querySelector('.modal-overlay')!);
+    fireEvent.click(container.ownerDocument.querySelector('.modal-close')!);
     await waitFor(() => expect(h.getStatus.mock.calls.length).toBe(loadsBefore + 1));
     expect(await screen.findByText('8 left')).toBeInTheDocument();
   });
@@ -376,7 +376,7 @@ describe('UserSecurityPage password reset request', () => {
     fireEvent.click(screen.getByTestId('security-confirm-cancel-button'));
     expect(screen.queryByTestId('security-confirm-proceed-button')).toBeNull();
     fireEvent.click(screen.getByTestId('request-password-reset-button'));
-    fireEvent.click(container.ownerDocument.querySelector('.modal-overlay')!);
+    fireEvent.click(container.ownerDocument.querySelector('.modal-close')!);
     expect(screen.queryByTestId('security-confirm-proceed-button')).toBeNull();
     expect(h.requestPasswordReset).not.toHaveBeenCalled();
   });

@@ -62,8 +62,9 @@ export function mapStatus(sample: Sample): Sample['status'] {
 }
 
 function computeVolume(sample: Sample) {
-  const initialRaw = sample.volumeInitial ?? sample.initialQuantity ?? sample.quantity;
-  const currentRaw = sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity;
+  const legacy = sample as Sample & { volumeInitial?: number | null; volumeCurrent?: number | null };
+  const initialRaw = sample.initialQuantity ?? legacy.volumeInitial ?? sample.quantity;
+  const currentRaw = sample.currentQuantity ?? legacy.volumeCurrent ?? sample.quantity;
   // #1436: keep null when nothing was recorded; do not coerce to 0.
   return {
     initial: initialRaw == null ? null : Number(initialRaw),
