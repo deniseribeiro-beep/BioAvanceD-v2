@@ -413,9 +413,7 @@ describe('LogsPage: the timestamp and id shapes the reader may return', () => {
 
   it('formats every shape, reads an unparseable one as N/A, and sorts them by time', async () => {
     renderPage(shapes);
-    // The sort reads a serialized dateTime as no time, so only the shapes it
-    // reads are pinned to an order here.
-    expect(messages().slice(0, 4)).toEqual(['as-datetime', 'as-number', 'as-serialized', 'as-date']);
+    expect(messages()).toEqual(['as-serialized-datetime', 'as-datetime', 'as-number', 'as-serialized', 'as-date', 'as-garbage']);
     const stampOf = (m: string) => bodyRows().find((r) => r.textContent!.includes(m))!.querySelector('.log-timestamp')!.textContent;
     for (const m of ['as-date', 'as-serialized', 'as-number', 'as-datetime', 'as-serialized-datetime']) expect(stampOf(m)).not.toBe('N/A');
     expect(stampOf('as-garbage')).toBe('N/A');
@@ -428,6 +426,30 @@ describe('LogsPage: the timestamp and id shapes the reader may return', () => {
     fireEvent.change(start, { target: { value: '2026-05-01' } });
     fireEvent.change(end, { target: { value: '2026-07-31' } });
     expect(messages()).toEqual(['as-datetime', 'as-number', 'as-serialized']);
+  });
+
+  it('the date filters keep a serialized dateTime that falls inside the range', async () => {
+    renderPage(shapes);
+    await userEvent.click(screen.getByRole('button', { name: /common\.filter/ }));
+    const [start, end] = Array.from(document.querySelectorAll('.filters-panel input[type="date"]')) as HTMLInputElement[];
+    fireEvent.change(start, { target: { value: '2026-08-01' } });
+    expect(messages()).toEqual(['as-serialized-datetime']);
+    fireEvent.change(start, { target: { value: '' } });
+    fireEvent.change(end, { target: { value: '2026-08-31' } });
+    expect(messages()).toEqual(['as-serialized-datetime', 'as-datetime', 'as-number', 'as-serialized', 'as-date']);
+  });
+
+  it('reads a serialized dateTime with a null value as no time: N/A, and dropped by an end-date filter', async () => {
+    renderPage([
+      log({ _id: 'n1', message: 'as-null-datetime', dateTime: { _type: 'Date', _value: null } as any }),
+      log({ _id: 'n2', message: 'as-iso', timestampISO: '2026-08-10T10:00:00Z' }),
+    ]);
+    const stamp = bodyRows().find((r) => r.textContent!.includes('as-null-datetime'))!.querySelector('.log-timestamp')!.textContent;
+    expect(stamp).toBe('N/A');
+    await userEvent.click(screen.getByRole('button', { name: /common\.filter/ }));
+    const [, end] = Array.from(document.querySelectorAll('.filters-panel input[type="date"]')) as HTMLInputElement[];
+    fireEvent.change(end, { target: { value: '2026-08-31' } });
+    expect(messages()).toEqual(['as-iso']);
   });
 
   it('opens the full log by a serialized ObjectId or a numeric logID, and logs when there is no id', async () => {

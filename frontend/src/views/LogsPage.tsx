@@ -35,6 +35,19 @@ import './LogsPage.css';
 type SortField = 'timestamp' | 'userName' | 'action' | 'entity' | 'severity' | 'result' | 'ipSource' | 'module';
 type SortOrder = 'asc' | 'desc';
 
+// The one reader of a log's time for the date filters, the sort and the
+// table (#1429): timestampISO, else timestamp, else dateTime, with a
+// serialized { _type: 'Date', _value } unwrapped. null when it does not parse,
+// or when the serialized _value is null or undefined (not the epoch).
+function readLogDate(log: Log): Date | null {
+  const raw: any = log.timestampISO || log.timestamp || log.dateTime;
+  if (!raw) return null;
+  const value = typeof raw === 'object' && !(raw instanceof Date) && raw._type === 'Date' ? raw._value : raw;
+  if (value === null || value === undefined) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return isNaN(date.getTime()) ? null : date;
+}
+
 export default function LogsPage() {
   const navigate = useNavigate();
   const { t } = useLanguage();
@@ -167,23 +180,8 @@ export default function LogsPage() {
         if (!isNaN(start.getTime())) {
           filtered = filtered.filter(log => {
             try {
-              let logDate: Date | null = null;
-              if (log.timestampISO) {
-                logDate = new Date(log.timestampISO);
-              } else if (log.timestamp) {
-                if (typeof log.timestamp === 'string') {
-                  logDate = new Date(log.timestamp);
-                } else if (log.timestamp instanceof Date) {
-                  logDate = log.timestamp;
-                } else if (typeof log.timestamp === 'object' && (log.timestamp as any)?._type === 'Date') {
-                  logDate = new Date((log.timestamp as any)._value);
-                } else {
-                  logDate = new Date(log.timestamp);
-                }
-              } else if (log.dateTime) {
-                logDate = typeof log.dateTime === 'string' ? new Date(log.dateTime) : new Date(log.dateTime);
-              }
-              return logDate && !isNaN(logDate.getTime()) && logDate >= start;
+              const logDate = readLogDate(log);
+              return logDate !== null && logDate >= start;
             } catch (e) {
               return false;
             }
@@ -200,23 +198,8 @@ export default function LogsPage() {
         if (!isNaN(end.getTime())) {
           filtered = filtered.filter(log => {
             try {
-              let logDate: Date | null = null;
-              if (log.timestampISO) {
-                logDate = new Date(log.timestampISO);
-              } else if (log.timestamp) {
-                if (typeof log.timestamp === 'string') {
-                  logDate = new Date(log.timestamp);
-                } else if (log.timestamp instanceof Date) {
-                  logDate = log.timestamp;
-                } else if (typeof log.timestamp === 'object' && (log.timestamp as any)?._type === 'Date') {
-                  logDate = new Date((log.timestamp as any)._value);
-                } else {
-                  logDate = new Date(log.timestamp);
-                }
-              } else if (log.dateTime) {
-                logDate = typeof log.dateTime === 'string' ? new Date(log.dateTime) : new Date(log.dateTime);
-              }
-              return logDate && !isNaN(logDate.getTime()) && logDate <= end;
+              const logDate = readLogDate(log);
+              return logDate !== null && logDate <= end;
             } catch (e) {
               return false;
             }
@@ -235,30 +218,7 @@ export default function LogsPage() {
       switch (sortField) {
         case 'timestamp':
           try {
-            const getTime = (log: Log) => {
-              if (log.timestampISO) {
-                const d = new Date(log.timestampISO);
-                return isNaN(d.getTime()) ? 0 : d.getTime();
-              }
-              if (log.timestamp) {
-                let d: Date;
-                if (typeof log.timestamp === 'string') {
-                  d = new Date(log.timestamp);
-                } else if (log.timestamp instanceof Date) {
-                  d = log.timestamp;
-                } else if (typeof log.timestamp === 'object' && (log.timestamp as any)?._type === 'Date') {
-                  d = new Date((log.timestamp as any)._value || log.timestamp);
-                } else {
-                  d = new Date(log.timestamp);
-                }
-                return isNaN(d.getTime()) ? 0 : d.getTime();
-              }
-              if (log.dateTime) {
-                const d = typeof log.dateTime === 'string' ? new Date(log.dateTime) : new Date(log.dateTime);
-                return isNaN(d.getTime()) ? 0 : d.getTime();
-              }
-              return 0;
-            };
+            const getTime = (log: Log) => readLogDate(log)?.getTime() ?? 0;
             aValue = getTime(a);
             bValue = getTime(b);
           } catch (e) {
@@ -546,39 +506,9 @@ export default function LogsPage() {
 
   const formatTimestamp = (log: Log) => {
     try {
-      let date: Date | null = null;
-
-      // Tenta usar timestampISO primeiro e sempre renderiza em timezone local do cliente.
-      if (log.timestampISO) {
-        date = new Date(log.timestampISO);
-      }
-      // Tenta usar timestamp
-      else if (log.timestamp) {
-        if (typeof log.timestamp === 'string') {
-          date = new Date(log.timestamp);
-        } else if (log.timestamp instanceof Date) {
-          date = log.timestamp;
-        } else if (typeof log.timestamp === 'object' && (log.timestamp as any)?._type === 'Date') {
-          // Se for um objeto Date serializado
-          date = new Date((log.timestamp as any)._value || log.timestamp);
-        } else {
-          date = new Date(log.timestamp);
-        }
-      }
-      // Tenta usar dateTime
-      else if (log.dateTime) {
-        if (typeof log.dateTime === 'string') {
-          date = new Date(log.dateTime);
-        } else if (log.dateTime instanceof Date) {
-          date = log.dateTime;
-        } else if (typeof log.dateTime === 'object' && (log.dateTime as any)?._type === 'Date') {
-          date = new Date((log.dateTime as any)._value || log.dateTime);
-        } else {
-          date = new Date(log.dateTime);
-        }
-      }
-      
-      if (!date || isNaN(date.getTime())) return 'N/A';
+      // Renderiza sempre em timezone local do cliente.
+      const date = readLogDate(log);
+      if (!date) return 'N/A';
 
       return new Intl.DateTimeFormat(undefined, {
         year: 'numeric',
