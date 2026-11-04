@@ -1,0 +1,13 @@
+# Homolog / public HTTPS access overlay: same-origin API behind the access proxy.
+# Usage (on VM, from BioAvanceD-v2-homolog):
+#   docker compose --env-file .env.test.example -f compose.test.yml \
+#     -f scripts/gcp-access-proxy/compose.access-overlay.yml \
+#     build frontend-app-test
+#   docker compose --env-file .env.test.example -f compose.test.yml \
+#     -f scripts/gcp-access-proxy/compose.access-overlay.yml \
+#     up -d frontend-app-test
+services:
+  frontend-app-test:
+    build:
+      args:
+        VITE_API_BASE_URL: /api
