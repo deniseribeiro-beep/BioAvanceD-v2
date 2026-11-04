@@ -1157,13 +1157,14 @@
       "organizationType": "Tipo",
       "website": "Website"
     },
-    "subtitle": "Gerenciamento integrado de usuários e configurações de segurança",
+    "subtitle": "Usuários, organizações, coleções e políticas de segurança",
     "tabs": {
       "collections": "Coleções",
       "organizations": "Organizações",
       "security": "Segurança",
       "users": "Usuários"
     },
+    "tabsLabel": "Seções do gerenciamento do sistema",
     "title": "Gerenciamento do Sistema"
   },
   "roles": {
@@ -1887,6 +1888,8 @@
     "roleTechnician": "🔬 Técnico - Operações básicas do sistema",
     "saveError": "Erro ao salvar usuário",
     "saving": "Salvando...",
+    "searchEmpty": "Nenhum usuário encontrado",
+    "searchPlaceholder": "Buscar por nome, email ou usuário",
     "status": "Status",
     "statusActive": "Ativo",
     "statusBlocked": "Bloqueado",

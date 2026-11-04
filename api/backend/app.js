@@ -79,6 +79,12 @@ if (isDev) {
     "http://127.0.0.1:5173",
     "http://localhost:4173",
     "http://127.0.0.1:4173",
+    // Access proxy / IAP tunnel (scripts/gcp-access-proxy): browser Origin is :8080
+    // even though /api is same-site through nginx; cors() still validates it.
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "https://bioadvanced.dev",
+    "https://www.bioadvanced.dev",
   ].forEach((origin) => {
     addAllowedOrigin(allowedOrigins, seenAllowedOrigins, origin);
   });

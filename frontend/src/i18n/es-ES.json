@@ -1887,6 +1887,8 @@
     "roleTechnician": "🔬 Técnico - Operaciones básicas del sistema",
     "saveError": "Error al guardar usuario",
     "saving": "Guardando...",
+    "searchEmpty": "Ningún usuario encontrado",
+    "searchPlaceholder": "Buscar por nombre, email o usuario",
     "status": "Estado",
     "statusActive": "Activo",
     "statusBlocked": "Bloqueado",

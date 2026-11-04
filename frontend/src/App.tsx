@@ -26,6 +26,9 @@ const SampleMovementsPage = lazy(() => import('./views/SampleMovementsPage'));
 const SampleWithdrawalReturnPage = lazy(() => import('./views/SampleWithdrawalReturnPage'));
 const SampleCustodyReportsPage = lazy(() => import('./views/SampleCustodyReportsPage'));
 const FacilityManagementPage = lazy(() => import('./views/FacilityManagementPage'));
+const EquipmentFormPage = lazy(() => import('./views/EquipmentFormPage'));
+const SensorFormPage = lazy(() => import('./views/SensorFormPage'));
+const PolicyFormPage = lazy(() => import('./views/PolicyFormPage'));
 const SystemManagementPage = lazy(() => import('./views/SystemManagementPage'));
 const ReportsPage = lazy(() => import('./views/ReportsPage'));
 const ReportViewPage = lazy(() => import('./views/ReportViewPage'));
@@ -43,6 +46,12 @@ const TcleBuilderPage = lazy(() => import('./views/TcleBuilderPage'));
 const AccessRequestsPage = lazy(() => import('./views/AccessRequestsPage'));
 const ConsentHistoryPage = lazy(() => import('./views/ConsentHistoryPage'));
 const BiomarkerAssociationsPage = lazy(() => import('./views/BiomarkerAssociationsPage'));
+const OrganizationFormPage = lazy(() => import('./views/OrganizationFormPage'));
+const CollectionFormPage = lazy(() => import('./views/CollectionFormPage'));
+const CollectionGovernancePage = lazy(() => import('./views/CollectionGovernancePage'));
+const QualityDescriptionFormPage = lazy(() => import('./views/QualityDescriptionFormPage'));
+const ReportTemplateFormPage = lazy(() => import('./views/ReportTemplateFormPage'));
+const BiomarkerAssociationFormPage = lazy(() => import('./views/BiomarkerAssociationFormPage'));
 const FoundationApp = lazy(() => import('./foundation/FoundationApp'));
 const IntakeWizardPage = lazy(() => import('./pages/v2/intake/IntakeWizardPage'));
 
@@ -164,12 +173,23 @@ function App() {
                   <Route path="samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
                   <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
                   <Route path="/system-management" element={<ProtectedRoute requiredRole="Administrador"><SystemManagementPage /></ProtectedRoute>} />
+                  <Route path="/organizations/new" element={<ProtectedRoute requiredRole="Administrador"><OrganizationFormPage /></ProtectedRoute>} />
+                  <Route path="/organizations/:id/edit" element={<ProtectedRoute requiredRole="Administrador"><OrganizationFormPage /></ProtectedRoute>} />
+                  <Route path="/collections/new" element={<ProtectedRoute requiredRole="Administrador"><CollectionFormPage /></ProtectedRoute>} />
+                  <Route path="/collections/:id/edit" element={<ProtectedRoute requiredRole="Administrador"><CollectionFormPage /></ProtectedRoute>} />
+                  <Route path="/collections/:id/governance" element={<ProtectedRoute requiredRole="Administrador"><CollectionGovernancePage /></ProtectedRoute>} />
                   <Route path="/users" element={<Navigate to="/system-management?tab=users" replace />} />
                   <Route path="/access" element={<Navigate to="/system-management?tab=users" replace />} />
                   <Route path="/security" element={<Navigate to="/system-management?tab=security" replace />} />
                   <Route path="/users/new" element={<ProtectedRoute requiredRole="Administrador"><NewUserPage /></ProtectedRoute>} />
                   <Route path="/users/new/success" element={<ProtectedRoute requiredRole="Administrador"><NewUserSuccessPage /></ProtectedRoute>} />
                   <Route path="/facility-management" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FacilityManagementPage /></ProtectedRoute>} />
+                  <Route path="/equipment/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><EquipmentFormPage /></ProtectedRoute>} />
+                  <Route path="/equipment/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><EquipmentFormPage /></ProtectedRoute>} />
+                  <Route path="/sensors/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SensorFormPage /></ProtectedRoute>} />
+                  <Route path="/sensors/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SensorFormPage /></ProtectedRoute>} />
+                  <Route path="/policies/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><PolicyFormPage /></ProtectedRoute>} />
+                  <Route path="/policies/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><PolicyFormPage /></ProtectedRoute>} />
                   <Route path="/equipment" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/locations" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/temperature" element={<Navigate to="/facility-management?tab=temperature" replace />} />
@@ -181,9 +201,13 @@ function App() {
                   {/* #726 (RF008 AC#6): template management is Coordenador+Administrador
                       only (manageReportTemplates), narrower than /reports' own view-only gate. */}
                   <Route path="/reports/templates" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplatesPage /></ProtectedRoute>} />
+                  <Route path="/reports/templates/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplateFormPage /></ProtectedRoute>} />
+                  <Route path="/reports/templates/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplateFormPage /></ProtectedRoute>} />
                   <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
+                  <Route path="/quality-descriptions/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionFormPage /></ProtectedRoute>} />
+                  <Route path="/quality-descriptions/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionFormPage /></ProtectedRoute>} />
                   {/* #808: the LGPD import's own surface. `/import` posts to the
                       *async* importer; #813 landed, so that importer now
                       quarantines its rejected rows too, into
@@ -229,6 +253,8 @@ function App() {
                   <Route path="/consents" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ConsentHistoryPage /></ProtectedRoute>} />
                   {/* ELM-0275..0285 (#1402): BiomarkerAssociation entry, behind the backend's requireRole(3, 4). */}
                   <Route path="/biomarker-associations" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><BiomarkerAssociationsPage /></ProtectedRoute>} />
+                  <Route path="/biomarker-associations/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><BiomarkerAssociationFormPage /></ProtectedRoute>} />
+                  <Route path="/biomarker-associations/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><BiomarkerAssociationFormPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/edit/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />

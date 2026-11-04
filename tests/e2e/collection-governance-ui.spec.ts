@@ -48,6 +48,8 @@ test('registers an approval, records the biorepository context and suspends the 
   try {
     await page.goto('/system-management?tab=collections');
     await page.getByTestId(`governance-collection-button-${ids.collectionId}`).click();
+    await expect(page).toHaveURL(new RegExp(`/collections/${ids.collectionId}/governance`));
+    await expect(page.getByTestId('collection-governance-page')).toBeVisible();
     const panel = page.getByTestId('collection-governance-panel');
     await expect(panel).toBeVisible();
 

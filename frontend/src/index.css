@@ -196,4 +196,168 @@
   .btn-danger {
     @apply inline-flex items-center gap-2 rounded-lg border border-destructive bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:opacity-90 disabled:opacity-70;
   }
+
+  /* System management / users table */
+  .section-header {
+    @apply mb-3 flex flex-wrap items-center justify-between gap-3;
+  }
+
+  .table-actions {
+    @apply inline-flex flex-nowrap items-center gap-1;
+  }
+
+  .role-badge-container {
+    @apply flex flex-wrap items-center gap-1.5;
+  }
+
+  .role-badge {
+    @apply inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs font-medium text-foreground;
+  }
+
+  .status-badge {
+    @apply inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs font-medium;
+  }
+
+  .status-badge.status-ativo,
+  .status-badge.status-active {
+    @apply border-emerald-200 bg-emerald-50 text-emerald-800;
+  }
+
+  .status-badge.status-inativo,
+  .status-badge.status-inactive {
+    @apply border-slate-200 bg-slate-50 text-slate-600;
+  }
+
+  /* Security settings (embedded under /system-management?tab=security) */
+  .security-page {
+    @apply flex w-full min-w-0 flex-col gap-4;
+  }
+
+  .security-page.security-page--embedded .security-header {
+    @apply hidden;
+  }
+
+  .security-header {
+    @apply rounded-xl border border-border bg-card p-4 shadow-sm;
+  }
+
+  .security-title {
+    @apply flex items-center gap-2 text-xl font-semibold tracking-tight text-foreground;
+  }
+
+  .security-subtitle {
+    @apply mt-1 text-sm text-muted-foreground;
+  }
+
+  .security-error,
+  .security-success {
+    @apply flex items-center gap-2 rounded-lg border px-3 py-2 text-sm;
+  }
+
+  .security-error {
+    @apply border-destructive/30 bg-destructive/5 text-destructive;
+  }
+
+  .security-success {
+    @apply border-emerald-200 bg-emerald-50 text-emerald-800;
+  }
+
+  .security-content {
+    @apply grid w-full min-w-0 gap-4 lg:grid-cols-[220px_minmax(0,1fr)];
+  }
+
+  .security-sidebar {
+    @apply min-w-0;
+  }
+
+  .security-nav {
+    @apply flex flex-col gap-1 rounded-xl border border-border bg-card p-1.5 shadow-sm;
+  }
+
+  .security-nav button {
+    @apply w-full rounded-lg border-0 bg-transparent px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-primary-soft hover:text-primary;
+  }
+
+  .security-nav button.active {
+    @apply bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground;
+  }
+
+  .security-main {
+    @apply min-w-0;
+  }
+
+  .security-section h2 {
+    @apply mb-4 text-lg font-semibold text-foreground;
+  }
+
+  .security-section h3,
+  .config-subtitle {
+    @apply mb-2 text-sm font-semibold text-foreground;
+  }
+
+  .config-group {
+    @apply flex flex-col gap-4;
+  }
+
+  .config-group-divider {
+    @apply mt-2 border-t border-border pt-4;
+  }
+
+  .config-field {
+    @apply flex max-w-md flex-col gap-1.5;
+  }
+
+  .config-field label {
+    @apply text-sm font-medium text-foreground;
+  }
+
+  .config-field input[type='number'],
+  .config-field input[type='text'],
+  .config-field input[type='date'],
+  .config-field select {
+    @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground;
+  }
+
+  .config-field input:focus,
+  .config-field select:focus {
+    @apply outline-none ring-2 ring-primary/30;
+  }
+
+  .config-field input:disabled,
+  .config-field select:disabled,
+  .config-switch input:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  .config-switch {
+    @apply flex max-w-xl cursor-pointer items-start gap-2.5 text-sm text-foreground;
+  }
+
+  .config-switch input[type='checkbox'] {
+    @apply mt-0.5 h-4 w-4 shrink-0 rounded border-border text-primary;
+  }
+
+  .config-help {
+    @apply block text-xs leading-relaxed text-muted-foreground;
+  }
+
+  .config-actions {
+    @apply mt-6 flex flex-wrap gap-3 border-t border-border pt-4;
+  }
+
+  .permissions-grid {
+    @apply mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3;
+  }
+
+  .permission-profile {
+    @apply flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3;
+  }
+
+  .permission-profile h3 {
+    @apply mb-1 border-b border-border pb-2 text-sm font-semibold;
+  }
+
+  .access-denied {
+    @apply flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-8 text-center text-muted-foreground;
+  }
 }
