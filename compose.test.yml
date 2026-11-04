@@ -140,7 +140,21 @@ services:
     # this early gets refused, seemingly a hairpin-NAT limitation), whereas
     # a separate container connecting in normally, after the healthcheck
     # confirms the port is reachable, does not.
-    command: ["--replSet", "rs0", "--bind_ip_all"]
+    #
+    # #1440 / lab GCP e2-highcpu-16 (~16 GiB): mongod's default WiredTiger
+    # cache is ~half of host RAM (~7 GiB). Under the full compose.test stack
+    # (Neo4j, Influx, backend, Playwright Chromium, …) that balloons into
+    # OOM and mongod aborts with exit 14 mid e2e-gate. Cap the cache and
+    # container so the gate can finish on this machine size.
+    command:
+      [
+        "--replSet",
+        "rs0",
+        "--bind_ip_all",
+        "--wiredTigerCacheSizeGB",
+        "1.5",
+      ]
+    mem_limit: 2500m
     volumes:
       - mongodb-test-data:/data/db
     ports:
