@@ -10,7 +10,8 @@
 
 - Apêndice de rastreabilidade homologação (`docs/mestrado/Apendice_Matriz_Rastreabilidade_Homologacao_v1.0.0.md`)
 - Checklist UI↔Mongo + nota API-only ADR W8
-- CT-RNF001 + RNF030 exceção + RF016 sintético + checklists wave3
+- CT-RNF001 + `rnf001-ui-p95-results.json` (GCP 2026-11-04, overallPass)
+- RNF030 exceção + RF016 sintético + checklists wave3
 - Resumo gate GCP watchdog 2026-11-04 (#1440)
 - Este `ZENODO.md` + checksums
 

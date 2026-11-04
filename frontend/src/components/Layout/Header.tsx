@@ -2,7 +2,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { User as UserType } from '@/types/models';
 import { useNavigate } from 'react-router-dom';
-import Button from '../UI/Button';
+import { Button } from '@/components/shadcn/button';
 import LanguageSelector from '../LanguageSelector';
 import { canRoleAccessRoute } from '@/utils/rolePermissions';
 import { LogOut, Workflow } from 'lucide-react';
@@ -75,13 +75,16 @@ export default function Header() {
             </>
           ) : null}
           {canOpenIntake ? (
-            <Button variant="secondary" onClick={() => navigate('/next/intake')} className="intake-button hidden sm:inline-flex">
-              <Workflow size={16} />
+            <Button
+              onClick={() => navigate('/next/intake')}
+              className="intake-button hidden gap-1.5 sm:inline-flex"
+            >
+              <Workflow className="h-4 w-4" />
               {t('navigation.newIntake')}
             </Button>
           ) : null}
-          <Button variant="secondary" onClick={handleLogout} className="logout-button">
-            <LogOut size={16} />
+          <Button variant="outline" onClick={handleLogout} className="logout-button gap-1.5" aria-label={t('auth.logout')}>
+            <LogOut className="h-4 w-4" />
             <span className="hidden sm:inline">{t('auth.logout')}</span>
           </Button>
         </div>

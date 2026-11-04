@@ -83,8 +83,7 @@ input, select, textarea {
   font-family: inherit;
 }
 
-/* Botões com fundo sólido (aplicação global) */
-button,
+/* Legacy solid buttons only — never paint every <button> (breaks shadcn/TailAdmin shell) */
 .btn,
 .action-button {
   background-color: var(--color-action);
@@ -94,7 +93,6 @@ button,
   transition: none;
 }
 
-/* Variantes sólidas */
 .btn-primary,
 button.primary,
 .action-button.primary {
@@ -105,9 +103,7 @@ button.primary,
 
 .btn-secondary,
 button.secondary,
-.action-button.secondary,
-.header-button,
-.logout-button {
+.action-button.secondary {
   background-color: var(--secondary);
   border-color: var(--secondary);
   color: #fff;
@@ -129,8 +125,6 @@ button.danger,
   color: #fff;
 }
 
-/* Remover mudança visual no hover (mantém sólido) */
-button:hover,
 .btn:hover,
 .action-button:hover,
 .btn-primary:hover,

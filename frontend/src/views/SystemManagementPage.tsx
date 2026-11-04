@@ -56,35 +56,39 @@ export default function SystemManagementPage() {
   ];
 
   return (
-    <div className="page" data-testid="system-management-page">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">{t('system.title', 'Gerenciamento do Sistema')}</h1>
-          <p className="page-subtitle">{t('system.subtitle', 'Gerenciamento integrado de usuários e configurações de segurança')}</p>
-        </div>
+    <div className="page-shell" data-testid="system-management-page">
+      <div className="card-surface">
+        <h1 className="page-title">{t('system.title', 'Gerenciamento do Sistema')}</h1>
+        <p className="page-subtitle">{t('system.subtitle', 'Gerenciamento integrado de usuários e configurações de segurança')}</p>
       </div>
 
-      <div className="system-tabs">
+      <div className="flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1">
         {tabs.map((tab) => {
           const Icon = tab.icon;
+          const active = activeTab === tab.id;
           return (
             <button
               key={tab.id}
+              type="button"
               data-testid={`system-tab-${tab.id}`}
-              className={`system-tab ${activeTab === tab.id ? 'active' : ''}`}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                active
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-primary-soft hover:text-primary'
+              }`}
               onClick={() => {
                 setActiveTab(tab.id);
                 setSearchParams({ tab: tab.id });
               }}
             >
-              <Icon size={18} />
+              <Icon className="h-4 w-4" />
               <span>{tab.label}</span>
             </button>
           );
         })}
       </div>
 
-      <div className="system-tab-content">
+      <div className="space-y-4">
         {activeTab === 'users' && <UsersSection />}
         {activeTab === 'organizations' && <OrganizationsSection />}
         {activeTab === 'collections' && <CollectionsSection />}

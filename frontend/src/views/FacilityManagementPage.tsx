@@ -60,28 +60,31 @@ export default function FacilityManagementPage() {
 
   return (
     <div className="page-shell facility-management-page flex w-full min-w-0 flex-col gap-4">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">{t('facility.title', 'Gerenciamento de Instalações')}</h1>
-          <p className="page-subtitle">{t('facility.subtitle', 'Gerenciamento integrado de equipamentos, temperatura, sensores e políticas')}</p>
-        </div>
+      <div className="card-surface">
+        <h1 className="page-title">{t('facility.title', 'Gerenciamento de Instalações')}</h1>
+        <p className="page-subtitle">{t('facility.subtitle', 'Gerenciamento integrado de equipamentos, temperatura, sensores e políticas')}</p>
       </div>
 
-      <div className="facility-tabs relative z-0 shrink-0">
+      <div className="facility-tabs relative z-0 flex shrink-0 flex-wrap gap-1 rounded-xl border border-border bg-card p-1">
         {tabs.map((tab) => {
           const Icon = tab.icon;
+          const active = activeTab === tab.id;
           return (
             <button
               key={tab.id}
               type="button"
               data-testid={`facility-tab-${tab.id}`}
-              className={`facility-tab ${activeTab === tab.id ? 'active' : ''}`}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                active
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-primary-soft hover:text-primary'
+              }`}
               onClick={() => {
                 setActiveTab(tab.id);
                 setSearchParams({ tab: tab.id });
               }}
             >
-              <Icon size={18} />
+              <Icon className="h-4 w-4" />
               <span>{tab.label}</span>
             </button>
           );

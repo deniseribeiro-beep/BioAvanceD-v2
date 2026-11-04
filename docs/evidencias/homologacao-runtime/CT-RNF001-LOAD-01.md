@@ -6,8 +6,8 @@
 | Critério | p95 do tempo até UI interativa ≤ 2000 ms nas rotas críticas |
 | Rotas | `/login`, `/dashboard`, `/samples`, `/next/intake` |
 | Instrumento | `scripts/rnf001-ui-p95.mjs` (Playwright navigation timing) |
-| Ambiente | Frontend Compose de teste ou `compose.dev` local |
-| Data | 2026-11-03 |
+| Ambiente | GCP VM `instance-20261029-155615` + `compose.test.yml` (host ports 5173/3000) |
+| Data | 2026-11-04 |
 
 ## Protocolo
 
@@ -27,8 +27,15 @@
 | `/login` | `[data-testid="login-form"]` |
 | `/dashboard` | `nav.sidebar-nav` (ou título do dashboard) |
 | `/samples` | texto/heading de inventário ou tabela |
-| `/next/intake` | formulário/wizard visível |
+| `/next/intake` | `[data-testid="wizard-full-name"]` / `.intake-wizard-page` |
 
 ## Resultado
 
-Ver `rnf001-ui-p95-results.json` gerado pela campanha. O status de homologação RNF001 no apêndice acompanha esse arquivo.
+| Rota | p50 (ms) | p95 (ms) | max (ms) | Critério ≤2000 | N |
+|---|---:|---:|---:|---|---:|
+| `/login` | 57 | 85 | 181 | Aprovado | 30 |
+| `/dashboard` | 273 | 390 | 857 | Aprovado | 30 |
+| `/samples` | 146 | 274 | 276 | Aprovado | 30 |
+| `/next/intake` | 137 | 155 | 166 | Aprovado | 30 |
+
+`overallPass=true` @ `2026-11-04T13:47:59.439Z` — ver `rnf001-ui-p95-results.json`. Homologação RNF001 no apêndice: **Aprovado**.

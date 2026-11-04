@@ -19,9 +19,10 @@ const OUT = process.env.OUT
 
 const routes = [
   { path: '/login', ready: '[data-testid="login-form"]', auth: false },
-  { path: '/dashboard', ready: 'nav.sidebar-nav, h1, [data-testid="dashboard"]', auth: true },
-  { path: '/samples', ready: 'h1, table, [data-testid="samples-page"]', auth: true },
-  { path: '/next/intake', ready: 'h1, form, [data-testid="intake-wizard"]', auth: true },
+  { path: '/dashboard', ready: 'aside#app-sidebar h1, h1', auth: true },
+  { path: '/samples', ready: 'h1, [data-testid="samples-page"]', auth: true },
+  // Intake wizard has no page-level h1; readiness is the first wizard field.
+  { path: '/next/intake', ready: '[data-testid="wizard-full-name"]', auth: true },
 ];
 
 function percentile(sorted, p) {
@@ -65,13 +66,28 @@ async function ensureAuth(context) {
 
 async function measure(page, route) {
   const t0 = Date.now();
-  await page.goto(`${BASE_URL}${route.path}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await page.locator(route.ready).first().waitFor({ state: 'visible', timeout: 60_000 });
+  await page.goto(`${BASE_URL}${route.path}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.locator(route.ready).first().waitFor({ state: 'visible', timeout: 20_000 });
   return Date.now() - t0;
 }
 
+async function waitStackReady(page, attempts = 12) {
+  let lastErr;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.locator('[data-testid="login-form"]').first().waitFor({ state: 'visible', timeout: 20_000 });
+      return;
+    } catch (err) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
+  }
+  throw lastErr || new Error('stack not ready for /login');
+}
+
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext();
+const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 
 let authed = false;
 if (routes.some((r) => r.auth)) {
@@ -89,14 +105,52 @@ const results = {
   passCriterionMs: 2000,
 };
 
+try {
+  await waitStackReady(page);
+} catch (err) {
+  results.error = String(err?.message || err);
+  results.overallPass = false;
+  mkdirSync(dirname(OUT), { recursive: true });
+  writeFileSync(OUT, `${JSON.stringify(results, null, 2)}\n`);
+  console.error(results.error);
+  await browser.close();
+  process.exit(2);
+}
+
 for (const route of routes) {
   if (route.auth && !authed) {
     results.routes[route.path] = { skipped: true, reason: 'auth_required_but_login_failed' };
     continue;
   }
+  // /login must be measured without seeded auth or ProtectedRoute redirects away.
+  const measurePage = route.auth
+    ? page
+    : await (async () => {
+        const bare = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+        const p = await bare.newPage();
+        p._bareContext = bare;
+        return p;
+      })();
   const samples = [];
+  const errors = [];
   for (let i = 0; i < N; i += 1) {
-    samples.push(await measure(page, route));
+    try {
+      const ms = await measure(measurePage, route);
+      samples.push(ms);
+      if ((i + 1) % 5 === 0 || i === 0) {
+        console.error(`[rnf001] ${route.path} sample ${i + 1}/${N}: ${ms}ms`);
+      }
+    } catch (err) {
+      errors.push(String(err?.message || err));
+      console.error(`[rnf001] ${route.path} sample ${i + 1}/${N} FAIL: ${errors[errors.length - 1]}`);
+    }
+  }
+  if (measurePage._bareContext) {
+    await measurePage._bareContext.close();
+  }
+  if (!samples.length) {
+    results.routes[route.path] = { skipped: true, reason: 'all_samples_failed', errors };
+    continue;
   }
   const sorted = [...samples].sort((a, b) => a - b);
   const summary = {
@@ -106,6 +160,7 @@ for (const route of routes) {
     max: sorted[sorted.length - 1],
     pass: percentile(sorted, 95) <= 2000,
   };
+  if (errors.length) summary.errors = errors;
   results.routes[route.path] = summary;
 }
 

@@ -806,74 +806,49 @@ export default function TcleBuilderPage() {
   };
 
   return (
-    <div className="page tcle-builder-page">
-      <div className="page-header tcle-builder-page__header">
-        <div className="tcle-builder-page__heading">
-          <div className="tcle-builder-page__eyebrow">
-            <Sparkles size={15} />
-            <span>Gestão de Consentimento</span>
-          </div>
-          <h1 className="page-title">Construtor de TCLE</h1>
-          <p className="page-subtitle">
-            Estruture o TCLE no padrão do wizard: cabeçalho e aceite fixos, corpo e itens granulares editáveis e vigência preenchida manualmente.
-          </p>
+    <div className="page-shell tcle-builder-page">
+      <div className="card-surface">
+        <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-primary-soft px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-primary">
+          <Sparkles size={15} />
+          <span>Gestão de Consentimento</span>
         </div>
-
+        <h1 className="page-title">Construtor de TCLE</h1>
+        <p className="page-subtitle">
+          Estruture o TCLE no padrão do wizard: cabeçalho e aceite fixos, corpo e itens granulares editáveis e vigência preenchida manualmente.
+        </p>
       </div>
 
-      <div className="tcle-builder-tabs" role="tablist" aria-label="Navegação do construtor de TCLE">
-        {activeTab === 'editor' ? (
-          <button
-            type="button"
-            role="tab"
-            aria-selected="true"
-            className="tcle-builder-tab is-active"
-            onClick={() => setActiveTab('editor')}
-          >
-            <FileText size={16} />
-            Edição do TCLE
-          </button>
-        ) : (
-          <button
-            type="button"
-            role="tab"
-            aria-selected="false"
-            className="tcle-builder-tab"
-            onClick={() => setActiveTab('editor')}
-          >
-            <FileText size={16} />
-            Edição do Termo
-          </button>
-        )}
-        {activeTab === 'history' ? (
-          <button
-            type="button"
-            role="tab"
-            aria-selected="true"
-            className="tcle-builder-tab is-active"
-            onClick={() => setActiveTab('history')}
-          >
-            <History size={16} />
-            Histórico de versões
-          </button>
-        ) : (
-          <button
-            type="button"
-            role="tab"
-            aria-selected="false"
-            className="tcle-builder-tab"
-            onClick={() => setActiveTab('history')}
-          >
-            <History size={16} />
-            Histórico de Versões
-          </button>
-        )}
+      <div className="flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1" role="tablist" aria-label="Navegação do construtor de TCLE">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'editor'}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${
+            activeTab === 'editor' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-primary-soft'
+          }`}
+          onClick={() => setActiveTab('editor')}
+        >
+          <FileText size={16} />
+          Edição do TCLE
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'history'}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${
+            activeTab === 'history' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-primary-soft'
+          }`}
+          onClick={() => setActiveTab('history')}
+        >
+          <History size={16} />
+          Histórico de Versões
+        </button>
       </div>
 
       {activeTab === 'editor' ? (
-        <form id="tcle-builder-form" className="tcle-builder-grid" onSubmit={(event) => { event.preventDefault(); void handleSave(); }}>
-          <Card className="tcle-builder-card tcle-builder-card--editor-panel">
-            <div className="tcle-builder-form-grid">
+        <form id="tcle-builder-form" className="space-y-4" onSubmit={(event) => { event.preventDefault(); void handleSave(); }}>
+          <Card className="card-surface space-y-4 border-border p-4 shadow-sm">
+            <div className="grid gap-4 sm:grid-cols-2">
               <Input
                 label="Nome do Modelo"
                 value={title}

@@ -113,7 +113,7 @@ Vocabulário de papéis (RBAC): 1 Externo · 2 Técnico · 3 Coordenador · 4 Ad
 
 | ID | Categoria | Tema | Entregável / evidência de código | Casos de teste / validação | Homologação |
 |---|---|---|---|---|---|
-| **RNF001** | Desempenho | p95 UI ≤ 2 s | Telemetria frontend / monitoramento HTTP | Campanha de carga formal **não** catalogada como suite fixa | **Pendente** |
+| **RNF001** | Desempenho | p95 UI ≤ 2 s | `scripts/rnf001-ui-p95.mjs` + `rnf001-ui-p95-results.json` (GCP 2026-11-04) | CT-RNF001-LOAD-01 (N=30; p95 max rota 390 ms ≪ 2000 ms) | **Aprovado** |
 | **RNF002** | Desempenho | Lookup IDs ≤ 3 s @100k | Índices `sampleIndexes` / identifier lookup scripts | `identifier-lookup-explain.test.js`; gaps reports | **Em Teste** |
 | **RNF003** | Disponibilidade | 99,5% / health | `GET /api/health`; Compose healthchecks | `health.api.test.js`; `dependencyHealth.test.js` | **Em Teste** |
 | **RNF004** | Resiliência | Buffer telemetria | edge buffer scripts/services | `telemetry-edge-buffer.spec.ts`; unit buffer | **Em Teste** |
@@ -151,10 +151,10 @@ Vocabulário de papéis (RBAC): 1 Externo · 2 Técnico · 3 Coordenador · 4 Ad
 | Conjunto | Aprovado | Em Teste | Pendente | Total |
 |---|---:|---:|---:|---:|
 | RF001–RF029 | 22 | 7 | 0 | 29 |
-| RNF001–RNF032 | 18 | 12 | 2 | 32 |
-| **Total** | **40** | **19** | **2** | **61** |
+| RNF001–RNF032 | 19 | 12 | 1 | 32 |
+| **Total** | **41** | **19** | **1** | **61** |
 
-Lacunas explícitas (não omitidas): **RNF001** (campanha de desempenho UI) e **RNF030** (estruturas de modelo/IA inativas por desenho).
+Lacuna explícita remanescente: **RNF030** (estruturas de modelo/IA inativas por desenho — ver exceção de publicação).
 
 ---
 
@@ -216,7 +216,7 @@ Convenção de ID de caso: `CT-<REQ>-<camada>-<n>` (camada: `E2E` | `INT` | `UNI
 
 | ID Requisito | ID Caso de Teste | Artefato | Tipo | Homologação |
 |---|---|---|---|---|
-| RNF001 | CT-RNF001-PEND-01 | Campanha p95 UI (a registrar) | — | Pendente |
+| RNF001 | CT-RNF001-LOAD-01 | `docs/evidencias/homologacao-runtime/rnf001-ui-p95-results.json` (GCP VM) | LOAD | Aprovado |
 | RNF002 | CT-RNF002-UNIT-01 | `identifier-lookup-explain.test.js` | UNIT | Em Teste |
 | RNF003 | CT-RNF003-INT-01 | `health.api.test.js` | INT | Em Teste |
 | RNF004 | CT-RNF004-E2E-01 | `telemetry-edge-buffer.spec.ts` | E2E | Em Teste |
@@ -369,7 +369,7 @@ Validações estruturais do workbook (VAL-001–VAL-028) permanecem **PASS** no 
 
 ## 9. Encerramento da matriz (declaração de completude)
 
-1. **ID do Requisito vs. Caso de Teste:** cada RF001–RF029 e RNF001–RNF032 possui pelo menos um `CT-*` explícito (Seções 4.1 e 4.2). Lacunas restantes estão nomeadas (RNF001 desempenho; RNF030 futuro; RF016 ex ante não executado).
+1. **ID do Requisito vs. Caso de Teste:** cada RF001–RF029 e RNF001–RNF032 possui pelo menos um `CT-*` explícito (Seções 4.1 e 4.2). Lacunas restantes estão nomeadas (RNF030 futuro; RF016 ensaio físico opcional — evidência sintética publicada).
 2. **Requisito vs. Entregável/Código:** Seção 5 fecha o vínculo módulo/API/serviço/modelo/UI por RF.
 3. **Status de Homologação:** Seções 2 e 3 atualizam o estado para **Aprovado / Em Teste / Pendente** com contagem agregada.
 4. **RF/RNF por módulos, regras de negócio e arquitetura:** Seções 1, 2, 3 e 6 consolidam o catálogo operacional alinhado a `requisitos.md` v4.0.0 e à matriz do modelo v2.0.0.
@@ -378,11 +378,11 @@ Validações estruturais do workbook (VAL-001–VAL-028) permanecem **PASS** no 
 
 | Item | Ação recomendada | Prioridade |
 |---|---|---|
-| RNF001 — campanha p95 UI | Protocolo em `CT-RNF001-LOAD-01.md` + `scripts/rnf001-ui-p95.mjs`; executar na stack saudável pós-#1440 | P0 operacional |
+| RNF001 — campanha p95 UI | **Concluído** — `rnf001-ui-p95-results.json` @ `2026-11-04T13:47:59Z` (p95 ≤ 390 ms) | Fechado |
 | RF016 — ensaio ex ante físico | Evidência sintética em `RF016-ex-ante-sintetico-v1.0.0.md` (RELEASE_MANIFEST `executed_synthetic`); ensaio físico opcional | P1 científico |
-| RF011/024/025/026/027 — fechar e2e | Re-gate GCP após correção Mongo exit 14 (#1440) | P0 |
+| RF011/024/025/026/027 — fechar e2e | **Concluído** — gate GCP `exit 0` / 402 passed (#1440) | Fechado |
 | RNF030 / AIR-008–012 | Manter inativos até projeto ético dedicado — ver `RNF030-excecao-publicacao.md` | Condicionado |
-| e2e-gate GCP 2026-11-04 | Watchdog 3× EXIT=20 (Mongo exit 14) — `e2e-gate-gcp-watchdog-2026-11-04.md` / #1440 | P0 infra |
+| e2e-gate GCP 2026-11-04 | **Concluído** — Mongo exit 14 mitigado; gate verde | Fechado |
 
 ### 9.2 Decisão GO/NO-GO (2026-11-04)
 
@@ -395,9 +395,10 @@ Validações estruturais do workbook (VAL-001–VAL-028) permanecem **PASS** no 
 | Binding UI↔Mongo | Spec + checklist; gate verde cobre jornadas UI correlatas |
 | Showcase fluxo (vídeo) | Reel 2026-11-01 + gate 402 passed |
 | RNF030 exceção | **GO** por desenho |
-| Zenodo v1.0.3 pacote | **GO** para upload (atualizar zip com este apêndice) |
+| RNF001 p95 UI | **GO** — CT-RNF001-LOAD-01 `overallPass=true`; p95 `/login` 85 ms, `/dashboard` 390 ms, `/samples` 274 ms, `/next/intake` 155 ms |
+| Zenodo v1.0.3 pacote | **GO** para upload (zip inclui apêndice + `rnf001-ui-p95-results.json`) |
 
-**Publicação runtime “padrão ouro”:** **GO** com RNF030 Pendente por desenho e RNF001 campanha p95 ainda a anexar se não gerada nesta sessão.
+**Publicação runtime “padrão ouro”:** **GO** — única lacuna consciente remanescente: RNF030 Pendente por desenho.
 
 ---
 
