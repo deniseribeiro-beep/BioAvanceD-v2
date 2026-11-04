@@ -64,10 +64,22 @@ test.describe('UI ↔ API/Mongo field binding (homologacao runtime)', () => {
 
     await page.goto('/samples');
     await expect(page.getByTestId('sample-list-root')).toBeVisible({ timeout: 20_000 });
-    await page.getByTestId('samples-search-input').fill(specimenId);
-    await page.getByTestId('samples-search-button').click();
     const row = page.locator(`[data-testid^="sample-row-"]`).filter({ hasText: specimenId });
-    await expect(row.first()).toBeVisible({ timeout: 15_000 });
+    // Inventory is client-filtered; wait for the list fetch to include the just-created specimen.
+    await expect
+      .poll(
+        async () => {
+          await page.getByTestId('samples-search-input').fill(specimenId);
+          await page.getByTestId('samples-search-button').click();
+          if (await row.first().isVisible().catch(() => false)) return true;
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          await expect(page.getByTestId('sample-list-root')).toBeVisible({ timeout: 20_000 });
+          return false;
+        },
+        { timeout: 45_000, intervals: [1_000, 2_000, 3_000] }
+      )
+      .toBe(true);
+    await expect(row.first()).toBeVisible({ timeout: 5_000 });
     await expect(row.first()).toContainText(/PLASMA|Plasma|Sangue/i);
 
     await page.goto(`/samples/${specimenId}`);

@@ -65,7 +65,11 @@ export default function FacilityManagementPage() {
         <p className="page-subtitle">{t('facility.subtitle', 'Gerenciamento integrado de equipamentos, temperatura, sensores e políticas')}</p>
       </div>
 
-      <div className="facility-tabs relative z-0 flex shrink-0 flex-wrap gap-1 rounded-xl border border-border bg-card p-1">
+      <div
+        className="facility-tabs relative z-0 flex shrink-0 flex-wrap gap-1 rounded-xl border border-border bg-card p-1"
+        role="tablist"
+        aria-label={t('facility.tabsLabel', 'Seções do gerenciamento de instalações')}
+      >
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
