@@ -159,13 +159,17 @@ export default function Sidebar() {
             <SheetTitle className="sr-only">{t('layout.mainNavigation', 'Navegação principal')}</SheetTitle>
             {brand}
           </SheetHeader>
-          <ScrollArea className="h-[calc(100vh-4rem)]">
-            <NavItems
-              items={menuItems}
-              onNavigate={() => setIsOpen(false)}
-              ariaLabel={t('layout.mainNavigation', 'Navegação principal')}
-            />
-          </ScrollArea>
+          {/* Mount mobile nav only while open so closed Sheet links are not
+              tab stops alongside the desktop aside (RNF027 keyboard e2e). */}
+          {isOpen ? (
+            <ScrollArea className="h-[calc(100vh-4rem)]">
+              <NavItems
+                items={menuItems}
+                onNavigate={() => setIsOpen(false)}
+                ariaLabel={t('layout.mainNavigation', 'Navegação principal')}
+              />
+            </ScrollArea>
+          ) : null}
         </SheetContent>
       </Sheet>
 

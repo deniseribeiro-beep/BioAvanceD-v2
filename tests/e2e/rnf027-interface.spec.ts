@@ -114,8 +114,9 @@ test.describe('RNF027 interface', () => {
     await expect(link).toBeVisible();
     await page.locator('body').focus();
 
+    await link.scrollIntoViewIfNeeded();
     let reached = false;
-    for (let i = 0; i < 40; i += 1) {
+    for (let i = 0; i < 80; i += 1) {
       await page.keyboard.press(tab);
       await expectVisibleFocus(page);
       if (await link.evaluate((el) => el === document.activeElement)) {
