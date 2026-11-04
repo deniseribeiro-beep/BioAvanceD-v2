@@ -35,6 +35,9 @@ test.describe('UI ↔ API/Mongo field binding (homologacao runtime)', () => {
   });
 
   test('samples list and detail show specimenId and type from the real API', async ({ page, request }) => {
+    // Poll window is 45s; global Playwright timeout is 30s.
+    test.setTimeout(60_000);
+
     const session = await realLogin(request);
     await seedRealAuth(page, session);
     const headers = { Authorization: `Bearer ${session.token}` };
@@ -61,6 +64,7 @@ test.describe('UI ↔ API/Mongo field binding (homologacao runtime)', () => {
     expect(detailApi.ok(), await detailApi.text()).toBeTruthy();
     const detail = (await detailApi.json()).data;
     expect(String(detail.specimenId)).toBe(specimenId);
+    const barcode = String(detail.barcode || '');
 
     await page.goto('/samples');
     await expect(page.getByTestId('sample-list-root')).toBeVisible({ timeout: 20_000 });
@@ -80,12 +84,19 @@ test.describe('UI ↔ API/Mongo field binding (homologacao runtime)', () => {
       )
       .toBe(true);
     await expect(row.first()).toBeVisible({ timeout: 5_000 });
+    await expect(row.first()).toContainText(specimenId);
+    if (barcode) {
+      await expect(row.first()).toContainText(barcode);
+    }
     await expect(row.first()).toContainText(/PLASMA|Plasma|Sangue/i);
 
     await page.goto(`/samples/${specimenId}`);
     await expect(page.getByTestId('sample-detail-root')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('sample-detail-page-title')).toContainText(specimenId);
     await expect(page.getByTestId('sample-detail-root')).toContainText(specimenId);
+    if (barcode) {
+      await expect(page.getByTestId('sample-detail-root')).toContainText(barcode);
+    }
   });
 
   test('patients table row reflects a participant created through the API', async ({ page, request }) => {

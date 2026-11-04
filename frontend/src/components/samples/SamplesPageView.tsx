@@ -239,7 +239,14 @@ export default function SamplesPageView({
                         </div>
                       </td>
                       <td>{sample.sampleOrigin || 'N/A'}</td>
-                      <td style={{ fontFamily: 'monospace' }}>{sample.barcode || sample.specimenId || 'N/A'}</td>
+                      <td style={{ fontFamily: 'monospace' }}>
+                        <div>{sample.specimenId || 'N/A'}</div>
+                        {sample.barcode && String(sample.barcode) !== String(sample.specimenId || '') ? (
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-light)', marginTop: '0.2rem' }}>
+                            {sample.barcode}
+                          </div>
+                        ) : null}
+                      </td>
                       <td>
                         <SampleStatusBadge status={mapStatus(sample) as any} />
                       </td>

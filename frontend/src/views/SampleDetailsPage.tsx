@@ -477,7 +477,7 @@ export default function SampleDetailsPage() {
       <div className="page-header">
         <div>
             <h1 className="page-title" data-testid="sample-detail-page-title">
-            {t('samples.detail.title', 'Detalhes da Amostra')} - {sample.barcode || (sample as any).specimenId || t('common.notAvailable', 'N/A')}
+            {t('samples.detail.title', 'Detalhes da Amostra')} - {(sample as any).specimenId || sample._id || (sample as any).id || t('common.notAvailable', 'N/A')}
           </h1>
 
           <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

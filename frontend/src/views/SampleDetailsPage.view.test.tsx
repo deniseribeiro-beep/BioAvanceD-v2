@@ -174,7 +174,7 @@ describe('SampleDetailsPage page states', () => {
   it('matches the route id case-insensitively and reads participantId from patientID', async () => {
     h.canEdit = true;
     renderWith({ ...baseSample, participantId: undefined, patientID: 'LEG-7' }, '/samples/spc-1');
-    expect(await title()).toHaveTextContent('BC-1');
+    expect(await title()).toHaveTextContent('SPC-1');
     fireEvent.click(screen.getByTestId('sample-detail-edit-button'));
     expect(screen.getByDisplayValue('LEG-7')).toBeInTheDocument();
     expect(h.getById).not.toHaveBeenCalled();
@@ -227,7 +227,7 @@ describe('SampleDetailsPage id fallbacks', () => {
     h.canEdit = true;
     h.updateSample.mockResolvedValue(null);
     renderWith({ id: 'legacy-9', barcode: 'BC-L' }, '/samples/legacy-9');
-    expect(await title()).toHaveTextContent('BC-L');
+    expect(await title()).toHaveTextContent('legacy-9');
     expect(screen.getByTestId('files-section')).toHaveTextContent('legacy-9');
     fireEvent.click(screen.getByText('Gerenciar Armazenagem'));
     expect(screen.getByTestId('storage-panel')).toHaveTextContent('legacy-9|');
@@ -240,7 +240,7 @@ describe('SampleDetailsPage id fallbacks', () => {
 describe('SampleDetailsPage read-only view', () => {
   it('renders the sample fields, quantities and status for a non-editor', async () => {
     renderWith({ ...baseSample, currentQuantity: 4, quantityStatus: 'partial', registeredAt: '2026-01-15T12:00:00Z' });
-    expect(await title()).toHaveTextContent('Detalhes da Amostra - BC-1');
+    expect(await title()).toHaveTextContent('Detalhes da Amostra - SPC-1');
     expect(screen.getByText('SPC-1')).toBeInTheDocument();
     expect(screen.getByText('Sangue')).toBeInTheDocument();
     expect(screen.getByText('Hospital A')).toBeInTheDocument();
@@ -260,7 +260,7 @@ describe('SampleDetailsPage read-only view', () => {
   it('reads the available amount and the status from the same canonical quantities', async () => {
     // A stale volume* alias on the record must not override currentQuantity.
     renderWith({ ...baseSample, initialQuantity: 10, currentQuantity: 4, volumeInitial: 10, volumeCurrent: 10 });
-    expect(await title()).toHaveTextContent('BC-1');
+    expect(await title()).toHaveTextContent('SPC-1');
     expect(screen.getByText('10,0 µL')).toBeInTheDocument();
     expect(screen.getByText('4,0 µL')).toBeInTheDocument();
     expect(screen.getByText('Parcialmente Retirada')).toBeInTheDocument();
@@ -288,7 +288,7 @@ describe('SampleDetailsPage read-only view', () => {
       barcode: 'BC-UNK',
       sampleType: 'Plasma',
     });
-    expect(await title()).toHaveTextContent('BC-UNK');
+    expect(await title()).toHaveTextContent('SPC-UNK');
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('Não registrada')).toBeInTheDocument();
     expect(screen.queryByText('0,0 µL')).not.toBeInTheDocument();
@@ -518,7 +518,7 @@ describe('SampleDetailsPage analysis files', () => {
   it('shows no results for a sample without a specimenId', async () => {
     h.results = results;
     renderWith({ _id: 'oid-x', barcode: 'BC-X' }, '/samples/oid-x');
-    expect(await title()).toHaveTextContent('BC-X');
+    expect(await title()).toHaveTextContent('oid-x');
     expect(screen.getByText('Nenhum arquivo associado a esta amostra')).toBeInTheDocument();
   });
 
