@@ -173,7 +173,7 @@ export default function ResultsPage() {
   };
 
   return (
-    <div className="page">
+    <div className="page-shell">
       <div className="page-header">
 
         <div>

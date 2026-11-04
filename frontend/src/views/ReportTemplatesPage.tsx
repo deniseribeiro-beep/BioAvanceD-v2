@@ -64,7 +64,7 @@ export default function ReportTemplatesPage() {
   const handlerKeyLabel = (key: string) => t(`reportTemplates.handlerKeys.${key}`, key);
 
   return (
-    <div className="page" data-testid="report-templates-page">
+    <div className="page-shell" data-testid="report-templates-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">

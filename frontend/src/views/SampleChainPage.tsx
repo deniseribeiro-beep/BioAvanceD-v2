@@ -9,7 +9,7 @@ export default function SampleChainPage() {
   const { t } = useLanguage();
 
   return (
-    <div className="page">
+    <div className="page-shell">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h1>{t('samples.chain') || 'Cadeia de Custódia'}</h1>
       </div>

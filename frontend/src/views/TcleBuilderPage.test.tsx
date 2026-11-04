@@ -344,8 +344,8 @@ describe('TcleBuilderPage (#1337)', () => {
         },
       } as any);
       renderPage();
-      await userEvent.click(screen.getByRole('tab', { name: /Histórico de Versões/ }));
-      const historyTab = screen.getByRole('tab', { name: /Histórico de versões/ });
+      await userEvent.click(screen.getByRole('tab', { name: /Histórico de Versões/i }));
+      const historyTab = screen.getByRole('tab', { name: /Histórico de Versões/i });
       expect(historyTab).toHaveAttribute('aria-selected', 'true');
       await userEvent.click(historyTab);
       expect(historyTab).toHaveAttribute('aria-selected', 'true');
@@ -366,8 +366,8 @@ describe('TcleBuilderPage (#1337)', () => {
       expect(within(rows[2]).getByText('--')).toBeInTheDocument();
       expect(within(rows[2]).getByText(new Date('2026-12-31T12:00:00.000Z').toLocaleDateString('pt-BR'))).toBeInTheDocument();
 
-      await userEvent.click(screen.getByRole('tab', { name: /Edição do Termo/ }));
-      const editorTab = screen.getByRole('tab', { name: /Edição do TCLE/ });
+      await userEvent.click(screen.getByRole('tab', { name: /Edição do TCLE/i }));
+      const editorTab = screen.getByRole('tab', { name: /Edição do TCLE/i });
       await userEvent.click(editorTab);
       expect(editorTab).toHaveAttribute('aria-selected', 'true');
       expect(screen.getByLabelText('Nome do Modelo')).toBeInTheDocument();

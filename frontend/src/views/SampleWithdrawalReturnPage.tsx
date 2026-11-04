@@ -414,7 +414,7 @@ export default function SampleWithdrawalReturnPage() {
 
 
   return (
-    <div className="page withdrawal-return-page">
+    <div className="page-shell withdrawal-return-page">
       <h1>{t('samples.withdrawalReturn') || 'Retirada e Devolução de Amostras'}</h1>
       <p className="page-subtitle">{t('samples.withdrawalReturnSubtitle') || 'Registre retiradas e devoluções de amostras biológicas'}</p>
 

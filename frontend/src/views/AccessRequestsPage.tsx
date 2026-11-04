@@ -346,7 +346,7 @@ export default function AccessRequestsPage() {
   const selected = requests.find((item) => item.accessRequestId === selectedId) || null;
 
   return (
-    <div className="page access-requests-page">
+    <div className="page-shell access-requests-page">
       <div className="page-header">
         <h1>Solicitações de acesso e distribuição</h1>
       </div>

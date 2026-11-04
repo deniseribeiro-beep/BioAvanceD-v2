@@ -3,6 +3,47 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Brand / institutional tokens (logo BioAvanceD) */
+    --color-primary: #371667;
+    --color-primary-dark: #2A104F;
+    --color-primary-soft: #F4F1F8;
+    --color-navy: #371667;
+    --color-action: #5B3FA0;
+    --color-success: #15803D;
+    --color-warning: #B45309;
+    --color-danger: #B91C1C;
+    --color-info: #0E7A94;
+    --color-text: #0F172A;
+    --color-text-secondary: #64748B;
+    --color-bg: #F8FAFC;
+    --color-surface: #FFFFFF;
+    --color-border: #E2E8F0;
+    --radius-card: 10px;
+    --radius-control: 8px;
+    --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 12px rgba(15, 23, 42, 0.04);
+
+    /* Legacy var(--*) aliases used by older views */
+    --primary: var(--color-primary);
+    --primary-rgb: 55, 22, 103;
+    --primary-dark: var(--color-primary-dark);
+    --primary-soft: var(--color-primary-soft);
+    --secondary: var(--color-navy);
+    --success: var(--color-success);
+    --warning: var(--color-warning);
+    --danger: var(--color-danger);
+    --info: var(--color-info);
+    --background: var(--color-bg);
+    --bg-secondary: #F1F5F9;
+    --surface: var(--color-surface);
+    --border: var(--color-border);
+    --text: var(--color-text);
+    --text-secondary: var(--color-text-secondary);
+    --text-light: var(--color-text-secondary);
+    --shadow: var(--shadow-card);
+    --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
+  }
+
   * {
     @apply border-border;
     box-sizing: border-box;
@@ -29,9 +70,19 @@
   }
 }
 
-@layer utilities {
-  .page-shell {
-    @apply mx-auto w-full max-w-[1400px] space-y-4;
+@layer components {
+  /* Page layout bridge — prefer page-shell in new code */
+  .page-shell,
+  .page {
+    @apply mx-auto flex w-full max-w-[1400px] flex-col gap-4;
+  }
+
+  .page {
+    @apply p-4;
+  }
+
+  .page-header {
+    @apply mb-4 flex w-full min-w-0 flex-wrap items-start justify-between gap-4 rounded-xl border border-border bg-card p-5 shadow-sm;
   }
 
   .page-title {
@@ -44,5 +95,105 @@
 
   .card-surface {
     @apply rounded-xl border border-border bg-card p-4 shadow-sm;
+  }
+
+  .form-actions {
+    @apply mt-6 flex flex-wrap gap-3;
+  }
+
+  .form-select {
+    @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground;
+  }
+
+  .form-select:focus {
+    @apply outline-none ring-2 ring-primary/30;
+  }
+
+  /* Icon/table action hooks (explicit class only — never global button) */
+  .action-button {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-foreground shadow-sm transition-colors hover:bg-muted;
+  }
+
+  .action-button.danger {
+    @apply border-destructive/40 text-destructive hover:bg-destructive/10;
+  }
+
+  .consent-action-button {
+    @apply inline-flex items-center justify-center rounded-md border border-border bg-card px-2 py-1 text-xs font-medium text-foreground shadow-sm hover:bg-muted;
+  }
+
+  /* Samples bridge */
+  .samples-view-switch {
+    @apply inline-flex gap-2 rounded-lg border border-border bg-card p-1;
+  }
+
+  .samples-view-switch__button {
+    @apply cursor-pointer rounded-md border-0 bg-transparent px-3.5 py-2 text-sm font-semibold text-muted-foreground;
+  }
+
+  .samples-view-switch__button.active,
+  .samples-view-switch__button[aria-pressed='true'] {
+    @apply bg-primary text-primary-foreground;
+  }
+
+  .samples-toolbar,
+  .samples-search-panel,
+  .samples-search-actions {
+    @apply flex flex-wrap items-center gap-3;
+  }
+
+  .samples-search-button {
+    @apply inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground;
+  }
+
+  .samples-search-button.active,
+  .samples-search-button--scan.active {
+    @apply border-primary bg-[#F4F1F8] text-primary;
+  }
+
+  .table-container,
+  .samples-page table,
+  .page table,
+  .page-shell table {
+    @apply w-full overflow-hidden rounded-xl border border-border bg-card;
+    border-collapse: collapse;
+  }
+
+  .page table th,
+  .page-shell table th,
+  .samples-page table th {
+    @apply border-b border-border bg-slate-50 px-3.5 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground;
+  }
+
+  .page table td,
+  .page-shell table td,
+  .samples-page table td {
+    @apply border-b border-border px-3.5 py-2.5 align-middle text-sm;
+  }
+
+  .stat-label {
+    @apply text-xs font-medium uppercase tracking-wide text-muted-foreground;
+  }
+
+  .stat-value {
+    @apply text-lg font-semibold text-foreground;
+  }
+
+  /* SampleLocator / legacy e2e button hooks (class names only; shadcn paints UI/Button) */
+  .btn-search,
+  .btn-scan {
+    @apply inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-70;
+  }
+
+  .btn-scan.active {
+    @apply border-primary bg-[#F4F1F8] text-primary;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-muted disabled:opacity-70;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center gap-2 rounded-lg border border-destructive bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:opacity-90 disabled:opacity-70;
   }
 }

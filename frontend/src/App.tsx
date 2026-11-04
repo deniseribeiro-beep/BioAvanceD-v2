@@ -2,8 +2,6 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
-import './App.css';
-
 const EConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
 const EConsentImportPage = lazy(() => import('./pages/patient/EConsentImportPage'));
 const EConsentLinkPanel = lazy(() => import('./pages/patient/EConsentLinkPanel'));

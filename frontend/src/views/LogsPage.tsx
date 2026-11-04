@@ -715,7 +715,7 @@ export default function LogsPage() {
   }, [logs]);
 
   return (
-    <div className="page logs-page">
+    <div className="page-shell logs-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t('logs.title')}</h1>

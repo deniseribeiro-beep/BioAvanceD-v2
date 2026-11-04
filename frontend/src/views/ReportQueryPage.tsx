@@ -1011,7 +1011,7 @@ export default function ReportQueryPage() {
   };
 
   return (
-    <div className="page report-query-page">
+    <div className="page-shell report-query-page">
       <div className="page-header report-query-header">
         <div>
           <Button variant="secondary" onClick={handleCancel} className="report-query-back-button">

@@ -14,7 +14,7 @@ export default function QualityDescriptionPage() {
   const [editingQuality, setEditingQuality] = useState<SampleWithQualityDescription | null>(null);
 
   return (
-    <div className="page">
+    <div className="page-shell">
       <div className="page-header">
         <div>
           <h1 className="page-title">Descrições de Qualidade</h1>

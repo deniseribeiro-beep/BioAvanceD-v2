@@ -500,7 +500,7 @@ export default function ReportViewPage() {
 
   if (loading) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div className="page-header">
           <h1 className="page-title">Carregando relatório...</h1>
         </div>
@@ -510,7 +510,7 @@ export default function ReportViewPage() {
 
   if (error) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div className="page-header">
           <h1 className="page-title">Erro</h1>
         </div>
@@ -527,7 +527,7 @@ export default function ReportViewPage() {
 
   if (!report) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div className="page-header">
           <h1 className="page-title">Relatório não encontrado</h1>
         </div>
@@ -543,7 +543,7 @@ export default function ReportViewPage() {
   }
 
   return (
-    <div className="page report-view-page">
+    <div className="page-shell report-view-page">
       <div className="page-header report-view-header">
         <div className="page-header-content">
           <Button onClick={() => navigate('/reports')} variant="secondary" className="back-button">

@@ -180,7 +180,7 @@ export default function BiomarkerAssociationsPage() {
   };
 
   return (
-    <div className="page">
+    <div className="page-shell">
       <div className="page-header">
         <div>
           <h1 className="page-title">Associações de Biomarcadores</h1>

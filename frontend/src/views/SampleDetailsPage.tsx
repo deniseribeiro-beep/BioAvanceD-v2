@@ -338,7 +338,7 @@ export default function SampleDetailsPage() {
 
   if (loading) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div style={{ 
           display: 'flex', 
           justifyContent: 'center', 
@@ -355,7 +355,7 @@ export default function SampleDetailsPage() {
 
   if (error) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div style={{ marginBottom: '1rem' }}>
           <Button variant="secondary" onClick={() => navigate('/samples')}>
             <ArrowLeft size={18} style={{ marginRight: '0.5rem' }} />
@@ -374,7 +374,7 @@ export default function SampleDetailsPage() {
   // Se terminou de carregar mas não encontrou a amostra
   if (!loading && samples !== undefined && !sample && id) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div style={{ marginBottom: '1rem' }}>
           <Button variant="secondary" onClick={() => navigate('/samples')}>
             <ArrowLeft size={18} style={{ marginRight: '0.5rem' }} />
@@ -399,7 +399,7 @@ export default function SampleDetailsPage() {
   // Se ainda não tem sample (ainda carregando ou aguardando)
   if (!sample) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div style={{ 
           display: 'flex', 
           justifyContent: 'center', 
@@ -473,7 +473,7 @@ export default function SampleDetailsPage() {
   };
 
   return (
-    <div className="page" data-testid="sample-detail-root">
+    <div className="page-shell" data-testid="sample-detail-root">
       <div className="page-header">
         <div>
             <h1 className="page-title" data-testid="sample-detail-page-title">

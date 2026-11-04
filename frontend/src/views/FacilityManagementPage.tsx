@@ -73,6 +73,8 @@ export default function FacilityManagementPage() {
             <button
               key={tab.id}
               type="button"
+              role="tab"
+              aria-selected={active}
               data-testid={`facility-tab-${tab.id}`}
               className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                 active

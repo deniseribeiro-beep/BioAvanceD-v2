@@ -314,7 +314,18 @@ jobs:
             -f compose.test.yml \
             down --volumes --remove-orphans
 
+      # Same prune as current-state-validation: e2e-gate rebuilds the full
+      # compose.test matrix on a fresh runner and exhausts disk without this.
+      - name: Free runner disk before e2e gate
+        run: |
+          df -h
+          docker system prune -af --volumes || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost || true
+          df -h
+
       - name: Run the e2e gate
+        env:
+          COMPOSE_PARALLEL_LIMIT: "2"
         run: bash scripts/e2e-gate.sh e2e-gate-out
 
       - name: Collect Compose logs on failure

@@ -41,7 +41,7 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="page reports-page">
+    <div className="page-shell reports-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">Central de Relatórios</h1>

@@ -123,7 +123,7 @@ export default function ConsentHistoryPage() {
   };
 
   return (
-    <div className="page consent-history-page">
+    <div className="page-shell consent-history-page">
       <div className="page-header">
         <h1>Consentimentos (TCLE)</h1>
       </div>
