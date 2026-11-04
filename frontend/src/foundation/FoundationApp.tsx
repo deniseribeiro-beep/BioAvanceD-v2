@@ -11,7 +11,6 @@ import {
   LEGACY_SAMPLE_STATUS_LABELS,
   USER_STATUSES,
 } from './contracts';
-import './foundation.css';
 
 const foundationRoutes = [
   { path: '', label: 'Visão geral', icon: LayoutDashboard },

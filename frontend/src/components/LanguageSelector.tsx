@@ -1,6 +1,5 @@
 import { useLanguage } from '../contexts/LanguageContext';
 import { Globe } from 'lucide-react';
-import './LanguageSelector.css';
 
 export default function LanguageSelector() {
   const { language, setLanguage, t } = useLanguage();
@@ -12,8 +11,11 @@ export default function LanguageSelector() {
   };
 
   return (
-    <div className="language-selector" data-testid="language-selector-container">
-      <Globe size={18} />
+    <div
+      className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-sm text-muted-foreground"
+      data-testid="language-selector-container"
+    >
+      <Globe size={16} aria-hidden="true" />
       <label htmlFor={selectId} className="sr-only">
         {t('app.language')}
       </label>
@@ -23,14 +25,19 @@ export default function LanguageSelector() {
         data-testid="language-selector"
         value={language}
         onChange={handleLanguageChange}
-        className="language-select"
+        className="border-0 bg-transparent text-sm text-foreground focus:outline-none focus:ring-0"
         aria-label={t('app.language')}
       >
-        <option value="pt-BR" data-testid="language-option-pt-BR">{t('app.portuguese')}</option>
-        <option value="en-US" data-testid="language-option-en-US">{t('app.english')}</option>
-        <option value="es-ES" data-testid="language-option-es-ES">{t('app.spanish')}</option>
+        <option value="pt-BR" data-testid="language-option-pt-BR">
+          {t('app.portuguese')}
+        </option>
+        <option value="en-US" data-testid="language-option-en-US">
+          {t('app.english')}
+        </option>
+        <option value="es-ES" data-testid="language-option-es-ES">
+          {t('app.spanish')}
+        </option>
       </select>
     </div>
   );
 }
-

@@ -28,7 +28,6 @@ import { getPasswordIssues, passwordRequirementItems, rulesForAccount } from '..
 import { usePasswordPolicy, usePasswordResetAllowed } from '../hooks/usePasswordPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { userSecurityService } from '../services/api';
-import './UserSecurityPage.css';
 
 export default function UserSecurityPage() {
   const { t } = useLanguage();

@@ -8,8 +8,12 @@
   "physicalIdentificationProtocol": {
     "version": "1.0.0",
     "status": "approved_for_execution",
-    "executionStatus": "not_executed",
-    "result": null
+    "executionStatus": "executed_synthetic",
+    "result": "pass",
+    "executedOn": "2026-11-03",
+    "evidence": "docs/evidencias/homologacao-runtime/RF016-ex-ante-sintetico-v1.0.0.md",
+    "instrument": "tests/e2e/physical-chain.spec.ts",
+    "notes": "Synthetic fixtures only (BVA2:synthetic:*); no biological specimen. Separates documentary model approval from runtime protocol evidence."
   },
   "dsr": {
     "modifiedInThisRelease": false

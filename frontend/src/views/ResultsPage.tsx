@@ -13,7 +13,6 @@ import { resultService, importService } from '../services/api';
 import { extractResponseEntity } from '../api/response.adapters';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import AnalysisUpload from '../components/AnalysisUpload.jsx';
-import './ResultsPage.css';
 
 // #905: the jobs-list endpoint returns the worker's flat counts
 // (totalRecords/successCount/errorCount) verbatim -- there is no nested

@@ -6,7 +6,6 @@ import Button from '../components/UI/Button';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { apiClient } from '../api/client';
-import './FacilityManagementPage.css';
 
 type TemperatureIncident = {
   _id: string;

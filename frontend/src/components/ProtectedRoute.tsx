@@ -1,7 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { canRoleAccessRoute, RoleName } from '../utils/rolePermissions';
-import './ProtectedRoute.css';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -14,11 +13,11 @@ interface ProtectedRouteProps {
 
 export default function ProtectedRoute({ children, requiredAccessType, requiredRole, requireAuditReader }: ProtectedRouteProps) {
     const renderAccessDenied = (message: string, currentRole: string) => (
-      <div className="protected-route-access-denied">
-        <h2>Acesso Negado</h2>
-        <p>{message}</p>
-        <p>Sua role atual: <strong>{currentRole}</strong></p>
-        <button className="protected-route-back" onClick={() => window.history.back()}>Voltar</button>
+      <div className="mx-auto flex min-h-[50vh] max-w-lg flex-col items-start justify-center gap-3 px-4">
+        <h2 className="text-xl font-semibold text-foreground">Acesso Negado</h2>
+        <p className="text-sm text-muted-foreground">{message}</p>
+        <p className="text-sm text-muted-foreground">Sua role atual: <strong className="text-foreground">{currentRole}</strong></p>
+        <button className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground" onClick={() => window.history.back()}>Voltar</button>
       </div>
     );
 
@@ -27,13 +26,8 @@ export default function ProtectedRoute({ children, requiredAccessType, requiredR
 
   if (isLoading) {
     return (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        height: '100vh' 
-      }}>
-        <p>Carregando...</p>
+      <div className="flex h-screen items-center justify-center">
+        <p className="text-sm text-muted-foreground">Carregando...</p>
       </div>
     );
   }

@@ -5,7 +5,6 @@ import Input from '../components/UI/Input';
 import { ArrowLeft, QrCode, CheckCircle, AlertCircle, Shield, Key } from 'lucide-react';
 import { authService } from '../services/api';
 import { LIMITS } from '../config/constants/limits.constants';
-import './MFASetupPage.css';
 
 export default function MFASetupPage() {
   const navigate = useNavigate();

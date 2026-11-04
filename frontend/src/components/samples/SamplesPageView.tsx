@@ -62,9 +62,14 @@ export function mapStatus(sample: Sample): Sample['status'] {
 }
 
 function computeVolume(sample: Sample) {
-  const initial = sample.initialQuantity ?? sample.quantity ?? 0;
-  const current = sample.currentQuantity ?? sample.quantity ?? 0;
-  return { initial, current };
+  const legacy = sample as Sample & { volumeInitial?: number | null; volumeCurrent?: number | null };
+  const initialRaw = sample.initialQuantity ?? legacy.volumeInitial ?? sample.quantity;
+  const currentRaw = sample.currentQuantity ?? legacy.volumeCurrent ?? sample.quantity;
+  // #1436: keep null when nothing was recorded; do not coerce to 0.
+  return {
+    initial: initialRaw == null ? null : Number(initialRaw),
+    current: currentRaw == null ? null : Number(currentRaw),
+  };
 }
 
 export default function SamplesPageView({
@@ -100,7 +105,7 @@ export default function SamplesPageView({
   const hasSearch = search.trim().length > 0;
 
   return (
-    <div className="page samples-page" data-testid="sample-list-root">
+    <div className="page-shell samples-page" data-testid="sample-list-root">
       <div className="page-header">
         <h1 data-testid="samples-page-title">{t('samples.title')}</h1>
       </div>
@@ -245,8 +250,13 @@ export default function SamplesPageView({
                       </td>
                       <td>
                         <strong>
-                          {current.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} /{' '}
-                          {initial.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                          {current == null
+                            ? '—'
+                            : current.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                          {' / '}
+                          {initial == null
+                            ? '—'
+                            : initial.toLocaleString(language, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
                         </strong>
                       </td>
                       <td>{participantId ?? 'N/A'}</td>

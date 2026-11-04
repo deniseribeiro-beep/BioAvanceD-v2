@@ -313,7 +313,7 @@ export interface Sample {
   checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
   // Status de disponibilidade
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Destroyed' | 'Unusable';
-  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED';
+  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED' | 'UNKNOWN';
   // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';

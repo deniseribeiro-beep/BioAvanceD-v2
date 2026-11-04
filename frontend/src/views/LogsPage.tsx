@@ -30,7 +30,6 @@ import { extractPayloadSummary } from '../utils/logFormatter';
 import { formatEntityID } from '../utils/entityIdFormatter';
 import { useLanguage } from '../contexts/LanguageContext';
 import SessionAuditPanel from '../components/audit/SessionAuditPanel';
-import './LogsPage.css';
 
 type SortField = 'timestamp' | 'userName' | 'action' | 'entity' | 'severity' | 'result' | 'ipSource' | 'module';
 type SortOrder = 'asc' | 'desc';

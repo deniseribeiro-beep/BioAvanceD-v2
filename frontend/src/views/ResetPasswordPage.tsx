@@ -9,7 +9,6 @@ import { validatePasswordAndGetError } from '../utils/passwordValidator';
 import { getPasswordIssues, passwordRequirementItems } from '../utils/passwordRules';
 import { usePasswordPolicy } from '../hooks/usePasswordPolicy';
 import { useLanguage } from '../contexts/LanguageContext';
-import './ResetPasswordPage.css';
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();

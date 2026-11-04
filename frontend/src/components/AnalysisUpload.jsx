@@ -3,7 +3,6 @@ import { Archive, File, FileImage, FileText, UploadCloud, Barcode, AlertCircle, 
 import Button from './UI/Button';
 import Input from './UI/Input';
 import { analysisFileService } from '../services/api';
-import './AnalysisUpload.css';
 
 const formatBytes = (bytes) => {
   if (!bytes && bytes !== 0) return '';

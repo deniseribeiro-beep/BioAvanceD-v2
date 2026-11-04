@@ -7,7 +7,6 @@ import { useBackup, Backup } from '../hooks/useBackup';
 import { useBackupPolicy, BackupPolicy } from '../hooks/useBackupPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import './BackupPage.css';
 
 const CRON_FIELD_PATTERN = /^(\S+\s+){4}\S+$/;
 

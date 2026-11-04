@@ -7,7 +7,6 @@ import { useSampleFiles } from '../hooks/useSampleFiles';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { SampleFile } from '../types/models';
-import './SampleFilesSection.css';
 
 // Botão Exportar removido conforme solicitado
 

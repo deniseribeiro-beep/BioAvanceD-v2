@@ -7,7 +7,6 @@ import Input from '../components/UI/Input';
 import { Plus, Edit, Trash2 } from 'lucide-react';
 import { SampleWithQualityDescription } from '../types/models';
 import { useQualityDescriptions } from '../hooks/useQualityDescriptions';
-import './QualityDescriptionPage.css';
 
 export default function QualityDescriptionPage() {
   const { qualities, loading, error, createQuality, updateQuality, deleteQuality } = useQualityDescriptions();

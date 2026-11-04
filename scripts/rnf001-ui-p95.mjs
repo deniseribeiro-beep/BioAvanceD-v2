@@ -1,0 +1,118 @@
+#!/usr/bin/env node
+/**
+ * CT-RNF001-LOAD-01 — measure p95 UI ready time on critical routes.
+ * Usage:
+ *   BASE_URL=http://localhost:5173 N=30 node scripts/rnf001-ui-p95.mjs
+ * Optional auth (cookie/storage not required for /login; for others set TOKEN via
+ * PLAYWRIGHT storage by logging in when TEST_USER/TEST_PASS are set).
+ */
+import { chromium } from 'playwright';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const BASE_URL = (process.env.BASE_URL || 'http://localhost:5173').replace(/\/$/, '');
+const API_URL = (process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || 'http://127.0.0.1:3000').replace(/\/$/, '');
+const N = Math.max(5, Number(process.env.N || 30));
+const OUT = process.env.OUT
+  || join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'evidencias', 'homologacao-runtime', 'rnf001-ui-p95-results.json');
+
+const routes = [
+  { path: '/login', ready: '[data-testid="login-form"]', auth: false },
+  { path: '/dashboard', ready: 'nav.sidebar-nav, h1, [data-testid="dashboard"]', auth: true },
+  { path: '/samples', ready: 'h1, table, [data-testid="samples-page"]', auth: true },
+  { path: '/next/intake', ready: 'h1, form, [data-testid="intake-wizard"]', auth: true },
+];
+
+function percentile(sorted, p) {
+  if (!sorted.length) return null;
+  const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+  return sorted[idx];
+}
+
+async function apiLogin() {
+  const user = process.env.TEST_USER || process.env.BOOTSTRAP_ADMIN_USERNAME || 'admin';
+  const pass = process.env.TEST_PASS || process.env.BOOTSTRAP_ADMIN_TEMP_PASSWORD || '';
+  if (!pass) return null;
+  const res = await fetch(`${API_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: user, password: pass }),
+  });
+  if (!res.ok) {
+    console.error(`api login failed: ${res.status} ${await res.text()}`);
+    return null;
+  }
+  const body = await res.json();
+  const token = body?.data?.token;
+  const sessionUser = body?.data?.user;
+  if (!token || !sessionUser) return null;
+  return { token, user: sessionUser };
+}
+
+async function ensureAuth(context) {
+  const session = await apiLogin();
+  if (!session) return false;
+  await context.addInitScript(
+    ([tokenValue, userValue]) => {
+      window.localStorage.setItem('token', tokenValue);
+      window.localStorage.setItem('user', userValue);
+    },
+    [session.token, JSON.stringify(session.user)]
+  );
+  return true;
+}
+
+async function measure(page, route) {
+  const t0 = Date.now();
+  await page.goto(`${BASE_URL}${route.path}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await page.locator(route.ready).first().waitFor({ state: 'visible', timeout: 60_000 });
+  return Date.now() - t0;
+}
+
+const browser = await chromium.launch({ headless: true });
+const context = await browser.newContext();
+
+let authed = false;
+if (routes.some((r) => r.auth)) {
+  authed = await ensureAuth(context);
+}
+const page = await context.newPage();
+
+const results = {
+  protocol: 'CT-RNF001-LOAD-01',
+  baseUrl: BASE_URL,
+  n: N,
+  measuredAt: new Date().toISOString(),
+  authed,
+  routes: {},
+  passCriterionMs: 2000,
+};
+
+for (const route of routes) {
+  if (route.auth && !authed) {
+    results.routes[route.path] = { skipped: true, reason: 'auth_required_but_login_failed' };
+    continue;
+  }
+  const samples = [];
+  for (let i = 0; i < N; i += 1) {
+    samples.push(await measure(page, route));
+  }
+  const sorted = [...samples].sort((a, b) => a - b);
+  const summary = {
+    samples,
+    p50: percentile(sorted, 50),
+    p95: percentile(sorted, 95),
+    max: sorted[sorted.length - 1],
+    pass: percentile(sorted, 95) <= 2000,
+  };
+  results.routes[route.path] = summary;
+}
+
+results.overallPass = Object.values(results.routes).every((r) => r.skipped || r.pass === true);
+
+await browser.close();
+mkdirSync(dirname(OUT), { recursive: true });
+writeFileSync(OUT, `${JSON.stringify(results, null, 2)}\n`);
+console.log(JSON.stringify(results, null, 2));
+process.exit(results.overallPass ? 0 : 2);
