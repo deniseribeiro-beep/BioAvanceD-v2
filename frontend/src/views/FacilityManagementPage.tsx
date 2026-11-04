@@ -59,7 +59,7 @@ export default function FacilityManagementPage() {
   ];
 
   return (
-    <div className="page-shell facility-management-page flex w-full min-w-0 flex-col md:flex-row">
+    <div className="page-shell facility-management-page flex w-full min-w-0 flex-col gap-4">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t('facility.title', 'Gerenciamento de Instalações')}</h1>
@@ -67,12 +67,13 @@ export default function FacilityManagementPage() {
         </div>
       </div>
 
-      <div className="facility-tabs">
+      <div className="facility-tabs relative z-0 shrink-0">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           return (
             <button
               key={tab.id}
+              type="button"
               data-testid={`facility-tab-${tab.id}`}
               className={`facility-tab ${activeTab === tab.id ? 'active' : ''}`}
               onClick={() => {
@@ -87,7 +88,7 @@ export default function FacilityManagementPage() {
         })}
       </div>
 
-      <div className="facility-tab-content flex-1 min-w-0 overflow-hidden">
+      <div className="facility-tab-content relative z-0 min-w-0 flex-1">
         {activeTab === 'equipment' && <EquipmentSection />}
         {activeTab === 'temperature' && <TemperatureSection />}
         {activeTab === 'history' && <HistorySection />}

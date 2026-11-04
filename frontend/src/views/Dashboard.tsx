@@ -303,7 +303,8 @@ export default function Dashboard() {
     <div className="page-shell">
       <Card>
         <CardHeader>
-          <CardTitle className="page-title">{t('dashboard.title')}</CardTitle>
+          {/* h1.page-title is the RNF027 axe/interface ready selector */}
+          <h1 className="page-title text-lg font-semibold leading-none tracking-tight">{t('dashboard.title')}</h1>
           <CardDescription>{t('dashboard.subtitle')}</CardDescription>
         </CardHeader>
       </Card>

@@ -34,13 +34,17 @@ export default function Toast({ message, type = 'info', duration = 3000, onClose
 
   const Icon = iconMap[type];
 
+  // success/error/warning are assertive so e2e and AT can find getByRole('alert');
+  // plain info stays polite status.
+  const role = type === 'info' ? 'status' : 'alert';
+
   return (
     <div
       className={cn(
         'flex min-w-[280px] max-w-md items-start gap-3 rounded-md border px-3 py-2.5 text-sm shadow-card',
         styleMap[type]
       )}
-      role="status"
+      role={role}
     >
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />
       <p className="flex-1 text-foreground">{message}</p>

@@ -14,6 +14,14 @@ const variantMap = {
   success: 'success',
 } as const;
 
+// Legacy btn-* hooks kept for e2e selectors (results job actions, etc.).
+const legacyClassMap = {
+  primary: 'btn btn-primary',
+  secondary: 'btn btn-secondary',
+  danger: 'btn btn-danger',
+  success: 'btn btn-success',
+} as const;
+
 export default function Button({
   variant = 'primary',
   children,
@@ -23,7 +31,7 @@ export default function Button({
   return (
     <ShadcnButton
       variant={variantMap[variant]}
-      className={cn(className)}
+      className={cn(legacyClassMap[variant], className)}
       {...props}
     >
       {children}

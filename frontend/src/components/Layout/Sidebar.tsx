@@ -145,7 +145,7 @@ export default function Sidebar() {
       <Button
         variant="outline"
         size="icon"
-        className="sidebar-toggle fixed left-3 top-3 z-50 lg:hidden"
+        className="sidebar-toggle fixed left-3 top-3 z-50 xl:hidden"
         onClick={() => setIsOpen(true)}
         aria-label={t('layout.toggleMenu', 'Alternar menu')}
         aria-controls="app-sidebar"
@@ -169,9 +169,10 @@ export default function Sidebar() {
         </SheetContent>
       </Sheet>
 
+      {/* xl (1280+) matches RNF027 institutional desktop; 1024 uses the sheet toggle */}
       <aside
         id="app-sidebar"
-        className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-border bg-card lg:flex lg:flex-col"
+        className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-border bg-card xl:flex xl:flex-col"
       >
         <div className="border-b border-border px-4 py-3">{brand}</div>
         <ScrollArea className="flex-1">

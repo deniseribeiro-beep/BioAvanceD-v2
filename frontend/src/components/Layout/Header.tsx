@@ -51,7 +51,7 @@ export default function Header() {
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
       <div className="flex h-14 items-center gap-3 px-4 sm:px-6 lg:px-8">
-        <div className="flex min-w-0 items-center gap-2 lg:hidden">
+        <div className="flex min-w-0 items-center gap-2 xl:hidden">
           <img src={logo} alt="" className="ml-10 h-7 w-7 rounded object-contain" />
           <h2 className="truncate text-sm font-semibold text-foreground">{t('app.title')}</h2>
         </div>
