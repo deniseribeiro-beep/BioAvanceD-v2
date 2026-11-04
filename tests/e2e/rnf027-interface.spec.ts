@@ -112,11 +112,16 @@ test.describe('RNF027 interface', () => {
 
     const link = page.locator(DESKTOP_SECURITY_LINK);
     await expect(link).toBeVisible();
-    await page.locator('body').focus();
-
     await link.scrollIntoViewIfNeeded();
+
+    // Start inside the desktop aside so header/chrome tab stops do not
+    // exhaust the budget before /user/security (Firefox was the outlier).
+    const firstNav = page.locator('aside#app-sidebar nav.sidebar-nav a').first();
+    await firstNav.focus();
+    await expect(firstNav).toBeFocused();
+
     let reached = false;
-    for (let i = 0; i < 80; i += 1) {
+    for (let i = 0; i < 40; i += 1) {
       await page.keyboard.press(tab);
       await expectVisibleFocus(page);
       if (await link.evaluate((el) => el === document.activeElement)) {
