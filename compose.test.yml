@@ -144,8 +144,13 @@ services:
     # #1440 / lab GCP e2-highcpu-16 (~16 GiB): mongod's default WiredTiger
     # cache is ~half of host RAM (~7 GiB). Under the full compose.test stack
     # (Neo4j, Influx, backend, Playwright Chromium, …) that balloons into
-    # OOM and mongod aborts with exit 14 mid e2e-gate. Cap the cache and
-    # container so the gate can finish on this machine size.
+    # OOM pressure. Cap the cache and container so the gate can finish on
+    # this machine size.
+    #
+    # Same issue #1440 (exit 14): RF013 restore e2e creates a scratch DB with
+    # many collections; with Docker's default nofile=1024 WiredTiger hits
+    # EMFILE ("Too many open files"), panics, and mongod fasserts. Raise
+    # nofile for this service.
     command:
       [
         "--replSet",
@@ -155,6 +160,10 @@ services:
         "1.5",
       ]
     mem_limit: 2500m
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     volumes:
       - mongodb-test-data:/data/db
     ports:
