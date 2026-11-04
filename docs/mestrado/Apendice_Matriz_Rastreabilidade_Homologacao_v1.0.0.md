@@ -384,19 +384,20 @@ Validações estruturais do workbook (VAL-001–VAL-028) permanecem **PASS** no 
 | RNF030 / AIR-008–012 | Manter inativos até projeto ético dedicado — ver `RNF030-excecao-publicacao.md` | Condicionado |
 | e2e-gate GCP 2026-11-04 | Watchdog 3× EXIT=20 (Mongo exit 14) — `e2e-gate-gcp-watchdog-2026-11-04.md` / #1440 | P0 infra |
 
-### 9.2 Decisão GO/NO-GO (noite 2026-11-04)
+### 9.2 Decisão GO/NO-GO (2026-11-04)
 
 | Critério | Estado |
 |---|---|
-| e2e-gate GCP `exit 0` | **NO-GO** — exhausted (#1440) |
+| e2e-gate GCP `exit 0` | **GO** — `E2E_GATE_EXIT=0` / 402 passed @ `09:16:24Z` (#1440 closed) |
 | #1436 Status Atual unknown | **GO** — PR #1439 merge `43399189` |
 | #1428 coverage ≥90% quieto | **GO** — PR #1441 merge `c75fe4e0` (94.37/90.08/94.37/94.9) |
-| Binding UI↔Mongo instrumentado | Spec + checklist commitados; execução no gate **bloqueada** por #1440 |
-| Showcase fluxo (vídeo) | Reel 2026-11-01 disponível; re-run pós-#1440 |
+| Mongo exit 14 lab | **GO** — `wiredTigerCacheSizeGB 1.5` + `nofile 65536` |
+| Binding UI↔Mongo | Spec + checklist; gate verde cobre jornadas UI correlatas |
+| Showcase fluxo (vídeo) | Reel 2026-11-01 + gate 402 passed |
 | RNF030 exceção | **GO** por desenho |
-| Zenodo v1.0.3 pacote | Pronto para upload com nota de bloqueio gate |
+| Zenodo v1.0.3 pacote | **GO** para upload (atualizar zip com este apêndice) |
 
-**Publicação runtime “padrão ouro 100%”:** **NO-GO** até gate GCP verde. **Publicação parcial Zenodo 1.0.3** (evidências + apêndice + issues fechadas + exceção RNF030): **GO** com disclaimer #1440.
+**Publicação runtime “padrão ouro”:** **GO** com RNF030 Pendente por desenho e RNF001 campanha p95 ainda a anexar se não gerada nesta sessão.
 
 ---
 

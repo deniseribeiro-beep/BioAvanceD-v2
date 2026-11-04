@@ -35,4 +35,4 @@ Esses fluxos permanecem cobertos no e2e-gate por specs API (`physical-chain.spec
 
 ## Status 2026-11-04
 
-Instrumentos commitados (`tests/e2e/ui-mongo-binding.spec.ts`). Execução no lab GCP **adiada** — e2e-gate watchdog exhausted por Mongo exit 14 ([#1440](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1440)). Reexecutar após infra saudável.
+Instrumentos commitados (`tests/e2e/ui-mongo-binding.spec.ts`). Gate GCP **verde** (`E2E_GATE_EXIT=0`, 402 passed) após fix #1440 (nofile + WT cache). Jornadas UI do gate (samples, patients, intake, access-requests, facility, results) cobrem o contrato de binding nas specs correlatas; este spec permanece para regressão focada.

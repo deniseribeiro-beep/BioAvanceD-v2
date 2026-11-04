@@ -7,22 +7,26 @@
 | Branch tip (notebook) | pós-merge #1439 / #1441 em `feature/docker-e2e-backend-integration` |
 | Issue | [#1440](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1440) |
 
-## Resultado
+## Resultado (noite + manhã 2026-11-04)
+
+### Primeira bateria (pré-fix) — exhausted
 
 | Tentativa | EXIT | Motivo |
 |---|---|---|
-| 1 | 20 | `INFRA_ABORT` — MongoDB `Exited (14)` |
-| 2 | 20 | idem |
-| 3 | 20 | idem |
+| 1–3 | 20 | `INFRA_ABORT` — MongoDB `Exited (14)` |
 
-Marcadores finais: `E2E_GATE_EXIT=20` / `STOP_REASON=exhausted` / `WATCHDOG_END=2026-11-04T04:45:02Z`.
+Causa: **EMFILE** (`Too many open files`, nofile=1024) no RF013 restore → WiredTiger panic. Secundário: WT cache default ~7 GiB em e2-highcpu-16.
 
-Fail-fast cortou a cascata (antes: dezenas de minutos de Playwright após Mongo morto).
+### Após fix (`compose.test.yml` cache 1.5 GiB + nofile 65536 + RNF027)
 
-## Observação de produto pré-abort
-
-Enquanto Mongo/backend estavam healthy, o runner avançou centenas de specs (auth, intake, physical-chain, pipeline slices). A falha dominante desta noite é **infra Mongo exit 14**, não regressão shadcn isolada.
+| Marcador | Valor |
+|---|---|
+| `E2E_GATE_EXIT` | **0** |
+| `STOP_REASON` | **success** |
+| `ATTEMPT=1 EXIT` | **0** @ `2026-11-04T09:16:24Z` |
+| Playwright | **402 passed** (8.2 m) |
+| Issue | [#1440](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/1440) **closed** |
 
 ## Impacto na publicação
 
-Gate oficial **não** fechou verde. Binding UI↔Mongo e re-filmagem showcase na stack GCP ficam bloqueados por #1440. Evidências de fluxo existentes: `docs/e2e-showcase-2026-11-01-*.mp4`.
+Gate oficial **verde** na VM GCP. Prosseguir binding focado / RNF001 / Zenodo com esta evidência.
