@@ -46,7 +46,7 @@ function NavItems({
   const navigate = useNavigate();
 
   return (
-    <nav className="flex flex-col gap-0.5 px-2 py-2" aria-label={ariaLabel}>
+    <nav className="sidebar-nav flex flex-col gap-0.5 px-2 py-2" aria-label={ariaLabel}>
       {items.map((item) => {
         const Icon = item.icon;
         return (
@@ -145,7 +145,7 @@ export default function Sidebar() {
       <Button
         variant="outline"
         size="icon"
-        className="fixed left-3 top-3 z-50 lg:hidden"
+        className="sidebar-toggle fixed left-3 top-3 z-50 lg:hidden"
         onClick={() => setIsOpen(true)}
         aria-label={t('layout.toggleMenu', 'Alternar menu')}
         aria-controls="app-sidebar"
