@@ -301,16 +301,22 @@ export default function SampleDetailsPage() {
     { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
     { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
     { value: 'Closed', label: t('samples.status.closed', 'Encerrada') },
+    { value: 'Unknown', label: t('samples.detail.availability.unknown', 'Não registrada') },
   ]), [t]);
 
   // #545: specimenStatus is the sole persisted source of truth (sample.service.js
   // strips currentStatus/status from every write since #540) — "Status Atual"
   // is a read-only derived display, not an editable field. RF006 AC3: the
   // partial/total withdrawal part reads quantityStatus.
+  // #1436: prefer availabilityPreview so unknown quantity shows "Não registrada"
+  // together with "—" instead of legacy AVAILABLE / "Disponível".
   const derivedStatusLabel = useMemo(() => {
+    if (availabilityPreview.className === 'availability-unknown') {
+      return availabilityPreview.label;
+    }
     const derived = resolveLegacySampleStatus(sample);
     return statusOptions.find((option) => option.value === derived)?.label || derived;
-  }, [sample, statusOptions]);
+  }, [sample, statusOptions, availabilityPreview]);
 
   // #628: Result.specimenId is now the sole canonical shape (every write
   // path writes it, existing documents backfilled) — a direct match, not

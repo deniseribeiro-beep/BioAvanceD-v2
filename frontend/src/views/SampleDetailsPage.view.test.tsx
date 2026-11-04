@@ -281,6 +281,21 @@ describe('SampleDetailsPage read-only view', () => {
     expect(within(dateRow).getByText('N/A')).toBeInTheDocument();
   });
 
+  it('shows — and Não registrada when quantity fields are absent (#1436)', async () => {
+    renderWith({
+      _id: 'oid-unknown',
+      specimenId: 'SPC-UNK',
+      barcode: 'BC-UNK',
+      sampleType: 'Plasma',
+    });
+    expect(await title()).toHaveTextContent('BC-UNK');
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Não registrada')).toBeInTheDocument();
+    expect(screen.queryByText('0,0 µL')).not.toBeInTheDocument();
+    expect(screen.queryByText('Disponível')).not.toBeInTheDocument();
+    expect(screen.queryByText('Indisponível')).not.toBeInTheDocument();
+  });
+
   it('navigates to the chain, the label and back to the list', async () => {
     renderWith(baseSample);
     await title();
