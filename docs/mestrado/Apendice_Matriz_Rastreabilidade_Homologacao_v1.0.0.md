@@ -378,10 +378,25 @@ Validações estruturais do workbook (VAL-001–VAL-028) permanecem **PASS** no 
 
 | Item | Ação recomendada | Prioridade |
 |---|---|---|
-| RNF001 — campanha p95 UI | Registrar protocolo de carga e CT formal | P0 operacional |
-| RF016 — ensaio ex ante físico | Executar protocolo v1.0.0 com fixtures sintéticas e anexar evidências | P0 científico |
-| RF011/024/025/026/027 — fechar e2e | Ampliar specs Playwright no e2e-gate | P1 |
-| RNF030 / AIR-008–012 | Manter inativos até projeto ético dedicado | Condicionado |
+| RNF001 — campanha p95 UI | Protocolo em `CT-RNF001-LOAD-01.md` + `scripts/rnf001-ui-p95.mjs`; executar na stack saudável pós-#1440 | P0 operacional |
+| RF016 — ensaio ex ante físico | Evidência sintética em `RF016-ex-ante-sintetico-v1.0.0.md` (RELEASE_MANIFEST `executed_synthetic`); ensaio físico opcional | P1 científico |
+| RF011/024/025/026/027 — fechar e2e | Re-gate GCP após correção Mongo exit 14 (#1440) | P0 |
+| RNF030 / AIR-008–012 | Manter inativos até projeto ético dedicado — ver `RNF030-excecao-publicacao.md` | Condicionado |
+| e2e-gate GCP 2026-11-04 | Watchdog 3× EXIT=20 (Mongo exit 14) — `e2e-gate-gcp-watchdog-2026-11-04.md` / #1440 | P0 infra |
+
+### 9.2 Decisão GO/NO-GO (noite 2026-11-04)
+
+| Critério | Estado |
+|---|---|
+| e2e-gate GCP `exit 0` | **NO-GO** — exhausted (#1440) |
+| #1436 Status Atual unknown | **GO** — PR #1439 merge `43399189` |
+| #1428 coverage ≥90% quieto | **GO** — PR #1441 merge `c75fe4e0` (94.37/90.08/94.37/94.9) |
+| Binding UI↔Mongo instrumentado | Spec + checklist commitados; execução no gate **bloqueada** por #1440 |
+| Showcase fluxo (vídeo) | Reel 2026-11-01 disponível; re-run pós-#1440 |
+| RNF030 exceção | **GO** por desenho |
+| Zenodo v1.0.3 pacote | Pronto para upload com nota de bloqueio gate |
+
+**Publicação runtime “padrão ouro 100%”:** **NO-GO** até gate GCP verde. **Publicação parcial Zenodo 1.0.3** (evidências + apêndice + issues fechadas + exceção RNF030): **GO** com disclaimer #1440.
 
 ---
 
