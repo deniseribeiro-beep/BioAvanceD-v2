@@ -27,6 +27,10 @@ const derivedScoreServicePath = require.resolve('../../src/services/derived-scor
 const activeCodeValidatorPath = require.resolve('../../src/ingestion/activeCodeValidator');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
+// #1428: warm the intakeWizard route graph once at file load so #782 cases
+// under a full coverage run do not pay cold-require inside the it() budget.
+require(routePath);
+
 const allPaths = [
   notificationServicePath,
   patientIdentityServicePath,

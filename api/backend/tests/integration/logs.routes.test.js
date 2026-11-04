@@ -25,6 +25,10 @@ const modulePaths = {
   controller: require.resolve('../../src/interface/routes/logs.routes'),
 };
 
+// #1428: warm the route graph once at file load so the first it() under a
+// full coverage run does not pay the cold require inside the case budget.
+require(modulePaths.controller);
+
 function setCachedModule(modulePath, exportsObject) {
   require.cache[modulePath] = {
     id: modulePath,
