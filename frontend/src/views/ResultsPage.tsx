@@ -403,7 +403,7 @@ export default function ResultsPage() {
                       <span className="metric-value">{selectedJob.metrics.skippedRecords}</span>
                     </div>
                   )}
-                  {selectedJob.metrics.processingTime && (
+                  {!!selectedJob.metrics.processingTime && (
                     <div className="metric-item">
                       <label className="metric-label">{t('results.metrics.processingTime', 'Tempo de Processamento')}</label>
                       <span className="metric-value">{selectedJob.metrics.processingTime.toFixed(2)}s</span>
