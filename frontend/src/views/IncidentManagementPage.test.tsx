@@ -304,6 +304,25 @@ describe('IncidentManagementPage: actions', () => {
     expect(h.get).toHaveBeenCalledTimes(2);
   });
 
+  it('shows the refetched incident, new note included, in the open panel after adding a note (#1449)', async () => {
+    served([incident('h1', { status: 'acknowledged' })]);
+    render(<IncidentManagement />);
+    const panel = (await openDetails('h1')).closest('.incident-detail-panel') as HTMLElement;
+    expect(within(panel).queryByText('Histórico')).toBeNull();
+    served([
+      incident('h1', {
+        status: 'acknowledged',
+        notes: [{ timestamp: '2026-10-02T09:00:00.000Z', userId: 'user-1', action: 'note', message: 'Porta selada' }],
+      }),
+    ]);
+    fireEvent.change(screen.getByTestId('incident-note-input'), { target: { value: 'Porta selada' } });
+    fireEvent.click(screen.getByTestId('incident-add-note-button'));
+    expect(await within(panel).findByText('Porta selada')).toBeInTheDocument();
+    expect(within(panel).getByText('Histórico')).toBeInTheDocument();
+    expect(screen.getByTestId('incident-note-input')).toHaveValue('');
+    expect(h.get).toHaveBeenCalledTimes(2);
+  });
+
   it('adds a note after a filter change dropped the open incident from the list, keeping the panel open', async () => {
     served([incident('f1', { status: 'acknowledged' })]);
     render(<IncidentManagement />);
