@@ -43,7 +43,9 @@ export function buildReportTemplateSubmissionPayload(
   const payload: Partial<ReportTemplate> = {
     name: formData.name,
     description: formData.description || null,
-    handlerKey: formData.handlerKey,
+    // #1450: the form's select shows the first key when the template has
+    // none, so the payload sends that same key.
+    handlerKey: formData.handlerKey || REPORT_TEMPLATE_HANDLER_KEYS[0],
     handlerOptions,
     templateStatus: formData.templateStatus || 'active',
   };

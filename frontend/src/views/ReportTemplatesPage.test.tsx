@@ -97,6 +97,11 @@ describe('buildReportTemplateSubmissionPayload', () => {
     expect(payload.templateStatus).toBe('active');
   });
 
+  it('#1450: sends the first handler key, the one the form shows, when the form data has none', () => {
+    const payload = buildReportTemplateSubmissionPayload({ name: 'Partial', handlerOptionsText: '{}' }, null);
+    expect(payload.handlerKey).toBe(REPORT_TEMPLATE_HANDLER_KEYS[0]);
+  });
+
   it('sends an empty handlerOptions object when no handlerOptionsText is given', () => {
     const payload = buildReportTemplateSubmissionPayload({ code: 'x', name: 'X', handlerKey: 'sample' }, null);
     expect(payload.handlerOptions).toEqual({});
@@ -364,6 +369,24 @@ describe('ReportTemplatesPage', () => {
       expect(within(dialog).getByTestId('report-template-handler-options-input')).toHaveValue('{}');
       fireEvent.submit(within(dialog).getByTestId('report-template-form'));
       await waitFor(() => expect(h.update).toHaveBeenCalledWith('legacy', expect.not.objectContaining({ code: expect.anything() })));
+    });
+
+    it('#1450: puts the handler key the form shows for a template the server sent without one', async () => {
+      const partial = { _id: 'p1', code: 'partial', name: 'Partial', isSystemDefined: false } as unknown as ReportTemplate;
+      await renderLoaded([partial]);
+      h.update.mockResolvedValue(ok({ success: true, data: partial }));
+      fireEvent.click(screen.getByTestId('edit-report-template-button-partial'));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByTestId('report-template-handler-key-select')).toHaveValue(REPORT_TEMPLATE_HANDLER_KEYS[0]);
+      fireEvent.submit(within(dialog).getByTestId('report-template-form'));
+      await waitFor(() => expect(h.update).toHaveBeenCalledTimes(1));
+      expect(h.update).toHaveBeenCalledWith('p1', {
+        name: 'Partial',
+        description: null,
+        handlerKey: REPORT_TEMPLATE_HANDLER_KEYS[0],
+        handlerOptions: {},
+        templateStatus: 'active',
+      });
     });
 
     it('holds the first handler key and active status for a template the server sent without them', async () => {
