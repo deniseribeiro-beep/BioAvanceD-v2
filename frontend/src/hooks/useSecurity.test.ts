@@ -288,6 +288,31 @@ describe('useSecurity', () => {
       });
       expect(result.current.config).toEqual(CFG_B);
     });
+
+    it.each([
+      ['resolves', (d: ReturnType<typeof deferred<any>>) => d.resolve(envelope(CFG_A))],
+      ['rejects', (d: ReturnType<typeof deferred<any>>) => d.reject(new Error('stale failure'))],
+    ])('ends loading when a config load made stale by a save %s', async (_label, settle) => {
+      const { result } = await mountLoaded();
+      const load = deferred<any>();
+      getConfig.mockReturnValueOnce(load.promise);
+      updateConfig.mockResolvedValueOnce(envelope(CFG_B));
+      let pending!: Promise<void>;
+      act(() => {
+        pending = result.current.loadConfig();
+      });
+      expect(result.current.loading).toBe(true);
+      await act(async () => {
+        await result.current.updateConfig({});
+      });
+      await act(async () => {
+        settle(load);
+        await pending;
+      });
+      expect(result.current.config).toEqual(CFG_B);
+      expect(result.current.error).toBeNull();
+      expect(result.current.loading).toBe(false);
+    });
   });
 
   describe('updateConfig', () => {

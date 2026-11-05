@@ -186,6 +186,32 @@ describe('useLogs', () => {
       expect(result.current.loading).toBe(false);
       expect(result.current.error).toBeNull();
     });
+
+    it.each([
+      ['resolves', (d: ReturnType<typeof deferred<any>>) => d.resolve(ok({ logs: [A, B] }))],
+      ['rejects', (d: ReturnType<typeof deferred<any>>) => d.reject(new Error('stale'))],
+    ])('ends loading when a load made stale by a query %s', async (_label, settle) => {
+      const { result } = await mountLoaded();
+      const load = deferred<any>();
+      getLogs.mockReturnValueOnce(load.promise);
+      queryLogs.mockResolvedValueOnce(ok({ logs: [B] }));
+      let lp!: Promise<void>;
+      act(() => {
+        lp = result.current.loadLogs();
+      });
+      expect(result.current.loading).toBe(true);
+      await act(async () => {
+        await result.current.queryLogs({});
+      });
+      expect(result.current.logs).toEqual([B]);
+      await act(async () => {
+        settle(load);
+        await lp;
+      });
+      expect(result.current.logs).toEqual([B]);
+      expect(result.current.error).toBeNull();
+      expect(result.current.loading).toBe(false);
+    });
   });
 
   describe('queryLogs', () => {
