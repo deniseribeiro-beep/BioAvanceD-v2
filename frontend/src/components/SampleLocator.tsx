@@ -63,14 +63,12 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     inputRef.current?.focus();
   };
 
-  const handleRelease = async () => {
-    if (!result) return;
-
+  const handleRelease = async (specimenId: string) => {
     setReleasing(true);
     setError(null);
 
     try {
-      const response = await storageApi.releaseSample(result.specimenId);
+      const response = await storageApi.releaseSample(specimenId);
       if (response.success) {
         setResult(null);
         setSearchInput('');
@@ -207,7 +205,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
               Nova Busca
             </button>
             <button
-              onClick={handleRelease}
+              onClick={() => handleRelease(result.specimenId)}
               disabled={releasing}
               className="btn-danger"
               data-testid="sample-locator-release-button"
