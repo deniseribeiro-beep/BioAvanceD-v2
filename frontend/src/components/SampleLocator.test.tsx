@@ -173,15 +173,20 @@ describe('SampleLocator', () => {
     expect(input().placeholder).toBe('Digite ID, barcode ou QR code...');
   });
 
-  // Pins today's behaviour, not intent: #1448's fix inverts this case.
-  it('Nova Busca re-runs the same lookup (current behaviour, bug #1448)', async () => {
+  it('Nova Busca clears the field, the result and any error and focuses the field (#1448)', async () => {
+    mocks.releaseSample.mockResolvedValueOnce({ success: false, error: 'RELEASE_ERROR' });
     render(<SampleLocator />);
     await findSample();
-    mocks.getSampleLocation.mockResolvedValueOnce({ success: true, data: FOUND });
+    fireEvent.click(screen.getByTestId('sample-locator-release-button'));
+    await waitFor(() => expect(errorText()).toContain('Erro ao liberar amostra: RELEASE_ERROR'));
+    expect(document.activeElement).not.toBe(input());
     fireEvent.click(screen.getByTestId('sample-locator-new-search-button'));
-    await waitFor(() => expect(mocks.getSampleLocation).toHaveBeenCalledTimes(2));
-    expect(mocks.getSampleLocation).toHaveBeenLastCalledWith('SP-1');
-    expect(await screen.findByTestId('sample-locator-result-box')).toBeInTheDocument();
+    expect(input().value).toBe('');
+    expect(screen.queryByTestId('sample-locator-result-box')).toBeNull();
+    expect(screen.queryByTestId('sample-locator-error-box')).toBeNull();
+    expect(document.activeElement).toBe(input());
+    expect(screen.getByText('Digite um ID ou código de barras para localizar uma amostra')).toBeInTheDocument();
+    expect(mocks.getSampleLocation).toHaveBeenCalledTimes(1);
   });
 
   it('releases the found position and returns to the empty state with the field cleared', async () => {

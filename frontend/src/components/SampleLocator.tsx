@@ -56,6 +56,13 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     inputRef.current?.focus();
   };
 
+  const handleNewSearch = () => {
+    setSearchInput('');
+    setResult(null);
+    setError(null);
+    inputRef.current?.focus();
+  };
+
   const handleRelease = async () => {
     if (!result) return;
 
@@ -192,7 +199,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
 
           <div className="result-actions" data-testid="sample-locator-result-actions">
             <button
-              onClick={handleSearch}
+              onClick={handleNewSearch}
               className="btn-secondary"
               disabled={releasing}
               data-testid="sample-locator-new-search-button"
