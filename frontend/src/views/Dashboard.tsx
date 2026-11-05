@@ -4,7 +4,6 @@ import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, FileSearch, 
 import { usePatients } from '../hooks/usePatients';
 import { useSamples } from '../hooks/useSamples';
 import { useResults } from '../hooks/useResults';
-import { useTemperature } from '../hooks/useTemperature';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTemperatureReadings } from '../hooks/useTemperatureReadings';
@@ -150,7 +149,6 @@ export default function Dashboard() {
   const { patients, loading: loadingPatients, loadPatients } = usePatients();
   const { samples, loading: loadingSamples, loadSamples } = useSamples();
   const { results, loading: loadingResults, loadResults } = useResults();
-  const { temperatures, loading: loadingTemperatures, viewControl } = useTemperature();
   const [consentQueueStats, setConsentQueueStats] = useState<{ waiting: number; delayed: number; active: number; failed: number; totalQueued: number; available: boolean } | null>(null);
   const [loadingConsentQueue, setLoadingConsentQueue] = useState(false);
   const role = dashboardRole(user);
@@ -189,21 +187,6 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, [role]);
 
-  // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
-  const TEMPERATURE_READING_DISABLED = true;
-
-  // Carrega controle de temperatura (não bloqueia o carregamento da dashboard)
-  useEffect(() => {
-    // Apenas tenta carregar se não estiver desativado, não estiver carregando e se a função existir
-    if (!TEMPERATURE_READING_DISABLED && viewControl && !loadingTemperatures) {
-      viewControl().catch((err) => {
-        // Erro não bloqueia o carregamento da dashboard
-        console.warn('Erro ao carregar controle de temperatura:', err);
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Executa apenas uma vez ao montar
-
   useEffect(() => {
     return onDashboardDataChanged(() => {
       void Promise.allSettled([
@@ -217,23 +200,20 @@ export default function Dashboard() {
   // Calcula estatísticas reais
   const stats = useMemo(() => {
     // Garante que todos os dados sejam arrays
-    const temperaturesArray = Array.isArray(temperatures) ? temperatures : [];
     // Para pacientes, se não houver dados e não estiver carregando, usa contagem mínima de 0
     // (os mockados são apenas para exibição na página, não para contagem na dashboard)
     const patientsArray = Array.isArray(patients) ? patients : [];
     const samplesArray = Array.isArray(samples) ? samples : [];
     const resultsArray = Array.isArray(results) ? results : [];
-    const temperatureAlerts = temperaturesArray.length;
 
     return {
       patients: patientsArray.length,
       samples: samplesArray.length,
       results: resultsArray.length,
-      temperatureAlerts,
     };
-  }, [patients, samples, results, temperatures]);
+  }, [patients, samples, results]);
 
-  const loading = loadingPatients || loadingSamples || loadingResults || loadingTemperatures;
+  const loading = loadingPatients || loadingSamples || loadingResults;
 
   const isAdmin = role === 'administrator';
 

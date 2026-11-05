@@ -11,7 +11,6 @@ import { Plus, Edit, Trash2, AlertCircle, CheckCircle, Box, Thermometer, Radio a
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { Equipment, Temperature, Sensor, Policy } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
-import { useTemperature } from '../hooks/useTemperature';
 import { useTemperatureReadings, TemperatureReading } from '../hooks/useTemperatureReadings';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';

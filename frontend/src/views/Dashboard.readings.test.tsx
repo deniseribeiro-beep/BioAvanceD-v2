@@ -25,9 +25,6 @@ vi.mock('../hooks/useSamples', () => ({
 vi.mock('../hooks/useResults', () => ({
   useResults: () => ({ results: [], loading: false, loadResults: noop }),
 }));
-vi.mock('../hooks/useTemperature', () => ({
-  useTemperature: () => ({ temperatures: [], loading: false, viewControl: noop }),
-}));
 vi.mock('../services/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/api')>()),
   temperatureService: { getAll: vi.fn() },
