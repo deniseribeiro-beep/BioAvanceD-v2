@@ -139,7 +139,6 @@ export default function ReportTemplatesPage() {
                       disabled={template.isSystemDefined}
                       title={template.isSystemDefined ? t('reportTemplates.deleteSystemBlocked') : t('common.delete')}
                       onClick={async () => {
-                        if (template.isSystemDefined) return;
                         if (confirm(t('reportTemplates.deleteConfirm'))) {
                           try {
                             await deleteReportTemplate(template._id || template.code);
