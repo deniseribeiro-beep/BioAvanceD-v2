@@ -32,6 +32,11 @@ const REVOCATION_CONFIRMATION_TEMPLATE_ID = 'consent.revocation_confirmation.v1'
 const REVOCATION_PURPOSE = 'consent_revocation';
 const REVOCATION_NOTIFICATION_TYPE = 'RF_CONSENT_REVOCATION_CONFIRMATION';
 
+const TERM_EXPIRY_NOTICE = 'notice';
+const TERM_EXPIRY_TEMPLATE_ID = 'consent.term_expiry.v1';
+const TERM_EXPIRY_PURPOSE = 'consent_term_expiry';
+const TERM_EXPIRY_NOTIFICATION_TYPE = 'RF_CONSENT_TERM_EXPIRY';
+
 function permissionLabelsByKey(template) {
   const labels = new Map();
   for (const permission of Array.isArray(template?.permissions) ? template.permissions : []) {
@@ -288,6 +293,54 @@ async function notifyHoldersOfSupersededTerm(db, { newTemplateId, newTemplate, p
  * not. Never throws; returns the event's outcome (`delivered` or
  * `failed`), or null when not even the event could be written.
  */
+function formatTermExpiryNotice({ validTo }) {
+  const when = validTo instanceof Date && !Number.isNaN(validTo.getTime()) ? validTo : new Date();
+  const formatted = when.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+  return [
+    `BioAvanceD: o seu termo de consentimento encerrou em ${formatted} (horário de Brasília).`,
+    'A partir dessa data, nada mais será feito com base nesse consentimento.',
+    'O encerramento não desfaz o que foi feito antes dele, e os registros que a lei obriga a guardar continuam guardados pelo prazo legal.',
+  ].join('\n');
+}
+
+/**
+ * Tell the holder, once, that the term's own validTo has closed the consent.
+ * A second pass finds the communication already recorded and sends nothing.
+ */
+async function notifyTermExpiry(db, { consent, validTo }) {
+  try {
+    const eventsCollection = await getCollection(db, 'consentCommunicationEvents');
+    const consentId = consentHistory.consentKeyOf(consent);
+    const existing = await eventsCollection.findOne({
+      consentId,
+      contentTemplateId: TERM_EXPIRY_TEMPLATE_ID,
+    });
+    if (existing) return existing.deliveryStatus || 'delivered';
+    const notificationService = require('./notification.service');
+    return await sendRecordedEmail(db, {
+      eventsCollection,
+      notificationService,
+      consent,
+      communicationType: TERM_EXPIRY_NOTICE,
+      contentTemplateId: TERM_EXPIRY_TEMPLATE_ID,
+      purpose: TERM_EXPIRY_PURPOSE,
+      sourceEventType: 'Consent',
+      sourceEventId: consentId,
+      subject: 'BioAvanceD - Encerramento do termo de consentimento',
+      notificationType: TERM_EXPIRY_NOTIFICATION_TYPE,
+      composeMessage: () => formatTermExpiryNotice({ validTo }),
+      label: 'o aviso de encerramento do termo',
+    });
+  } catch (error) {
+    logger.error('Erro ao avisar o titular do encerramento do termo:', error.message);
+    return null;
+  }
+}
+
 async function confirmRevocationToHolder(db, { consent, revocation }) {
   try {
     const eventsCollection = await getCollection(db, 'consentCommunicationEvents');
@@ -315,8 +368,11 @@ async function confirmRevocationToHolder(db, { consent, revocation }) {
 module.exports = {
   notifyHoldersOfSupersededTerm,
   confirmRevocationToHolder,
+  notifyTermExpiry,
   formatPolicyChangeNotice,
   formatRevocationConfirmation,
+  formatTermExpiryNotice,
+  TERM_EXPIRY_TEMPLATE_ID,
   POLICY_CHANGE_NOTICE,
   POLICY_CHANGE_NOTICE_TEMPLATE_ID,
   POLICY_CHANGE_PURPOSE,

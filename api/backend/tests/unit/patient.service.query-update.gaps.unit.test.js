@@ -317,15 +317,21 @@ describe('PatientService.validateConsentToken', () => {
     );
   });
 
-  it('rejects when the patient status is not PENDING_CONSENT', async () => {
+  it('keeps a matching token valid after the participant is no longer pending', async () => {
     const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ participantId: '12345678', status: 'ACTIVE' })
+      findOne: vi.fn().mockResolvedValue({
+        participantId: '12345678',
+        status: 'ACTIVE',
+        consentTokenHash: hashConsentToken('tok'),
+      })
     });
     const db = makeFakeDb({ patients: patientsCollection });
 
-    await expect(patientService.validateConsentToken(db, '12345678', 'tok')).rejects.toThrow(
-      'Paciente não está pendente de consentimento'
-    );
+    await expect(patientService.validateConsentToken(db, '12345678', 'tok')).resolves.toEqual({
+      valid: true,
+      participantId: '12345678',
+      patientStatus: 'ACTIVE',
+    });
   });
 
   it('rejects when the token does not match', async () => {
@@ -405,7 +411,7 @@ describe('PatientService.validateConsentToken', () => {
 
     const result = await patientService.validateConsentToken(db, '12345678', 'tok');
 
-    expect(result).toEqual({ valid: true, participantId: '12345678' });
+    expect(result).toEqual({ valid: true, participantId: '12345678', patientStatus: 'PENDING_CONSENT' });
   });
 });
 
@@ -413,10 +419,12 @@ describe('PatientService.acceptConsentToken', () => {
   // #821: acceptance now records a Consent first; that behaviour is pinned in
   // patient.service.unit.test.js. Stubbed here so this case keeps covering
   // the status/token write that follows it.
-  it('activates the patient and clears the consent token after validating it', async () => {
+  it('activates the patient and keeps the panel token after validating it', async () => {
     const consentService = require('../../src/services/consent.service');
-    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+    const consentPanel = require('../../src/services/consentPanel.service');
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [], validTo: '2027-01-01T00:00:00.000Z' });
     vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
+    vi.spyOn(consentPanel, 'recordPanelLinkCommunication').mockResolvedValue(undefined);
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
         participantId: '12345678',
@@ -436,7 +444,8 @@ describe('PatientService.acceptConsentToken', () => {
     expect(result).toEqual({ success: true, participantId: '12345678', consentId: 'uuid-1', consentVersion: '1' });
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload.status).toBe('ACTIVE');
-    expect(setPayload.consentTokenHash).toBeNull();
+    expect(setPayload.consentTokenExpiresAt).toEqual(new Date('2027-01-01T00:00:00.000Z'));
+    expect(setPayload.consentTokenHash).toBeUndefined();
   });
 
   it('propagates the validation error and never calls updateOne when the token is invalid', async () => {
@@ -473,11 +482,14 @@ describe('PatientService.resendConsentNotification', () => {
     );
   });
 
-  it('rejects when the patient status is not PENDING_CONSENT', async () => {
+  it('rejects when a consent is already in force', async () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ participantId: '12345678', status: 'ACTIVE' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const consents = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678', status: 'ACTIVE' })
+    });
+    const db = makeFakeDb({ patients: patientsCollection, patientConsents: consents });
 
     await expect(patientService.resendConsentNotification(db, '12345678')).rejects.toThrow(
       'Paciente não está pendente de consentimento'

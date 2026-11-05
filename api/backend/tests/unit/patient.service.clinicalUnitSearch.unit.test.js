@@ -78,7 +78,12 @@ describe('clinicalUnit free-text search/filter paths stay consistent with Organi
       { participantId: '11111111', patientName: 'Ana', clinicalUnit: snapshot.clinicalUnit, unitAcronym: snapshot.unitAcronym },
       { participantId: '22222222', patientName: 'Bruno', clinicalUnit: 'Oncologia', unitAcronym: 'ONC' },
     ]);
-    db.collection = vi.fn((name) => (name === 'patients' ? patients : organizations));
+    const identities = { find: vi.fn(() => ({ toArray: async () => [] })), createIndex: vi.fn(async () => undefined) };
+    db.collection = vi.fn((name) => {
+      if (name === 'patients') return patients;
+      if (name === 'participantIdentities') return identities;
+      return organizations;
+    });
 
     const result = await patientService.listPatients(db, { clinicalUnit: snapshot.clinicalUnit });
 

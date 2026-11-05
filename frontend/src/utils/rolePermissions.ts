@@ -153,6 +153,7 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   ['/locations', STAFF],
   ['/temperature', STAFF],
   ['/sensors', STAFF],
+  ['/incidents', STAFF],
   ['/policies', STAFF],
   ['/quality-descriptions', STAFF],
 

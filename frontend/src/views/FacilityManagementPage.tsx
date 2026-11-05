@@ -13,7 +13,6 @@ import { useEquipment } from '../hooks/useEquipment';
 import { useTemperatureReadings, TemperatureReading } from '../hooks/useTemperatureReadings';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
-import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import { equipmentFormEditPath } from './EquipmentFormPage';
 import { sensorFormEditPath, resolveSensorId } from './SensorFormPage';
 import { policyFormEditPath } from './PolicyFormPage';

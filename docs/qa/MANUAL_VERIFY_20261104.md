@@ -37,3 +37,13 @@ Não são defeito de layout. Não foi inventado fluxo para elas.
 ## Efeito colateral
 
 Foi criado um backup em 2026-11-05 (cerca de 145 MB) só para abrir o modal de restauração. A restauração não foi confirmada.
+
+## Homolog depois deste pass
+
+Conferido em `http://127.0.0.1:8080` na mesma VM, sem `docker compose down -v`.
+
+- Diretório: a lista mostra prontuário, data de nascimento e o selo de consentimento, e atualiza o selo com a página aberta.
+- O menu da conta do administrador mostra a seta no nome, também quando o nome some na tela estreita.
+- Consentimentos: o termo assinado abre e baixa quando há arquivo. Sem arquivo, a página diz que não há termo assinado.
+- O painel do participante em `/patients/:participantId/consent` segue o consentimento em vigor, mostra o termo e o arquivo assinado, e revoga as permissões marcadas.
+- Mailpit: a caixa abre em `/mailpit/`. A mensagem **Prova do servidor de e-mail** entrou em 05/11/2026, 17:04:30, com registro `SENT` em `smtp-test:1025`.

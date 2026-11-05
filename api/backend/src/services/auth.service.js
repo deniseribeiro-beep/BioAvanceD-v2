@@ -1642,8 +1642,9 @@ class AuthService {
 
       // Prefer the public origin the browser used (access proxy / LB) so the
       // emailed and in-response lab link is reachable, not FRONTEND_URL's e2e host.
-      const forwardedHost = req && (req.get('x-forwarded-host') || req.get('host'));
-      const forwardedProto = (req && (req.get('x-forwarded-proto') || req.protocol)) || 'http';
+      const header = (name) => (req && typeof req.get === 'function' ? req.get(name) : undefined);
+      const forwardedHost = header('x-forwarded-host') || header('host');
+      const forwardedProto = header('x-forwarded-proto') || (req && req.protocol) || 'http';
       const publicOrigin = forwardedHost
         ? `${String(forwardedProto).split(',')[0].trim()}://${String(forwardedHost).split(',')[0].trim()}`
         : (process.env.FRONTEND_URL || 'http://localhost:5173');

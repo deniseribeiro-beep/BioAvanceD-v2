@@ -193,6 +193,7 @@ function App() {
                   <Route path="/equipment" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/locations" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/temperature" element={<Navigate to="/facility-management?tab=temperature" replace />} />
+                  <Route path="/incidents" element={<Navigate to="/facility-management?tab=incidents" replace />} />
                   <Route path="/sensors" element={<Navigate to="/facility-management?tab=sensors" replace />} />
                   <Route path="/policies" element={<Navigate to="/facility-management?tab=policies" replace />} />
                   <Route path="/logs" element={<ProtectedRoute requireAuditReader><LogsPage /></ProtectedRoute>} />

@@ -30,6 +30,19 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
+// WSL's `bash` (WindowsApps) rewrites a bare `C:\...` argv into `C:Users...`
+// and fails; Git Bash accepts `C:/...`. Same rewrite as env-generator-behaviour.
+function toBashPath(winPath) {
+  if (process.platform !== 'win32') return winPath;
+  const resolved = path.resolve(winPath);
+  const uname = spawnSync('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
+  const kind = String(uname.stdout || '');
+  if (/MINGW|MSYS/i.test(kind)) return resolved.replace(/\\/g, '/');
+  const drive = /^([A-Za-z]):(.*)$/.exec(resolved);
+  if (drive) return `/mnt/${drive[1].toLowerCase()}${drive[2].replace(/\\/g, '/')}`;
+  return resolved.replace(/\\/g, '/');
+}
+
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const GENERATOR = path.resolve(REPO_ROOT, 'generate-env-production-secrets.sh');
 const EXAMPLE = path.resolve(REPO_ROOT, '.env.production.example');
@@ -71,7 +84,11 @@ function makeSandbox() {
 function run(script, args, cwd) {
   // bash explicitly rather than relying on the executable bit, which does
   // not survive every checkout on every platform.
-  return spawnSync('bash', [script, ...args], { cwd, encoding: 'utf8' });
+  // cwd stays a host path (Node's spawnSync); argv paths are rewritten for
+  // WSL/Git Bash. Flags stay literal: path.resolve would turn them into
+  // cwd/--flag under win32.
+  const bashArgs = args.map((arg) => (String(arg).startsWith('-') ? arg : toBashPath(arg)));
+  return spawnSync('bash', [toBashPath(script), ...bashArgs], { cwd, encoding: 'utf8' });
 }
 
 function parseEnv(content) {
@@ -98,7 +115,12 @@ function withSandbox(fn) {
   try {
     fn(sandbox);
   } finally {
-    fs.rmSync(sandbox.dir, { recursive: true, force: true });
+    // WSL bash can briefly keep a handle on /mnt/c/... sandbox dirs after exit.
+    try {
+      fs.rmSync(sandbox.dir, { recursive: true, force: true });
+    } catch (err) {
+      if (err && err.code !== 'EPERM' && err.code !== 'EBUSY') throw err;
+    }
   }
 }
 

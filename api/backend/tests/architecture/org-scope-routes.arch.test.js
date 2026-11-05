@@ -74,6 +74,35 @@ const EXEMPT = new Map([
   // The RNF009 audit trail, gated on isAuditReader in the handler (#1241).
   // An auditor reads it across organizations, the same rule /api/logs keeps.
   ['user.routes.js GET /logs', 'audit trail: isAuditReader reads it across organizations, as /api/logs does (#1384)'],
+  // The file became visible to this sweep when the staff signed-term route
+  // took requireOrganizationScope. These registrations stay outside that gate.
+  ['eConsent.js POST /generate-link', 'invitation addressed to one participant, gated by requestConsent'],
+  ['eConsent.js GET /validate/:token', 'participant link, no staff organization'],
+  ['eConsent.js POST /update', 'participant link, no staff organization'],
+  ['eConsent.js GET /import/fhir/consent/:token', 'participant link, no staff organization'],
+  ['eConsent.js POST /import/fhir/consent/:token/accept', 'participant link, no staff organization'],
+  ['eConsent.js GET /consent-policies/:id/pending-patients', 'role 3/4 catalog of who still owes a term'],
+  ['eConsent.js POST /consent-templates', 'global consent catalog, role 3/4'],
+  ['eConsent.js GET /consent-templates', 'global consent catalog, role 3/4'],
+  ['eConsent.js GET /purpose-codes', 'global consent catalog, role 3/4'],
+  ['eConsent.js GET /consent-templates/current', 'the term a participant or collector is shown'],
+  ['eConsent.js GET /consent-templates/active', 'global consent catalog, role 3/4'],
+  ['eConsent.js GET /consent-templates/:id', 'global consent catalog, role 3/4'],
+  ['eConsent.js PUT /consent-templates/:id', 'global consent catalog, role 3/4'],
+  ['eConsent.js POST /consent-policies', 'global consent catalog, role 3/4'],
+  ['eConsent.js PUT /consent-policies/:id', 'global consent catalog, role 3/4'],
+  ['eConsent.js GET /consent-policies/active', 'global consent catalog, role 3/4'],
+  ['eConsent.js GET /consent-policies/active-with-caae', 'global consent catalog, role 3/4'],
+  ['eConsent.js GET /consent-policies/history', 'global consent catalog, role 3/4'],
+  ['eConsent.js GET /consent-policies', 'global consent catalog, role 3/4'],
+  ['eConsent.js POST /consents', 'records the term the staff collector just showed, role 3/4'],
+  ['eConsent.js POST /consents/:id/revoke', 'staff revocation of one consent, role 3/4'],
+  ['eConsent.js GET /consents/:id/history', 'staff read of one consent, role 3/4'],
+  ['eConsent.js GET /patients/:participantId/consent', 'staff read of one participant, role 3/4'],
+  ['eConsent.js POST /consent-tokens/validate', 'participant link, no staff organization'],
+  ['eConsent.js POST /consent-tokens/accept', 'participant link, no staff organization'],
+  ['eConsent.js POST /consent-tokens/revoke', 'participant link, no staff organization'],
+  ['eConsent.js POST /consent-tokens/signed-tcle', 'participant link, no staff organization'],
 ]);
 
 // NOT exemptions: routes that DO need the gate and do not have it yet, each

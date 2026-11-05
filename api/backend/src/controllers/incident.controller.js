@@ -148,10 +148,11 @@ async function createOrUpdateIncident(req, res) {
 
 async function getIncidents(req, res) {
   try {
-    const { status, sensorKey, limit = 50, skip = 0 } = req.query;
+    const { status, sensorKey, limit = 50, skip = 0, excludeResolved } = req.query;
     const { TemperatureIncidentCollection } = await getCollections();
     const filter = {};
     if (status) filter.status = status;
+    else if (excludeResolved === 'true' || excludeResolved === true) filter.status = { $ne: 'resolved' };
     if (sensorKey) filter.sensorKey = sensorKey;
     const incidents = await TemperatureIncidentCollection.find(filter).sort({ openedAt: -1 }).skip(Number(skip)).limit(Number(limit)).toArray();
     const total = await TemperatureIncidentCollection.countDocuments(filter);

@@ -341,7 +341,9 @@ describe('NotificationService', () => {
       );
       const payload = complianceSpy.mock.calls[complianceSpy.mock.calls.length - 1][0];
       expect(payload.sentAt).toBeInstanceOf(Date);
-      expect(payload.deliveryStatus).toBeUndefined();
+      expect(payload.sentAtLocal).toEqual(expect.stringMatching(/\d{2}\/\d{2}\/\d{4}/));
+      expect(payload.location.machine).toEqual(expect.any(String));
+      expect(payload.deliveryStatus).toBe('SENT');
     });
 
     it('no longer exposes persistConsentDeliveryFailure', () => {
@@ -475,8 +477,49 @@ describe('NotificationService', () => {
 
       const lastCall = complianceSpy.mock.calls[complianceSpy.mock.calls.length - 1][0];
       expect(lastCall).toEqual(
-        expect.objectContaining({ provider: 'smtp', sentAt: expect.any(Date), messageId: 'smtp-msg-1' })
+        expect.objectContaining({
+          provider: 'smtp',
+          deliveryStatus: 'SENT',
+          sentAt: expect.any(Date),
+          sentAtLocal: expect.stringMatching(/\d{2}\/\d{2}\/\d{4}/),
+          location: expect.objectContaining({
+            kind: 'smtp_relay',
+            host: 'smtp-test',
+            port: '1025',
+            machine: expect.any(String),
+          }),
+          messageId: 'smtp-msg-1',
+        })
       );
+      expect(lastCall.html).toBeUndefined();
+      expect(lastCall.text).toBeUndefined();
+      const attempt = complianceSpy.mock.calls.find((call) => call[0].deliveryStatus === 'ATTEMPTED')[0];
+      expect(attempt.sentAt).toBeInstanceOf(Date);
+      expect(attempt.location).toEqual(expect.objectContaining({ host: 'smtp-test', port: '1025' }));
+    });
+
+    it('records a resend location when no SMTP host is set, and the default port when the host has none', () => {
+      delete process.env.SMTP_HOST;
+      delete process.env.SMTP_PORT;
+      const resendTrace = notificationService.emailSendTrace();
+      expect(resendTrace.provider).toBe('resend');
+      expect(resendTrace.sentAtLocal).toEqual(expect.stringMatching(/\d{2}\/\d{2}\/\d{4}/));
+      expect(resendTrace.location).toEqual({
+        kind: 'resend',
+        host: 'resend',
+        port: null,
+        machine: expect.any(String),
+      });
+
+      process.env.SMTP_HOST = '  smtp-test  ';
+      delete process.env.SMTP_PORT;
+      const smtpTrace = notificationService.emailSendTrace();
+      expect(smtpTrace.provider).toBe('smtp');
+      expect(smtpTrace.location).toEqual(expect.objectContaining({
+        kind: 'smtp_relay',
+        host: 'smtp-test',
+        port: '1025',
+      }));
     });
 
     it('records a DELIVERY_FAILED row with provider smtp and rethrows when the SMTP transport rejects', async () => {
@@ -496,7 +539,10 @@ describe('NotificationService', () => {
           provider: 'smtp',
           deliveryStatus: 'DELIVERY_FAILED',
           errorCode: 'ECONNREFUSED',
-          failedAt: expect.any(Date)
+          failedAt: expect.any(Date),
+          sentAt: expect.any(Date),
+          sentAtLocal: expect.stringMatching(/\d{2}\/\d{2}\/\d{4}/),
+          location: expect.objectContaining({ kind: 'smtp_relay', host: 'smtp-test', port: '1025' }),
         })
       );
     });

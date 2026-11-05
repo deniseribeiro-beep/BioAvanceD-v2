@@ -5,8 +5,10 @@ const { STORAGE_BASE } = require('../config/uploadConfig');
 const {
   assertFileEncryptionConfigured,
   encryptFileBuffer,
+  decryptFileBuffer,
   computeChecksum,
 } = require('../utils/fileCrypto');
+const { buildSignedTclePdf } = require('./tclePdf');
 
 /**
  * #827 -- RF010 AC#4 ("Registrar data, evidência, hash, origem e
@@ -31,8 +33,14 @@ function sha256Hex(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
 }
 
-function buildConsentEvidenceDocument({ consentId, participantId, template, responses, decisionDateTime, signatureHash, signerRole, ipAddress, userAgent }) {
+function buildConsentEvidenceDocument({ consentId, participantId, template, responses, decisionDateTime, signatureHash, signerRole, ipAddress, userAgent, collectionPlace }) {
   const termText = template.htmlContent || template.content || '';
+  const place = typeof collectionPlace === 'string' ? collectionPlace.trim() : '';
+  const origin = {
+    ipAddress: ipAddress || null,
+    userAgent: userAgent || null,
+  };
+  if (place) origin.collectionPlace = place;
   return {
     evidenceSchema: 'bioavanced.consent-evidence/v1',
     consentId,
@@ -46,31 +54,21 @@ function buildConsentEvidenceDocument({ consentId, participantId, template, resp
     decisionDateTime: new Date(decisionDateTime).toISOString(),
     signerRole: signerRole || 'participant',
     signatureHash: signatureHash || null,
-    origin: {
-      ipAddress: ipAddress || null,
-      userAgent: userAgent || null,
-    },
+    origin,
   };
 }
 
-function storeConsentEvidence(input) {
+function storeEncryptedConsentFile(consentId, fileName, plaintext) {
   assertFileEncryptionConfigured();
-
-  const document = buildConsentEvidenceDocument(input);
-  const plaintext = Buffer.from(JSON.stringify(document), 'utf8');
   const checksum = computeChecksum(plaintext);
   const encryption = encryptFileBuffer(plaintext);
-
-  const dir = path.join(STORAGE_BASE, 'consents', String(input.consentId));
+  const dir = path.join(STORAGE_BASE, 'consents', String(consentId));
   fs.mkdirSync(dir, { recursive: true });
-  const storagePath = path.join(dir, EVIDENCE_FILE_NAME);
-  fs.writeFileSync(storagePath, encryption ? encryption.ciphertext : plaintext);
-
+  fs.writeFileSync(path.join(dir, fileName), encryption ? encryption.ciphertext : plaintext);
   return {
-    evidenceDocumentUri: `objstore://consents/${input.consentId}/${EVIDENCE_FILE_NAME}`,
-    evidenceHash: `sha256:${checksum}`,
-    evidenceMimeType: EVIDENCE_MIME_TYPE,
-    evidenceEncryption: encryption
+    uri: `objstore://consents/${consentId}/${fileName}`,
+    hash: `sha256:${checksum}`,
+    encryption: encryption
       ? {
           algorithm: encryption.algorithm,
           keyId: encryption.keyId,
@@ -78,6 +76,40 @@ function storeConsentEvidence(input) {
           tag: encryption.tag,
         }
       : null,
+  };
+}
+
+const SIGNED_TCLE_FILE_NAME = 'tcle.pdf';
+
+function storeConsentEvidence(input) {
+  const document = buildConsentEvidenceDocument(input);
+  const signed = input.signatureImageBase64
+    ? storeEncryptedConsentFile(
+        input.consentId,
+        SIGNED_TCLE_FILE_NAME,
+        buildSignedTclePdf({
+          template: input.template,
+          collectionPlace: document.origin.collectionPlace || null,
+          decisionDateTime: document.decisionDateTime,
+          signatureImageBase64: input.signatureImageBase64,
+        })
+      )
+    : null;
+
+  const stored = storeEncryptedConsentFile(
+    input.consentId,
+    EVIDENCE_FILE_NAME,
+    Buffer.from(JSON.stringify(document), 'utf8')
+  );
+
+  return {
+    evidenceDocumentUri: stored.uri,
+    evidenceHash: stored.hash,
+    evidenceMimeType: EVIDENCE_MIME_TYPE,
+    evidenceEncryption: stored.encryption,
+    signedTcleDocumentUri: signed ? signed.uri : null,
+    signedTcleHash: signed ? signed.hash : null,
+    signedTcleEncryption: signed ? signed.encryption : null,
   };
 }
 
@@ -102,6 +134,7 @@ function storeRevocationEvidence(input) {
     channel: input.channel,
     signerRole: input.signerRole,
     signerId: input.signerId,
+    location: input.location || { status: 'unavailable' },
   };
   const plaintext = Buffer.from(JSON.stringify(document), 'utf8');
   const checksum = computeChecksum(plaintext);
@@ -126,9 +159,37 @@ function storeRevocationEvidence(input) {
   };
 }
 
+function readSignedTcle(consent) {
+  const uri = consent?.signedTcleDocumentUri;
+  const match = typeof uri === 'string' ? /^objstore:\/\/consents\/([^/]+)\/([^/]+)$/.exec(uri) : null;
+  if (!match) return null;
+
+  const filePath = path.join(STORAGE_BASE, 'consents', match[1], match[2]);
+  if (!fs.existsSync(filePath)) return null;
+
+  const stored = fs.readFileSync(filePath);
+  const envelope = consent.signedTcleEncryption;
+  const plaintext = envelope
+    ? decryptFileBuffer(stored, {
+        encryptionKeyId: envelope.keyId,
+        encryptionIv: envelope.iv,
+        encryptionTag: envelope.tag,
+      })
+    : stored;
+
+  const expected = String(consent.signedTcleHash || '').replace(/^sha256:/, '');
+  if (expected && computeChecksum(plaintext) !== expected) {
+    const error = new Error('Hash do TCLE assinado não confere');
+    error.statusCode = 409;
+    throw error;
+  }
+  return plaintext;
+}
+
 module.exports = {
   EVIDENCE_MIME_TYPE,
   buildConsentEvidenceDocument,
   storeConsentEvidence,
   storeRevocationEvidence,
+  readSignedTcle,
 };

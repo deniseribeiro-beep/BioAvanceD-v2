@@ -5,9 +5,10 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/shadcn/button';
 import LanguageSelector from '../LanguageSelector';
 import { canRoleAccessRoute } from '@/utils/rolePermissions';
-import { LogOut, Workflow } from 'lucide-react';
+import { ChevronDown, LogOut, Settings, ShieldCheck, Workflow } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/shadcn/avatar';
 import { Separator } from '@/components/shadcn/separator';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/shadcn/dropdown-menu';
 import logo from '@/LOGO_BIOAVANCED_CORE.png';
 
 export default function Header() {
@@ -15,6 +16,7 @@ export default function Header() {
   const { t } = useLanguage();
   const navigate = useNavigate();
   const canOpenIntake = canRoleAccessRoute(user?.roleName, '/next/intake');
+  const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
 
   const handleLogout = async () => {
     await logout();
@@ -61,17 +63,51 @@ export default function Header() {
           {user ? (
             <>
               <Separator orientation="vertical" className="hidden h-6 sm:block" />
-              <div className="hidden items-center gap-2 sm:flex">
-                <Avatar className="h-7 w-7">
-                  <AvatarFallback>{initials}</AvatarFallback>
-                </Avatar>
-                <div className="min-w-0 leading-tight">
-                  <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {t('roles.access')}: {getAccessTypeLabel(user)}
-                  </p>
+              {isAdmin ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      data-testid="account-menu-trigger"
+                      className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-label={user.name}
+                    >
+                      <Avatar className="h-7 w-7">
+                        <AvatarFallback>{initials}</AvatarFallback>
+                      </Avatar>
+                      <span className="hidden min-w-0 leading-tight sm:block">
+                        <span className="block truncate text-sm font-medium text-foreground">{user.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {t('roles.access')}: {getAccessTypeLabel(user)}
+                        </span>
+                      </span>
+                      <ChevronDown data-testid="account-menu-chevron" className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem data-testid="account-menu-security" onSelect={() => navigate('/security')}>
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      {t('dashboard.security', 'Segurança')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem data-testid="account-menu-settings" onSelect={() => navigate('/system-management')}>
+                      <Settings className="mr-2 h-4 w-4" />
+                      {t('dashboard.settings', 'Configurações')}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <div className="hidden items-center gap-2 sm:flex">
+                  <Avatar className="h-7 w-7">
+                    <AvatarFallback>{initials}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 leading-tight">
+                    <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {t('roles.access')}: {getAccessTypeLabel(user)}
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           ) : null}
           {canOpenIntake ? (

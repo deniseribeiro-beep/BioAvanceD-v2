@@ -44,6 +44,7 @@ x-test-env: &test-env
   ENCRYPTION_KEY_ID: vitest-key-001
   RESEND_API_KEY: vitest-resend-api-key
   EMAIL_FROM: onboarding@resend.dev
+  ALERT_EMAIL_TO: e2e-admin@bioavanced.test
   USER_ANON_SALT: vitest-user-anon-salt
   CONSENT_SECRET: vitest-consent-secret-key
   # #829: required by NotificationService.getFrontendUrl(), which throws when
@@ -282,8 +283,10 @@ services:
 
   smtp-test:
     image: axllent/mailpit:v1.21.8
+    environment:
+      MP_WEBROOT: /mailpit
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/api/v1/info >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/mailpit/api/v1/info >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -455,6 +458,10 @@ services:
     # real fix, and that change deletes this mount.
     volumes:
       - uploads-test-data:/app/uploads
+      # The signed TCLE and its evidence live under STORAGE_BASE (/app/storage).
+      # Without this mount a backend recreate drops the ciphertext the consent
+      # still points at, and Ver/Baixar answers 404.
+      - storage-test-data:/app/storage
       # #959 item 2: read-only -- the app signs with this key and must never be
       # able to rewrite it. POST /api/audit/anchor runs in THIS process and
       # reaches the same signing chains as the nightly worker job, so the backend
@@ -853,6 +860,7 @@ services:
     # #828: same volume as backend-app-test -- this is the reading half.
     volumes:
       - uploads-test-data:/app/uploads
+      - storage-test-data:/app/storage
       # #959 item 2: the nightly daily-merkle job signs here.
       - audit-signing-test-data:/run/secrets:ro
     healthcheck:
@@ -1035,6 +1043,8 @@ volumes:
   influxdb-test-data:
   # #828: shared /app/uploads for backend-app-test and worker-test.
   uploads-test-data:
+  # Signed TCLE ciphertext (objstore://consents/...) survives a backend recreate.
+  storage-test-data:
   # #959 item 2: holds the Merkle signing key audit-keygen-test mints. Named, so
   # it survives a down/up and the key stays stable across runs of this stack.
   audit-signing-test-data:

@@ -142,6 +142,27 @@
     @apply flex flex-wrap items-center gap-3;
   }
 
+  .inventory-box-grid {
+    @apply mb-4 max-w-[28rem];
+  }
+
+  .inventory-box-grid__header h2 {
+    @apply text-base font-semibold text-foreground;
+  }
+
+  .inventory-box-grid__header p,
+  .inventory-box-grid__box {
+    @apply text-sm text-muted-foreground;
+  }
+
+  .inventory-box-grid__picker {
+    @apply mt-2 flex items-center gap-2 text-sm text-foreground;
+  }
+
+  .inventory-box-grid__picker select {
+    @apply rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground;
+  }
+
   .samples-search-button {
     @apply inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground;
   }

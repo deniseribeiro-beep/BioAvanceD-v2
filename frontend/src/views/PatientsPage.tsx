@@ -1,12 +1,11 @@
-import { useState, useMemo, Fragment, CSSProperties } from 'react';
+import { useState, useMemo, useEffect, Fragment, CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
-import Modal from '../components/UI/Modal';
 import { Edit, Trash2, Search, ArrowLeft } from 'lucide-react';
-import StatusBadge, { ConsentStatus } from '../components/Consent/StatusBadge';
-import SignaturePad from '../components/Consent/SignaturePad';
+import StatusBadge from '../components/Consent/StatusBadge';
+import InPersonConsentModal from '../components/Consent/InPersonConsentModal';
 import { Patient } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useAuth } from '../contexts/AuthContext';
@@ -14,12 +13,14 @@ import { patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { hasConsentRecord, normalizeConsentStatus } from './patientsConsentStatus';
 
+const DIRECTORY_REFRESH_MS = 15_000;
+
 const styles: Record<string, CSSProperties> = {
   consentActions: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: '11rem 13.5rem 11rem auto',
     alignItems: 'center',
-    gap: '0.5rem',
-    flexWrap: 'wrap'
+    columnGap: '0.5rem'
   },
   consentActionButton: {
     padding: '0.3rem 0.6rem',
@@ -28,17 +29,13 @@ const styles: Record<string, CSSProperties> = {
   consentStatusCell: {
     display: 'flex',
     alignItems: 'center'
-  },
-  consentHint: {
-    fontSize: '0.8rem',
-    color: 'var(--text-light)'
   }
 };
 
 export default function PatientsPage() {
   const navigate = useNavigate();
   const { t, language } = useLanguage();
-  const { patients, loading, error, deletePatient, loadPatients } = usePatients();
+  const { patients, loading, error, deletePatient, loadPatients, refreshPatients } = usePatients();
   const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [searchResults, setSearchResults] = useState<Patient[]>([]);
@@ -47,8 +44,32 @@ export default function PatientsPage() {
   const [resendingConsentFor, setResendingConsentFor] = useState<string | null>(null);
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
   const [activeParticipantId, setActiveParticipantId] = useState<string | null>(null);
-  const [consentOverrides, setConsentOverrides] = useState<Record<string, ConsentStatus>>({});
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
+
+  useEffect(() => {
+    let intervalId = 0;
+    const stop = () => window.clearInterval(intervalId);
+    const start = () => {
+      stop();
+      intervalId = window.setInterval(() => {
+        if (!document.hidden) void refreshPatients();
+      }, DIRECTORY_REFRESH_MS);
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+        return;
+      }
+      void refreshPatients();
+      start();
+    };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [refreshPatients]);
 
   const isConnectionError = (errorMessage?: string) => {
     const normalized = String(errorMessage || '').toLowerCase();
@@ -65,16 +86,6 @@ export default function PatientsPage() {
     setActiveParticipantId(null);
   };
 
-  const handleConfirmSignature = (_dataUrl: string) => {
-    if (!activeParticipantId) return;
-    setConsentOverrides((prev) => ({
-      ...prev,
-      [activeParticipantId]: 'GRANTED'
-    }));
-    setIsSignatureModalOpen(false);
-    setActiveParticipantId(null);
-  };
-  
   // Handler para busca de pacientes
   const handleSearch = async (term: string) => {
     if (!term || term.trim().length === 0) {
@@ -220,8 +231,8 @@ export default function PatientsPage() {
 
   return (
     <div className="page-shell patients-page" data-testid="patients-page">
-      <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+      <div className="page-header" style={{ alignItems: 'center', flexWrap: 'nowrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
           <Button data-testid="patients-back-button" aria-label={t('common.back')} onClick={() => navigate('/dashboard')} variant="secondary" style={{ minWidth: 'auto' }}>
             <ArrowLeft size={18} />
           </Button>
@@ -232,8 +243,8 @@ export default function PatientsPage() {
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           {canImportPatients && (
-            <Button data-testid="patients-import-fhir-button" variant="primary" onClick={() => navigate('/patients/import-fhir')}>
-              Importar FHIR
+            <Button data-testid="patients-import-fhir-button" variant="primary" onClick={() => navigate('/import/lgpd')}>
+              Importar dados
             </Button>
           )}
           <div style={{ 
@@ -360,6 +371,8 @@ export default function PatientsPage() {
           data-testid="patients-table"
           headers={[
             t('patients.tableId'),
+            t('patients.recordNumber'),
+            t('patients.birthDate'),
             t('patients.tableConsent'),
             t('patients.actions'),
           ]}
@@ -369,7 +382,7 @@ export default function PatientsPage() {
             const participantId = patient.participantId 
               ? String(patient.participantId) 
               : ((patient as any).id ? String((patient as any).id) : `patient-${index}`);
-            const rawConsentStatus = consentOverrides[participantId] || (patient as any).consentStatus || (patient as any).status;
+            const rawConsentStatus = (patient as any).consentStatus || (patient as any).status;
             const consentStatus = normalizeConsentStatus(String(rawConsentStatus || ''));
             const isConsentPending = consentStatus === 'PENDING';
             const canCollectSignature = consentStatus !== 'GRANTED';
@@ -378,6 +391,8 @@ export default function PatientsPage() {
               <Fragment key={`patient-fragment-${participantId}`}>
                 <tr key={`patient-row-${index}-${participantId}`} data-testid={`patient-row-${participantId}`}>
                   <td>{participantId}</td>
+                  <td>{patient.recordNumber || ''}</td>
+                  <td>{patient.birthDate || ''}</td>
                   <td>
                     <div style={styles.consentStatusCell}>
                       <StatusBadge status={consentStatus} />
@@ -386,70 +401,48 @@ export default function PatientsPage() {
                   {canViewFullData ? (
                     <td>
                       <div style={styles.consentActions} className="consent-actions">
-                        {canCollectSignature ? (
-                          <Button
-                            data-testid={`collect-signature-button-${participantId}`}
-                            variant="primary"
-                            onClick={() => handleOpenSignatureModal(participantId)}
-                            style={styles.consentActionButton}
-                            className="consent-action-button"
-                          >
-                            {getPatientsActionLabel('patients.collectSignature', 'Collect Signature', 'Recolectar firma')}
-                          </Button>
-                        ) : (
-                          <span style={styles.consentHint}>{t('patients.signed')}</span>
-                        )}
-                        <Button
-                          data-testid={`send-tcle-link-button-${participantId}`}
-                          variant="secondary"
-                          onClick={() => handleSendTcleLink(participantId)}
-                          disabled={resendingConsentFor === participantId}
-                          style={styles.consentActionButton}
-                          className="consent-action-button"
-                        >
-                          {resendingConsentFor === participantId
-                            ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
-                            : 'Enviar Link TCLE'}
-                        </Button>
-                        {isConsentPending && (
-                          <Button
-                            data-testid={`resend-consent-button-${participantId}`}
-                            variant="secondary"
-                            onClick={async () => {
-                              const trimmedId = String(participantId || '').trim();
-                              if (!trimmedId) return;
-                              setResendingConsentFor(trimmedId);
-                              try {
-                                await patientService.resendConsentNotification(trimmedId);
-                                await loadPatients();
-                                alert(t('patients.notificationsResent'));
-                              } catch (err: any) {
-                                const errorMsg = err.response?.data?.message || err.message || t('patients.notificationsResendError');
-                                alert(errorMsg);
-                              } finally {
-                                setResendingConsentFor(null);
-                              }
-                            }}
-                            disabled={resendingConsentFor === participantId}
-                            style={styles.consentActionButton}
-                            className="consent-action-button"
-                          >
-                            {resendingConsentFor === participantId
-                              ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
-                              : getPatientsActionLabel('patients.resendNotifications', 'Resend Notifications', 'Reenviar notificaciones')}
-                          </Button>
-                        )}
-                        {hasConsentRecord(String(rawConsentStatus || '')) && (
-                          <Button
-                            data-testid={`consent-history-button-${participantId}`}
-                            variant="secondary"
-                            onClick={() => navigate(`/consents?participantId=${encodeURIComponent(participantId)}`)}
-                            style={styles.consentActionButton}
-                            className="consent-action-button"
-                          >
-                            Histórico do TCLE
-                          </Button>
-                        )}
+                        <div>
+                          {canCollectSignature && (
+                            <Button
+                              data-testid={`collect-signature-button-${participantId}`}
+                              variant="primary"
+                              onClick={() => handleOpenSignatureModal(participantId)}
+                              style={styles.consentActionButton}
+                              className="consent-action-button"
+                            >
+                              {getPatientsActionLabel('patients.collectSignature', 'Collect Signature', 'Recolectar firma')}
+                            </Button>
+                          )}
+                        </div>
+                        <div>
+                          {isConsentPending && (
+                            <Button
+                              data-testid={`send-tcle-link-button-${participantId}`}
+                              variant="secondary"
+                              onClick={() => handleSendTcleLink(participantId)}
+                              disabled={resendingConsentFor === participantId}
+                              style={styles.consentActionButton}
+                              className="consent-action-button"
+                            >
+                              {resendingConsentFor === participantId
+                                ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
+                                : 'Enviar TCLE por e-mail'}
+                            </Button>
+                          )}
+                        </div>
+                        <div>
+                          {hasConsentRecord(String(rawConsentStatus || '')) && (
+                            <Button
+                              data-testid={`consent-history-button-${participantId}`}
+                              variant="secondary"
+                              onClick={() => navigate(`/consents?participantId=${encodeURIComponent(participantId)}`)}
+                              style={styles.consentActionButton}
+                              className="consent-action-button"
+                            >
+                              Histórico do TCLE
+                            </Button>
+                          )}
+                        </div>
                         <div className="table-actions">
                           <button
                             data-testid={`edit-patient-button-${participantId}`}
@@ -485,9 +478,13 @@ export default function PatientsPage() {
       </Card>
       )}
 
-      <Modal isOpen={isSignatureModalOpen} onClose={handleCloseSignatureModal} title={t('patients.digitalSignature')}>
-        <SignaturePad onConfirm={handleConfirmSignature} onCancel={handleCloseSignatureModal} />
-      </Modal>
+      <InPersonConsentModal
+        isOpen={isSignatureModalOpen}
+        participantId={activeParticipantId}
+        title={t('patients.digitalSignature')}
+        onClose={handleCloseSignatureModal}
+        onSaved={loadPatients}
+      />
 
       {showSearchResults && (
         <div style={{ 

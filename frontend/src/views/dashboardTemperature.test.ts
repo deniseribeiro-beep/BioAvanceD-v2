@@ -51,15 +51,33 @@ describe('buildTemperatureSeries', () => {
     expect(series[0].latest.temperatureCelsius).toBe(-81);
   });
 
-  it('keeps the -90 to -50 domain for readings near -80, over the plotted time range', () => {
+  it('fits the domain around readings near -80, over the plotted time range', () => {
     const chart = buildTemperatureSeries([reading('a', -79.4, at(9)), reading('b', -81.6, at(3))]);
-    expect(chart.domain).toEqual({ min: -90, max: -50 });
+    expect(chart.domain).toEqual({ min: -84, max: -77 });
     expect(chart.timeRange).toEqual({ start: Date.parse(at(3)), end: Date.parse(at(9)) });
   });
 
-  it('widens the domain to draw an excursion above -50 or below -90', () => {
-    expect(buildTemperatureSeries([reading('a', -47.5, at(9))]).domain).toEqual({ min: -90, max: -45 });
-    expect(buildTemperatureSeries([reading('a', -101, at(9))]).domain).toEqual({ min: -103, max: -50 });
+  it('fits the domain to an excursion above -50 or below -90', () => {
+    expect(buildTemperatureSeries([reading('a', -47.5, at(9))]).domain).toEqual({ min: -50, max: -45 });
+    expect(buildTemperatureSeries([reading('a', -101, at(9))]).domain).toEqual({ min: -103, max: -99 });
+  });
+
+  it('leaves out a sensor whose last reading is more than half an hour behind the live one', () => {
+    const chart = buildTemperatureSeries([
+      reading('freezer', -50, at(40)),
+      reading('stale-cold', -77, at(0)),
+      reading('stale-warm', 25, at(1)),
+    ]);
+    expect(chart.series.map((item) => item.sensorId)).toEqual(['freezer']);
+    expect(chart.domain).toEqual({ min: -52, max: -48 });
+    expect(chart.timeRange).toEqual({ start: Date.parse(at(40)), end: Date.parse(at(40)) });
+  });
+
+  it('includes both a freezer reading and a warm reading in the same scale', () => {
+    expect(buildTemperatureSeries([
+      reading('warm', 25, at(9)),
+      reading('freezer', -77, at(3)),
+    ]).domain).toEqual({ min: -79, max: 27 });
   });
 
   it('returns no series, the default domain and no time range for no readings', () => {
@@ -78,9 +96,9 @@ describe('activeIncidents', () => {
     expect(activeIncidents(incidents).map((item) => item._id)).toEqual(['1', '3', '4']);
   });
 
-  it('keeps at most ten', () => {
+  it('keeps at most three', () => {
     const incidents = Array.from({ length: 15 }, (_, index) => ({ _id: String(index), status: 'open' }));
-    expect(DASHBOARD_ALERT_LIMIT).toBe(10);
-    expect(activeIncidents(incidents).map((item) => item._id)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
+    expect(DASHBOARD_ALERT_LIMIT).toBe(3);
+    expect(activeIncidents(incidents).map((item) => item._id)).toEqual(['0', '1', '2']);
   });
 });

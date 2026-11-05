@@ -11,6 +11,7 @@ import InlineStorageMovementPanel from './InlineStorageMovementPanel';
 import type { Sample } from '../../types/models';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 import { getStorageLabel, buildSprecSummary } from './sampleListFormatters';
+import InventoryBoxGrid from './InventoryBoxGrid';
 import { resolveSampleLifecycleStatus } from '../../foundation/contracts';
 import { BLOCKED_SPECIMEN_STATUSES, resolveSpecimenStatus } from '../../utils/sampleHelpers';
 
@@ -162,6 +163,8 @@ export default function SamplesPageView({
             </p>
           </div>
         </div>
+
+        <InventoryBoxGrid samples={filteredSamples} t={t} />
 
         <Table>
           <thead>

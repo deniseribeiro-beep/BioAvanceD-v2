@@ -1,4 +1,5 @@
 const consentService = require('../services/consent.service');
+const consentEvidence = require('../services/consentEvidence.service');
 const patientService = require('../services/patient.service');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
@@ -677,6 +678,13 @@ class ConsentController {
 
       return res.status(200).json({ success: true, data: history });
     } catch (error) {
+      if (error.statusCode === 400) {
+        return res.status(400).json({
+          success: false,
+          error: 'ID de consentimento inválido',
+          message: error.message
+        });
+      }
       logger.error('Erro ao buscar histórico do consentimento:', error.message);
       return res.status(400).json({
         success: false,
@@ -723,15 +731,80 @@ class ConsentController {
         });
       }
 
+      const visibleConsent = { ...consent };
+      delete visibleConsent.signedTcleEncryption;
+      delete visibleConsent.evidenceEncryption;
       return res.status(200).json({
         success: true,
-        data: consent
+        data: visibleConsent
       });
     } catch (error) {
       logger.error('Erro ao buscar consentimento:', error.message);
       return res.status(500).json({
         success: false,
         error: 'Erro ao buscar consentimento',
+        message: error.message
+      });
+    }
+  }
+
+  async getSignedTcle(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const consent = await consentService.findConsentById(db, req.params.id);
+      if (!consent) {
+        return res.status(404).json({
+          success: false,
+          error: 'Consentimento não encontrado'
+        });
+      }
+
+      const patient = await patientService.getPatient(db, consent.participantId);
+      if (!patient) {
+        return res.status(404).json({
+          success: false,
+          error: 'Paciente não encontrado'
+        });
+      }
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
+      const pdf = consentEvidence.readSignedTcle(consent);
+      if (!pdf) {
+        return res.status(404).json({
+          success: false,
+          error: 'Termo assinado não encontrado'
+        });
+      }
+
+      const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `${disposition}; filename="tcle.pdf"`);
+      return res.status(200).send(pdf);
+    } catch (error) {
+      if (error.statusCode === 400 || error.statusCode === 409) {
+        return res.status(error.statusCode).json({
+          success: false,
+          error: error.message
+        });
+      }
+      logger.error('Erro ao ler o TCLE assinado:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao ler o TCLE assinado',
         message: error.message
       });
     }
@@ -778,10 +851,40 @@ class ConsentController {
         });
       }
 
+      let consent = null;
+      try {
+        consent = await consentService.getPatientConsent(db, result.participantId);
+      } catch (consentError) {
+        logger.error('Erro ao carregar o consentimento do painel:', consentError.message);
+        return res.status(503).json({
+          success: false,
+          error: 'Termo de consentimento indisponível'
+        });
+      }
+
+      const derived = consent?.currentStateDerived || null;
+      const inForce = consent && consent.status === 'ACTIVE' && derived !== 'revoked' && derived !== 'superseded';
+      // An in-person signature can leave the patient row pending while the
+      // consent itself is already in force. The panel follows the consent.
+      let panel = 'pending';
+      if (inForce) panel = 'manage';
+      else if (consent && (consent.status === 'REVOKED' || derived === 'revoked' || derived === 'superseded')) panel = 'closed';
+
       return res.status(200).json({
         success: true,
         data: {
           ...result,
+          panel,
+          consent: consent
+            ? {
+              participantId: consent.participantId || result.participantId,
+              status: consent.status,
+              currentStateDerived: derived,
+              signedAt: consent.signedAt || null,
+              hasSignedTcle: Boolean(consent.signedTcleDocumentUri),
+              effectivePermissions: consent.effectivePermissions || consent.responses || {},
+            }
+            : null,
           template: template
             ? {
               id: String(template._id),
@@ -877,6 +980,96 @@ class ConsentController {
         return res.status(503).json({
           success: false,
           error: 'Não foi possível registrar o consentimento'
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'Link inválido ou expirado'
+      });
+    }
+  }
+
+  async revokeConsentToken(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const patientId = req.body.patientId || req.body.participantId;
+      const token = req.body.token;
+      const result = await patientService.revokeConsentByToken(db, String(patientId || ''), String(token || ''), {
+        scope: req.body.scope,
+        reason: req.body.reason,
+        location: req.body.location,
+      });
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      logger.error('Erro ao revogar consentimento pelo painel:', error.message);
+      if (patientService.isConsentManifestationRejection(error)) {
+        return res.status(422).json({
+          success: false,
+          error: 'Não há consentimento em vigor para revogar',
+          details: ['Não há consentimento em vigor para revogar']
+        });
+      }
+      if (!patientService.isConsentTokenRejection(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'Não foi possível registrar a revogação'
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'Link inválido ou expirado'
+      });
+    }
+  }
+
+  // The emailed panel has no staff session. The same token that opens it
+  // is the credential for this participant's signed file, and nothing else.
+  async getSignedTcleByToken(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const patientId = req.body.patientId || req.body.participantId;
+      const token = req.body.token;
+      const result = await patientService.validateConsentToken(db, String(patientId || ''), String(token || ''));
+      const consent = await consentService.getPatientConsent(db, result.participantId);
+      const pdf = consent ? consentEvidence.readSignedTcle(consent) : null;
+      if (!pdf) {
+        return res.status(404).json({
+          success: false,
+          error: 'Termo assinado não encontrado'
+        });
+      }
+
+      const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `${disposition}; filename="tcle.pdf"`);
+      return res.status(200).send(pdf);
+    } catch (error) {
+      if (error.statusCode === 409) {
+        logger.error('Erro ao ler o TCLE assinado pelo painel:', error.message);
+        return res.status(409).json({
+          success: false,
+          error: 'Termo assinado não encontrado'
+        });
+      }
+      logger.error('Erro ao ler o TCLE assinado pelo painel:', error.message);
+      if (!patientService.isConsentTokenRejection(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'Não foi possível abrir o termo assinado'
         });
       }
       return res.status(400).json({

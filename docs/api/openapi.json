@@ -31895,6 +31895,362 @@
         }
       }
     },
+    "/api/e-consent/consents/{id}/signed-tcle": {
+      "get": {
+        "tags": [
+          "e-consent"
+        ],
+        "summary": "Open the signed consent PDF for a staff member",
+        "description": "Gates: authenticate, requireRole(3, 4), requireOrganizationScope. The file is the PDF stored with the consent. download=1 sends it as an attachment; otherwise it is inline. The 403 is a participant outside the caller's organization. The 404 is an unknown consent, an unknown participant, or a consent with no signed file. The 409 is a stored file whose hash no longer matches the consent.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The consent: its 24-character _id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "download",
+            "in": "query",
+            "description": "1 sends the PDF as an attachment. Any other value, or none, sends it inline.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The signed PDF.",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The consent id cannot be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The participant belongs to another organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The consent, the participant, or the signed file is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The stored file does not match the hash recorded on the consent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The file could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available. Also returned by authenticate.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/e-consent/consent-tokens/revoke": {
+      "post": {
+        "tags": [
+          "e-consent"
+        ],
+        "summary": "Revoke the consent in force from the participant panel",
+        "description": "Gates: none. The token is the credential, so the route carries no session and no 401. Outside the test environment the route also sits behind the consent limiter and answers 429 over it. patientId (or participantId) and token come from the body. The 400 is an unknown participant, a wrong token or an expired token, and it carries the opaque message Link invalido ou expirado. The 422 is a token that is valid while no consent is in force, and its body names details. A full revocation also quarantines the participant's samples; a quarantine failure is logged and the revocation still answers 200.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "patientId": {
+                    "type": "string",
+                    "description": "The participant."
+                  },
+                  "participantId": {
+                    "type": "string",
+                    "description": "Alias of patientId."
+                  },
+                  "token": {
+                    "type": "string",
+                    "description": "The panel token the participant holds."
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Permission keys to revoke. Absent or empty revokes the consent as a whole."
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "location": {
+                    "type": "string",
+                    "description": "Where the participant recorded the revocation."
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The revocation is recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "participantId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "currentStateDerived": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "effectivePermissions": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "required": [
+                            "participantId",
+                            "status"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The link is invalid or expired (Link invalido ou expirado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The token is valid and there is no consent in force to revoke. The body includes details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over the consent limiter (outside the test environment only): 10 requests a minute per client, or 100 where CONSENT_RATE_LIMIT_RELAXED is set outside production. The body is the text Muitas requisicoes. Tente novamente mais tarde., not JSON.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available, or the revocation could not be recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/e-consent/consent-tokens/signed-tcle": {
+      "post": {
+        "tags": [
+          "e-consent"
+        ],
+        "summary": "Open the signed consent PDF from the participant panel",
+        "description": "Gates: none. The token is the credential, so the route carries no session and no 401. Outside the test environment the route also sits behind the consent limiter and answers 429 over it. patientId (or participantId) and token come from the body. download=1 sends the PDF as an attachment; otherwise it is inline. A missing file and a file whose hash no longer matches both answer 404-shaped text Termo assinado nao encontrado; the hash mismatch is status 409. The 400 is an unknown participant, a wrong token or an expired token.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "download",
+            "in": "query",
+            "description": "1 sends the PDF as an attachment. Any other value, or none, sends it inline.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "patientId": {
+                    "type": "string",
+                    "description": "The participant."
+                  },
+                  "participantId": {
+                    "type": "string",
+                    "description": "Alias of patientId."
+                  },
+                  "token": {
+                    "type": "string",
+                    "description": "The panel token the participant holds."
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The signed PDF.",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The link is invalid or expired (Link invalido ou expirado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This participant has no signed file (Termo assinado nao encontrado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The stored file does not match the hash recorded on the consent. The body still says Termo assinado nao encontrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over the consent limiter (outside the test environment only): 10 requests a minute per client, or 100 where CONSENT_RATE_LIMIT_RELAXED is set outside production. The body is the text Muitas requisicoes. Tente novamente mais tarde., not JSON.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available, or the file could not be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/compliance/dashboard": {
       "get": {
         "tags": [

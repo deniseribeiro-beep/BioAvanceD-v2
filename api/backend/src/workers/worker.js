@@ -72,6 +72,15 @@ try {
   logger.warn('Job daily-merkle não registrado:', err.message || err);
 }
 
+try {
+  const consentExpiryJob = require('./jobs/consent-expiry.job');
+  if (consentExpiryJob && typeof consentExpiryJob.scheduleNextRun === 'function') {
+    consentExpiryJob.scheduleNextRun();
+  }
+} catch (err) {
+  logger.warn('Job de vencimento do TCLE não registrado:', err.message || err);
+}
+
 // #977/#979: deliberate posture. A Redis configuration fault is fatal whether
 // or not Redis answers: validateRedisOnly() and getRedisInstance() run before
 // the connectivity loop, so an invalid REDIS_URL, a missing production
