@@ -108,7 +108,7 @@ function rowToBundleEntries(row, index) {
             ? { url: 'urn:bioavanced:sprecs-raw', valueString: clean(row.sprecs_raw) }
             : null,
           clean(row.processing_unknown)
-            ? { url: 'urn:bioavanced:processing-unknown', valueBoolean: /^true|sim|1$/i.test(clean(row.processing_unknown)) }
+            ? { url: 'urn:bioavanced:processing-unknown', valueBoolean: /^(true|sim|1)$/i.test(clean(row.processing_unknown)) }
             : null,
         ].filter(Boolean),
       },
@@ -193,7 +193,8 @@ export async function convertExcelFileToFhirBundle(file) {
   }
 
   const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
-  const headers = Object.keys(rows[0] || {});
+  const [headerRow = []] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+  const headers = headerRow.map(String);
   const missingColumns = REQUIRED_COLUMNS.filter((column) => !headers.includes(column));
 
   if (missingColumns.length > 0) {
