@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import AnalysisUpload from './AnalysisUpload.jsx';
 import { analysisFileService } from '../services/api';
@@ -10,8 +10,15 @@ vi.mock('../services/api', () => ({
   },
 }));
 
-const validateSample = vi.mocked(analysisFileService.validateSample);
-const upload = vi.mocked(analysisFileService.upload);
+// validateSample resolves to the Axios response, whose body is the result.
+type ValidationBody = { success: boolean; error?: string; sample?: Record<string, string>; patient?: { _id: string } };
+type ProgressEvent = { loaded: number; total?: number };
+const validateSample = analysisFileService.validateSample as unknown as Mock<
+  (id: string) => Promise<{ data: ValidationBody }>
+>;
+const upload = analysisFileService.upload as unknown as Mock<
+  (fd: FormData, cb: (e: ProgressEvent) => void) => Promise<unknown>
+>;
 
 const TYPED_PLACEHOLDER = 'Digite o ID, código de barras ou escaneie QR code';
 const QR_PLACEHOLDER = 'Escaneie o código de barras/QR code';
@@ -44,8 +51,7 @@ const makeFile = (name: string, size: number) => {
   return f;
 };
 
-// Scans `id` through the QR input, which is the component's only path that
-// calls validateSample (see the typed-input case below).
+// Scans `id` through the QR input, which validates it at once.
 const scan = async (id: string) => {
   fireEvent.click(screen.getByRole('button', { name: /QR Code/ }));
   await act(async () => {
@@ -53,7 +59,7 @@ const scan = async (id: string) => {
   });
 };
 
-const validSample = { success: true, sample: { specimenId: 'SP-1', barcode: 'BC-9' }, patient: { _id: 'p1' } };
+const validSample = { data: { success: true, sample: { specimenId: 'SP-1', barcode: 'BC-9' }, patient: { _id: 'p1' } } };
 
 beforeEach(() => {
   validateSample.mockReset();
@@ -132,7 +138,7 @@ describe('AnalysisUpload sample validation', () => {
   });
 
   it('falls back to the sample _id when it has no specimenId', async () => {
-    validateSample.mockResolvedValue({ success: true, sample: { _id: 'obj-42', barcode: 'BC-1' } });
+    validateSample.mockResolvedValue({ data: { success: true, sample: { _id: 'obj-42', barcode: 'BC-1' } } });
     const { container } = render(<AnalysisUpload />);
     await scan('AM-2');
     expect(validationBox(container)?.textContent).toContain('✓ Amostra válida: obj-42 (BC-1)');
@@ -152,7 +158,7 @@ describe('AnalysisUpload sample validation', () => {
     ['the response error', { success: false, error: 'Sem consentimento' }, 'Sem consentimento'],
     ['the default text', { success: false }, 'Falha na validação'],
   ])('an unsuccessful response shows %s and keeps the button disabled', async (_n, response, shown) => {
-    validateSample.mockResolvedValue(response);
+    validateSample.mockResolvedValue({ data: response });
     const { container } = render(<AnalysisUpload />);
     await scan('AM-4');
     const box = validationBox(container) as HTMLElement;
@@ -194,19 +200,150 @@ describe('AnalysisUpload sample validation', () => {
     expect(typedInput()).toBeInTheDocument();
   });
 
-  // Pins bug #1444: the 800 ms timer compares the typed value with the
-  // sampleId captured before the keystroke, so a typed id never reaches
-  // validateSample. The fix for #1444 flips this case.
-  it('pinned bug #1444: a typed id updates the field but sends no validation request after 800 ms', () => {
+  // #1444: a typed id is validated once typing pauses for 800 ms, and only
+  // the latest value is.
+  it('a typed id is validated after 800 ms and enables the send button', async () => {
     vi.useFakeTimers();
-    render(<AnalysisUpload />);
+    validateSample.mockResolvedValue(validSample);
+    const { container } = render(<AnalysisUpload />);
     fireEvent.change(typedInput(), { target: { value: 'AM-6' } });
     expect(typedInput().value).toBe('AM-6');
     act(() => {
-      vi.advanceTimersByTime(800);
+      vi.advanceTimersByTime(799);
     });
     expect(validateSample).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(validateSample).toHaveBeenCalledTimes(1);
+    expect(validateSample).toHaveBeenCalledWith('AM-6');
+    expect(validationBox(container)?.textContent).toContain('✓ Amostra válida: SP-1 (BC-9)');
+    expect(sendButton()).toBeEnabled();
+  });
+
+  it('a typed value superseded within 800 ms is not validated; only the latest is', async () => {
+    vi.useFakeTimers();
+    validateSample.mockResolvedValue(validSample);
+    render(<AnalysisUpload />);
+    fireEvent.change(typedInput(), { target: { value: 'AM-6' } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    fireEvent.change(typedInput(), { target: { value: 'AM-61' } });
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(validateSample).toHaveBeenCalledTimes(1);
+    expect(validateSample).toHaveBeenCalledWith('AM-61');
+  });
+
+  it('a scan cancels a pending typed validation', async () => {
+    vi.useFakeTimers();
+    validateSample.mockResolvedValue(validSample);
+    render(<AnalysisUpload />);
+    fireEvent.change(typedInput(), { target: { value: 'AM-6' } });
+    await scan('AM-8');
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(validateSample).toHaveBeenCalledTimes(1);
+    expect(validateSample).toHaveBeenCalledWith('AM-8');
+  });
+
+  it('a typed id is validated without its surrounding spaces', async () => {
+    vi.useFakeTimers();
+    validateSample.mockResolvedValue(validSample);
+    render(<AnalysisUpload />);
+    fireEvent.change(typedInput(), { target: { value: ' AM-9 ' } });
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(validateSample).toHaveBeenCalledTimes(1);
+    expect(validateSample).toHaveBeenCalledWith('AM-9');
+  });
+
+  it('a late response for a superseded typed id is discarded; the box and send button follow the latest id', async () => {
+    vi.useFakeTimers();
+    const first = deferred<{ data: ValidationBody }>();
+    const second = deferred<{ data: ValidationBody }>();
+    validateSample.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { container } = render(<AnalysisUpload />);
+    fireEvent.change(typedInput(), { target: { value: 'GOOD' } });
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    fireEvent.change(typedInput(), { target: { value: 'BAD' } });
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(validateSample.mock.calls).toEqual([['GOOD'], ['BAD']]);
+    await act(async () => first.resolve(validSample));
+    expect(validationBox(container)).toBeNull();
+    expect(container.querySelector('.analysis-upload-validating')?.textContent).toBe('Validando amostra...');
     expect(sendButton()).toBeDisabled();
+    await act(async () => second.resolve({ data: { success: false, error: 'Sem consentimento' } }));
+    expect(typedInput().value).toBe('BAD');
+    expect(validationBox(container)?.textContent).toBe('✗ Erro: Sem consentimento');
+    expect(container.querySelector('.analysis-upload-validating')).toBeNull();
+    expect(sendButton()).toBeDisabled();
+  });
+
+  it('a late failure for a superseded typed id is discarded', async () => {
+    vi.useFakeTimers();
+    const first = deferred<{ data: ValidationBody }>();
+    validateSample.mockReturnValueOnce(first.promise).mockResolvedValueOnce(validSample);
+    const { container } = render(<AnalysisUpload />);
+    fireEvent.change(typedInput(), { target: { value: 'AM-6' } });
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    fireEvent.change(typedInput(), { target: { value: 'AM-61' } });
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    await act(async () => first.reject(new Error('Network Error')));
+    expect(validationBox(container)?.textContent).toContain('✓ Amostra válida: SP-1 (BC-9)');
+    expect(sendButton()).toBeEnabled();
+  });
+
+  it('a new scan clears the previous result while it validates', async () => {
+    const d = deferred<{ data: ValidationBody }>();
+    validateSample.mockResolvedValueOnce(validSample).mockReturnValueOnce(d.promise);
+    const { container } = render(<AnalysisUpload />);
+    await scan('AM-1');
+    expect(sendButton()).toBeEnabled();
+    await scan('AM-2');
+    expect(validationBox(container)).toBeNull();
+    expect(sendButton()).toBeDisabled();
+    await act(async () => d.resolve(validSample));
+    expect(sendButton()).toBeEnabled();
+  });
+
+  it('editing a validated id clears its result until the new id is validated', async () => {
+    vi.useFakeTimers();
+    validateSample.mockResolvedValue(validSample);
+    const { container } = render(<AnalysisUpload />);
+    await scan('AM-1');
+    expect(sendButton()).toBeEnabled();
+    fireEvent.change(typedInput(), { target: { value: 'AM-12' } });
+    expect(validationBox(container)).toBeNull();
+    expect(sendButton()).toBeDisabled();
+    await act(async () => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(validateSample).toHaveBeenLastCalledWith('AM-12');
+    expect(sendButton()).toBeEnabled();
+  });
+
+  it('editing the id while a validation is in flight drops its "Validando amostra..."', async () => {
+    const d = deferred<typeof validSample>();
+    validateSample.mockReturnValue(d.promise);
+    const { container } = render(<AnalysisUpload />);
+    await scan('AM-3');
+    fireEvent.blur(screen.getByPlaceholderText(QR_PLACEHOLDER));
+    expect(container.querySelector('.analysis-upload-validating')).not.toBeNull();
+    fireEvent.change(typedInput(), { target: { value: 'AM-30' } });
+    expect(container.querySelector('.analysis-upload-validating')).toBeNull();
   });
 
   it('clearing the typed id removes a previous validation result', async () => {
@@ -230,7 +367,7 @@ describe('AnalysisUpload upload', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
-  it('when the id was cleared while a scan was validating, a click asks for the id and sends nothing', async () => {
+  it('when the id was cleared while a scan was validating, its late response is dropped and send stays disabled', async () => {
     const d = deferred<typeof validSample>();
     validateSample.mockReturnValue(d.promise);
     const { container } = render(<AnalysisUpload />);
@@ -239,19 +376,18 @@ describe('AnalysisUpload upload', () => {
     fireEvent.blur(screen.getByPlaceholderText(QR_PLACEHOLDER));
     fireEvent.change(typedInput(), { target: { value: '' } });
     await act(async () => d.resolve(validSample));
-    expect(sendButton()).toBeEnabled();
-    fireEvent.click(sendButton());
-    expect(container.querySelector('.analysis-upload-error')?.textContent).toBe('Informe o ID da amostra');
+    expect(validationBox(container)).toBeNull();
+    expect(sendButton()).toBeDisabled();
     expect(upload).not.toHaveBeenCalled();
   });
 
   it('sends the file and sample id, tracks progress, then clears the form', async () => {
     validateSample.mockResolvedValue(validSample);
     const d = deferred<unknown>();
-    let onProgress: (e: { loaded: number; total?: number }) => void = () => {};
-    upload.mockImplementation((_fd: FormData, cb: typeof onProgress) => {
+    let onProgress: (e: ProgressEvent) => void = () => {};
+    upload.mockImplementation((_fd, cb) => {
       onProgress = cb;
-      return d.promise as never;
+      return d.promise;
     });
     const { container } = render(<AnalysisUpload />);
     const file = makeFile('scan.png', 2048);
@@ -293,7 +429,7 @@ describe('AnalysisUpload upload', () => {
 
   it('picking a new file clears the success message', async () => {
     validateSample.mockResolvedValue(validSample);
-    upload.mockResolvedValue({} as never);
+    upload.mockResolvedValue({});
     const { container } = render(<AnalysisUpload />);
     pickFile(makeFile('a.txt', 1));
     await scan('AM-11');
@@ -307,7 +443,7 @@ describe('AnalysisUpload upload', () => {
 
   it('picking a new file after a failed upload resets its progress and clears its error', async () => {
     validateSample.mockResolvedValue(validSample);
-    upload.mockImplementation(async (_fd: FormData, cb: (e: { loaded: number; total: number }) => void) => {
+    upload.mockImplementation(async (_fd, cb) => {
       cb({ loaded: 1, total: 2 });
       throw new Error('falhou');
     });
@@ -337,7 +473,7 @@ describe('AnalysisUpload upload', () => {
   it('a retry after a failed upload clears the earlier error once it starts', async () => {
     validateSample.mockResolvedValue(validSample);
     const d = deferred<unknown>();
-    upload.mockRejectedValueOnce(new Error('falhou')).mockReturnValueOnce(d.promise as never);
+    upload.mockRejectedValueOnce(new Error('falhou')).mockReturnValueOnce(d.promise);
     const { container } = render(<AnalysisUpload />);
     pickFile(makeFile('a.txt', 1));
     await scan('AM-17');
