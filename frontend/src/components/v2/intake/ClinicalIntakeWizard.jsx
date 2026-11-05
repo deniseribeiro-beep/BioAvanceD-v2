@@ -30,21 +30,6 @@ import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
 import { useCreateOrganizationChoice } from '../../../hooks/useCreateOrganizationChoice';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const CANONICAL_PREVIEW_UNAVAILABLE = Object.freeze({
-  model_version: 'RCS-GOV-1.0',
-  matrix_type: '',
-  governance_status: null,
-  governance_failure_reasons: [],
-  p_bio: null,
-  rcs_score: null,
-  score_based_grade: null,
-  final_grade: '',
-  grade_route: '',
-  axis_penalties: [],
-  calculation_trace: {},
-  previewUnavailable: true,
-});
-
 function normalizeDocumentValue(value) {
   return String(value || '').trim();
 }
@@ -89,11 +74,6 @@ function isValidCpfDocument(value) {
 function isValidPassportDocument(value) {
   const normalized = normalizeDocumentValue(value);
   return /^\d{5,20}$/.test(normalized);
-}
-
-function isValidProntuarioDocument(value) {
-  const normalized = normalizeDocumentValue(value);
-  return /^[A-Z0-9][A-Z0-9\s\-_.\/]{4,29}$/i.test(normalized);
 }
 
 function isValidCpfOrPassportDocument(value) {
@@ -251,11 +231,6 @@ function createPatientStepSchema(t) {
   }
   });
 }
-
-const clinicalStepSchema = z.object({
-  bloodPressure: z.string().trim().max(30, 'Blood pressure is too long').optional().or(z.literal('')),
-  clinicalObservations: z.string().trim().max(LIMITS.GENERIC_TEXT_MAX_LENGTH, 'Clinical notes are too long').optional().or(z.literal('')),
-});
 
 function createConsentStepSchema(t) {
   return z.object({
@@ -868,107 +843,6 @@ function formatBloodPressureInput(value) {
   return `${digits.slice(0, 3)}/${digits.slice(3)}`;
 }
 
-function normalizeRcsPreview(rawPreview, matrixType = '') {
-  const source = rawPreview && typeof rawPreview === 'object' ? rawPreview : {};
-  return {
-    model_version: source.model_version || source.modelVersion || 'RCS-GOV-1.0',
-    matrix_type: source.matrix_type || source.matrixType || matrixType || '',
-    governance_status: source.governance_status ?? source.governanceStatus ?? null,
-    governance_failure_reasons: Array.isArray(source.governance_failure_reasons)
-      ? source.governance_failure_reasons
-      : (Array.isArray(source.governanceFailureReasons) ? source.governanceFailureReasons : []),
-    p_bio: source.p_bio ?? source.pBio ?? null,
-    rcs_score: source.rcs_score ?? source.rcsScore ?? null,
-    score_based_grade: source.score_based_grade || source.scoreBasedGrade || null,
-    final_grade: source.final_grade || source.finalGrade || '',
-    grade_route: source.grade_route || source.gradeRoute || '',
-    axis_penalties: Array.isArray(source.axis_penalties)
-      ? source.axis_penalties
-      : (Array.isArray(source.axisPenalties) ? source.axisPenalties : []),
-    calculation_trace: source.calculation_trace && typeof source.calculation_trace === 'object'
-      ? source.calculation_trace
-      : (source.calculationTrace && typeof source.calculationTrace === 'object' ? source.calculationTrace : {}),
-    previewUnavailable: Boolean(source.previewUnavailable),
-  };
-}
-
-function formatRcsScore(value) {
-  if (value === null || value === undefined || value === '') {
-    return '-';
-  }
-
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue)) {
-    return String(value);
-  }
-
-  return String(Math.round(numericValue * 100) / 100);
-}
-
-function getGovernanceFailureText(qualityAssessment) {
-  const reasons = Array.isArray(qualityAssessment?.governance_failure_reasons)
-    ? qualityAssessment.governance_failure_reasons
-    : [];
-  return reasons.map((reason) => String(reason || '').trim()).filter(Boolean).join('; ');
-}
-
-function buildRcsPreviewLabel(qualityAssessment, t) {
-  if (qualityAssessment.previewUnavailable) {
-    return t('wizard.status.canonicalPreviewUnavailable', 'Preview canônico indisponível');
-  }
-
-  const grade = String(qualityAssessment.final_grade || '').trim() || '-';
-  const score = formatRcsScore(qualityAssessment.rcs_score);
-  return `Grade ${grade} • RCS ${score}`;
-}
-
-function buildRcsStatusLabel(qualityAssessment, fallbackLabel) {
-  const route = String(qualityAssessment?.grade_route || '').trim();
-  const failureText = getGovernanceFailureText(qualityAssessment);
-
-  if (qualityAssessment?.governance_status === 0) {
-    return failureText ? `${route || 'Governance failure'}: ${failureText}` : (route || 'Governance failure');
-  }
-
-  return route || fallbackLabel;
-}
-
-function getQualityTheme(finalGrade, t) {
-  if (!finalGrade) {
-    return {
-      cardClass: 'governance-card',
-      textClass: 'governance-score',
-      progressClass: 'governance-progress',
-      label: t('wizard.status.waitingCanonicalPreview', 'Aguardando preview canônico'),
-    };
-  }
-
-  if (finalGrade === 'A') {
-    return {
-      cardClass: 'governance-card governance-card--a',
-      textClass: 'governance-score governance-score--a',
-      progressClass: 'governance-progress governance-progress--a',
-      label: t('wizard.labels.qualityHigh', 'High quality'),
-    };
-  }
-
-  if (finalGrade === 'B') {
-    return {
-      cardClass: 'governance-card governance-card--b',
-      textClass: 'governance-score governance-score--b',
-      progressClass: 'governance-progress governance-progress--b',
-      label: t('wizard.labels.qualityAcceptable', 'Acceptable quality'),
-    };
-  }
-
-  return {
-    cardClass: 'governance-card governance-card--c',
-    textClass: 'governance-score governance-score--c',
-    progressClass: 'governance-progress governance-progress--c',
-    label: t('wizard.labels.qualityCompromised', 'Compromised sample'),
-  };
-}
-
 function createSampleStepSchema(t) {
   return z.object({
     sampleType: z.string().trim().min(1, t('wizard.validation.sampleType', 'Select the MIABIS sample type')),
@@ -1113,10 +987,6 @@ function createBiomarkerStepSchema(biomarkerItems = []) {
   );
 }
 
-function getStepError(error) {
-  return error?.issues?.[0]?.message || '';
-}
-
 function getFieldError(validation, fieldName) {
   return validation?.error?.issues?.find((issue) => issue.path?.[0] === fieldName)?.message || '';
 }
@@ -1130,14 +1000,6 @@ function formatBirthDateInput(value) {
   if (digits.length <= 2) return digits;
   if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
   return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
-}
-
-function formatCpfInput(value) {
-  const digits = digitsOnly(value).slice(0, 11);
-  if (digits.length <= 3) return digits;
-  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
-  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
 }
 
 function formatDocumentInput(value) {
@@ -1164,10 +1026,6 @@ function normalizeBirthDateForPayload(value) {
   // canonical.v1.participant's birthDate is format:'date' (bare YYYY-MM-DD,
   // #699) -- no time component, unlike a full ISO datetime.
   return `${year}-${month}-${day}`;
-}
-
-function buildPenaltyLog(qualityAssessment) {
-  return Array.isArray(qualityAssessment?.axis_penalties) ? qualityAssessment.axis_penalties : [];
 }
 
 function findOption(options = [], value = '') {
@@ -1241,8 +1099,8 @@ const SPREC_VERSION = 'SPREC-2.0';
 
 // canonical.v1.specimen's sprec (#699) is flat strings with required
 // top-level code/version -- buildCanonicalSprecPayload's {code, label,
-// ...extra} objects (shared with the quality-preview and sample-integrity
-// callers below, which need the fuller shape) don't match it. This
+// ...extra} objects (shared with the sample-integrity caller below, which
+// needs the fuller shape) don't match it. This
 // flattens to just the axis codes, dropping the extra applicable/required
 // flags and axis-object nesting the AJV schema doesn't allow.
 function buildIntakeSprecPayload(formData, matrixType, dictionary) {
@@ -1264,15 +1122,6 @@ function buildIntakeSprecPayload(formData, matrixType, dictionary) {
     code: String(formData.sprecCode || '').trim() || 'UNKNOWN',
     version: SPREC_VERSION,
     ...flat,
-  };
-}
-
-function buildQualityPreviewPayload(formData, matrixType) {
-  const dictionary = matrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
-  return {
-    source: 'frontend-intake-preview',
-    matrixType,
-    sprec: buildCanonicalSprecPayload(formData, matrixType, dictionary),
   };
 }
 
@@ -1562,7 +1411,24 @@ function applyIntakeOrganization(payload, intakeOrganizationId) {
   return payload;
 }
 
-export const _test = { buildSubmissionPayload, applyIntakeOrganization, createClinicalStepSchema };
+export const _test = {
+  buildSubmissionPayload,
+  applyIntakeOrganization,
+  createClinicalStepSchema,
+  getDictionarySlug,
+  mapDictionaryOptions,
+  getDiagnosisLocalizedLabel,
+  getCidDisplayLabel,
+  getCidAliases,
+  normalizeCidOption,
+  normalizeDiseaseBiomarker,
+  normalizeDiseasePhenotype,
+  buildBiomarkerValuesMap,
+  normalizeCidCode,
+  pickBestOrphaCandidate,
+  filterAndRankDiagnosisResults,
+  consolidateDiagnosisCandidates,
+};
 
 export default function ClinicalIntakeWizard(props) {
   const { t } = useLanguage();
