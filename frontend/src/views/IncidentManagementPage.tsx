@@ -133,8 +133,6 @@ export default function IncidentManagement() {
   };
 
   const handleAddNote = async (incidentId: string) => {
-    if (!noteText.trim()) return;
-
     try {
       await apiClient.post(`/incidents/${incidentId}/notes`, {
         userId: user?._id,
@@ -145,10 +143,8 @@ export default function IncidentManagement() {
       
       await fetchIncidents();
       setNoteText('');
-      if (selectedIncident) {
-        const updated = incidents.find(i => i._id === selectedIncident._id);
-        if (updated) setSelectedIncident(updated);
-      }
+      const updated = incidents.find(i => i._id === incidentId);
+      if (updated) setSelectedIncident(updated);
     } catch (err: any) {
       alert(err.response?.data?.message || err.response?.data?.error || err.message || t('incidents.errors.addNote', 'Erro ao adicionar nota'));
     }

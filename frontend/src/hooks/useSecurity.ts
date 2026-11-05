@@ -23,10 +23,6 @@ const extractErrorMessage = (error: unknown, fallback: string): string => {
     return apiError.response?.data?.message || apiError.message || fallback;
   }
 
-  if (error instanceof Error) {
-    return error.message;
-  }
-
   return fallback;
 };
 

@@ -87,9 +87,9 @@ export default function SampleLabelPage() {
   }, [id]);
 
   const downloadPrintJob = async () => {
-    if (!id) {
-      return;
-    }
+    // The button renders only once a label has loaded, which needs an id; this
+    // guard only narrows useParams' optional id for the type checker.
+    if (!id) return;
 
     setActionError('');
     setBusyAction('print-job');
