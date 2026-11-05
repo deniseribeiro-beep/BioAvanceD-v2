@@ -545,10 +545,6 @@ export const temperatureService = {
   getAll: () => api.get<ApiEnvelope<{ temperatures: Temperature[]; total: number; limit: number; skip: number }>>('/temperature'),
   // #1391 (RF009 AC1): a reading is read from InfluxDB by its telemetryReadingId.
   getById: (telemetryReadingId: string) => api.get<ApiEnvelope<Temperature>>(`/temperature/${encodeURIComponent(telemetryReadingId)}`),
-  viewControl: (sensorID?: string, policyID?: string) => 
-    api.get<any>('/temperature/control', { 
-      params: { sensorID, policyID } 
-    }), // Implementa User.viewTemperatureControl()
 };
 
 // ========== SENSOR SERVICES ==========

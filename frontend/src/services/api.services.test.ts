@@ -111,7 +111,6 @@ const rows: Row[] = [
   ['equipmentService.delete', () => equipmentService.delete(2), 'delete', ['/equipment/2']],
   ['temperatureService.getAll', () => temperatureService.getAll(), 'get', ['/temperature']],
   ['temperatureService.getById', () => temperatureService.getById('r/1'), 'get', ['/temperature/r%2F1']],
-  ['temperatureService.viewControl', () => temperatureService.viewControl('s1', 'p1'), 'get', ['/temperature/control', { params: { sensorID: 's1', policyID: 'p1' } }]],
   ['sensorService.getAll', () => sensorService.getAll(), 'get', ['/sensors']],
   ['sensorService.getById', () => sensorService.getById('s1'), 'get', ['/sensors/s1']],
   ['sensorService.create', () => sensorService.create({ name: 'S' } as any), 'post', ['/sensors', { name: 'S' }]],
