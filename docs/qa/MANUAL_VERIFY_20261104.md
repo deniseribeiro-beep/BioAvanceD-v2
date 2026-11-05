@@ -1,30 +1,39 @@
-# MANUAL_VERIFY — 2026-11-04 (QA live pass / entity forms)
+# MANUAL_VERIFY — recheck 2026-11-05
 
-Regra: o que não foi testável nesta sessão ou não está explícito em docs/código/contexto → SKIP.
+Homolog `http://127.0.0.1:8080` (VM `instance-20261029-155615`, túnel SSH local; IAP direto na porta 8080 continua 4033). Login `admin` / stack de teste.
 
-## Coberto nesta sessão (não precisa revalidar só por este pass)
+Regra deste pass: código só muda se o critério falhar. O único FAIL de layout já estava corrigido no commit `806453df` e não estava no bundle publicado. O frontend foi reconstruído na VM e reverificado.
 
-- Skill `.cursor/skills/qa-live-pass/SKILL.md`
-- Modal→página: organizations, collections (+governance), equipment, sensors, policies, quality-descriptions, report-templates, biomarker-associations
-- Unit/behaviour das listas + FormPages tocadas (incl. SystemManagement, Facility, Biomarker, rolePermissions)
-- E2E specs atualizados para URLs de form page: `organization-collection-management-ui.spec.ts`, `collection-governance-ui.spec.ts`
-- ui-gold DEMO_ROUTES com paths `/…/new` das novas forms
+## Resultado
 
-## Skips — verificação manual
+| ID | Resultado | O que foi visto |
+|----|-----------|-----------------|
+| SKIP-001 | PASS | Organização e coleção: `/new` é página, salvar volta à aba, a linha aparece. Registros de fumaça apagados. |
+| SKIP-002 | PASS | `/collections/:id/governance` abre com `collection-governance-panel`. Voltar recarrega a lista. O spec Playwright também registrou aprovação, contexto e suspensão. |
+| SKIP-003 | PASS | Equipamento, sensor e política: criar, voltar à aba, editar e apagar. |
+| SKIP-004 | PASS | Descrição de qualidade, modelo de relatório e associação de biomarcador: criar, voltar à lista e editar. Biomarcador não tem exclusão na UI; o registro de fumaça foi removido pela API. |
+| SKIP-005 | PASS | Edição real de organização, coleção, equipamento, sensor, política, qualidade, modelo e biomarcador. Regime de coleção já definido permanece bloqueado. |
+| SKIP-006 | PASS | Busca de organização, coleção, equipamento, sensor e política filtra e mostra o estado vazio. |
+| SKIP-007 | Fora deste pass | `e2e-gate.sh` não foi executado, por decisão. Os dois specs pedidos rodaram contra `:8080` e passaram. |
+| SKIP-008 | PASS | As páginas `/new` de organização, coleção, facility, qualidade, modelo e biomarcador abrem com Voltar, sem modal. |
+| SKIP-009 | PASS, com notas | 51 rotas do ui-gold que não são form page nova. Nenhuma com layout colapsado. H1 duplicado só em Segurança; corrigido no bundle e reverificado (um `h1`: "Gerenciamento do Sistema"). |
+| SKIP-010 | PASS | Esqueci a senha, envio de arquivo e restaurar backup abrem modal e a URL não muda. Confirmações curtas de exclusão continuam `confirm()` na própria lista. "Imprimir Etiquetas" abre a página `/samples/:id/label`, que já era rota do ui-gold. |
 
-| ID | Rota / UI | Por que skip | O que verificar manualmente | Critério de ok |
-|----|-----------|--------------|-----------------------------|----------------|
-| SKIP-001 | `http://127.0.0.1:8080` login + lista→form de org/coleção | Túnel IAP local `:8080` caiu após rebuild (reauth 4033 nesta sessão); FE **já rebuildado na VM** com `CollectionFormPage-*.js` | 1) Reabrir túnel IAP / login. 2) Sistema→Organizações→Nova Organização. 3) Salvar mín. e voltar à lista. Idem Coleções. | URL `/organizations/new` ou `/collections/new` (não modal); após salvar, volta à aba; CSS/ações ok |
-| SKIP-002 | `/collections/:id/governance` live | Precisa coleção seedada + IAP/login | Abrir Governança numa coleção existente; registrar/ver painel | Página dedicada com `collection-governance-panel`; Voltar recarrega lista |
-| SKIP-003 | Facility: `/equipment/new`, `/sensors/new`, `/policies/new` live | Sem browser autenticado nesta sessão | Em Facility, Novo Equipamento/Sensor/Política → preencher → salvar | Navega para form page; salva e volta à tab |
-| SKIP-004 | `/quality-descriptions/new`, `/reports/templates/new`, `/biomarker-associations/new` live | Sem browser autenticado | Criar um registro mínimo em cada superfície | Form page; lista atualiza após salvar |
-| SKIP-005 | Edit paths `/:id/edit` com ID real (todas entidades) | Sem seed/ID garantido na sessão | Editar uma linha existente de cada entidade migrada | Abre form preenchido; regime de coleção locked se já setado |
-| SKIP-006 | Busca client-side orgs/coleções/facility | Julgamento visual + dados reais | Digitar filtro nas listas; limpar | Filtra; empty state de busca quando nada casa |
-| SKIP-007 | `bash scripts/e2e-gate.sh` / job CI `e2e-tests` completo | Disco/tempo inviável nesta sessão | Rodar CI na PR ou `test:e2e:docker` com API | Specs org/coleção/governance + ui-gold paths novos verdes |
-| SKIP-008 | Smoke browser pós-deploy nas form pages | Deploy VM **feito** (`DEPLOY_ACCESS_DONE=2026-11-04T21:07:36Z`, proxy 200); falta smoke via túnel local (IAP 4033) | Reabrir IAP tunnel e visitar `/collections/new`, `/organizations/new`, facility/quality/templates/biomarker `/new` | Página form carrega; sem modal legado |
-| SKIP-009 | DEMO_ROUTES restantes (samples/:id, e-consent tokens, etc.) | Seed/demo-id / fluxos sem AC explícito para “clique total” | Smoke visual das rotas auth do ui-gold que você priorizar | Página carrega sem layout colapsado; sem H1 duplicado óbvio |
-| SKIP-010 | Modais que **permanecem** (forgot-password, upload, print, restore, confirms) | Fora do escopo Modal→página | Confirmar que ainda abrem como modal | Continua modal; não virou página por engano |
+## Notas de rotas sem dado real (SKIP-009)
 
-## Nenhum skip vazio
+Não são defeito de layout. Não foi inventado fluxo para elas.
 
-Lista acima é o entregável de verificação manual deste pass.
+- `/samples/demo-id`, `/samples/demo-id/label`, `/logs/demo-id`: a página abre e não há amostra ou log com esse id.
+- `/reports/demo-id`: título "Erro".
+- `/admin/tcle/edit/demo-template`: redireciona para `/admin/tcle/new`.
+- `/patient/e-consent/demo-token` e `/patient/e-consent/import/demo-token`: "Link inválido ou expirado."
+- `/patients/demo-id/consent`: link incompleto.
+
+## Playwright contra `:8080`
+
+- `organization-collection-management-ui.spec.ts`: 2 passed
+- `collection-governance-ui.spec.ts`: 1 passed, com `E2E_MONGO_URI` no Mongo publicado da VM (`127.0.0.1:27017`)
+
+## Efeito colateral
+
+Foi criado um backup em 2026-11-05 (cerca de 145 MB) só para abrir o modal de restauração. A restauração não foi confirmada.
