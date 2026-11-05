@@ -76,6 +76,9 @@ export default function ConsentTokenPage() {
   }, [params]);
 
   async function acceptConsent() {
+    // The accept button renders only with a loaded template and no error, and an
+    // invalid link always sets an error; this guard only narrows params and
+    // template for the type checker (#1445).
     if (!params.ok || !template) return;
     setSubmitting(true);
     setError('');
