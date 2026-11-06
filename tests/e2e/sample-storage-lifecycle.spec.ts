@@ -9,6 +9,16 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import {
+  sampleMongoId,
+  sampleOutboxEvents,
+  expectedPayloadHash,
+  expectedIdempotencyKey,
+  seedActiveSpecimenLabel,
+  removeSpecimenLabels,
+  countAbortedWrites,
+  closeOutboxDb,
+} from './helpers/queryOutbox';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -41,13 +51,44 @@ function validSampleFields() {
   };
 }
 
+// #1499: the canonical model release every outbox event carries
+// (foundation/readiness.js), the literal audit-chain-integrity.spec.ts uses.
+const CANONICAL_MODEL_RELEASE_ID = 'release-2.0.0';
+
+type OutboxEvent = Awaited<ReturnType<typeof sampleOutboxEvents>>[number];
+
+// [aggregateVersion, eventType, payload.custodyEventType ?? null] per event.
+function eventTuples(events: OutboxEvent[]) {
+  return events.map((e) => [e.aggregateVersion, e.eventType, e.payload?.custodyEventType ?? null]);
+}
+
+// #1499 (RF023 AC1/AC2, RNF019 C2): every event carries the versioned
+// contract, and its hash and key equal the outbox service's own formulas.
+function expectEventContract(events: OutboxEvent[], mongoId: string) {
+  for (const event of events) {
+    expect(event.eventTypeVersion).toBe('1');
+    expect(event.schemaVersion).toBe(1);
+    expect(event.canonicalModelReleaseId).toBe(CANONICAL_MODEL_RELEASE_ID);
+    expect(event.aggregateType).toBe('Sample');
+    expect(event.aggregateId).toBe(mongoId);
+    expect(event.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(event.payloadHash).toBe(expectedPayloadHash(event.payload));
+    expect(event.idempotencyKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(event.idempotencyKey).toBe(expectedIdempotencyKey(event));
+  }
+  expect(new Set(events.map((e) => e.idempotencyKey)).size).toBe(events.length);
+}
+
 test.describe('Sample storage lifecycle (#321) — real backend, withTransaction proof', () => {
   const seededStorageBoxes: SeededStorageBox[] = [];
+  const seededLabelCodes: string[] = [];
 
   test.afterAll(async () => {
     await Promise.all(
       seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
     );
+    await removeSpecimenLabels(seededLabelCodes).catch(() => {});
+    await closeOutboxDb();
     await closeSeedDb();
   });
 
@@ -77,6 +118,20 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect([201, 202]).toContain(create.status());
     const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
+
+    // #1499 (RF023 AC1/AC2, RNF019 C2): the create appends exactly three
+    // Sample events at versions 1..3 -- the allocation's custody event, the
+    // SPECIMEN_UPSERTED, then the register custody event -- each with the
+    // versioned contract.
+    const mongoId = await sampleMongoId(sampleId);
+    const createEvents = await sampleOutboxEvents(mongoId);
+    const createTuples = [
+      [1, 'CUSTODY_EVENT_RECORDED', 'allocate'],
+      [2, 'SPECIMEN_UPSERTED', null],
+      [3, 'CUSTODY_EVENT_RECORDED', 'register'],
+    ];
+    expect(eventTuples(createEvents)).toEqual(createTuples);
+    expectEventContract(createEvents, mongoId);
 
     // --- MoveSampleUseCase#execute -> withTransaction ---
     const moveWatch = await watchAuditTrail(request, apiBaseURL!, admin.token);
@@ -153,6 +208,82 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     const afterAllocateBody = await afterAllocate.json();
     expect(afterAllocateBody.data.box.boxId).toBe(boxA.boxId);
     expect(afterAllocateBody.data.box.position).toBe(boxA.positionCode);
+
+    // #1499: move, release and the re-allocate each add one custody event at
+    // the next version, and the contract still holds across all six.
+    const finalEvents = await sampleOutboxEvents(mongoId);
+    expect(eventTuples(finalEvents)).toEqual([
+      ...createTuples,
+      [4, 'CUSTODY_EVENT_RECORDED', 'move'],
+      [5, 'CUSTODY_EVENT_RECORDED', 'release'],
+      [6, 'CUSTODY_EVENT_RECORDED', 'allocate'],
+    ]);
+    expectEventContract(finalEvents, mongoId);
+  });
+
+  test('a create whose label issue fails rolls back its sample, movement, allocation and outbox events together (RF023 AC3, RNF019 C1)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const box = await seedStorageBoxLocation();
+    seededStorageBoxes.push(box);
+
+    // Opaque E2E<digits>-... codes pass the personal-data guard on barcodes.
+    const suffix = Date.now();
+    const taken = `E2E1499-${suffix}-T`;
+    const fresh = `E2E1499-${suffix}-F`;
+    const linkedProject = `E2E-1499-${suffix}`;
+    seededLabelCodes.push(taken, fresh);
+    await seedActiveSpecimenLabel(taken);
+
+    const createBody = (barcode: string) => ({
+      participantId: participant.participantId,
+      ...validSampleFields(),
+      linkedProject,
+      barcode,
+      boxId: box.boxId,
+      positionCode: box.positionCode,
+    });
+
+    // The barcode pre-check reads only samples.barcode, so it passes; the
+    // transaction then inserts, moves, allocates and appends the allocate
+    // custody event before the label insert hits the unique active-label
+    // index. The label message tells this apart from a STORAGE_COLLISION 409.
+    const failed = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: createBody(taken),
+    });
+    expect(failed.status()).toBe(409);
+    const failedBody = await failed.json();
+    expect(failedBody.message).toMatch(
+      /^Falha ao emitir a etiqueta da amostra: Valor E2E1499-\d+-T já ativo neste namespace$/
+    );
+
+    // Nothing the aborted transaction wrote is left; the only label is the seeded one.
+    expect(await countAbortedWrites({ linkedProject, barcode: taken, boxId: box.boxId })).toEqual({
+      samples: 0,
+      movements: 0,
+      birthMovements: 0,
+      custodyToBox: 0,
+      labels: 1,
+    });
+
+    // Control: the same position is free, so a fresh code creates, and the
+    // same queries now see exactly one of each (they are not vacuous).
+    const retried = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: createBody(fresh),
+    });
+    expect([201, 202]).toContain(retried.status());
+    expect(await countAbortedWrites({ linkedProject, barcode: fresh, boxId: box.boxId })).toEqual({
+      samples: 1,
+      movements: 2,
+      birthMovements: 1,
+      custodyToBox: 1,
+      labels: 1,
+    });
   });
 
   test('allocate rejects a target position already occupied by another sample (STORAGE_COLLISION)', async ({
