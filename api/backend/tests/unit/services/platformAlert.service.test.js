@@ -19,7 +19,9 @@ function httpSnapshot(requests, errors) {
 const noQueues = () => Promise.resolve([]);
 
 // A platformAlerts collection over an in-memory array, and the outbox count.
-function makeDb({ deadLetter = 0 } = {}) {
+// `backup` ({ history, policy }) adds backupHistory and backup_policy; without
+// it the backup reading fails and BACKUP_RPO stays unknown.
+function makeDb({ deadLetter = 0, backup } = {}) {
   const rows = [];
   let nextId = 1;
   const matches = (row, filter) => Object.entries(filter).every(([k, v]) => row[k] === v);
@@ -47,7 +49,21 @@ function makeDb({ deadLetter = 0 } = {}) {
     countDocuments: typeof deadLetter === 'function' ? vi.fn(deadLetter) : vi.fn().mockResolvedValue(deadLetter),
   };
   const collections = { platformAlerts, graph_projection_outbox: outbox };
-  return { collection: vi.fn((name) => collections[name]), rows, platformAlerts, outbox };
+  let backupHistory;
+  if (backup) {
+    backupHistory = {
+      findOne: vi.fn(async (filter, options = {}) => {
+        let found = backup.history.filter((row) => matches(row, filter));
+        if (options.sort && options.sort.completedAt === -1) {
+          found = [...found].sort((a, b) => b.completedAt - a.completedAt);
+        }
+        return found[0] || null;
+      }),
+    };
+    collections.backupHistory = backupHistory;
+    collections.backup_policy = { findOne: vi.fn(async () => backup.policy) };
+  }
+  return { collection: vi.fn((name) => collections[name]), rows, platformAlerts, outbox, backupHistory };
 }
 
 let dispatchSpy;
@@ -184,6 +200,52 @@ describe('platformAlert.service - runPlatformAlertCheck', () => {
 
     expect(db.platformAlerts.findOne.mock.calls[0][0]).toEqual({ alertKey: 'HTTP_ERROR_RATE:http', status: 'active' });
     expect(db.rows.map((row) => row.alertKey)).toEqual(['OUTBOX_DEAD_LETTER:graph_projection_outbox']);
+  });
+
+  // RNF010 C2 (#1484): the age of the newest successful backup against rpoHours.
+  it('opens a BACKUP_RPO episode when the newest successful backup is past rpoHours', async () => {
+    const db = makeDb({
+      backup: {
+        history: [{ status: 'success', completedAt: new Date(Date.now() - 25 * 3600000) }],
+        policy: { _id: 'main', rpoHours: 24 },
+      },
+    });
+
+    await platformAlert.runPlatformAlertCheck(db, { snapshot: httpSnapshot(0, 0), readQueues: noQueues });
+
+    expect(db.rows).toHaveLength(1);
+    expect(db.rows[0]).toMatchObject({ alertKey: 'BACKUP_RPO:backup', status: 'active', threshold: 24 });
+    expect(db.rows[0].value).toBeGreaterThan(24);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes no BACKUP_RPO episode when the newest successful backup is within rpoHours', async () => {
+    const db = makeDb({
+      backup: {
+        history: [{ status: 'success', completedAt: new Date(Date.now() - 3600000) }],
+        policy: { _id: 'main', rpoHours: 24 },
+      },
+    });
+
+    await platformAlert.runPlatformAlertCheck(db, { snapshot: httpSnapshot(0, 0), readQueues: noQueues });
+
+    expect(db.rows).toEqual([]);
+  });
+
+  it('reads backupHistory with a maxTimeMS', async () => {
+    const db = makeDb({
+      backup: {
+        history: [{ status: 'success', completedAt: new Date(Date.now() - 3600000) }],
+        policy: { _id: 'main', rpoHours: 24 },
+      },
+    });
+
+    await platformAlert.runPlatformAlertCheck(db, { snapshot: httpSnapshot(0, 0), readQueues: noQueues });
+
+    expect(db.backupHistory.findOne).toHaveBeenCalledWith(
+      { status: 'success' },
+      expect.objectContaining({ maxTimeMS: 2000 })
+    );
   });
 });
 

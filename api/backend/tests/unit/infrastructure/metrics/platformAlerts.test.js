@@ -166,6 +166,36 @@ describe('platformAlerts - OUTBOX_DEAD_LETTER', () => {
   });
 });
 
+// RNF010 C2 (#1484): the age of the newest successful backup against rpoHours.
+describe('platformAlerts - BACKUP_RPO', () => {
+  it('fires when the newest successful backup is older than rpoHours', () => {
+    expect(rowOf(evaluate({ backup: { ageHours: 25, anyRun: true, rpoHours: 24 } }), ALERT_CODES.BACKUP_RPO, 'backup'))
+      .toMatchObject({ key: 'BACKUP_RPO:backup', severity: 'critical', state: 'firing', value: 25, threshold: 24 });
+  });
+
+  it('is ok at rpoHours and below', () => {
+    expect(rowOf(evaluate({ backup: { ageHours: 24, anyRun: true, rpoHours: 24 } }), ALERT_CODES.BACKUP_RPO, 'backup'))
+      .toMatchObject({ state: 'ok', value: 24, threshold: 24 });
+    expect(rowOf(evaluate({ backup: { ageHours: 1, anyRun: true, rpoHours: 24 } }), ALERT_CODES.BACKUP_RPO, 'backup'))
+      .toMatchObject({ state: 'ok', value: 1, threshold: 24 });
+  });
+
+  it('fires when runs are recorded but none succeeded', () => {
+    expect(rowOf(evaluate({ backup: { ageHours: null, anyRun: true, rpoHours: 24 } }), ALERT_CODES.BACKUP_RPO, 'backup'))
+      .toMatchObject({ state: 'firing', value: null, threshold: 24 });
+  });
+
+  it('is unknown before any backup run', () => {
+    expect(rowOf(evaluate({ backup: { ageHours: null, anyRun: false, rpoHours: 24 } }), ALERT_CODES.BACKUP_RPO, 'backup'))
+      .toMatchObject({ state: 'unknown', value: null, threshold: 24 });
+  });
+
+  it('is unknown when the reading is unavailable', () => {
+    expect(rowOf(evaluate({ backup: null }), ALERT_CODES.BACKUP_RPO, 'backup'))
+      .toMatchObject({ state: 'unknown', value: null, threshold: null });
+  });
+});
+
 describe('platformAlerts - row shape', () => {
   it('carries only the fixed vocabulary', () => {
     const rows = evaluate({ queues: [upQueue('import-queue')] });

@@ -39,6 +39,20 @@ async function resolveRetentionDays(db) {
   return Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
 }
 
+// RNF010 C3 (#1484): the policy's rtoHours for the restore test's timing, or
+// null. Never throws, so a policy read never changes a run's outcome.
+async function resolveRtoHours(db) {
+  if (!db) return null;
+  try {
+    const policy = await backupPolicyService.getPolicy(db);
+    const rtoHours = Number(policy?.rtoHours);
+    return Number.isFinite(rtoHours) && rtoHours > 0 ? rtoHours : null;
+  } catch (error) {
+    logger.warn('Não foi possível ler rtoHours da política de backup:', error.message);
+    return null;
+  }
+}
+
 // #1325: unlike resolveRetentionDays, this fails closed. A run whose policy
 // cannot be read (no db handle, or the lookup throws) is aborted rather
 // than written in plaintext (RNF010: "cópias criptografadas"). Only a
@@ -1229,13 +1243,29 @@ async function runControlledRestoreTest(backupPath) {
 // #727 (RF013 AC#4): thin wrapper so every testRestoreBackup() call persists
 // exactly one restoreTestHistory entry, same pattern as runBackup/
 // recordBackupHistory above.
+//
+// RNF010 C3 (#1484): the run's wall time is recorded against the policy's
+// rtoHours. It times the restore test (a MongoDB restore into a scratch
+// database plus a parse of the Neo4j/InfluxDB exports), a lower bound of a
+// full recovery, not a timed full recovery. Past rtoHours logs an error; the
+// run's success is unchanged.
 async function testRestoreBackup(backupPath, db) {
-  const startedAt = new Date();
+  const startMs = Date.now();
+  const startedAt = new Date(startMs);
   const result = await runControlledRestoreTest(backupPath);
+  const endMs = Date.now();
+  const durationMs = endMs - startMs;
+  const completedAt = new Date(endMs);
+
+  const rtoHours = await resolveRtoHours(db);
+  const withinRto = (!result.success || rtoHours === null) ? null : durationMs <= rtoHours * 3600000;
+  if (withinRto === false) {
+    logger.error(`Teste de restauração excedeu o RTO: ${durationMs} ms > ${rtoHours} h`, path.basename(backupPath));
+  }
 
   await recordRestoreTestHistory(db, {
     startedAt,
-    completedAt: new Date(),
+    completedAt,
     status: result.success ? 'success' : 'error',
     mode: result.mode || null,
     scratchDb: result.scratchDb || null,
@@ -1248,6 +1278,9 @@ async function testRestoreBackup(backupPath, db) {
     restoredDocuments: typeof result.restoredDocuments === 'number' ? result.restoredDocuments : null,
     // #1325: per-store verified/skipped/failed, null when not tested.
     stores: result.stores ?? null,
+    durationMs,
+    rtoHours,
+    withinRto,
     error: result.error || null
   });
 

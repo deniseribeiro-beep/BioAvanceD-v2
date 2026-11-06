@@ -1476,6 +1476,73 @@ describe('backup.service', () => {
       }));
     });
 
+    // RNF010 C3 (#1484): each restore test's wall time against the policy's rtoHours.
+    function rtoPolicyDb() {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'restore-test-history-1' });
+      const findOne = vi.fn().mockResolvedValue({ _id: 'main', rtoHours: 12 });
+      return {
+        db: { collection: vi.fn((name) => (name === 'backup_policy' ? { findOne } : { insertOne })) },
+        insertOne,
+      };
+    }
+
+    function mockSuccessfulRestore() {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum });
+        throw new Error('unexpected');
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+      const fakeDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })), dropDatabase: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() }; });
+    }
+
+    const T0 = Date.UTC(2026, 10, 1, 3, 0, 0);
+
+    it('records the restore test wall time within rtoHours', async () => {
+      mockSuccessfulRestore();
+      const backupService = freshBackupService();
+      const { db, insertOne } = rtoPolicyDb();
+      vi.spyOn(Date, 'now').mockReturnValueOnce(T0).mockReturnValue(T0 + 60000);
+
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'), db);
+
+      expect(result.success).toBe(true);
+      expect(insertOne.mock.calls[0][0]).toEqual(expect.objectContaining({
+        status: 'success', durationMs: 60000, rtoHours: 12, withinRto: true,
+      }));
+    });
+
+    it('records withinRto false and logs an error past rtoHours', async () => {
+      mockSuccessfulRestore();
+      const backupService = freshBackupService();
+      const { db, insertOne } = rtoPolicyDb();
+      vi.spyOn(Date, 'now').mockReturnValueOnce(T0).mockReturnValue(T0 + 13 * 3600000);
+
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'), db);
+
+      expect(result.success).toBe(true);
+      expect(insertOne.mock.calls[0][0]).toEqual(expect.objectContaining({
+        status: 'success', durationMs: 46800000, rtoHours: 12, withinRto: false,
+      }));
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('excedeu o RTO'), 'backup');
+    });
+
+    it('records withinRto null when the restore test fails', async () => {
+      env.MONGO_URI = undefined;
+      const backupService = freshBackupService();
+      const { db, insertOne } = rtoPolicyDb();
+
+      await backupService.testRestoreBackup('/some/backup', db);
+
+      const row = insertOne.mock.calls[0][0];
+      expect(row).toEqual(expect.objectContaining({ status: 'error', rtoHours: 12, withinRto: null }));
+      expect(typeof row.durationMs).toBe('number');
+      expect(row.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
     // #1325 (RNF010 C5): the restore test also checks the Neo4j and InfluxDB
     // exports through backupStores.verifySecondaryStores.
     const NEO4J_FAILED = 'Teste de restauração de Neo4j falhou: neo4j/nodes.ndjson não pôde ser descriptografado';

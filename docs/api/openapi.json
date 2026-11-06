@@ -2313,12 +2313,13 @@
                                       "QUEUE_UNAVAILABLE",
                                       "QUEUE_BACKLOG",
                                       "QUEUE_FAILED",
-                                      "OUTBOX_DEAD_LETTER"
+                                      "OUTBOX_DEAD_LETTER",
+                                      "BACKUP_RPO"
                                     ]
                                   },
                                   "subject": {
                                     "type": "string",
-                                    "description": "http, a queue name, or graph_projection_outbox."
+                                    "description": "http, a queue name, graph_projection_outbox, or backup."
                                   },
                                   "severity": {
                                     "type": "string",
