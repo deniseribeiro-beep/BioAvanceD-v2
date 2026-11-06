@@ -523,6 +523,9 @@ app.use("/api/iot", require("./src/interface/routes/iot.routes"));
 // RF029 slice 1/6 (#669): test-support-only ingestion gateway probe, same
 // NODE_ENV+shared-secret gating as iot.routes.js's telemetry-monitor routes.
 app.use("/api/_test-support/ingestion", require("./src/interface/routes/ingestionTestSupport.routes"));
+// RF028/RNF032 (#1476): test-support-only reference import into an E2E_
+// dataset, under the same gates, so the e2e suite can promote and roll back.
+app.use("/api/_test-support/reference-import-runs",require("./src/interface/routes/referenceImportsTestSupport.routes"));
 // RF029 (#1318): the production ingestion route; it persists and audits.
 app.use("/api/ingestion", require("./src/interface/routes/ingestion.routes"));
 app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));

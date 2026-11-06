@@ -58,6 +58,7 @@
     "/api/analysis-types",
     "/api/diagnostic-reports",
     "/api/_test-support/ingestion",
+    "/api/_test-support/reference-import-runs",
     "/api/terminologies",
     "/api/cids",
     "/api/phone-codes",
@@ -297,6 +298,10 @@
     {
       "name": "test-support-ingestion",
       "description": "/api/_test-support/ingestion: the test-support probe of the ingestion gateway, registered only where test-support routes are enabled (RF029)."
+    },
+    {
+      "name": "test-support-reference-import-runs",
+      "description": "/api/_test-support/reference-import-runs: the test-support reference import into an E2E_ dataset and the check of its preserved asset, registered only where test-support routes are enabled (RF028, RNF032)."
     },
     {
       "name": "terminologies",
@@ -40634,6 +40639,241 @@
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/_test-support/reference-import-runs/run": {
+      "post": {
+        "tags": [
+          "test-support-reference-import-runs"
+        ],
+        "summary": "Run a reference import into an E2E_ dataset",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. Writes the posted records as a JSONL file and runs the real reference import pipeline on it with the HPO source's registration and normalizer, under the posted E2E_ datasetCode and its own systemUri urn:bioavanced:e2e:<datasetCode>, so no real dataset is touched (RF028, RNF032, #1476). The release it registers waits approved for an explicit promotion. A wrong or missing secret answers 403. 400 is a datasetCode outside the E2E_ namespace (invalid_dataset_code), a bad datasetVersion (invalid_dataset_version) or records that are not 1..1000 objects (invalid_records); validation runs before any file or database access. 503 is no database; 500 is any failure of the import.",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "datasetCode": {
+                    "type": "string",
+                    "pattern": "^E2E_[A-Za-z0-9_-]{1,60}$"
+                  },
+                  "datasetVersion": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]{1,40}$"
+                  },
+                  "records": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "required": [
+                  "datasetCode",
+                  "datasetVersion",
+                  "records"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The import run, its release and whether it was approved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "run": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "releaseId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "approved": {
+                          "type": "boolean"
+                        },
+                        "idempotent": {
+                          "type": "boolean"
+                        },
+                        "assetUri": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_dataset_code, invalid_dataset_version or invalid_records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The import failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/_test-support/reference-import-runs/asset": {
+      "post": {
+        "tags": [
+          "test-support-reference-import-runs"
+        ],
+        "summary": "Check the preserved asset of an E2E_ reference release",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. Reads the object storage copy a reference import preserved for an E2E_ datasetCode and checksum, and answers whether it exists and the sha256 of its stored bytes (RF028 AC2, RNF032, #1476). It reads no database. A wrong or missing secret answers 403. 400 is a datasetCode outside the E2E_ namespace (invalid_dataset_code) or a checksum that is not 64 lowercase hex digits (invalid_checksum). A missing object, or one that is not a regular file, is a 200 with exists false and sha256 null. 500 is any other failure of the read.",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "datasetCode": {
+                    "type": "string",
+                    "pattern": "^E2E_[A-Za-z0-9_-]{1,60}$"
+                  },
+                  "checksum": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "datasetCode",
+                  "checksum"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Whether the preserved asset exists, and the sha256 of its stored bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "assetUri": {
+                          "type": "string"
+                        },
+                        "exists": {
+                          "type": "boolean"
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_dataset_code or invalid_checksum.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read of the stored object failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }

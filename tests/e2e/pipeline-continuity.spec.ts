@@ -36,6 +36,15 @@ import {
   countReferenceDatasetReleasesByDatasetCode,
   countActiveReferenceDatasetReleasesByDatasetCode,
   countTerminologyConceptsBySystemUri,
+  findReferenceRelease,
+  referenceImportRunsForRelease,
+  referenceImportIssuesForRun,
+  countReferenceImportStagingForRun,
+  findReferenceCoverageManifest,
+  findDataQualityAssessment,
+  terminologyConceptsBySystemUri,
+  countTerminologyRelationsByRelease,
+  findAuditLog,
   closeFoundationDb,
 } from './helpers/queryFoundationData';
 import {
@@ -576,6 +585,244 @@ test.describe('Reference data importers (RF028) — real backend', () => {
 
     const concepts = await countTerminologyConceptsBySystemUri('http://edamontology.org/EDAM.owl');
     expect(concepts).toBeGreaterThan(0);
+  });
+});
+
+// RF028 AC1-9, RNF032 AC1-9 (#1476): imports run only in the stack's one-shot
+// bootstrap jobs, and promoting or rolling back a bootstrapped dataset on
+// persistent volumes would break every test that relies on it. So the
+// test-support route /api/_test-support/reference-import-runs (same gates as the ingestion
+// probe below) runs the real import pipeline into a fresh E2E_ dataset, and
+// the release it registers is promoted and rolled back through the real
+// Administrador routes. No cleanup: release history is never deleted, and
+// the unique E2E_ code and systemUri touch no other test's data.
+async function postReferenceImportSupport(
+  request: import('@playwright/test').APIRequestContext,
+  path: string,
+  body: Record<string, unknown>,
+) {
+  return request.post(`${apiBaseURL}/api/_test-support/reference-import-runs/${path}`, {
+    headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+    data: body,
+  });
+}
+
+// The ten lines of api/backend/src/reference-data/reference-imports/fixtures/hpo-sample.jsonl:
+// eight valid terms with seven is_a relations, one without a code and one without a label.
+const HPO_SAMPLE_RECORDS: Record<string, unknown>[] = [
+  { id: 'HP:0000001', lbl: 'All', is_a: [], synonyms: [], obsolete: false },
+  { id: 'HP:0000118', lbl: 'Phenotypic abnormality', is_a: ['HP:0000001'], synonyms: [], obsolete: false },
+  { id: 'HP:0000707', lbl: 'Abnormality of the nervous system', is_a: ['HP:0000118'], synonyms: [], obsolete: false },
+  { id: 'HP:0012638', lbl: 'Abnormal nervous system physiology', is_a: ['HP:0000707'], synonyms: [], obsolete: false },
+  { id: 'HP:0001250', lbl: 'Seizure', is_a: ['HP:0012638'], synonyms: ['Seizures', 'Epileptic seizure'], obsolete: false },
+  { id: 'HP:0002133', lbl: 'Status epilepticus', is_a: ['HP:0001250'], synonyms: [], obsolete: false },
+  { id: 'HP:0007359', lbl: 'Focal seizure', is_a: ['HP:0001250'], synonyms: [], obsolete: false },
+  { id: 'HP:0001251', lbl: 'Ataxia', is_a: ['HP:0012638'], synonyms: [], obsolete: false },
+  { id: '', lbl: 'Missing code term', is_a: [], synonyms: [], obsolete: false },
+  { id: 'HP:9999999', lbl: '', is_a: [], synonyms: [], obsolete: false },
+];
+
+test.describe('Reference release lifecycle (RF028 AC1-9, RNF032 AC1-9) — real backend', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  test.afterAll(async () => {
+    await closeFoundationDb();
+    await closeNeo4jDriver();
+  });
+
+  const suffix = `${Date.now()}`;
+  const datasetCode = `E2E_RF028_${suffix}`;
+  const systemUri = `urn:bioavanced:e2e:${datasetCode}`;
+  let firstReleaseId: string;
+
+  test('an import registers its release before the load, stages, quarantines and checkpoints, keeps its asset and writes its coverage manifest and quality assessment (RF028 AC1-7, RNF032 AC1-7)', async ({ request }) => {
+    const response = await postReferenceImportSupport(request, 'run', {
+      datasetCode,
+      datasetVersion: 'e2e-v1',
+      records: HPO_SAMPLE_RECORDS,
+    });
+    expect(response.status(), await response.text()).toBe(200);
+    const { data } = await response.json();
+    expect(data.approved).toBe(true);
+    expect(data.idempotent).toBe(false);
+    expect(data.run.runStatus).toBe('completed');
+    firstReleaseId = data.releaseId;
+
+    // RF028 AC1: the release is registered with its origin before the load.
+    const release = await findReferenceRelease(firstReleaseId);
+    expect(release).not.toBeNull();
+    expect(release!.releaseStatus).toBe('approved');
+    expect(release!.datasetVersion).toBe('e2e-v1');
+    expect(release!.sourceChecksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(release!.sourceFormat).toEqual(['JSONL']);
+    for (const field of ['sourceId', 'license', 'retrievalUri', 'parserVersion', 'mappingVersion', 'coverageManifestId', 'dataQualityAssessmentId']) {
+      expect(release![field], field).toBeTruthy();
+    }
+
+    // RF028 AC3/AC4, RNF032 AC3/AC4: the full run read, validated, rejected,
+    // staged in batches and checkpointed its offset.
+    const runs = await referenceImportRunsForRelease(firstReleaseId);
+    const run = runs.find((candidate) => candidate.referenceImportRunId === data.run.referenceImportRunId);
+    expect(run).toBeDefined();
+    expect(new Date(release!.createdAt).getTime()).toBeLessThanOrEqual(new Date(run!.startedAt).getTime());
+    expect(run!.importMode).toBe('full');
+    expect(run!.recordsRead).toBe(10);
+    expect(run!.recordsValidated).toBe(8);
+    expect(run!.recordsRejected).toBe(2);
+    expect(run!.checkpoint.offset).toBe(15);
+    expect(run!.batchSize).toBe(500);
+    expect(run!.validationSummary.approved).toBe(true);
+    expect(await countReferenceImportStagingForRun(run!.referenceImportRunId)).toBe(15);
+
+    // RF028 AC5, RNF032 AC5: the two bad rows are quarantined as open issues.
+    const issues = await referenceImportIssuesForRun(run!.referenceImportRunId);
+    expect(issues.map((issue) => issue.errorCode).sort()).toEqual(['MISSING_CODE', 'MISSING_DISPLAY']);
+    for (const issue of issues) {
+      expect(issue.resolutionStatus).toBe('open');
+      expect(issue.referenceDatasetReleaseId).toBe(firstReleaseId);
+    }
+
+    // RF028 AC2, RNF032 AC2: the source asset is kept, byte for byte.
+    expect(data.assetUri).toBe(`objstore://reference-releases/${datasetCode}/sha256/${release!.sourceChecksum}`);
+    const assetResponse = await postReferenceImportSupport(request, 'asset', { datasetCode, checksum: release!.sourceChecksum });
+    expect(assetResponse.status(), await assetResponse.text()).toBe(200);
+    const asset = (await assetResponse.json()).data;
+    expect(asset.exists).toBe(true);
+    expect(asset.sha256).toBe(release!.sourceChecksum);
+
+    // RF028 AC6/AC7, RNF032 AC6/AC7: the coverage manifest explains every
+    // missing row, and the quality assessment of the release passed.
+    const manifest = await findReferenceCoverageManifest(release!.coverageManifestId);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.referenceDatasetReleaseId).toBe(firstReleaseId);
+    expect(manifest!.assets).toEqual([data.assetUri]);
+    expect(manifest!.expectedCount).toBe(10);
+    expect(manifest!.obtainedCount).toBe(8);
+    expect(manifest!.exclusions).toHaveLength(2);
+    expect(manifest!.coverageResult).toBe('justified');
+    const assessment = await findDataQualityAssessment(release!.dataQualityAssessmentId);
+    expect(assessment).not.toBeNull();
+    expect(assessment!.status).toBe('passed');
+    expect(assessment!.scopeType).toBe('dataset_release');
+    expect(assessment!.scopeId).toBe(firstReleaseId);
+
+    // RF028 AC8: an approved release writes no records before its promotion.
+    expect(await countTerminologyConceptsBySystemUri(systemUri)).toBe(0);
+  });
+
+  test('promotion and rollback are explicit Administrador calls, publish to the outbox and are audited (RF028 AC5, AC8, AC9, RNF032 AC6, AC8, AC9)', async ({ request }) => {
+    const promoteUrl = (releaseId: string) => `${apiBaseURL}/api/reference-releases/${releaseId}/promote`;
+
+    const unauthenticated = await request.post(promoteUrl(firstReleaseId));
+    expect(unauthenticated.status(), await unauthenticated.text()).toBe(401);
+
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const promoted = await request.post(promoteUrl(firstReleaseId), { headers: auth });
+    expect(promoted.status(), await promoted.text()).toBe(200);
+    const promotion = (await promoted.json()).data;
+    expect(promotion.promoted).toBe(true);
+    expect(promotion.previousReleaseId).toBeNull();
+    expect(promotion.recordsInserted).toBe(15);
+
+    const active = await findReferenceRelease(firstReleaseId);
+    expect(active!.releaseStatus).toBe('active');
+    expect(typeof active!.promotionApprovedBy).toBe('string');
+    expect(active!.promotionApprovedBy).not.toBe('');
+    expect(active!.promotionApprovedBy).not.toBe('system:reference-data-bootstrap');
+
+    const concepts = await terminologyConceptsBySystemUri(systemUri);
+    expect(concepts).toHaveLength(8);
+    for (const concept of concepts) {
+      expect(concept.referenceDatasetReleaseId).toBe(firstReleaseId);
+    }
+    expect(await countTerminologyRelationsByRelease(firstReleaseId)).toBe(7);
+
+    // RF028 AC9: the promoted records reach Neo4j through the outbox.
+    await waitForTerminologyConceptNode('HP:0000118', systemUri, 'Phenotypic abnormality');
+    await waitForTerminologyRelation('HP:0000118', 'HP:0000001', systemUri, 'is_a');
+
+    const promoteAudit = await findAuditLog('PROMOTE', firstReleaseId);
+    expect(promoteAudit).not.toBeNull();
+    expect(promoteAudit!.status).toBe('success');
+
+    const again = await request.post(promoteUrl(firstReleaseId), { headers: auth });
+    expect(again.status(), await again.text()).toBe(409);
+    expect((await again.json()).error).toBe('release_not_approved');
+
+    const unknown = await request.post(promoteUrl(`no-such-release-${suffix}`), { headers: auth });
+    expect(unknown.status(), await unknown.text()).toBe(404);
+    expect((await unknown.json()).error).toBe('release_not_found');
+
+    const secondImport = await postReferenceImportSupport(request, 'run', {
+      datasetCode,
+      datasetVersion: 'e2e-v2',
+      records: HPO_SAMPLE_RECORDS,
+    });
+    expect(secondImport.status(), await secondImport.text()).toBe(200);
+    const second = (await secondImport.json()).data;
+    expect(second.approved).toBe(true);
+    const secondReleaseId: string = second.releaseId;
+    expect(secondReleaseId).not.toBe(firstReleaseId);
+
+    const promotedSecond = await request.post(promoteUrl(secondReleaseId), { headers: auth });
+    expect(promotedSecond.status(), await promotedSecond.text()).toBe(200);
+    expect((await promotedSecond.json()).data.previousReleaseId).toBe(firstReleaseId);
+    expect((await findReferenceRelease(firstReleaseId))!.releaseStatus).toBe('superseded');
+    expect((await findReferenceRelease(secondReleaseId))!.releaseStatus).toBe('active');
+
+    const rollbackUrl = `${apiBaseURL}/api/reference-releases/datasets/${datasetCode}/rollback`;
+    const rolledBack = await request.post(rollbackUrl, { headers: auth });
+    expect(rolledBack.status(), await rolledBack.text()).toBe(200);
+    const rollback = (await rolledBack.json()).data;
+    expect(rollback.rolledBack).toBe(true);
+    expect(rollback.activeReleaseId).toBe(firstReleaseId);
+    expect(rollback.rolledBackReleaseId).toBe(secondReleaseId);
+
+    const rolledBackRelease = await findReferenceRelease(secondReleaseId);
+    expect(rolledBackRelease!.releaseStatus).toBe('rolled_back');
+    expect(rolledBackRelease!.rollbackTargetId).toBe(firstReleaseId);
+    expect((await findReferenceRelease(firstReleaseId))!.releaseStatus).toBe('active');
+    const firstRuns = await referenceImportRunsForRelease(firstReleaseId);
+    expect(firstRuns.some((run) => run.importMode === 'rollback' && run.runStatus === 'rolled_back')).toBe(true);
+    expect(await findAuditLog('ROLLBACK', secondReleaseId)).not.toBeNull();
+
+    const rollbackAgain = await request.post(rollbackUrl, { headers: auth });
+    expect(rollbackAgain.status(), await rollbackAgain.text()).toBe(409);
+    expect((await rollbackAgain.json()).error).toBe('no_previous_release');
+  });
+
+  test('a release whose coverage leaves a gap no exclusion explains is refused promotion (RF028 AC7, RNF032 AC7)', async ({ request }) => {
+    const gapCode = `E2E_RF028_GAP_${suffix}`;
+    const gapSystemUri = `urn:bioavanced:e2e:${gapCode}`;
+    // A duplicated code consumes a row and stages nothing new, with no issue.
+    const response = await postReferenceImportSupport(request, 'run', {
+      datasetCode: gapCode,
+      datasetVersion: 'e2e-v1',
+      records: [HPO_SAMPLE_RECORDS[0], HPO_SAMPLE_RECORDS[1], HPO_SAMPLE_RECORDS[2], HPO_SAMPLE_RECORDS[1]],
+    });
+    expect(response.status(), await response.text()).toBe(200);
+    const { data } = await response.json();
+    expect(data.approved).toBe(true);
+
+    const release = await findReferenceRelease(data.releaseId);
+    expect(release!.releaseStatus).toBe('approved');
+    const manifest = await findReferenceCoverageManifest(release!.coverageManifestId);
+    expect(manifest!.expectedCount).toBe(4);
+    expect(manifest!.obtainedCount).toBe(3);
+    expect(manifest!.coverageResult).toBe('incomplete');
+    const assessment = await findDataQualityAssessment(release!.dataQualityAssessmentId);
+    expect(assessment!.status).toBe('failed');
+
+    const admin = await realLogin(request);
+    const promoted = await request.post(`${apiBaseURL}/api/reference-releases/${data.releaseId}/promote`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(promoted.status(), await promoted.text()).toBe(409);
+    expect((await promoted.json()).error).toBe('coverage_incomplete');
+    expect((await findReferenceRelease(data.releaseId))!.releaseStatus).toBe('approved');
+    expect(await countTerminologyConceptsBySystemUri(gapSystemUri)).toBe(0);
   });
 });
 

@@ -154,6 +154,59 @@ export async function countTerminologyConceptsBySystemUri(systemUri: string): Pr
 }
 
 /**
+ * RF028/RNF032 (#1476): the reference release lifecycle's own records, read
+ * from Mongo for the same reason as above: no route reads them back.
+ */
+export async function findReferenceRelease(referenceDatasetReleaseId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('referenceDatasetReleases').findOne({ referenceDatasetReleaseId });
+}
+
+/** Every ReferenceImportRun of a release, any importMode (full, dry_run, rollback). */
+export async function referenceImportRunsForRelease(referenceDatasetReleaseId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('referenceImportRuns').find({ referenceDatasetReleaseId }).toArray();
+}
+
+/** The ReferenceImportIssues (the quarantine) one import run recorded. */
+export async function referenceImportIssuesForRun(referenceImportRunId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('referenceImportIssues').find({ referenceImportRunId }).toArray();
+}
+
+/** The staging rows one import run wrote, concepts and relations together. */
+export async function countReferenceImportStagingForRun(referenceImportRunId: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('referenceImportStaging').countDocuments({ referenceImportRunId });
+}
+
+export async function findReferenceCoverageManifest(referenceCoverageManifestId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('referenceCoverageManifests').findOne({ referenceCoverageManifestId });
+}
+
+export async function findDataQualityAssessment(dataQualityAssessmentId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('dataQualityAssessments').findOne({ dataQualityAssessmentId });
+}
+
+export async function terminologyConceptsBySystemUri(systemUri: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('terminologyConcepts').find({ systemUri }).toArray();
+}
+
+export async function countTerminologyRelationsByRelease(referenceDatasetReleaseId: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('terminologyRelations').countDocuments({ referenceDatasetReleaseId });
+}
+
+/** The audit log entry auditLogger wrote for an action on a resource, newest first. */
+export async function findAuditLog(action: string, resourceId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('logs').find({ action, resourceId }).sort({ createdAt: -1 }).limit(1).next();
+}
+
+/**
  * RF022 AC9, RNF014 C7: the newest ReadinessReport the Foundation job wrote
  * for an environment. The API starts only when it is `ready`.
  */
