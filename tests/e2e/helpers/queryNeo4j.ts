@@ -86,6 +86,21 @@ export async function waitForEthicalConsentStatus(
   );
 }
 
+/** #1481 RF029 AC6: an EthicalConsent node's own properties and the ids of the Donor nodes CONSENTED_UNDER it. */
+export async function readConsentProjection(consentId: string): Promise<{ consent: Record<string, unknown> | null; donorIds: string[] }> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (c:EthicalConsent {id: $consentId}) OPTIONAL MATCH (d:Donor)-[:CONSENTED_UNDER]->(c) RETURN properties(c) AS consent, collect(d.id) AS donorIds',
+      { consentId }
+    );
+    if (result.records.length === 0) return { consent: null, donorIds: [] };
+    return { consent: result.records[0].get('consent'), donorIds: result.records[0].get('donorIds') };
+  } finally {
+    await session.close();
+  }
+}
+
 /**
  * RF009 (#304) fixture: seeds a bare `:Sample {id}` node plus an optional
  * `DERIVED_FROM` edge to a parent's node, so propagateCompromise's

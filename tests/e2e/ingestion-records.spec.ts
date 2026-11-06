@@ -33,6 +33,7 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { deleteOrganizations } from './helpers/listOrganizations';
+import { waitForEthicalConsentStatus, readConsentProjection, closeNeo4jDriver } from './helpers/queryNeo4j';
 
 // RF029 (#1318): POST /api/ingestion/records against the real backend, its
 // writes read back from the stack's Mongo. Real backend only — see
@@ -105,6 +106,7 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
     await closeSeedDb();
     await closeIngestionDb();
+    await closeNeo4jDriver();
   });
 
   function provenance(sourceRecordId: string) {
@@ -321,6 +323,47 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     // The route awaits this row before it answers.
     const rows = await findIngestionRefusalRows('DataFile');
     expect(rows).toHaveLength(before + 1);
+  });
+
+  test('#1481 RF029 AC4: a DataFileVersion, an Object Storage binary, is refused 422 INGESTION_STORE_UNSUPPORTED naming the trusted replace routes, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-data-file-version`;
+    // A delta, not an absolute: the stack's logs persist across runs.
+    const before = (await findIngestionRefusalRows('DataFileVersion')).length;
+
+    const payload = { fileUri: 'objstore://rf029-e2e/data-file/sha256/ab', checksum: 'ab', fileSizeBytes: 10 };
+    const res = await ingest(request, { entityType: 'DataFileVersion', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_STORE_UNSUPPORTED');
+    expect(body.details).toEqual([expect.stringContaining('Object Storage')]);
+    expect(body.details[0]).toContain('/replace');
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+    // The route awaits this row before it answers.
+    const rows = await findIngestionRefusalRows('DataFileVersion');
+    expect(rows).toHaveLength(before + 1);
+  });
+
+  test('#1481 RF029 AC4: a proteomics or metabolomics OmicsRun, an Object Storage entity, is refused 422 INGESTION_STORE_UNSUPPORTED and persists nothing', async ({ request }) => {
+    for (const modality of ['proteomics', 'metabolomics']) {
+      const sourceRecordId = `rf029-e2e-${Date.now()}-omics-run-${modality}`;
+      // A delta, not an absolute: the stack's logs persist across runs.
+      const before = (await findIngestionRefusalRows('OmicsRun')).length;
+
+      const res = await ingest(request, { entityType: 'OmicsRun', payload: { modality }, provenance: provenance(sourceRecordId) });
+
+      expect(res.status(), await res.text()).toBe(422);
+      const body = await res.json();
+      expect(body.error).toBe('INGESTION_STORE_UNSUPPORTED');
+      expect(body.details).toEqual([expect.stringContaining(modality)]);
+      expect(await countIngestedBySourceRecordId('omicsRuns', sourceRecordId)).toBe(0);
+      expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+      // The route awaits this row before it answers.
+      const rows = await findIngestionRefusalRows('OmicsRun');
+      expect(rows).toHaveLength(before + 1);
+    }
   });
 
   // #1318: an Assay's references resolve against real records (#664), so its
@@ -655,6 +698,34 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(priorDecisions.map((row: { decision: string }) => row.decision).sort()).toEqual(['accepted', 'superseded']);
   });
 
+  test('#1481 RF029 AC6: an ingested Consent projects into Neo4j as an ACTIVE EthicalConsent under a pseudonymized Donor, and its ingestion outbox event is consumed', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-consent-graph`;
+    const payload = await seedConsentReferences(request);
+
+    const res = await ingest(request, { entityType: 'Consent', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    consentIdsToDelete.push(body.entityId);
+
+    // The graph node's id is the consent's Mongo _id, not its consentId
+    // (consentTarget.js, graphProjection.service.js).
+    const stored = await findIngestedRecord('patientConsents', 'consentId', body.entityId);
+    const consentNodeId = String(stored._id);
+    await waitForEthicalConsentStatus(consentNodeId, 'ACTIVE');
+
+    const { consent, donorIds } = await readConsentProjection(consentNodeId);
+    expect(donorIds).toEqual([expect.stringMatching(/^DONOR_[0-9a-f]{24}$/)]);
+    expect(consent).not.toBeNull();
+    expect(Object.keys(consent!)).not.toContain('participantId');
+    expect(Object.values(consent!).filter((v) => typeof v === 'string').some((v) => (v as string).includes(payload.participantId))).toBe(false);
+    expect(donorIds.some((id) => id.includes(payload.participantId))).toBe(false);
+
+    // The projector skips INGESTION_RECORD_PERSISTED, and the worker marks a
+    // skipped event projected all the same.
+    await expect.poll(async () => (await findOutboxEvents(body.entityId))[0]?.status, { timeout: 15_000 }).toBe('PROJECTED');
+  });
+
   test('#1318: a Consent carrying signatureName answers 422 INGESTION_STORE_UNSUPPORTED, persists nothing, and audits no name', async ({ request }) => {
     const sourceRecordId = `rf029-e2e-${Date.now()}-consent-signature`;
     const signatureName = `RF029 e2e signer name ${Date.now()}`;
@@ -846,6 +917,135 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     const second = await ingest(request, body);
     expect(second.status(), await second.text()).toBe(422);
     expect(await countDataQualityAssessmentsByScope(scopeId)).toBe(1);
+  });
+
+  test('#1481 RF029 AC1: a Dataset with a non-canonical field name, no datasetTitle and empty creators is quarantined with its contract violations and a failed assessment', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-dataset-alias`;
+    const payload = { title: 'RF029 e2e alias', datasetVersion: '1.0.0', creators: [], license: 'CC BY 4.0' };
+
+    const res = await ingest(request, { entityType: 'Dataset', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toEqual([
+      "must have required property 'datasetTitle'",
+      'must NOT have additional properties',
+      'must NOT have fewer than 1 items',
+      'datasetTitle é obrigatório',
+      'creators é obrigatório e deve ser um array não vazio',
+    ]);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: any) => [v.code, v.field, v.ajvKeyword ?? null])).toEqual([
+      ['CONTRACT_VIOLATION', 'datasetTitle', 'required'],
+      ['CONTRACT_VIOLATION', 'title', 'additionalProperties'],
+      ['CONTRACT_VIOLATION', 'creators', 'minItems'],
+      ['ENTITY_VALIDATION_FAILED', null, null],
+      ['ENTITY_VALIDATION_FAILED', null, null],
+    ]);
+    expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+
+    const assessment = await findDataQualityAssessment(body.dataQualityAssessmentId);
+    expect(assessment.status).toBe('failed');
+    const results = Object.fromEntries(assessment.results.map((result: any) => [result.metric, result]));
+    expect(results.completeness).toMatchObject({ numerator: 2, denominator: 4 });
+    expect(results.validity.value).toBe(0);
+    expect(results.consistency.value).toBe(0);
+  });
+
+  function workflowRunPayload() {
+    return {
+      workflowId: 'rf029-e2e-variant-calling-pipeline',
+      workflowVersion: '2.3.1',
+      createdBy: 'User/e2e-suite',
+      startedAt: new Date().toISOString(),
+      runStatus: 'succeeded',
+      hardwareProfile: { cpu: 'synthetic', gpu: null },
+      randomSeed: 0,
+      environmentManifestUri: 'object://synthetic/environment.json',
+    };
+  }
+
+  test('#1481 RNF011 AC1: a WorkflowRun with an unknown runStatus and a non-integer randomSeed is quarantined with its enum and type violations', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-workflow-enum-type`;
+    const payload = { ...workflowRunPayload(), runStatus: 'finished', randomSeed: '7' };
+
+    const res = await ingest(request, { entityType: 'WorkflowRun', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toEqual([
+      'must be equal to one of the allowed values',
+      'must be integer',
+      'runStatus deve ser um de: queued, running, succeeded, failed, cancelled',
+      'randomSeed deve ser um inteiro',
+    ]);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: any) => [v.code, v.field, v.ajvKeyword ?? null])).toEqual([
+      ['CONTRACT_VIOLATION', 'runStatus', 'enum'],
+      ['CONTRACT_VIOLATION', 'randomSeed', 'type'],
+      ['ENTITY_VALIDATION_FAILED', null, null],
+      ['ENTITY_VALIDATION_FAILED', null, null],
+    ]);
+    expect(await countIngestedBySourceRecordId('workflowRuns', sourceRecordId)).toBe(0);
+  });
+
+  test('#1481 RNF011 AC1: a succeeded WorkflowRun carrying a failureReason is quarantined under the conditional rule', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-workflow-conditional`;
+    const payload = { ...workflowRunPayload(), failureReason: 'OOM' };
+
+    const res = await ingest(request, { entityType: 'WorkflowRun', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    // The canonical schema refuses the field itself; the second message is
+    // the model's conditional rule on runStatus (WorkflowRun.js).
+    expect(body.details).toEqual([
+      'must NOT have additional properties',
+      'failureReason só é permitido quando runStatus é failed ou cancelled',
+    ]);
+    expect(await countIngestedBySourceRecordId('workflowRuns', sourceRecordId)).toBe(0);
+  });
+
+  test('#1481 RF029 AC2: a record without provenance.sourceSystem or provenance.retrievedAt is quarantined, its assessment scoring provenance 2 of 4 and timeliness not assessed', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-no-origin`;
+
+    const res = await ingest(request, { entityType: 'Dataset', payload: datasetPayload(), provenance: { purpose: 'e2e_proof', sourceRecordId } });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toEqual(['provenance.sourceSystem é obrigatório', 'provenance.retrievedAt é obrigatório']);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['PROVENANCE_FIELD_MISSING', 'PROVENANCE_FIELD_MISSING']);
+    expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+
+    const assessment = await findDataQualityAssessment(body.dataQualityAssessmentId);
+    expect(assessment.status).toBe('failed');
+    const results = Object.fromEntries(assessment.results.map((result: any) => [result.metric, result]));
+    expect(results.provenance).toMatchObject({ numerator: 2, denominator: 4 });
+    expect(results.timeliness).toMatchObject({ value: null, notAssessed: 'no_retrieved_at' });
+  });
+
+  test('#1481 RNF011 AC2: a Consent writing the derived currentStateDerived is quarantined and writes no consent', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-consent-derived`;
+    const payload = { ...(await seedConsentReferences(request)), currentStateDerived: 'active' };
+
+    const res = await ingest(request, { entityType: 'Consent', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toEqual(['must NOT have additional properties']);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string; field: string }) => [v.code, v.field])).toEqual([['CONTRACT_VIOLATION', 'currentStateDerived']]);
+    expect(await countIngestedBySourceRecordId('patientConsents', sourceRecordId)).toBe(0);
   });
 
   test('RF029 AC10: an unsupported entityType is refused 422, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
