@@ -42,11 +42,13 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html', 'json', 'lcov'],
       reportsDirectory: 'coverage',
+      // Count every source file, not only the ones a test imports (#1443).
+      include: ['src/**/*.{js,jsx,ts,tsx}'],
       thresholds: {
         lines: 90,
         statements: 90,
         functions: 90,
-        branches: 85,
+        branches: 90,
       },
     },
   },
