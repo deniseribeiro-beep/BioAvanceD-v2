@@ -6,14 +6,14 @@ import InventoryBoxGrid, { groupAllocatedBoxes } from './InventoryBoxGrid';
 
 const t = (key: string, fallback?: string) => fallback || key;
 
-function allocated(fields: Partial<Sample> & { boxId: string; boxName: string; position: string }): Sample {
+function allocated(fields: Partial<Sample> & { boxId: string; boxName?: string | null; position: string; path?: string }): Sample {
   return {
     specimenId: fields.specimenId,
     barcode: fields.barcode,
     resolvedStorageLocation: {
       specimenId: String(fields.specimenId || ''),
-      path: fields.boxName,
-      box: { boxId: fields.boxId, boxName: fields.boxName, position: fields.position },
+      path: fields.path || fields.boxName || 'N/A',
+      box: { boxId: fields.boxId, boxName: fields.boxName ?? null, position: fields.position },
     },
   } as Sample;
 }
@@ -42,6 +42,24 @@ describe('groupAllocatedBoxes', () => {
         occupants: [{ position: 'B2', sampleCode: 'BR-9' }],
       },
     ]);
+  });
+
+  it('uses the storage path when the box name is missing or is an ObjectId', () => {
+    const boxes = groupAllocatedBoxes([
+      allocated({
+        specimenId: 'SPC-3',
+        boxId: '6aeb7f98e29192db67199d32',
+        boxName: null,
+        path: 'FREEZER_01/SHELF_1/RACK_A/BOX_01',
+        position: 'B2',
+      }),
+    ]);
+
+    expect(boxes[0]).toMatchObject({
+      id: '6aeb7f98e29192db67199d32',
+      label: 'BOX_01',
+      occupants: [{ position: 'B2', sampleCode: 'SPC-3' }],
+    });
   });
 });
 

@@ -23,6 +23,29 @@ function normalizeWell(position: string): string {
   return match ? `${match[1]}${match[2]}` : '';
 }
 
+function looksLikeObjectId(value: string): boolean {
+  return /^[a-f0-9]{24}$/i.test(value);
+}
+
+export function boxDisplayLabel(sample: Sample): string {
+  const location = sample.resolvedStorageLocation;
+  const boxName = String(location?.box?.boxName || '').trim();
+  if (boxName && !looksLikeObjectId(boxName)) return boxName;
+
+  const path = String(location?.path || '').trim();
+  if (path && path !== 'N/A') {
+    const segment = path.split('/').map((part) => part.trim()).filter(Boolean).pop();
+    if (segment && !looksLikeObjectId(segment)) return segment;
+  }
+
+  const readable = String(location?.readable || '').trim();
+  if (readable && !looksLikeObjectId(readable)) return readable;
+
+  const boxId = String(location?.box?.boxId || '').trim();
+  if (boxId) return `Caixa ${boxId.slice(-6)}`;
+  return 'Caixa';
+}
+
 export function groupAllocatedBoxes(samples: Sample[]): InventoryBox[] {
   const boxes = new Map<string, InventoryBox>();
 
@@ -33,8 +56,11 @@ export function groupAllocatedBoxes(samples: Sample[]): InventoryBox[] {
     if (!well || !sampleCode) return;
 
     const id = String(box?.boxId || box?.boxName || 'caixa').trim() || 'caixa';
-    const label = String(box?.boxName || box?.boxId || 'Caixa').trim() || 'Caixa';
+    const label = boxDisplayLabel(sample);
     const current = boxes.get(id) || { id, label, occupants: [] };
+    if (current.label.startsWith('Caixa ') && !label.startsWith('Caixa ')) {
+      current.label = label;
+    }
     const existing = current.occupants.find((occupant) => occupant.position === well);
     if (existing) {
       if (!existing.sampleCode.split(', ').includes(sampleCode)) {

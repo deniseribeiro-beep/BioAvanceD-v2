@@ -272,9 +272,9 @@ export default function SamplesPageView({
                       <td>{participantId ?? 'N/A'}</td>
                       <td style={{ fontSize: '0.92rem' }}>{getStorageLabel(sample, t)}</td>
                       <td>
-                        <div className="samples-row-actions" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.4rem' }}>
+                        <div className="table-actions samples-row-actions">
                           {isQuarantined(sample) && (
-                            <div className="samples-row-actions" style={{ gap: '0.4rem', flexWrap: 'wrap' }}>
+                            <>
                               <Button
                                 variant="secondary"
                                 className="samples-row-action"
@@ -302,7 +302,7 @@ export default function SamplesPageView({
                               >
                                 {t('samples.actions.viewPending', 'Visualizar pendência')}
                               </Button>
-                            </div>
+                            </>
                           )}
                           <Button
                             variant="secondary"
