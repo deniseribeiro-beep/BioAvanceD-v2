@@ -66,7 +66,7 @@ const ROUTES: GoldRoute[] = [
   { name: '33-access-requests', path: '/access-requests', group: 'governanca', auth: true },
 
   // Importação
-  { name: '34-import-lgpd', path: '/import/lgpd', group: 'importacao', auth: true },
+  { name: '34-import-batch', path: '/patients/import-fhir', group: 'importacao', auth: true },
   { name: '35-import-quarantine', path: '/import/quarantine', group: 'importacao', auth: true },
 
   // Relatórios

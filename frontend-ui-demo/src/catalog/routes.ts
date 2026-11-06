@@ -58,7 +58,7 @@ export const DEMO_ROUTES: DemoRoute[] = [
   { path: '/access-requests', title: 'Solicitações de Acesso', group: 'Governança', description: 'Pedidos e distribuição', shell: 'app' },
 
   // Importação
-  { path: '/import/lgpd', title: 'Importação LGPD', group: 'Importação', description: 'Importação com quarentena LGPD', shell: 'app' },
+  { path: '/patients/import-fhir', title: 'Importação em lote', group: 'Importação', description: 'Importação em lote FHIR R4', shell: 'app' },
   { path: '/import/quarantine', title: 'Quarentena de Importação', group: 'Importação', description: 'Itens em quarentena', shell: 'app' },
 
   // Relatórios / auditoria
@@ -124,7 +124,7 @@ export const SIDEBAR_SECTIONS = [
       { path: '/consents', label: 'Consentimentos' },
       { path: '/biomarker-associations', label: 'Biomarcadores' },
       { path: '/access-requests', label: 'Solicitações de Acesso' },
-      { path: '/import/lgpd', label: 'Importação LGPD' },
+      { path: '/patients/import-fhir', label: 'Importação em lote' },
       { path: '/import/quarantine', label: 'Quarentena' },
     ],
   },

@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
+import ListPagination from '../components/UI/ListPagination';
 import { Database, Download, RotateCcw, AlertCircle, CheckCircle, Clock, Save, Shield } from 'lucide-react';
 import { useBackup, Backup } from '../hooks/useBackup';
 import { useBackupPolicy, BackupPolicy } from '../hooks/useBackupPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
+import { LIST_PAGE_SIZE, useClientPagination } from '../hooks/useClientPagination';
 
 const CRON_FIELD_PATTERN = /^(\S+\s+){4}\S+$/;
 
@@ -172,9 +174,11 @@ export default function BackupPage() {
   // Verifica se o usuário é Administrador
   const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
 
+  const backupsPagination = useClientPagination(backups, LIST_PAGE_SIZE);
+
   if (!isAdmin) {
     return (
-      <div className="backup-page">
+      <div className="page-shell backup-page">
         <div className="access-denied">
           <AlertCircle size={48} />
           <h2>{t('backup.accessDenied')}</h2>
@@ -185,12 +189,12 @@ export default function BackupPage() {
   }
 
   return (
-    <div className="backup-page">
-      <div className="backup-header">
-          <h1>
+    <div className="page-shell backup-page">
+      <div className="page-header backup-header">
+          <h1 className="page-title">
             <Database /> {t('backup.management')}
           </h1>
-          <p>{t('backup.description')}</p>
+          <p className="page-subtitle">{t('backup.description', 'Faça backup e restaure dados do sistema')}</p>
       </div>
 
       <div className="backup-content">
@@ -249,8 +253,8 @@ export default function BackupPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {backups.map((backup, index) => (
-                    <tr key={index}>
+                  {backupsPagination.pagedItems.map((backup, index) => (
+                    <tr key={backup.fileName || index}>
                       <td>{backup.fileName}</td>
                       <td>{formatFileSize(backup.size)}</td>
                       <td>{formatDate(backup.createdAt)}</td>
@@ -277,6 +281,16 @@ export default function BackupPage() {
                   ))}
                 </tbody>
               </table>
+              <ListPagination
+                currentPage={backupsPagination.currentPage}
+                totalPages={backupsPagination.totalPages}
+                pageStart={backupsPagination.pageStart}
+                pageEnd={backupsPagination.pageEnd}
+                total={backupsPagination.total}
+                onPageChange={backupsPagination.setCurrentPage}
+                testIdPrefix="backups-pagination"
+                emptyLabel={t('backup.noBackups')}
+              />
             </div>
           )}
 

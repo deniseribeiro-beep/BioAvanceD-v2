@@ -41,7 +41,9 @@ export default function BiomarkerAssociationsPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Associações de Biomarcadores</h1>
-          <p className="page-subtitle">Biomarcadores, as condições a que se associam e as evidências que os sustentam</p>
+          <p className="page-subtitle">
+            Catálogo de analitos associados a condições ORPHA e às evidências que os sustentam. As sugestões do cadastro integrado usam este catálogo quando o grafo Neo4j não responde.
+          </p>
         </div>
         <Button onClick={() => navigate('/biomarker-associations/new')}>
           <Plus size={18} />
@@ -59,33 +61,42 @@ export default function BiomarkerAssociationsPage() {
       )}
 
       <Card>
-        <Table headers={['biomarkerId', 'Analito', 'Condições', 'Papel', 'Contexto de uso', 'Evidências', 'Ações']}>
-          {rows.map((row) => (
-            <tr key={row.biomarkerId}>
-              <td>{row.biomarkerId}</td>
-              <td>{codingLabel(row.analyte)}</td>
-              <td>{(row.associatedCondition || []).map((item) => item?.code).join(', ')}</td>
-              <td>{row.biomarkerRole}</td>
-              <td>{row.contextOfUse}</td>
-              <td>{(row.evidenceReferences || []).map((item) => `${item?.system}:${item?.value}`).join(', ')}</td>
-              <td>
-                <div className="table-actions">
-                  <button
-                    className="action-button"
-                    onClick={() =>
-                      navigate(`/biomarker-associations/${encodeURIComponent(row.biomarkerId)}/edit`, {
-                        state: { association: row },
-                      })
-                    }
-                    title="Editar"
-                  >
-                    <Edit size={16} />
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </Table>
+        {!loading && !loadError && rows.length === 0 ? (
+          <div data-testid="biomarker-associations-empty" style={{ padding: '1rem 0' }}>
+            <p style={{ margin: 0 }}>Nenhuma associação cadastrada neste ambiente.</p>
+            <p style={{ margin: '0.5rem 0 0', color: 'var(--text-light)' }}>
+              Use Nova Associação para registrar um analito e suas condições. Sem esse catálogo, o passo clínico do cadastro integrado não sugere biomarcadores pela doença.
+            </p>
+          </div>
+        ) : (
+          <Table headers={['biomarkerId', 'Analito', 'Condições', 'Papel', 'Contexto de uso', 'Evidências', 'Ações']}>
+            {rows.map((row) => (
+              <tr key={row.biomarkerId}>
+                <td>{row.biomarkerId}</td>
+                <td>{codingLabel(row.analyte)}</td>
+                <td>{(row.associatedCondition || []).map((item) => item?.code).join(', ')}</td>
+                <td>{row.biomarkerRole}</td>
+                <td>{row.contextOfUse}</td>
+                <td>{(row.evidenceReferences || []).map((item) => `${item?.system}:${item?.value}`).join(', ')}</td>
+                <td>
+                  <div className="table-actions">
+                    <button
+                      className="action-button"
+                      onClick={() =>
+                        navigate(`/biomarker-associations/${encodeURIComponent(row.biomarkerId)}/edit`, {
+                          state: { association: row },
+                        })
+                      }
+                      title="Editar"
+                    >
+                      <Edit size={16} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </Table>
+        )}
       </Card>
     </div>
   );

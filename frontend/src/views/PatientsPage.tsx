@@ -243,7 +243,7 @@ export default function PatientsPage() {
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           {canImportPatients && (
-            <Button data-testid="patients-import-fhir-button" variant="primary" onClick={() => navigate('/import/lgpd')}>
+            <Button data-testid="patients-import-fhir-button" variant="primary" onClick={() => navigate('/patients/import-fhir')}>
               Importar dados
             </Button>
           )}

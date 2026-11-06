@@ -2970,7 +2970,7 @@ export default function ClinicalIntakeWizard(props) {
                 {t('wizard.labels.processingUnknownHelp', 'In unknown-processing safety mode, SPREC axes 3, 4, 5 and 6 are automatically forced to code X.')}
               </div>
             )}
-            <div className="wizard-span-2 md:col-span-2 governance-grid">
+            <div className="wizard-span-2 md:col-span-2 governance-grid" data-testid="wizard-governance-grid-step2">
               <div className="governance-card">
                 <p className="governance-label">{t('wizard.labels.sprec', 'SPREC 2.0')}</p>
                 <p className="governance-sprec-code">{sprecCode || 'PENDENTE'}</p>
@@ -2978,7 +2978,7 @@ export default function ClinicalIntakeWizard(props) {
               </div>
               <div className="governance-card">
                 <p className="governance-label">{t('wizard.labels.backendGovernance', 'Governança do backend')}</p>
-                <p className="governance-sprec-code">{t('wizard.labels.afterSubmit', 'Após envio')}</p>
+                <p className="governance-subtext">{t('wizard.labels.afterSubmit', 'Após envio')}</p>
                 <p className="governance-subtext">{t('wizard.labels.noPreviewBeforeSubmit', 'Decisão final calculada somente depois da persistência')}</p>
               </div>
             </div>
@@ -3014,7 +3014,7 @@ export default function ClinicalIntakeWizard(props) {
 
     return (
       <div className="grid gap-4 step3-layout">
-        <div className="governance-grid governance-grid--three">
+        <div className="governance-grid governance-grid--three" data-testid="wizard-governance-grid-step3">
           <div className="governance-card">
             <p className="governance-label">{t('wizard.labels.sprec', 'SPREC 2.0')}</p>
             <p className="governance-sprec-code">{sprecCode || 'PENDENTE'}</p>
@@ -3022,7 +3022,7 @@ export default function ClinicalIntakeWizard(props) {
           </div>
           <div className="governance-card">
             <p className="governance-label">{t('wizard.labels.backendGovernance', 'Governança do backend')}</p>
-            <p className="governance-sprec-code">{t('wizard.labels.afterSubmit', 'Após envio')}</p>
+            <p className="governance-subtext">{t('wizard.labels.afterSubmit', 'Após envio')}</p>
             <p className="governance-subtext">{t('wizard.labels.noPreviewBeforeSubmit', 'Decisão final calculada somente depois da persistência')}</p>
           </div>
           <div className="governance-card">
@@ -3698,9 +3698,40 @@ export default function ClinicalIntakeWizard(props) {
               </div>
             </div>
 
+            <div className="clinical-subsection space-y-4" data-testid="wizard-dictionary-biomarkers-section">
+              <div className="border-b border-gray-200 pb-3 section-title-block">
+                <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.dictionaryBiomarkers', 'Biomarcadores do dicionário clínico')}</h4>
+                <p className="mt-1 text-sm text-slate-500">{t('wizard.labels.dictionaryBiomarkersHelp', 'Painel clínico fixo do biobanco (sempre disponível). Informe valores numéricos quando houver resultado laboratorial.')}</p>
+              </div>
+              {biomarkerDefinitions.length === 0 ? (
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noDictionaryBiomarkers', 'Nenhum biomarcador configurado no dicionário clínico.')}</div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {biomarkerDefinitions.map((item) => {
+                    const slug = getDictionarySlug(item);
+                    if (!slug) return null;
+                    return (
+                      <Input
+                        key={slug}
+                        data-testid={`wizard-dictionary-biomarker-${slug}`}
+                        className="w-full rounded-lg px-3 py-2"
+                        type="text"
+                        inputMode="decimal"
+                        label={getDictionaryLabel(item)}
+                        value={formData[slug] ?? ''}
+                        onChange={handleFieldChange(slug)}
+                        placeholder={t('wizard.placeholders.informValue', 'Informe o valor')}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             <div className="clinical-subsection space-y-4" data-testid="wizard-suggested-biomarkers-section">
               <div className="border-b border-gray-200 pb-3 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.hpoPhenotypes', 'Fenótipos HPO sugeridos pela doença')}</h4>
+                <p className="mt-1 text-sm text-slate-500">{t('wizard.labels.hpoPhenotypesHelp', 'Carregados de Neo4j ou terminologias locais após a seleção da doença ORPHA.')}</p>
               </div>
               {!hasSelectedDisease ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForPhenotypes', 'Selecione uma doença para carregar fenótipos HPO sugeridos.')}</div>
@@ -3719,7 +3750,7 @@ export default function ClinicalIntakeWizard(props) {
                   </button>
                 </div>
               ) : diseasePhenotypeSuggestions.length === 0 ? (
-                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noPhenotypes', 'Nenhum fenótipo sugerido para esta doença.')}</div>
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noPhenotypes', 'Nenhum fenótipo HPO encontrado no grafo ou nas terminologias para esta doença.')}</div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {diseasePhenotypeSuggestions.map((item) => (
@@ -3746,9 +3777,10 @@ export default function ClinicalIntakeWizard(props) {
               )}
             </div>
 
-            <div className="clinical-subsection space-y-4">
+            <div className="clinical-subsection space-y-4" data-testid="wizard-disease-biomarkers-section">
               <div className="border-b border-gray-200 pb-3 section-title-block">
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.suggestedBiomarkers', 'Biomarcadores sugeridos pela doença')}</h4>
+                <p className="mt-1 text-sm text-slate-500">{t('wizard.labels.suggestedBiomarkersHelp', 'Vêm do grafo Neo4j ou do catálogo Associações de Biomarcadores para a doença ORPHA selecionada.')}</p>
               </div>
               {!hasSelectedDisease ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForBiomarkers', 'Selecione uma doença para carregar biomarcadores sugeridos.')}</div>
@@ -3767,7 +3799,7 @@ export default function ClinicalIntakeWizard(props) {
                   </button>
                 </div>
               ) : diseaseBiomarkerSuggestions.length === 0 ? (
-                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noBiomarkers', 'Nenhum biomarcador sugerido para esta doença.')}</div>
+                <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noBiomarkers', 'Nenhuma associação de biomarcador no grafo ou no catálogo para esta doença. Use os biomarcadores do dicionário clínico acima ou cadastre associações.')}</div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5 biomarker-card-grid">
                   {diseaseBiomarkerSuggestions.map((item, index) => {

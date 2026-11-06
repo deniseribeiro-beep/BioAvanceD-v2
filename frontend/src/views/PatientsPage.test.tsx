@@ -162,7 +162,7 @@ describe('PatientsPage', () => {
       renderPage();
       expect(screen.getByTestId('patients-import-fhir-button')).toHaveTextContent('Importar dados');
       await userEvent.click(screen.getByTestId('patients-import-fhir-button'));
-      expect(navigate).toHaveBeenCalledWith('/import/lgpd');
+      expect(navigate).toHaveBeenCalledWith('/patients/import-fhir');
     });
 
     it.each([

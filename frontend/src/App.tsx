@@ -11,7 +11,6 @@ const Dashboard = lazy(() => import('./views/Dashboard'));
 const PatientsPage = lazy(() => import('./views/PatientsPage'));
 const FhirImportPage = lazy(() => import('./views/FhirImportPage'));
 const ImportQuarantinePage = lazy(() => import('./views/ImportQuarantinePage'));
-const ImportLGPDPage = lazy(() => import('./views/ImportLGPDPage'));
 const ConsentTokenPage = lazy(() => import('./pages/patient/ConsentTokenPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
@@ -209,26 +208,11 @@ function App() {
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionFormPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionFormPage /></ProtectedRoute>} />
-                  {/* #808: the LGPD import's own surface. `/import` posts to the
-                      *async* importer; #813 landed, so that importer now
-                      quarantines its rejected rows too, into
-                      import_staging_records with type ASYNC_BATCH_IMPORT. This
-                      posts to the LGPD importer, whose batches are the ones
-                      ImportQuarantinePage actually lists -- that page calls
-                      /import-lgpd/batches, which filters to LGPD quarantine
-                      types, so async batches are quarantined but not yet
-                      listable (#950). (RNF011 AC#4 / RF029 AC#6.) Same roles as
-                      /import and /import/quarantine -- the backend gates the two
-                      import routes on createPatient/createSample respectively,
-                      which these three roles hold. */}
-                  <Route
-                    path="/import/lgpd"
-                    element={
-                      <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
-                        <ImportLGPDPage />
-                      </ProtectedRoute>
-                    }
-                  />
+                  {/* Operational batch import is FHIR at /patients/import-fhir.
+                      /import/lgpd redirects there so bookmarks and old CTAs land
+                      on the lote flow; ImportLGPDPage remains in the repo for
+                      quarantine-linked spreadsheet history but is out of nav. */}
+                  <Route path="/import/lgpd" element={<Navigate to="/patients/import-fhir" replace />} />
                   {/* #794 item 2 (RNF011 AC#4): the quarantine review surface.
                       Same roles as /import — the backend gates both the list
                       and the batch read on createSample, which is the

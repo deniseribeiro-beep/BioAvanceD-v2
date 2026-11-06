@@ -536,4 +536,133 @@
   .access-denied {
     @apply flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-8 text-center text-muted-foreground;
   }
+
+  .dictionary-document-page {
+    @apply w-full max-w-5xl;
+  }
+
+  .dictionary-doc-header {
+    @apply mb-6 flex flex-wrap items-start justify-between gap-4;
+  }
+
+  .dictionary-doc-header .print-button {
+    @apply inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground;
+  }
+
+  .dictionary-article {
+    @apply space-y-8 text-foreground;
+  }
+
+  .dictionary-article .doc-section {
+    @apply scroll-mt-24 space-y-3;
+  }
+
+  .dictionary-article .doc-index {
+    @apply sticky top-0 z-10 flex flex-wrap gap-3 rounded-lg border border-border bg-card/95 p-3 text-sm backdrop-blur;
+  }
+
+  .dictionary-article .doc-index a {
+    @apply text-primary underline-offset-2 hover:underline;
+  }
+
+  .dictionary-article .table-wrap {
+    @apply overflow-x-auto rounded-lg border border-border;
+  }
+
+  .dictionary-article table {
+    @apply w-full border-collapse text-sm;
+  }
+
+  .dictionary-article th,
+  .dictionary-article td {
+    @apply border-b border-border px-3 py-2 text-left align-top;
+  }
+
+  .dictionary-article th {
+    @apply bg-muted/40 font-semibold;
+  }
+
+  .governance-grid {
+    @apply mt-4 grid grid-cols-1 gap-3 md:grid-cols-2;
+  }
+
+  .governance-grid--three {
+    @apply md:grid-cols-3;
+  }
+
+  .governance-card {
+    @apply rounded-xl border border-border bg-card p-4 shadow-sm;
+  }
+
+  .governance-card--a {
+    @apply border-emerald-300 bg-emerald-50;
+  }
+
+  .governance-card--b {
+    @apply border-amber-300 bg-amber-50;
+  }
+
+  .governance-card--c {
+    @apply border-rose-300 bg-rose-50;
+  }
+
+  .governance-label {
+    @apply text-xs font-semibold uppercase tracking-wide text-muted-foreground;
+  }
+
+  .governance-sprec-code {
+    @apply mt-1 font-mono text-base font-bold tracking-wide text-foreground;
+  }
+
+  .governance-subtext {
+    @apply mt-1 text-sm text-muted-foreground;
+  }
+
+  .governance-score {
+    @apply mt-1 text-2xl font-bold text-foreground;
+  }
+
+  .governance-progress {
+    @apply mt-2 h-2 overflow-hidden rounded-full bg-muted;
+  }
+
+  .identifier-list {
+    @apply mt-2 grid gap-1 text-sm;
+  }
+
+  .identifier-list div {
+    @apply flex items-center justify-between gap-2;
+  }
+
+  .identifier-list span {
+    @apply text-xs font-semibold uppercase tracking-wide text-muted-foreground;
+  }
+
+  .identifier-list strong {
+    @apply font-mono text-sm text-foreground;
+  }
+
+  .phenotype-card {
+    @apply flex items-start gap-2 rounded-lg border border-border bg-card p-3 text-sm;
+  }
+
+  .phenotype-card__content {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .phenotype-card__label {
+    @apply font-medium text-foreground;
+  }
+
+  .phenotype-card__code {
+    @apply text-xs text-muted-foreground;
+  }
+
+  .biomarker-card-grid {
+    @apply grid grid-cols-1 gap-4 md:grid-cols-2;
+  }
+
+  .suggestion-empty {
+    @apply rounded-md border border-dashed border-border bg-muted/20 px-3 py-2;
+  }
 }
