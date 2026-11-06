@@ -79,7 +79,7 @@ function escapeHtml(value: string) {
 
 function replaceProtectedTags(html: string, values: PreviewValueMap) {
   return String(html || '').replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_match, rawKey) => {
-    const key = String(rawKey || '').toLowerCase();
+    const key = String(rawKey).toLowerCase();
     const replacement = values[key];
     if (!replacement) {
       return `{{${key}}}`;
@@ -101,15 +101,6 @@ function normalizeTitle(value: string) {
   return String(value || '').trim().toLowerCase();
 }
 
-function slugify(value: string) {
-  return String(value || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-}
-
 function pad(value: number) {
   return String(value).padStart(2, '0');
 }
@@ -128,20 +119,8 @@ function toDateInputValue(value?: Date | string | null) {
 }
 
 function toIsoDateString(value: string, endOfDay = false) {
-  if (!value) {
-    return '';
-  }
-
   const suffix = endOfDay ? '23:59:59.999' : '12:00:00.000';
   return new Date(`${value}T${suffix}`).toISOString();
-}
-
-function getHtmlContent(policy?: ConsentPolicy | null) {
-  if (!policy) {
-    return DEFAULT_BODY_HTML.trim();
-  }
-
-  return String(policy.htmlContent || '').trim() || DEFAULT_BODY_HTML.trim();
 }
 
 function unwrapSingleResponse(response: any) {
@@ -149,7 +128,7 @@ function unwrapSingleResponse(response: any) {
 }
 
 function unwrapListResponse(response: any) {
-  const payload = response?.data?.data ?? response?.data ?? null;
+  const payload = response?.data?.data ?? response?.data;
   if (Array.isArray(payload)) {
     return payload;
   }
@@ -169,7 +148,7 @@ function createDraftItem(label = '', required = false): ConsentItemDraft {
   };
 }
 
-function normalizeDraftItems(items: Array<Partial<ConsentItemDraft> | null | undefined>) {
+function normalizeDraftItems(items: Array<Partial<ConsentItemDraft> | null | undefined> | undefined) {
   const normalized = (Array.isArray(items) ? items : [])
     .map((item) => ({
       id: createId(),
@@ -222,11 +201,6 @@ function normalizeGranularPermissions(items: ConsentItemDraft[]) {
     .filter(Boolean) as Array<{ key: string; label: string; required: boolean; purposeCode?: string }>;
 }
 
-function parseVersionNumber(version: string) {
-  const match = String(version || '').match(/(\d+)/);
-  return match ? Number(match[1]) : 0;
-}
-
 function formatDate(value?: Date | string | null) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) {
@@ -236,11 +210,7 @@ function formatDate(value?: Date | string | null) {
   return date.toLocaleDateString('pt-BR');
 }
 
-function getConsentValidityValue(item?: Partial<ConsentPolicy & ConsentTemplate> | null) {
-  if (!item) {
-    return null;
-  }
-
+function getConsentValidityValue(item: Partial<ConsentPolicy & ConsentTemplate>) {
   const aliases = [
     item.validTo,
     item.validUntil,
@@ -459,9 +429,7 @@ function openPrintablePolicy(policy: ConsentPolicy) {
       // Ignora falhas de limpeza.
     }
 
-    if (printFrame.parentNode) {
-      printFrame.parentNode.removeChild(printFrame);
-    }
+    printFrame.remove();
   };
 
   printFrame.onload = () => {
@@ -558,17 +526,13 @@ export default function TcleBuilderPage() {
     }
     // Set default text alignment to justified
     editor.style.textAlign = 'justify';
-  }, [bodyHtml, editorReady]);
+  }, [bodyHtml, editorReady, activeTab]);
 
   useEffect(() => {
     let active = true;
 
     const loadTemplate = async () => {
       if (!templateId) {
-        if (!active) {
-          return;
-        }
-
         setLoadedTemplate(null);
         setTitle('');
           setCaae('');
@@ -602,7 +566,7 @@ export default function TcleBuilderPage() {
         setValidFrom(toDateInputValue(template.validFrom || null));
         setValidTo(toDateInputValue(template.validTo || null));
         setBodyHtml(String(template.htmlContent || template.content || DEFAULT_BODY_HTML.trim()));
-        setConsentItems(normalizeDraftItems(template.granularPermissions || template.permissions || []));
+        setConsentItems(normalizeDraftItems(template.granularPermissions || template.permissions));
         setHistoryAnchorTitle(String(template.title || ''));
         setHistoryGroupId(String(template.versionGroupId || '').trim());
       } catch (error: any) {
@@ -676,24 +640,16 @@ export default function TcleBuilderPage() {
     };
   }, [currentModelTitle, historyGroupId]);
 
-  const updateEditorState = () => {
-    const editor = editorRef.current;
-    if (!editor) {
-      return;
-    }
-
+  const updateEditorState = (editor: HTMLDivElement) => {
     setBodyHtml(editor.innerHTML);
   };
 
+  // The toolbar renders only beside the editor, so the ref is set on every click.
   const applyFormat = (command: string, value?: string) => {
-    const editor = editorRef.current;
-    if (!editor) {
-      return;
-    }
-
+    const editor = editorRef.current as HTMLDivElement;
     editor.focus();
     document.execCommand(command, false, value);
-    updateEditorState();
+    updateEditorState(editor);
   };
 
   const addConsentItem = () => {
@@ -715,11 +671,6 @@ export default function TcleBuilderPage() {
   const openPrintableView = (policy: ConsentPolicy) => {
     if (!policy?._id) {
       showToast('Não foi possível abrir a visualização em PDF.', 'warning');
-      return;
-    }
-
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      showToast('O navegador bloqueou a visualização em PDF.', 'warning');
       return;
     }
 
@@ -759,11 +710,6 @@ export default function TcleBuilderPage() {
       permissions: normalizedPermissions,
     };
 
-    if (!payload.validFrom || !payload.validTo) {
-      showToast('Data de vigência inválida.', 'warning');
-      return;
-    }
-
     setSaving(true);
     try {
       const response = isEditing && templateId
@@ -782,7 +728,7 @@ export default function TcleBuilderPage() {
       setValidFrom(toDateInputValue(savedTemplate.validFrom || null));
       setValidTo(toDateInputValue(savedTemplate.validTo || null));
       setBodyHtml(String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim()));
-      setConsentItems(normalizeDraftItems(savedTemplate.granularPermissions || savedTemplate.permissions || []));
+      setConsentItems(normalizeDraftItems(savedTemplate.granularPermissions || savedTemplate.permissions));
       setHistoryAnchorTitle(String(savedTemplate.title || trimmedTitle));
       setHistoryGroupId(String(savedTemplate.versionGroupId || '').trim());
 
@@ -974,8 +920,8 @@ export default function TcleBuilderPage() {
                   role="textbox"
                   aria-multiline="true"
                   aria-label="Editor do corpo do TCLE"
-                  onInput={updateEditorState}
-                  onBlur={updateEditorState}
+                  onInput={(event) => updateEditorState(event.currentTarget)}
+                  onBlur={(event) => updateEditorState(event.currentTarget)}
                   onFocus={() => setEditorReady(true)}
                   style={{ textAlign: 'justify' }}
                 />
