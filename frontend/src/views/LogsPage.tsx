@@ -31,7 +31,7 @@ import { formatEntityID } from '../utils/entityIdFormatter';
 import { useLanguage } from '../contexts/LanguageContext';
 import SessionAuditPanel from '../components/audit/SessionAuditPanel';
 
-type SortField = 'timestamp' | 'userName' | 'action' | 'entity' | 'severity' | 'result' | 'ipSource' | 'module';
+type SortField = 'timestamp' | 'action' | 'severity' | 'result';
 type SortOrder = 'asc' | 'desc';
 
 // The one reader of a log's time for the date filters, the sort and the
@@ -225,17 +225,9 @@ export default function LogsPage() {
             bValue = 0;
           }
           break;
-        case 'userName':
-          aValue = (a.userName || '').toLowerCase();
-          bValue = (b.userName || '').toLowerCase();
-          break;
         case 'action':
           aValue = (a.action || '').toLowerCase();
           bValue = (b.action || '').toLowerCase();
-          break;
-        case 'entity':
-          aValue = (a.entity || '').toLowerCase();
-          bValue = (b.entity || '').toLowerCase();
           break;
         case 'severity':
           aValue = (a.severity || '').toLowerCase();
@@ -245,16 +237,6 @@ export default function LogsPage() {
           aValue = (a.result || '').toLowerCase();
           bValue = (b.result || '').toLowerCase();
           break;
-        case 'ipSource':
-          aValue = (a.ipSource || a.sourceIP || '').toLowerCase();
-          bValue = (b.ipSource || b.sourceIP || '').toLowerCase();
-          break;
-        case 'module':
-          aValue = (a.module || '').toLowerCase();
-          bValue = (b.module || '').toLowerCase();
-          break;
-        default:
-          return 0;
       }
 
       if (aValue < bValue) return sortOrder === 'asc' ? -1 : 1;
