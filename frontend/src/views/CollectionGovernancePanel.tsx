@@ -242,6 +242,7 @@ export default function CollectionGovernancePanel({
   const organizationName = (id: string) =>
     organizations.find((org) => org.organizationId === id)?.officialName || id;
   const approvals = governance?.approvals ?? [];
+  const events = governance?.events ?? [];
   const context = governance?.governanceContext ?? null;
   const currentRegime = governance?.governanceRegime ?? null;
   const isConversion = Boolean(currentRegime) && eventForm.newRegime !== '' && eventForm.newRegime !== currentRegime;
@@ -528,11 +529,11 @@ export default function CollectionGovernancePanel({
 
       <section>
         <h4>{t('system.collections.governance.events', 'Histórico de decisões')}</h4>
-        {(governance?.events ?? []).length === 0 ? (
+        {events.length === 0 ? (
           <p>{t('system.collections.governance.noEvents', 'Nenhuma decisão registrada')}</p>
         ) : (
           <ol data-testid="collection-governance-events">
-            {(governance?.events ?? []).map((event) => (
+            {events.map((event) => (
               <li key={event.collectionGovernanceEventId}>
                 {new Date(event.occurredAt).toLocaleString()} {'- '}
                 {t(`system.collections.governance.decision_${event.decisionType}`, event.decisionType)}:{' '}
