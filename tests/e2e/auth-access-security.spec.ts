@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { test, expect, APIRequestContext } from '@playwright/test';
 import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -7,6 +8,7 @@ import { deleteOrganizations } from './helpers/listOrganizations';
 import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb, findLogRows } from './helpers/queryLoginAttempts';
 import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
 import { invariantViolationsFor, closeFoundationDb } from './helpers/queryFoundationData';
+import { findStoredUser, setStoredSessionTimeoutMinutes, closeStoredCredentialsDb } from './helpers/storedCredentials1456';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
 // same skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -2339,7 +2341,7 @@ test.describe('Session and account lifecycle (RF001 criteria 2 and 4, RNF021, #1
     expect(enable.ok(), await enable.text()).toBeTruthy();
     const refreshCookie = /refresh_token=[^;]+/.exec(enable.headers()['set-cookie'] || '')?.[0];
     expect(refreshCookie, 'enrolment sets the refresh cookie').toBeTruthy();
-    return { token: (await enable.json()).data.token as string, refreshCookie: refreshCookie! };
+    return { token: (await enable.json()).data.token as string, refreshCookie: refreshCookie!, secret: secret as string };
   }
 
   const status = (request: APIRequestContext, token: string) =>
@@ -2451,5 +2453,192 @@ test.describe('Session and account lifecycle (RF001 criteria 2 and 4, RNF021, #1
       await clearLoginAttempts();
       await closeLoginAttemptsDb();
     }
+  });
+
+  // #1456: a JWT's claims, read without verifying it (the runner holds no secret).
+  const claimsOf = (jwt: string) => JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+  const sha256 = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
+  const refreshCookieLine = (setCookie: string) => setCookie.split('\n').find((line) => line.startsWith('refresh_token='));
+
+  test('a session is created with an expiry and the account role (RF001 criterion 3, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const username = `coordenador.rf001ac3.${Date.now()}`;
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { name: 'Fixture rf001ac3', email: `${username}@example.com`, username, password, accessType: 3, roleName: 'Coordenador' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const registered = await register.json();
+    const userID = registered.data?._id || registered.data?.id;
+    const session = await openSession(request, username);
+
+    // The role rides on the session's access token and is resolved from the
+    // live assignment by /verify.
+    expect(claimsOf(session.token).accessType).toBe(3);
+    const verify = await request.get(`${apiBaseURL}/api/auth/verify`, { headers: { Authorization: `Bearer ${session.token}` } });
+    expect(verify.ok(), await verify.text()).toBeTruthy();
+    const verified = (await verify.json()).data.user;
+    expect(verified.roleName).toBe('Coordenador');
+    expect(verified.accessType).toBe(3);
+
+    // The expiry is on the stored session.
+    const stored = await findLatestSession(userID);
+    expect(new Date(stored!.expiresAt).getTime() - new Date(stored!.sessionStartedAt).getTime()).toBe(15 * 60 * 1000);
+    expect(new Date(stored!.refreshExpiresAt).getTime()).toBeGreaterThan(new Date(stored!.expiresAt).getTime());
+    await closeSessionsDb();
+  });
+
+  test('an edit and a block of an account are each audited (RF003 criterion 6, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'audit1456');
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const edit = await request.put(`${apiBaseURL}/api/users/${target.userID}`, { headers: auth, data: { name: 'Fixture audit1456 edited' } });
+    expect(edit.ok(), await edit.text()).toBeTruthy();
+    const block = await request.put(`${apiBaseURL}/api/users/${target.userID}`, { headers: auth, data: { status: 'blocked' } });
+    expect(block.ok(), await block.text()).toBeTruthy();
+    expect((await block.json()).data.status).toBe('Bloqueado');
+
+    const rows = await findLogRows({ action: 'UPDATE', resourceType: 'User', resourceId: String(target.userID) });
+    const editRow = rows.find((row) => row.payload == null);
+    expect(editRow, 'the edit wrote an UPDATE row with no status change').toBeTruthy();
+    const blockRow = rows.find((row) => row.payload?.status?.to === 'blocked');
+    expect(blockRow, 'the block wrote an UPDATE row naming the status change').toBeTruthy();
+    expect(blockRow!.payload.status.from).toBe('active');
+    expect(blockRow).not.toBe(editRow);
+    await closeLoginAttemptsDb();
+  });
+
+  test('the access token is short-lived, a rotated refresh token is refused, tokens are stored only as hashes, and the refresh cookie is HttpOnly and SameSite (RNF021 criteria 1, 4 and 5, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'rot1456');
+    const session = await openSession(request, target.username);
+
+    // Criterion 1: a 15-minute access token.
+    const claims = claimsOf(session.token);
+    expect(claims.exp - claims.iat).toBe(15 * 60);
+
+    // Criterion 1: rotation. Each refresh issues a new refresh token, and the
+    // one it replaced is refused from then on.
+    const refresh = (cookie: string) => request.post(`${apiBaseURL}/api/auth/refresh`, { headers: { Cookie: cookie } });
+    const first = await refresh(session.refreshCookie);
+    expect(first.ok(), await first.text()).toBeTruthy();
+    const firstLine = refreshCookieLine(first.headers()['set-cookie'] || '');
+    expect(firstLine, 'the refresh sets a new refresh cookie').toBeTruthy();
+    const second = /refresh_token=[^;]+/.exec(firstLine!)![0];
+    expect(second).not.toBe(session.refreshCookie);
+
+    // Criterion 5: HttpOnly and SameSite on the stack. It runs NODE_ENV=test
+    // over plain HTTP, where the cookie is SameSite=Lax and not Secure;
+    // production's Secure and SameSite=Strict are pinned by the backend's
+    // auth.refresh-cookie.1456 test.
+    expect(firstLine).toMatch(/;\s*HttpOnly(;|$)/i);
+    expect(firstLine).toMatch(/;\s*SameSite=Lax(;|$)/i);
+    expect(firstLine).toMatch(/;\s*Path=\/api\/auth(;|$)/i);
+
+    const reused = await refresh(session.refreshCookie);
+    expect(reused.status(), 'the refresh token rotated away is refused').toBe(401);
+    expect((await reused.json()).data?.token).toBeFalsy();
+
+    const third = await refresh(second);
+    expect(third.ok(), await third.text()).toBeTruthy();
+    const latestCookie = /refresh_token=[^;]+/.exec(refreshCookieLine(third.headers()['set-cookie'] || '') || '')?.[0];
+    expect(latestCookie).toBeTruthy();
+    expect(latestCookie).not.toBe(second);
+    const latestAccess = (await third.json()).data.token as string;
+    const reusedSecond = await refresh(second);
+    expect(reusedSecond.status(), 'a token rotated away inside the same second is refused too').toBe(401);
+
+    // Criterion 4: the stored session holds the sha256 of the live tokens and
+    // no token in clear.
+    const stored = await findLatestSession(target.userID);
+    const rawRefresh = latestCookie!.slice('refresh_token='.length);
+    expect(stored!.accessTokenHash).toBe(sha256(latestAccess));
+    expect(stored!.refreshTokenHash).toBe(sha256(rawRefresh));
+    const text = JSON.stringify(stored);
+    for (const raw of [session.token, latestAccess, session.refreshCookie.slice('refresh_token='.length), second.slice('refresh_token='.length), rawRefresh]) {
+      expect(text.includes(raw), 'no raw token in the session document').toBe(false);
+    }
+    for (const field of ['token', 'accessToken', 'refreshToken']) {
+      expect(stored).not.toHaveProperty(field);
+    }
+    await closeSessionsDb();
+  });
+
+  test('a session idle past its inactivity timeout is refused and ended as an expiry (RNF021 criterion 3, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const config = await request.get(`${apiBaseURL}/api/security/config`, { headers: { Authorization: `Bearer ${admin.token}` } });
+    expect(config.ok(), await config.text()).toBeTruthy();
+    expect((await config.json()).data.enhancedSecurity?.enabled, 'precondition: the enhanced mode would replace the timeout').not.toBe(true);
+    const target = await registerTecnico(request, admin.token, 'idle1456');
+
+    // The API's floor is 5 minutes, so the stored value is set to 3 seconds
+    // for the one session opened here and put back at once; createSession
+    // copies it onto the session.
+    let session: { token: string; refreshCookie: string };
+    const previous = await setStoredSessionTimeoutMinutes(0.05);
+    try {
+      session = await openSession(request, target.username);
+      // At once: the 3-second idle clock runs from the session's creation, so
+      // this check comes before any other round trip.
+      expect((await status(request, session.token)).status(), 'the session works while active').toBe(200);
+    } finally {
+      await setStoredSessionTimeoutMinutes(previous);
+      await closeStoredCredentialsDb();
+    }
+    const opened = await findLatestSession(target.userID);
+    expect(opened!.inactivityTimeoutMs).toBe(3000);
+
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    expect((await status(request, session.token)).status(), 'idle past the timeout').toBe(401);
+
+    const ended = await findLatestSession(target.userID);
+    expect(ended!.isActive).toBe(false);
+    expect(ended!.revocationReason).toBe('expiration');
+    await closeSessionsDb();
+  });
+
+  test('a password is stored only as a bcrypt hash and the MFA secret only as an AES-GCM envelope with a key id (RNF020 criteria 2, 3 and 5, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'rest1456');
+    const session = await openSession(request, target.username);
+
+    const user = await findStoredUser(target.userID);
+    const text = JSON.stringify(user);
+
+    // Criterion 2: an adaptive hash, never the password.
+    const hash = /^\$2[aby]\$(\d{2})\$[./A-Za-z0-9]{53}$/.exec(String(user!.passwordHash));
+    expect(hash, 'passwordHash is a bcrypt hash').toBeTruthy();
+    expect(Number(hash![1])).toBeGreaterThanOrEqual(10);
+    expect(user).not.toHaveProperty('password');
+    expect(text.includes(password)).toBe(false);
+
+    // Criterion 3: the TOTP seed is ciphertext. The enrolment that just
+    // succeeded checked its code against this envelope, decrypted.
+    const envelope = user!.mfaSecretCiphertext;
+    expect(envelope.alg).toBe('aes-256-gcm');
+    for (const field of ['iv', 'tag', 'data']) expect(typeof envelope[field]).toBe('string');
+    expect(user).not.toHaveProperty('mfaSecret');
+    expect(text.includes(session.secret)).toBe(false);
+
+    // Criterion 5: the envelope names the deployment's key id, the slot a key
+    // rotation reads, not the code default. Rotation itself needs a restart
+    // under a new key and is proven by the backend's fieldEncryption tests.
+    expect(typeof envelope.keyId).toBe('string');
+    expect(envelope.keyId).not.toBe('default');
+    await closeStoredCredentialsDb();
+  });
+
+  // RNF020 criterion 1: TLS 1.2 or higher is negotiated by the deployment's
+  // HTTPS edge, not by this stack, which serves plain HTTP; the deployment
+  // check proves the TLS version. The application's own part is to tell
+  // browsers to use HTTPS only.
+  test('the API sends Strict-Transport-Security (RNF020 criterion 1, #1456)', async ({ request }) => {
+    const response = await request.get(`${apiBaseURL}/api/auth/password-policy`);
+    expect(response.ok(), await response.text()).toBeTruthy();
+    const hsts = response.headers()['strict-transport-security'] || '';
+    expect(hsts).toMatch(/max-age=31536000/);
+    expect(hsts).toMatch(/includeSubDomains/);
+    expect(hsts).toMatch(/preload/);
   });
 });
