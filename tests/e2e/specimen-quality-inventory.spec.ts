@@ -316,13 +316,12 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     await closeSeedDb();
   });
 
-  // RF004 AC3/AC4, RF021 AC2/AC3: give a biorepository collection its
-  // governance through the real API -- an organization, an ethics approval in
-  // force, then the `created` event carrying the context.
-  async function governBiorepository(
+  // An organization and an ethics approval in force for the collection, the
+  // two references a governance context names.
+  async function prepareGovernance(
     request: APIRequestContext,
     token: string,
-    ids: { collectionId: string; studyId: string; protocolId: string }
+    collectionId: string
   ): Promise<{ organizationId: string; approvalId: string }> {
     const headers = { Authorization: `Bearer ${token}` };
     const org = await request.post(`${apiBaseURL}/api/organizations`, {
@@ -333,7 +332,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     const organizationId = (await org.json()).data.organizationId as string;
     organizationIds.push(organizationId);
 
-    const approval = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/approvals`, {
+    const approval = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/approvals`, {
       headers,
       data: {
         authority: 'CEP sintético',
@@ -347,27 +346,77 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     });
     expect(approval.status(), await approval.text()).toBe(201);
     const approvalId = (await approval.json()).data.approvalId as string;
+    return { organizationId, approvalId };
+  }
+
+  // RF004 AC3/AC4, RF021 AC3: a complete biorepository context over those
+  // references.
+  function biorepositoryContext(
+    ids: { studyId: string; protocolId: string },
+    organizationId: string,
+    approvalId: string
+  ): Record<string, unknown> {
+    return {
+      studyId: ids.studyId,
+      protocolId: ids.protocolId,
+      protocolVersion: '1.0',
+      caae: '00000000.0.0000.0000',
+      responsibleOrganizationId: organizationId,
+      responsibleInvestigatorId: 'investigator-e2e',
+      ethicsApprovalId: approvalId,
+      validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+      plannedEndDate: '2030-12-31',
+    };
+  }
+
+  // RF004 AC3/AC4, RF021 AC2/AC3: give a biorepository collection its
+  // governance through the real API -- an organization, an ethics approval in
+  // force, then the `created` event carrying the context.
+  async function governBiorepository(
+    request: APIRequestContext,
+    token: string,
+    ids: { collectionId: string; studyId: string; protocolId: string }
+  ): Promise<{ organizationId: string; approvalId: string }> {
+    const headers = { Authorization: `Bearer ${token}` };
+    const { organizationId, approvalId } = await prepareGovernance(request, token, ids.collectionId);
 
     const event = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
       headers,
       data: {
         justification: 'Contexto inicial do biorrepositório',
-        governanceContext: {
-          studyId: ids.studyId,
-          protocolId: ids.protocolId,
-          protocolVersion: '1.0',
-          caae: '00000000.0.0000.0000',
-          responsibleOrganizationId: organizationId,
-          responsibleInvestigatorId: 'investigator-e2e',
-          ethicsApprovalId: approvalId,
-          validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
-          plannedEndDate: '2030-12-31',
-        },
+        governanceContext: biorepositoryContext(ids, organizationId, approvalId),
       },
     });
     expect(event.status(), await event.text()).toBe(201);
     expect((await event.json()).data.event).toMatchObject({ decisionType: 'created', newRegime: 'biorepository', approvalIds: [approvalId] });
     return { organizationId, approvalId };
+  }
+
+  // RF004 AC5: a biobank's access policy, scoped to the test's own organization.
+  async function createAccessPolicy(
+    request: APIRequestContext,
+    headers: Record<string, string>,
+    organizationId: string,
+    stamp: string
+  ): Promise<string> {
+    const policy = await request.post(`${apiBaseURL}/api/access-policies`, {
+      headers,
+      data: {
+        policyName: `RF020 e2e ${stamp}`,
+        policyVersion: '1.0.0',
+        applicableEntityTypes: ['AccessRequest'],
+        decisionEffect: 'review_required',
+        ruleExpression: 'all-conditions',
+        effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+        roleCodes: ['researcher'],
+        organizationScopeIds: [organizationId],
+        resourceScopes: ['Specimen'],
+        conditions: [{ consent: 'compatible' }],
+        decisionReasonsRequired: true,
+      },
+    });
+    expect(policy.status(), await policy.text()).toBe(201);
+    return (await policy.json()).data.accessPolicyId as string;
   }
 
   test('rejects a create when studyId does not resolve to a real Study', async ({ request }) => {
@@ -578,24 +627,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     expect(edit.status(), await edit.text()).toBe(422);
 
     // The biobank's policy, scoped to this test's own organization.
-    const policy = await request.post(`${apiBaseURL}/api/access-policies`, {
-      headers,
-      data: {
-        policyName: `RF020 e2e ${stamp}`,
-        policyVersion: '1.0.0',
-        applicableEntityTypes: ['AccessRequest'],
-        decisionEffect: 'review_required',
-        ruleExpression: 'all-conditions',
-        effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
-        roleCodes: ['researcher'],
-        organizationScopeIds: [organizationId],
-        resourceScopes: ['Specimen'],
-        conditions: [{ consent: 'compatible' }],
-        decisionReasonsRequired: true,
-      },
-    });
-    expect(policy.status(), await policy.text()).toBe(201);
-    const accessPolicyId = (await policy.json()).data.accessPolicyId as string;
+    const accessPolicyId = await createAccessPolicy(request, headers, organizationId, stamp);
 
     const biobankContext = {
       broadPurpose: { code: 'health-research' },
@@ -626,6 +658,147 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
       ['created', null, 'biorepository'],
       ['regime_change', 'biorepository', 'biobank'],
     ]);
+  });
+
+  // RF004 AC4, RF021 AC3: each required biorepository field is checked on its
+  // own, and a context needs a planned end date or a closure condition.
+  test('refuses a biorepository context missing studyId, protocolVersion or responsibleInvestigatorId, or both plannedEndDate and closureCondition', async ({ request }) => {
+    const admin = await realLogin(request);
+    const headers = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `collection-incomplete-${stamp}`, studyId: `study-${stamp}`, protocolId: `protocol-${stamp}` };
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    const { organizationId, approvalId } = await prepareGovernance(request, admin.token, ids.collectionId);
+    const full = biorepositoryContext(ids, organizationId, approvalId);
+    const postContext = (governanceContext: Record<string, unknown>) =>
+      request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
+        headers,
+        data: { justification: 'Contexto inicial do biorrepositório', governanceContext },
+      });
+
+    for (const field of ['studyId', 'protocolVersion', 'responsibleInvestigatorId']) {
+      const { [field]: _dropped, ...withoutField } = full;
+      const res = await postContext(withoutField);
+      expect(res.status(), await res.text()).toBe(422);
+      expect((await res.json()).details).toEqual([`${field} é obrigatório para biorrepositório`]);
+    }
+
+    const { plannedEndDate: _plannedEndDate, ...withoutEnd } = full;
+    const noEnd = await postContext(withoutEnd);
+    expect(noEnd.status(), await noEnd.text()).toBe(422);
+    expect((await noEnd.json()).details).toEqual(['biorrepositório exige plannedEndDate ou closureCondition (RF021 AC3)']);
+
+    // A refused event wrote no context, so the full one is still a `created`.
+    const res = await postContext(full);
+    expect(res.status(), await res.text()).toBe(201);
+    expect((await res.json()).data.event.decisionType).toBe('created');
+  });
+
+  // RF004 AC4: a biorepository specimen belongs to its context's study and
+  // protocol.
+  test('refuses a specimen naming another study or protocol than its biorepository collection\'s', async ({ request }) => {
+    const admin = await realLogin(request);
+    const headers = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `collection-linkage-${stamp}`, studyId: `study-a-${stamp}`, protocolId: `protocol-a-${stamp}` };
+    const otherStudyId = `study-b-${stamp}`;
+    const otherProtocolId = `protocol-b-${stamp}`;
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    await governBiorepository(request, admin.token, ids);
+    await seedStudy(otherStudyId);
+    await seedProtocol(otherProtocolId);
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const createSample = async (studyId: string, protocolId: string) => {
+      const seededStorageBox = await seedStorageBoxLocation();
+      seededStorageBoxes.push(seededStorageBox);
+      const { boxId, positionCode } = seededStorageBox;
+      return request.post(`${apiBaseURL}/api/samples`, {
+        headers,
+        data: {
+          participantId: participant.participantId,
+          ...validSampleFields(),
+          boxId,
+          positionCode,
+          studyId,
+          protocolId,
+          collectionId: ids.collectionId,
+        },
+      });
+    };
+
+    const otherStudy = await createSample(otherStudyId, ids.protocolId);
+    expect(otherStudy.status(), await otherStudy.text()).toBe(422);
+    expect((await otherStudy.json()).message).toBe(
+      `studyId ${otherStudyId} difere do studyId do biorrepositório da coleção (${ids.studyId})`
+    );
+
+    const otherProtocol = await createSample(ids.studyId, otherProtocolId);
+    expect(otherProtocol.status(), await otherProtocol.text()).toBe(422);
+    expect((await otherProtocol.json()).message).toBe(
+      `protocolId ${otherProtocolId} difere do protocolId do biorrepositório da coleção (${ids.protocolId})`
+    );
+
+    const own = await createSample(ids.studyId, ids.protocolId);
+    expect([201, 202], await own.text()).toContain(own.status());
+  });
+
+  // RF004 AC5: a biobank collection with an approval in force takes a
+  // specimen, and its context keeps every field it was given.
+  test('admits a specimen into a biobank collection with an approval and reads back every biobank context field', async ({ request }) => {
+    const admin = await realLogin(request);
+    const headers = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const collectionId = `collection-biobank-${stamp}`;
+    await seedCollectionEntity(collectionId);
+    await clearCollectionRegime(collectionId);
+    const { organizationId, approvalId } = await prepareGovernance(request, admin.token, collectionId);
+    const accessPolicyId = await createAccessPolicy(request, headers, organizationId, stamp);
+
+    const context = {
+      broadPurpose: { code: 'health-research' },
+      governancePolicyId: accessPolicyId,
+      accessCommitteeId: 'committee-e2e',
+      institutionalCustodianId: organizationId,
+      futureUseConditions: ['compatible_consent'],
+      applicableConsentModel: ['broad'],
+      newEthicsReviewRule: 'when_required_by_policy',
+    };
+    const event = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/events`, {
+      headers,
+      data: { newRegime: 'biobank', approvalIds: [approvalId], justification: 'Biobanco para uso futuro', governanceContext: context },
+    });
+    expect(event.status(), await event.text()).toBe(201);
+    expect((await event.json()).data.event).toMatchObject({
+      decisionType: 'created',
+      previousRegime: null,
+      newRegime: 'biobank',
+      approvalIds: [approvalId],
+    });
+
+    const governance = (await (await request.get(`${apiBaseURL}/api/collections/${collectionId}/governance`, { headers })).json()).data;
+    expect(governance.governanceRegime).toBe('biobank');
+    expect(governance.governanceContext).toMatchObject({ ...context, collectionId });
+    expect(typeof governance.governanceContext.biobankGovernanceContextId).toBe('string');
+    expect(governance.governanceContext.studyId).toBeUndefined();
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers,
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId },
+    });
+    expect([201, 202], await create.text()).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId;
+
+    const get = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers });
+    expect((await get.json()).data.collectionId).toBe(collectionId);
   });
 });
 
