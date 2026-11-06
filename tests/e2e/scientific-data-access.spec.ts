@@ -13,6 +13,10 @@ import {
   seedDuoConcept,
   closeSeedDb,
   readSampleFileStorage,
+  readSampleFileRow,
+  readDataFileVersions,
+  findSampleFileAuditRows,
+  deleteRetentionPolicies,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -39,6 +43,22 @@ function validSampleFields() {
 
 const seededStorageBoxes: SeededStorageBox[] = [];
 
+// RF007 AC3 (#1477): the DataFile retention policies a case creates, removed in afterAll.
+const createdRetentionPolicyIds: string[] = [];
+
+// RNF029 (#1477): the paths of every binary value in a stored document; a BSON
+// Binary reads back as a Binary (_bsontype 'Binary'), a Buffer or a Uint8Array.
+function binaryFieldPaths(value: unknown, at = ''): string[] {
+  if (value === null || typeof value !== 'object' || value instanceof Date) return [];
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array || (value as any)._bsontype === 'Binary') {
+    return [at || '(document)'];
+  }
+  if ((value as any)._bsontype) return [];
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+    binaryFieldPaths(child, at ? `${at}.${key}` : key)
+  );
+}
+
 async function createRealSample(request: any, token: string): Promise<string> {
   const participant = await createRealParticipant(request, apiBaseURL!, token);
   const seededStorageBox = await seedStorageBoxLocation();
@@ -62,6 +82,7 @@ test.afterAll(async () => {
   await Promise.all(
     seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
   );
+  await deleteRetentionPolicies(createdRetentionPolicyIds).catch(() => {});
   await closeSeedDb();
 });
 
@@ -335,6 +356,167 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(downloadedBytes.equals(replacementContent)).toBe(true);
     const downloadedChecksum = crypto.createHash('sha256').update(downloadedBytes).digest('hex');
     expect(downloadedChecksum).toBe(expectedNewChecksum);
+  });
+
+  test('a replace keeps the previous checksum in a DataFileVersion, a delete is logical and audited, and the file carries its retention policy (RF007 AC3-6, #1477)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sampleID = await createRealSample(request, admin.token);
+
+    // RF007 AC3 (V2E-0475): the server records the active DataFile policy on the file.
+    const policy = await request.post(`${apiBaseURL}/api/retention-policies`, {
+      headers: auth,
+      data: {
+        applicableEntityTypes: ['DataFile'],
+        triggerEvent: 'creation',
+        postRetentionAction: 'destroy',
+        retentionPeriod: 'P3650D',
+        jurisdiction: 'BR',
+        retentionBasis: ['RF007 AC3 e2e fixture basis'],
+        legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+        reviewRequired: false,
+      },
+    });
+    expect(policy.status(), await policy.text()).toBe(201);
+    const retentionPolicyId = String((await policy.json()).data._id);
+    createdRetentionPolicyIds.push(retentionPolicyId);
+
+    const originalContent = Buffer.from('RF007 AC4 e2e version 1 bytes');
+    const originalChecksum = crypto.createHash('sha256').update(originalContent).digest('hex');
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: auth,
+      multipart: { file: { name: 'versioned.csv', mimeType: 'text/csv', buffer: originalContent } },
+    });
+    expect(upload.status(), await upload.text()).toBe(201);
+    const uploaded = (await upload.json()).data;
+    const fileID = String(uploaded._id);
+    expect(uploaded.checksum).toBe(originalChecksum);
+    expect(uploaded.retentionPolicyId).toBe(retentionPolicyId);
+
+    // RF007 AC4: the replace writes a version 1 for the superseded binary and a version 2 for the new one.
+    const replacementContent = Buffer.from('RF007 AC4 e2e version 2 bytes, a different payload');
+    const replacementChecksum = crypto.createHash('sha256').update(replacementContent).digest('hex');
+    const replace = await request.put(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/replace`, {
+      headers: auth,
+      multipart: {
+        changeReason: 'RF007 AC4 e2e correction',
+        file: { name: 'versioned-v2.csv', mimeType: 'text/csv', buffer: replacementContent },
+      },
+    });
+    expect(replace.status(), await replace.text()).toBe(200);
+    const replaced = (await replace.json()).data;
+    expect(replaced.versionNumber).toBe(2);
+    expect(replaced.checksum).toBe(replacementChecksum);
+
+    const versions = await readDataFileVersions(fileID);
+    expect(versions.map((version) => version.versionNumber)).toEqual([1, 2]);
+    const [baseline, current] = versions;
+    expect(baseline).toMatchObject({
+      checksum: originalChecksum,
+      objectUri: uploaded.uri,
+      previousVersionId: null,
+      changeReason: 'initial upload',
+      retentionPolicyId,
+    });
+    expect(current).toMatchObject({
+      checksum: replacementChecksum,
+      objectUri: replaced.uri,
+      previousVersionId: baseline.dataFileVersionId,
+      changeReason: 'RF007 AC4 e2e correction',
+      retentionPolicyId,
+    });
+    const replaceAudit = await findSampleFileAuditRows('FILE_REPLACE', fileID);
+    expect(replaceAudit).toHaveLength(1);
+    expect(replaceAudit[0].payload).toMatchObject({
+      previousChecksum: originalChecksum,
+      checksum: replacementChecksum,
+      dataFileVersionId: current.dataFileVersionId,
+      versionNumber: 2,
+    });
+
+    // RF007 AC3: the listed file still carries its policy after the replace.
+    const listed = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, { headers: auth });
+    expect(listed.status()).toBe(200);
+    expect((await listed.json()).data.find((f: any) => String(f._id) === fileID).retentionPolicyId).toBe(retentionPolicyId);
+
+    // RF007 AC6: the delete marks the row and keeps it, its binary's URI and its versions.
+    const remove = await request.delete(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}`, { headers: auth });
+    expect(remove.status(), await remove.text()).toBe(200);
+    const row = await readSampleFileRow(fileID);
+    expect(row).not.toBeNull();
+    expect(row!.deletedAt).toBeInstanceOf(Date);
+    expect(row!.deletedByAnonId).toBeTruthy();
+    expect(row!.storageUri).toBe(replaced.uri);
+    expect(row!.checksum).toBe(replacementChecksum);
+    expect(row!.retentionPolicyId).toBe(retentionPolicyId);
+    expect(await readDataFileVersions(fileID)).toHaveLength(2);
+    const deleteAudit = await findSampleFileAuditRows('FILE_DELETE', fileID);
+    expect(deleteAudit).toHaveLength(1);
+    expect(deleteAudit[0].payload).toMatchObject({ logicalDelete: true, deletedAt: row!.deletedAt.toISOString() });
+
+    // A deleted file is out of the list and its download answers 404.
+    const afterDelete = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, { headers: auth });
+    expect((await afterDelete.json()).data.some((f: any) => String(f._id) === fileID)).toBe(false);
+    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, { headers: auth });
+    expect(download.status()).toBe(404);
+  });
+
+  test('keeps no file bytes in MongoDB, serves the binary from object storage and records the malware verdict (RNF029 AC3/AC4/AC6/AC7, #1477)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sampleID = await createRealSample(request, admin.token);
+
+    // 69,011 bytes of text, each line carrying a marker no row may hold.
+    const marker = `rnf029-${crypto.randomUUID()}`;
+    const fileContent = Buffer.from(`marker,row\n${`${marker},1\n`.repeat(1500)}`);
+    expect(fileContent.length).toBeGreaterThan(64 * 1024);
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: auth,
+      multipart: { file: { name: 'rnf029-objects.csv', mimeType: 'text/csv', buffer: fileContent } },
+    });
+    expect(upload.status(), await upload.text()).toBe(201);
+    const fileID = String((await upload.json()).data._id);
+    const replacementContent = Buffer.concat([fileContent, Buffer.from(`${marker},2\n`)]);
+    const replace = await request.put(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/replace`, {
+      headers: auth,
+      multipart: { file: { name: 'rnf029-objects-v2.csv', mimeType: 'text/csv', buffer: replacementContent } },
+    });
+    expect(replace.status(), await replace.text()).toBe(200);
+
+    const row = await readSampleFileRow(fileID);
+    const versions = await readDataFileVersions(fileID);
+    expect(row).not.toBeNull();
+    expect(versions).toHaveLength(2);
+
+    // RNF029 AC3/AC6/AC7: neither the file row nor a version row holds a
+    // binary field or any of the file's text, and each is far smaller than the file.
+    for (const doc of [row!, ...versions]) {
+      expect(binaryFieldPaths(doc)).toEqual([]);
+      const serialized = JSON.stringify(doc);
+      expect(serialized).not.toContain(marker);
+      expect(Buffer.byteLength(serialized)).toBeLessThan(8 * 1024);
+    }
+
+    // The binary lives in the object store: the row names no local path, only
+    // the object's URI, and the download serves the bytes MongoDB does not hold.
+    expect(row!.storagePath).toBeNull();
+    expect(row!.storageUri).toMatch(/^objstore:\/\/samples\//);
+    for (const version of versions) {
+      expect(version.objectUri).toMatch(/^objstore:\/\/samples\//);
+    }
+    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, { headers: auth });
+    expect(download.status()).toBe(200);
+    expect((await download.body()).equals(replacementContent)).toBe(true);
+
+    // RNF029 AC4: the test stack sets no MALWARE_SCAN_DRIVER, so the verdict
+    // recorded is not-available from the "none" scanner.
+    expect(row!.malwareScan).toMatchObject({ status: 'not-available', scanner: 'none' });
+    expect(row!.malwareScan.scannedAt).toBeInstanceOf(Date);
   });
 
   test('rejects a disallowed file format (AC#1)', async ({ request }) => {

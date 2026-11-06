@@ -82,6 +82,35 @@ export async function readSampleFileStorage(fileId: string): Promise<SampleFileS
   );
 }
 
+/**
+ * RF007 AC3-6, RNF029 (#1477): the whole sample_files row, so a spec can show
+ * its retention policy, its malware verdict, its logical delete and that it
+ * holds no file bytes. No route returns the row as stored.
+ */
+export async function readSampleFileRow(fileId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('sample_files').findOne({ _id: new ObjectId(fileId) });
+}
+
+/** RF007 AC4 (#1477): a file's DataFileVersion rows, oldest first. No route lists them. */
+export async function readDataFileVersions(fileId: string): Promise<Array<Record<string, any>>> {
+  const db = await getDb();
+  return db.collection('dataFileVersions').find({ fileId }).sort({ versionNumber: 1 }).toArray();
+}
+
+/** RF007 AC6/AC7 (#1477): the audit rows one file action wrote, e.g. FILE_DELETE. */
+export async function findSampleFileAuditRows(action: string, fileId: string): Promise<Array<Record<string, any>>> {
+  const db = await getDb();
+  return db.collection('logs').find({ action, resourceType: 'SampleFile', resourceId: fileId }).toArray();
+}
+
+/** Removes the retention policies a spec created, so a kept volume does not gather them. */
+export async function deleteRetentionPolicies(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const db = await getDb();
+  await db.collection('retentionPolicies').deleteMany({ _id: { $in: ids.map((id) => new ObjectId(id)) } });
+}
+
 export async function seedActiveConsentTemplate(db: Db): Promise<string> {
   // Canonical name is `consent_templates` (snake_case), not the
   // `consentTemplates` field/param name used throughout the API layer —
