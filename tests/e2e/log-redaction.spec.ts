@@ -162,22 +162,33 @@ test.describe('RNF009 C3 / RNF020 C6 log and audit redaction (real backend)', ()
     expect(exported.ok()).toBeTruthy();
     const exportText = (await exported.body()).toString('utf8');
     expect(exportText.startsWith('timestamp,userName,action,entity,result,severity,module,ipSource,message')).toBe(true);
-    expect(exportText).toContain('Usuário registrado com sucesso');
+    // The user-create route stores "Usuário registrado com sucesso"; the read
+    // path's message sanitizer rewrites "usuário <words>" to "usuário", so
+    // the exported create row's message is "usuário" (#1466).
+    const isUserCreate = (line: string) =>
+      line.includes('"CREATE","User","success","info","Usuários",') && line.endsWith(',"usuário"');
+    expect(exportText.split('\n').some(isUserCreate), 'the export holds a user create row').toBe(true);
     expectClean('the log export', exportText);
 
-    // The text above is met by any earlier spec's create too, and the CSV
-    // timestamp column reads "[object Object]", so the export is asked again
-    // for CREATE rows at or after `since` only: this spec's own create.
+    // The row above is met by any earlier spec's create too, so the export is
+    // asked again for CREATE rows at or after `since` only: this spec's own
+    // create. Each row's timestamp column is an ISO 8601 date (#1466), and
+    // the create's is not before `since`.
     const ownExport = await request.get(
       `${apiBaseURL}/api/logs/export/xlsx?limit=1000&action=CREATE&startDate=${encodeURIComponent(since.toISOString())}`,
       { headers: adminAuth }
     );
     expect(ownExport.ok()).toBeTruthy();
     const ownExportText = (await ownExport.body()).toString('utf8');
-    expect(
-      ownExportText.split('\n').some((line) => line.includes('"CREATE"') && line.includes('"Usuário registrado com sucesso"')),
-      'the export holds a create written since the spec began'
-    ).toBe(true);
+    const ownRows = ownExportText.split('\n').slice(1).filter((line) => line.length > 0);
+    const ISO_CELL = /^"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)",/;
+    for (const line of ownRows) {
+      expect(line, 'the export timestamp column is an ISO 8601 date').toMatch(ISO_CELL);
+    }
+    const ownCreate = ownRows.find(isUserCreate);
+    expect(ownCreate, 'the export holds a user create written since the spec began').toBeTruthy();
+    const createdAt = Date.parse(ISO_CELL.exec(ownCreate as string)?.[1] ?? '');
+    expect(createdAt, 'the create row timestamp is not before the spec began').toBeGreaterThanOrEqual(since.getTime());
     expectClean('the filtered log export', ownExportText);
   });
 });

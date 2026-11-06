@@ -293,7 +293,7 @@ describe('GET /api/logs/export/xlsx', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it('returns the same CSV-shaped bytes as the csv endpoint, with xlsx headers', async () => {
-    const logs = [{ timestamp: 't1', userName: 'Bob', action: 'READ', entity: 'e', result: 'ok', severity: 'low', module: 'm', ipSource: '1.1.1.1', message: 'hi' }];
+    const logs = [{ timestamp: '2026-01-01T00:00:00Z', userName: 'Bob', action: 'READ', entity: 'e', result: 'ok', severity: 'low', module: 'm', ipSource: '1.1.1.1', message: 'hi' }];
     vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs });
     app.locals.db = dbForAccessType(4);
     const res = await request(app)
@@ -305,7 +305,7 @@ describe('GET /api/logs/export/xlsx', () => {
     expect(res.headers['content-disposition']).toMatch(/^attachment; filename=logs_\d{4}-\d{2}-\d{2}\.xlsx$/);
 
     // body is really CSV text encoded as bytes, not real xlsx binary
-    expect(res.text).toBe('timestamp,userName,action,entity,result,severity,module,ipSource,message\n"t1","Bob","READ","e","ok","low","m","1.1.1.1","hi"');
+    expect(res.text).toBe('timestamp,userName,action,entity,result,severity,module,ipSource,message\n"2026-01-01T00:00:00.000Z","Bob","READ","e","ok","low","m","1.1.1.1","hi"');
   });
 });
 
