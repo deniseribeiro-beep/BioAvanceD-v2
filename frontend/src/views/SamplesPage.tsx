@@ -20,12 +20,12 @@ export default function SamplesPage() {
   const {
     loading,
     error,
-    search,
     searchInput,
     setSearchInput,
     submitSearch,
     selectedSampleIds,
     filteredSamples,
+    pagedSamples,
     selectedSamples,
     allSelected,
     toggleSelectAll,
@@ -35,6 +35,10 @@ export default function SamplesPage() {
     openPrintModal,
     closePrintModal,
     refreshSamples,
+    currentPage,
+    totalPages,
+    pageSize,
+    setCurrentPage,
   } = useSamplesPage();
 
   const canEdit = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
@@ -125,10 +129,14 @@ export default function SamplesPage() {
         search={searchInput}
         selectedSampleIds={selectedSampleIds}
         filteredSamples={filteredSamples}
+        pagedSamples={pagedSamples}
         selectedSamples={selectedSamples}
         allSelected={allSelected}
         canEdit={canEdit}
         printModalOpen={printModalOpen}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        pageSize={pageSize}
         onSearchChange={setSearchInput}
         onSearchSubmit={submitSearch}
         onToggleSelectAll={toggleSelectAll}
@@ -150,6 +158,7 @@ export default function SamplesPage() {
         onResendConsent={handleResendConsent}
         onAttachExternalDocument={handleAttachExternalDocument}
         onViewPending={handleViewPending}
+        onPageChange={setCurrentPage}
       />
       )}
     </div>

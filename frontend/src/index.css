@@ -163,6 +163,19 @@
     @apply rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground;
   }
 
+  .samples-pagination {
+    @apply mt-4 flex flex-wrap items-center justify-between gap-3;
+  }
+
+  .samples-pagination__summary,
+  .samples-pagination__page {
+    @apply text-sm text-muted-foreground;
+  }
+
+  .samples-pagination__controls {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
   .samples-search-button {
     @apply inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground;
   }

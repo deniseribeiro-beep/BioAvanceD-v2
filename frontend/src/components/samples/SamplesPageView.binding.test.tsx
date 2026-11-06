@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import type { ComponentProps } from 'react';
 import SamplesPageView from './SamplesPageView';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 
@@ -7,7 +8,7 @@ const t = (key: string, fallback?: string) => fallback || key;
 const noop = () => {};
 const asyncNoop = async () => {};
 
-function renderList(samples: SampleWithId[]) {
+function renderList(samples: SampleWithId[], overrides: Partial<ComponentProps<typeof SamplesPageView>> = {}) {
   return render(
     <SamplesPageView
       t={t}
@@ -17,10 +18,14 @@ function renderList(samples: SampleWithId[]) {
       search=""
       selectedSampleIds={[]}
       filteredSamples={samples}
+      pagedSamples={samples}
       selectedSamples={[]}
       allSelected={false}
       canEdit={false}
       printModalOpen={false}
+      currentPage={1}
+      totalPages={1}
+      pageSize={10}
       onSearchChange={noop}
       onSearchSubmit={noop}
       onToggleSelectAll={noop}
@@ -37,6 +42,8 @@ function renderList(samples: SampleWithId[]) {
       onResendConsent={noop}
       onAttachExternalDocument={noop}
       onViewPending={noop}
+      onPageChange={noop}
+      {...overrides}
     />
   );
 }
