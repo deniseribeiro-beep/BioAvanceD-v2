@@ -1121,6 +1121,170 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
     expect(omicsRunBody.data.referenceAssembly).toBe('GRCh38');
   });
 
+  test('records a run\'s provenance, reads its lineage back over a shared file, and resumes a failed run (AC#1/3/4/6, RNF030 AC1, #1480)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sampleID = await createRealSample(request, admin.token);
+    const executor = `User/${admin.user._id}`;
+    const workflowId = 'rf027-e2e-lineage-pipeline';
+    const workflowVersion = '1.4.0';
+
+    // AC#3: the file the two runs share is a real upload whose checksum the
+    // file record carries; the producer writes it and the consumer reads it.
+    const fileContent = Buffer.from('RF027 e2e fixture - intermediate alignment bytes shared by two runs');
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: auth,
+      multipart: { file: { name: 'aligned.raw', mimeType: 'application/octet-stream', buffer: fileContent } },
+    });
+    expect(upload.status()).toBe(201);
+    const uploadBody = await upload.json();
+    expect(uploadBody.data.checksum).toBe(crypto.createHash('sha256').update(fileContent).digest('hex'));
+    expect(uploadBody.data.checksumAlgorithm).toBe('sha256');
+    const sharedFileId: string = uploadBody.data._id;
+
+    const provenance = {
+      workflowId,
+      workflowVersion,
+      createdBy: executor,
+      containerImageDigest: 'sha256:e2e1480000000000000000000000000000000000000000000000000000000',
+      softwareDependencies: [{ name: 'bwa', version: '0.7.17' }, { name: 'samtools', version: '1.19' }],
+      parameters: { threads: 4, minMapQ: 20 },
+      hardwareProfile: { cpu: 'synthetic-8c', memoryGb: 32 },
+      randomSeed: 0,
+      datasetSnapshotId: 'rf027-e2e-snapshot-1480',
+      environmentManifestUri: 'object://synthetic/environment-1480.json',
+    };
+
+    // AC#1, RNF030 AC1: the producer records version, digest, parameters,
+    // dependencies, hardware, seed, environment and executor, and reads back.
+    const producerCreate = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), runStatus: 'succeeded' },
+    });
+    expect(producerCreate.status()).toBe(201);
+    const producerId: string = (await producerCreate.json()).data.workflowRunId;
+
+    const producerRead = await request.get(`${apiBaseURL}/api/workflow-runs/${producerId}`, { headers: auth });
+    expect(producerRead.status()).toBe(200);
+    expect((await producerRead.json()).data).toMatchObject({ workflowRunId: producerId, runStatus: 'succeeded', ...provenance });
+
+    // AC#6: a failed run records why it failed.
+    const failedCreate = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: {
+        ...provenance,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        runStatus: 'failed',
+        failureReason: 'synthetic node loss during variant calling',
+      },
+    });
+    expect(failedCreate.status()).toBe(201);
+    const failedId: string = (await failedCreate.json()).data.workflowRunId;
+
+    // AC#3: the shared file is linked as the producer's output and the failed run's input,
+    // and each link is audited (RF012).
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+    const linkOutput = await request.post(`${apiBaseURL}/api/workflow-runs/${producerId}/files`, {
+      headers: auth,
+      data: { fileId: sharedFileId, direction: 'output' },
+    });
+    expect(linkOutput.status()).toBe(200);
+    expect((await linkOutput.json()).data.outputFileIds).toEqual([sharedFileId]);
+    const linkInput = await request.post(`${apiBaseURL}/api/workflow-runs/${failedId}/files`, {
+      headers: auth,
+      data: { fileId: sharedFileId, direction: 'input' },
+    });
+    expect(linkInput.status()).toBe(200);
+    expect((await linkInput.json()).data.inputFileIds).toEqual([sharedFileId]);
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch, 2);
+
+    // AC#4: the failed run's lineage reads its producer back over the shared file.
+    const lineage = await request.get(`${apiBaseURL}/api/workflow-runs/${failedId}/lineage`, { headers: auth });
+    expect(lineage.status()).toBe(200);
+    const lineageData = (await lineage.json()).data;
+    expect(lineageData.workflowRunId).toBe(failedId);
+    expect(lineageData.truncated).toBe(false);
+    expect(lineageData.runs).toHaveLength(2);
+    expect(lineageData.runs[0]).toMatchObject({ workflowRunId: failedId, relation: 'root', depth: 0, runStatus: 'failed', inputFileIds: [sharedFileId] });
+    expect(lineageData.runs[1]).toMatchObject({
+      workflowRunId: producerId,
+      relation: 'upstream',
+      depth: 1,
+      runStatus: 'succeeded',
+      datasetSnapshotId: 'rf027-e2e-snapshot-1480',
+      outputFileIds: [sharedFileId],
+    });
+    expect(lineageData.edges).toEqual([{ fromWorkflowRunId: producerId, toWorkflowRunId: failedId, fileId: sharedFileId }]);
+
+    const downstream = await request.get(`${apiBaseURL}/api/workflow-runs/${producerId}/lineage`, { headers: auth });
+    expect(downstream.status()).toBe(200);
+    const downstreamRuns = (await downstream.json()).data.runs;
+    expect(downstreamRuns.map((run: any) => [run.workflowRunId, run.relation, run.depth])).toEqual([
+      [producerId, 'root', 0],
+      [failedId, 'downstream', 1],
+    ]);
+
+    // AC#4: the same lineage exports as one FHIR Provenance Bundle, root first.
+    const fhir = await request.get(`${apiBaseURL}/api/export/fhir/workflow-runs/${failedId}/lineage`, { headers: auth });
+    expect(fhir.status()).toBe(200);
+    const fhirData = (await fhir.json()).data;
+    expect(fhirData.lineage).toEqual({ workflowRunId: failedId, truncated: false });
+    expect(fhirData.mapping.mappingId).toBe('MAP-V2-008');
+    const resources = fhirData.bundle.entry.map((entry: any) => entry.resource);
+    expect(resources.map((resource: any) => resource.id)).toEqual([failedId, producerId]);
+    expect(resources[0].entity).toEqual([{ role: 'source', what: { reference: `DocumentReference/${sharedFileId}` } }]);
+    expect(resources[0].agent[0].who.identifier.value).toBe(executor);
+    expect(resources[1].target).toEqual([{ reference: `DocumentReference/${sharedFileId}` }]);
+
+    // AC#6: a failure reason belongs to a failed or cancelled run only.
+    const reasonOnSuccess = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, startedAt: new Date().toISOString(), runStatus: 'succeeded', failureReason: 'not a failure' },
+    });
+    expect(reasonOnSuccess.status()).toBe(422);
+    expect((await reasonOnSuccess.json()).details).toContain('failureReason só é permitido quando runStatus é failed ou cancelled');
+
+    // AC#6: a resume names the failed run, under the same workflow and version.
+    const resumeCreate = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, startedAt: new Date().toISOString(), runStatus: 'running', resumesWorkflowRunId: failedId },
+    });
+    expect(resumeCreate.status()).toBe(201);
+    const resumeId: string = (await resumeCreate.json()).data.workflowRunId;
+    const resumeRead = await request.get(`${apiBaseURL}/api/workflow-runs/${resumeId}`, { headers: auth });
+    expect(resumeRead.status()).toBe(200);
+    expect((await resumeRead.json()).data).toMatchObject({ resumesWorkflowRunId: failedId, failureReason: null, runStatus: 'running' });
+    const failedRead = await request.get(`${apiBaseURL}/api/workflow-runs/${failedId}`, { headers: auth });
+    expect(failedRead.status()).toBe(200);
+    expect((await failedRead.json()).data).toMatchObject({ runStatus: 'failed', failureReason: 'synthetic node loss during variant calling' });
+
+    // AC#6: only a failed or cancelled run is resumed, a changed version is a
+    // new derivation, and the link is never edited after creation.
+    const resumeSucceeded = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, startedAt: new Date().toISOString(), runStatus: 'running', resumesWorkflowRunId: producerId },
+    });
+    expect(resumeSucceeded.status()).toBe(422);
+    expect((await resumeSucceeded.json()).error).toBe('resumesWorkflowRunId deve referenciar uma execução failed ou cancelled');
+
+    const resumeOtherVersion = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, workflowVersion: '1.5.0', startedAt: new Date().toISOString(), runStatus: 'running', resumesWorkflowRunId: failedId },
+    });
+    expect(resumeOtherVersion.status()).toBe(422);
+    expect((await resumeOtherVersion.json()).error).toBe('uma retomada mantém workflowId e workflowVersion da execução retomada');
+
+    const editLink = await request.put(`${apiBaseURL}/api/workflow-runs/${resumeId}`, {
+      headers: auth,
+      data: { resumesWorkflowRunId: producerId },
+    });
+    expect(editLink.status()).toBe(422);
+    expect((await editLink.json()).error).toBe('resumesWorkflowRunId é registrado na criação da execução e não pode ser editado');
+  });
+
   test('registers an omics run without a genomic reference when not applicable (AC#5 "quando aplicável")', async ({
     request,
   }) => {
