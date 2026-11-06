@@ -13,12 +13,13 @@ const hook = vi.hoisted(() => ({
   loadLogs: vi.fn(),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
+const tOverrides = vi.hoisted(() => ({}) as Record<string, string>);
 
 vi.mock('../hooks/useLogs', () => ({
   useLogs: () => ({ ...hook.state, loadLogs: hook.loadLogs, queryLogs: vi.fn() }),
 }));
 vi.mock('../contexts/LanguageContext', () => ({
-  useLanguage: () => ({ t: (k: string, fb?: string) => fb ?? k, language: 'pt-BR' }),
+  useLanguage: () => ({ t: (k: string, fb?: string) => tOverrides[k] ?? fb ?? k, language: 'pt-BR' }),
 }));
 vi.mock('../components/audit/SessionAuditPanel', () => ({
   default: () => <div>session-audit-panel</div>,
@@ -76,6 +77,7 @@ function messages() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  for (const k of Object.keys(tOverrides)) delete tOverrides[k];
 });
 
 afterEach(() => {
@@ -518,5 +520,214 @@ describe('LogsPage: export error readings', () => {
     renderPage([]);
     await userEvent.click(screen.getByRole('button', { name: /Excel/ }));
     expect(await screen.findByText('Cota')).toBeInTheDocument();
+  });
+});
+
+describe('LogsPage: branch readings (#1443)', () => {
+  function fillVerify() {
+    const dateInput = document.querySelector('.logs-verify-date input') as HTMLInputElement;
+    fireEvent.change(dateInput, { target: { value: '2026-10-01' } });
+    fireEvent.change(screen.getByPlaceholderText('logs.verify.hashPlaceholder'), { target: { value: 'h1' } });
+  }
+
+  // Closes any open error card first, so each reading comes from a fresh export.
+  async function exportAndRead(): Promise<string> {
+    const close = screen.queryByRole('button', { name: 'common.close' });
+    if (close) await userEvent.click(close);
+    expect(document.querySelector('.error-message')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: /Excel/ }));
+    await waitFor(() => expect(document.querySelector('.error-message')).not.toBeNull());
+    return (document.querySelector('.error-message > div') as HTMLElement).textContent!;
+  }
+
+  it('filter options drop empty, null and undefined actions, put semantic actions first, and keep raw unknown labels', async () => {
+    renderPage([
+      log({ _id: 'a1', action: 'alpha', entity: '12345678' }),
+      log({ _id: 'a2', action: 'EXPORT', entity: 'User' }),
+      log({ _id: 'a3', action: 'zeta', entity: undefined, resourceType: undefined }),
+      log({ _id: 'a4', action: 'LOGIN' }),
+      log({ _id: 'a5', action: 'null' }),
+      log({ _id: 'a6', action: 'undefined' }),
+      log({ _id: 'a7', action: undefined }),
+    ]);
+    await userEvent.click(screen.getByRole('button', { name: /common\.filter/ }));
+
+    const action = screen.getByLabelText('logs.filters.action');
+    const actionOptions = within(action).getAllByRole('option') as HTMLOptionElement[];
+    expect(actionOptions.map((o) => o.value)).toEqual(['', 'LOGIN', 'EXPORT', 'alpha', 'zeta']);
+    expect(actionOptions.find((o) => o.value === 'alpha')!.textContent).toBe('alpha (alpha)');
+
+    const entity = screen.getByLabelText('logs.filters.entity');
+    expect(within(entity).getAllByRole('option').map((o) => o.textContent)).toEqual(['logs.filters.allEntities', 'Patient', 'User']);
+
+    const resourceType = screen.getByLabelText('Resource Type');
+    expect(within(resourceType).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)).toEqual(['', '12345678', 'Patient', 'User']);
+  });
+
+  it('a log without action, entity, severity or result sorts first ascending and reads N/A in its row and details', async () => {
+    renderPage([
+      log({ _id: 'b1', message: 'full', action: 'CREATE', severity: 'INFO', result: 'success', timestampISO: '2026-01-02T00:00:00Z' }),
+      log({ _id: 'b2', message: 'bare', action: undefined, entity: undefined, severity: undefined, result: undefined, timestampISO: '2026-01-01T00:00:00Z' }),
+      log({ _id: 'b3', message: 'twin', action: 'CREATE', severity: 'INFO', result: 'success', timestampISO: '2026-01-03T00:00:00Z' }),
+    ]);
+    await userEvent.click(screen.getByText('logs.tableHeaders.action'));
+    expect(messages()).toEqual(['bare', 'full', 'twin']);
+    await userEvent.click(screen.getByText('logs.tableHeaders.severity'));
+    expect(messages()).toEqual(['bare', 'full', 'twin']);
+    await userEvent.click(screen.getByText('logs.tableHeaders.result'));
+    expect(messages()).toEqual(['bare', 'full', 'twin']);
+
+    const bare = bodyRows()[0];
+    expect(bare.querySelector('.action-badge')!.textContent).toBe('N/A');
+    await userEvent.click(within(bare).getByTitle('logs.actions.viewDetails'));
+    const details = document.querySelector('.log-details-row') as HTMLElement;
+    expect(Array.from(details.querySelectorAll('.entity-text')).map((s) => s.textContent)).toEqual(['N/A', 'N/A']);
+  });
+
+  it('module badges colour auth, patient and sample modules, and an unknown severity reads neutral', async () => {
+    renderPage([
+      log({ _id: 'c1', message: 'm-auth', module: 'auth', timestampISO: '2026-01-04T00:00:00Z' }),
+      log({ _id: 'c2', message: 'm-patient', module: 'patient', timestampISO: '2026-01-03T00:00:00Z' }),
+      log({ _id: 'c3', message: 'm-sample', module: 'sample', timestampISO: '2026-01-02T00:00:00Z' }),
+      log({ _id: 'c4', message: 'm-debug', severity: 'DEBUG', timestampISO: '2026-01-01T00:00:00Z' }),
+    ]);
+    for (const b of screen.getAllByTitle('logs.actions.viewDetails')) await userEvent.click(b);
+    const badges = Array.from(document.querySelectorAll('.log-details-row .module-badge')) as HTMLElement[];
+    expect(badges.slice(0, 3).map((b) => [b.textContent, b.style.color])).toEqual([
+      ['auth', 'rgb(59, 130, 246)'],
+      ['patient', 'rgb(16, 185, 129)'],
+      ['sample', 'rgb(139, 92, 246)'],
+    ]);
+
+    const debugRow = bodyRows().find((r) => r.textContent!.includes('m-debug'))!;
+    const severity = debugRow.querySelector('.severity-badge') as HTMLElement;
+    expect(severity.textContent).toBe('DEBUG');
+    expect(severity.style.color).toBe('var(--text-light)');
+  });
+
+  it('the IP title reads N/A for a tracking block without ip and for metadata without tracking', async () => {
+    renderPage([
+      log({ _id: 'd1', message: 'no-ip', metadata: { tracking: { userAgent: 'UA' } } as any, timestampISO: '2026-01-02T00:00:00Z' }),
+      log({ _id: 'd2', message: 'no-tracking', metadata: { source: 'cron' } as any, timestampISO: '2026-01-01T00:00:00Z' }),
+    ]);
+    for (const b of screen.getAllByTitle('logs.actions.viewDetails')) await userEvent.click(b);
+    const titles = Array.from(document.querySelectorAll('.log-details-row .ip-text')).map((s) => s.getAttribute('title')!);
+    expect(titles[0].startsWith('IP: N/A\nUser-Agent: UA')).toBe(true);
+    expect(titles[1]).toBe('IP: N/A');
+  });
+
+  it('the full-log button skips an ObjectId with no value and opens a bare _value id', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const first = renderPage([log({ _id: { _type: 'ObjectId', _value: null } as any, message: 'null-oid' })]);
+    await userEvent.click(screen.getByTitle('logs.actions.viewDetails'));
+    await userEvent.click(screen.getByRole('button', { name: /logs\.actions\.viewFullDetails/ }));
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalledWith('Não foi possível extrair ID para navegação');
+    first.unmount();
+
+    renderPage([log({ _id: { _value: 'v-9' } as any, message: 'bare-value' })]);
+    await userEvent.click(screen.getByTitle('logs.actions.viewDetails'));
+    await userEvent.click(screen.getByRole('button', { name: /logs\.actions\.viewFullDetails/ }));
+    expect(navigateMock).toHaveBeenCalledWith('/logs/v-9');
+  });
+
+  it('a report with neither root stops at no proof before verify', async () => {
+    getReport.mockResolvedValue({ data: { data: { proof: ['p'] } } } as any);
+    renderPage([]);
+    fillVerify();
+    await userEvent.click(screen.getByRole('button', { name: /logs\.verify\.action/ }));
+    expect(await screen.findByText('logs.verify.errorNoProof')).toBeInTheDocument();
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it('a verdict without a tampered flag shows no tampered line', async () => {
+    getReport.mockResolvedValue({ data: { data: { proof: ['p'], savedRoot: 'r1' } } } as any);
+    verify.mockResolvedValue({ data: { verified: true } } as any);
+    renderPage([]);
+    fillVerify();
+    await userEvent.click(screen.getByRole('button', { name: /logs\.verify\.action/ }));
+    expect(await screen.findByText('logs.verify.ok')).toBeInTheDocument();
+    expect(screen.queryByText(/logs\.verify\.tamperedLabel/)).toBeNull();
+  });
+
+  it('a failed report reads the body message, then the error message, then the generic text', async () => {
+    getReport
+      .mockRejectedValueOnce({ response: { data: { message: 'Sem relatório' } } })
+      .mockRejectedValueOnce(new Error('rede'))
+      .mockRejectedValueOnce({});
+    renderPage([]);
+    fillVerify();
+    const run = () => userEvent.click(screen.getByRole('button', { name: /logs\.verify\.action/ }));
+    await run();
+    expect(await screen.findByText('Sem relatório')).toBeInTheDocument();
+    await run();
+    expect(await screen.findByText('rede')).toBeInTheDocument();
+    await run();
+    expect(await screen.findByText('logs.verify.errorGeneric')).toBeInTheDocument();
+  });
+
+  it('a JSON export body read as an object, or with no message, reads as its error or the generic one', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderPage([]);
+    exportExcel.mockResolvedValueOnce({ data: { error: 'Negado' }, headers: { 'content-type': 'application/json' }, status: 200 } as any);
+    expect(await exportAndRead()).toBe('logs.exportError: Negado');
+
+    exportExcel.mockResolvedValueOnce({ data: '{}', headers: { 'content-type': 'application/json' }, status: 200 } as any);
+    expect(await exportAndRead()).toBe('logs.exportError: logs.exportError');
+  });
+
+  it('a rejected export with a message-only body, an empty body or a bare status reads each fallback', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderPage([]);
+    exportExcel.mockRejectedValueOnce({ response: { data: { message: 'Só mensagem' } } });
+    expect(await exportAndRead()).toBe('logs.exportError: Só mensagem');
+
+    exportExcel.mockRejectedValueOnce({ response: { data: {} } });
+    expect(await exportAndRead()).toBe('logs.exportError: logs.exportError');
+
+    exportExcel.mockRejectedValueOnce({ response: { data: jsonBlob({}), status: 500 } });
+    expect(await exportAndRead()).toBe('logs.exportError: logs.exportError');
+
+    exportExcel.mockRejectedValueOnce({ response: { status: 503 } });
+    expect(await exportAndRead()).toBe('logs.exportError: Erro 503: logs.exportError');
+  });
+
+  it('an unreadable error blob with no status reads the unknown-status template', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    tOverrides['logs.exportErrorStatus'] = 'Falha {status} {statusText}';
+    const bad = new Blob(['x']);
+    Object.defineProperty(bad, 'text', { value: () => Promise.resolve('not json') });
+    exportExcel.mockRejectedValueOnce({ response: { data: bad } });
+    renderPage([]);
+    expect(await exportAndRead()).toBe('logs.exportError: Falha logs.exportErrorUnknown logs.exportError');
+  });
+
+  it('the copied note clears after two seconds and a later copy keeps its own note', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderPage([
+      log({ _id: 'h-a', auditHash: 'aaa', timestampISO: '2026-01-02T00:00:00Z' }),
+      log({ _id: 'h-b', auditHash: 'bbb', timestampISO: '2026-01-01T00:00:00Z' }),
+    ]);
+    for (const b of screen.getAllByTitle('logs.actions.viewDetails')) fireEvent.click(b);
+    const [copyA, copyB] = screen.getAllByRole('button', { name: 'logs.details.copyHash' });
+    const hashSpan = (hash: string) => screen.getByText(hash, { exact: false, selector: 'span.log-detail-value' });
+
+    vi.useFakeTimers();
+    fireEvent.click(copyA);
+    await act(async () => {});
+    expect(within(hashSpan('aaa')).getByText('logs.details.copied')).toBeInTheDocument();
+
+    act(() => { vi.advanceTimersByTime(1000); });
+    fireEvent.click(copyB);
+    await act(async () => {});
+    act(() => { vi.advanceTimersByTime(1999); });
+    expect(screen.getAllByText('logs.details.copied')).toHaveLength(1);
+    expect(within(hashSpan('bbb')).getByText('logs.details.copied')).toBeInTheDocument();
+
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(screen.queryByText('logs.details.copied')).toBeNull();
+    expect(writeText.mock.calls).toEqual([['aaa'], ['bbb']]);
   });
 });
