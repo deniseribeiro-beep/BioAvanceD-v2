@@ -787,7 +787,6 @@ export const logService = {
   getById: (id: number | string) => api.get<{ success: boolean; data: Log }>(`/logs/${id}`),
   getLogs: (filters?: any) => api.get<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs', { params: filters }),
   queryLogs: (filters: any) => api.post<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs/query', filters),
-  exportCSV: (filters?: any) => api.get('/logs/export/csv', { params: filters, responseType: 'blob' }),
   exportExcel: (filters?: any) => api.get('/logs/export/xlsx', { params: filters, responseType: 'blob' }),
   // #1005: every user's sessions, revoked ones included, pseudonymised.
   getSessions: (filters?: SessionAuditFilters) =>

@@ -25,7 +25,7 @@ vi.mock('../components/audit/SessionAuditPanel', () => ({
   default: () => <div>session-audit-panel</div>,
 }));
 vi.mock('../services/api', () => ({
-  logService: { exportExcel: vi.fn(), exportCSV: vi.fn() },
+  logService: { exportExcel: vi.fn() },
   auditService: { getReport: vi.fn(), verify: vi.fn() },
 }));
 vi.mock('react-router-dom', async (importOriginal) => ({

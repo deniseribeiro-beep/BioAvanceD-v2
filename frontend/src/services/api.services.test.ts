@@ -212,7 +212,6 @@ const rows: Row[] = [
   ['logService.getById', () => logService.getById('l1'), 'get', ['/logs/l1']],
   ['logService.getLogs', () => logService.getLogs({ page: 1 }), 'get', ['/logs', { params: { page: 1 } }]],
   ['logService.queryLogs', () => logService.queryLogs({ q: 1 }), 'post', ['/logs/query', { q: 1 }]],
-  ['logService.exportCSV', () => logService.exportCSV({ a: 1 }), 'get', ['/logs/export/csv', { params: { a: 1 }, responseType: 'blob' }]],
   ['logService.exportExcel', () => logService.exportExcel({ a: 1 }), 'get', ['/logs/export/xlsx', { params: { a: 1 }, responseType: 'blob' }]],
   ['logService.getSessions', () => logService.getSessions({ isRevoked: 'true' }), 'get', ['/logs/sessions', { params: { isRevoked: 'true' } }]],
   ['auditService.getReport with a hash', () => auditService.getReport('2026-10-01', 'h1'), 'get', ['/audit/report/2026-10-01', { params: { hash: 'h1' } }]],
