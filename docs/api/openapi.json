@@ -3814,6 +3814,59 @@
         }
       }
     },
+    "/api/retention-policies/data-classes": {
+      "get": {
+        "tags": [
+          "retention-policies"
+        ],
+        "summary": "The data classes with their purpose, sensitivity, policy, period and owner (RNF022 AC1)",
+        "description": "Gates: authenticate, requireRole(4). Registered before /{id}, so data-classes is never read as an id.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One record per data class.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/retention-policies/{id}": {
       "put": {
         "tags": [

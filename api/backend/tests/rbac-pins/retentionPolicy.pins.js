@@ -7,6 +7,7 @@ module.exports = {
     { method: 'POST', path: '/', roles: [4] },
     { method: 'PUT', path: '/:id', roles: [4] },
     { method: 'GET', path: '/active', roles: [4] },
+    { method: 'GET', path: '/data-classes', roles: [4] },
     { method: 'GET', path: '/:id', roles: [4] },
     { method: 'GET', path: '/', roles: [4] },
   ],
