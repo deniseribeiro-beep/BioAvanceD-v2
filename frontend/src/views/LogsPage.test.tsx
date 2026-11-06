@@ -731,3 +731,35 @@ describe('LogsPage: branch readings (#1443)', () => {
     expect(writeText.mock.calls).toEqual([['aaa'], ['bbb']]);
   });
 });
+
+describe('LogsPage: a raw object id (#1451)', () => {
+  const keyWarnings = (err: { mock: { calls: unknown[][] } }) =>
+    err.mock.calls.filter((c) => String(c[0]).includes('key'));
+
+  it('opens a raw { $oid } id by its hex, and expanding one such row expands only it', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderPage([
+      log({ _id: { $oid: '65a1b2c3d4e5f60718293a4b' } as any, message: 'raw-a', timestampISO: '2026-01-02T00:00:00Z' }),
+      log({ _id: { $oid: '65a1b2c3d4e5f60718293a4c' } as any, message: 'raw-b', timestampISO: '2026-01-01T00:00:00Z' }),
+    ]);
+    expect(keyWarnings(err)).toEqual([]);
+    await userEvent.click(screen.getAllByTitle('logs.actions.viewDetails')[0]);
+    expect(document.querySelectorAll('.log-details-row')).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button', { name: /logs\.actions\.viewFullDetails/ }));
+    expect(navigateMock.mock.calls).toEqual([['/logs/65a1b2c3d4e5f60718293a4b']]);
+  });
+
+  it('a plain-object id with no hex is not linkable, and two such rows keep apart', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderPage([
+      log({ _id: { foo: 1 } as any, message: 'plain-a', timestampISO: '2026-01-02T00:00:00Z' }),
+      log({ _id: { bar: 2 } as any, message: 'plain-b', timestampISO: '2026-01-01T00:00:00Z' }),
+    ]);
+    expect(keyWarnings(err)).toEqual([]);
+    await userEvent.click(screen.getAllByTitle('logs.actions.viewDetails')[0]);
+    expect(document.querySelectorAll('.log-details-row')).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button', { name: /logs\.actions\.viewFullDetails/ }));
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalledWith('Não foi possível extrair ID para navegação');
+  });
+});
