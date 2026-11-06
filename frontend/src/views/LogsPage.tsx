@@ -341,7 +341,7 @@ export default function LogsPage() {
     }
   };
 
-  const handleExport = async (format: 'csv' | 'xlsx') => {
+  const handleExport = async () => {
     setExporting(true);
     setExportError(null);
     
@@ -349,9 +349,7 @@ export default function LogsPage() {
       const queryFilters: any = { ...filters };
       if (searchTerm) queryFilters.search = searchTerm;
 
-      const response = format === 'xlsx'
-        ? await logService.exportExcel(queryFilters)
-        : await logService.exportCSV(queryFilters);
+      const response = await logService.exportExcel(queryFilters);
 
       // Verifica se a resposta é realmente um blob ou se é JSON de erro
       const contentType = String(response.headers['content-type'] || '');
@@ -382,18 +380,14 @@ export default function LogsPage() {
       }
 
       const blob = new Blob([response.data], {
-        type: format === 'xlsx' 
-          ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-          : 'text/csv;charset=utf-8;'
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
       
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       const dateStr = new Date().toISOString().split('T')[0];
-      const fileName = format === 'xlsx' 
-        ? `logs_${dateStr}.xlsx` 
-        : `logs_${dateStr}.csv`;
+      const fileName = `logs_${dateStr}.xlsx`;
       link.download = fileName;
       document.body.appendChild(link);
       link.click();
@@ -728,7 +722,7 @@ export default function LogsPage() {
           </Button>
           <Button
             variant="secondary"
-            onClick={() => handleExport('xlsx')}
+            onClick={() => handleExport()}
             disabled={exporting || loading}
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
             title={t('logs.exportExcel')}
