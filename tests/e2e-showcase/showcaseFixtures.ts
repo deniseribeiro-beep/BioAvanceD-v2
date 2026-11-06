@@ -21,6 +21,8 @@ const CAPTIONS: Array<[RegExp, string, string]> = [
   [/RF010 AC6/, 'Revogação de consentimento', 'Uma revogação muda a decisão de acesso de permitir para negar'],
   [/RF009/, 'Monitoramento de freezers', 'Leitura fora da faixa gera um alerta para o operador'],
   [/RF017\/RF006/, 'Armazenamento e estado do espécime', 'Freezer, prateleira, rack, caixa e posição até o esgotamento'],
+  [/RF003\/RNF008/, 'Gestão de usuários', 'Cadastro, troca de papel que encerra a sessão e inativação'],
+  [/RNF021 AC6/, 'Sessões, auditoria e permissões', 'O usuário encerra suas sessões; o administrador consulta os Logs e as permissões'],
   [/Inventário de Amostras/, 'Login e inventário de amostras', 'Acesso real, as amostras registradas, uma busca e o detalhe do espécime'],
 ];
 

@@ -6,6 +6,8 @@ import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
 import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, seedStudy, seedProtocol, seedCollectionEntity, seedActiveConsent, seedDuoConcept, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
 import { seedSensorWithPolicy, findTemperatureIncident, removeSeededSensor, closeSeedSensorDb, type SeededSensor } from '../e2e/helpers/seedSensor';
 import { queryTemperaturePoints } from '../e2e/helpers/queryInflux';
+import { completeFirstLoginMfa } from '../e2e/helpers/completeFirstLoginMfa';
+import { computeTotp } from '../e2e/helpers/totp';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -1588,6 +1590,253 @@ test.describe('Human-paced e2e showcase reel — login and sample inventory', ()
     await expect(page.getByText('Status Atual:', { exact: true })).toBeVisible();
     await beat(page, LARGE);
     await page.getByText('Armazenagem e Projeto').first().scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+  });
+});
+
+// W5 reel (security, LGPD and RBAC): user management through the real UI
+// (RF003: a user created, its role changed and the account inactivated), the
+// live session a role change ends (RNF008 AC7, RNF021 AC2), a user listing and
+// ending their own sessions on Segurança da Conta (RNF021 AC6), the Logs
+// screen with its session view (RF012, RNF009) and the read-only Permissões
+// tab (RNF008 AC2). Each ended session is checked off camera through the API,
+// as auth-access-security.spec.ts does. Deliberately not demoed: the MFA
+// reset, the administrator password set and the auditor grant, which
+// auth-access-security.spec.ts covers, and the audit chain's hash check, which
+// needs a known event hash (audit-chain-integrity.spec.ts). The fixture users
+// stay in place: deletion is logical (RF003 AC4).
+test.describe('Human-paced e2e showcase reel — W5 security, LGPD and RBAC', () => {
+  const password = 'Fixture@123456-forte';
+  // A short suffix keeps the username and email unique on a reused volume
+  // (RF003 AC1) while they still read as a name on camera.
+  const suffix = () => Date.now().toString(36).slice(-4);
+
+  test('RF003/RNF008 an administrator creates a user, changes its role, which ends its session, and inactivates it', async ({ page, request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
+    const username = `marina.souza.${suffix()}`;
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    // 1. The administrator signs in.
+    await page.goto('/login');
+    await expect(page.getByTestId('login-page')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('login-username-input').fill(testUser);
+    await beat(page, SMALL);
+    await page.getByTestId('login-password-input').fill(testPass);
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await page.waitForURL('**/system-management');
+    await beat(page, LARGE);
+
+    // 2. A new user through the real form. (RF003 AC1)
+    await page.goto('/system-management?tab=users');
+    await expect(page.getByTestId('users-table')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('new-user-button').click();
+    await expect(page.getByTestId('new-user-form')).toBeVisible();
+    await beat(page, LARGE);
+    await page.getByTestId('new-user-name-input').fill('Marina Souza');
+    await beat(page, SMALL);
+    await page.getByTestId('new-user-email-input').fill(`${username}@example.com`);
+    await beat(page, SMALL);
+    await page.getByTestId('new-user-username-input').fill(username);
+    await beat(page, SMALL);
+    await page.getByTestId('new-user-password-input').fill(password);
+    await beat(page, SMALL);
+    // The form opens on Técnico but its untouched default sends access type
+    // 1, which registers an external user; choosing the role sends 2.
+    await page.getByTestId('new-user-role-select').selectOption('Coordenador');
+    await beat(page, SMALL);
+    await page.getByTestId('new-user-role-select').selectOption('Técnico');
+    await expect(page.getByTestId('new-user-role-select')).toHaveValue('Técnico');
+    await beat(page, SMALL);
+    const created = page.waitForResponse(
+      (response) => response.url().includes('/api/users/register') && response.request().method() === 'POST'
+    );
+    await page.getByTestId('new-user-submit-button').click();
+    const createdResponse = await created;
+    expect(createdResponse.ok(), await createdResponse.text()).toBeTruthy();
+    expect(createdResponse.request().postDataJSON(), 'the form registers a technician').toMatchObject({
+      roleName: 'Técnico',
+      accessType: 2,
+    });
+    const createdBody = await createdResponse.json();
+    const userID: string = createdBody.data?._id || createdBody.data?.id;
+    expect(userID, 'the register response names the new user').toBeTruthy();
+    await expect(page).toHaveURL(/system-management/);
+    const row = page.locator('tr', { has: page.getByTestId(`edit-user-button-${userID}`) });
+    await expect(row).toContainText('Marina Souza');
+    await expect(row.locator('.role-badge').first()).toContainText('Técnico');
+    await expect(row.locator('.status-badge').first()).toHaveText('Ativo');
+    await row.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // Off camera: the new user enrols the second factor and opens a session,
+    // as on a first login.
+    const target = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+    const targetStatus = () =>
+      request.get(`${apiBaseURL}/api/user/security/status`, { headers: { Authorization: `Bearer ${target.token}` } });
+    expect((await targetStatus()).status(), 'the session works before the role change').toBe(200);
+
+    // 3. A role change through the edit form ends that live session.
+    // (RF003 AC3, RNF008 AC7, RNF021 AC2)
+    await page.getByTestId(`edit-user-button-${userID}`).click();
+    await expect(page.getByTestId('new-user-form')).toBeVisible();
+    await beat(page, LARGE);
+    await page.getByTestId('new-user-role-select').selectOption('Coordenador');
+    await beat(page, MEDIUM);
+    const roleSaved = page.waitForResponse(
+      (response) => response.url().includes(`/api/users/${userID}`) && response.request().method() === 'PUT'
+    );
+    await page.getByTestId('new-user-submit-button').click();
+    const roleResponse = await roleSaved;
+    expect(roleResponse.status(), await roleResponse.text()).toBe(200);
+    await expect(page).toHaveURL(/system-management/);
+    await expect(row.locator('.role-badge').first()).toContainText('Coordenador');
+    await row.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+    expect((await targetStatus()).status(), 'the role change ended the session').toBe(401);
+
+    // 4. Inactivation keeps the account's record. (RF003 AC4, RNF022 AC5)
+    await page.getByTestId(`edit-user-button-${userID}`).click();
+    await expect(page.getByTestId('new-user-form')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('new-user-status-select').scrollIntoViewIfNeeded();
+    await page.getByTestId('new-user-status-select').selectOption('Inativo');
+    await beat(page, SMALL);
+    const statusSaved = page.waitForResponse(
+      (response) => response.url().includes(`/api/users/${userID}`) && response.request().method() === 'PUT'
+    );
+    await page.getByTestId('new-user-submit-button').click();
+    const statusResponse = await statusSaved;
+    expect(statusResponse.status(), await statusResponse.text()).toBe(200);
+    await expect(page).toHaveURL(/system-management/);
+    await expect(row.locator('.status-badge').first()).toHaveText('Inativo');
+    await row.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+  });
+
+  test('RNF021 AC6/RF012/RNF008 AC2 a user ends their own sessions, then the administrator reads the Logs and the permissions tab', async ({ page, request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
+    const username = `rafael.lima.${suffix()}`;
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    // Off camera: a Técnico with an enrolled second factor and a session on
+    // another device. The first-login enrolment is inline, not through
+    // completeFirstLoginMfa, so the TOTP secret is kept for the UI login below.
+    const admin = await realLogin(request);
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { name: 'Rafael Lima', email: `${username}@example.com`, username, password, accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const qr = await request.post(`${apiBaseURL}/api/auth/two-factor/qr-first-login`, { data: { username, password } });
+    expect(qr.ok(), await qr.text()).toBeTruthy();
+    const secret: string = (await qr.json()).data?.secret;
+    expect(secret).toBeTruthy();
+    const enable = await request.post(`${apiBaseURL}/api/auth/two-factor/enable-first-login`, {
+      data: { username, password, code: computeTotp(secret) },
+    });
+    expect(enable.ok(), await enable.text()).toBeTruthy();
+    const otherToken: string = (await enable.json()).data.token;
+    const otherStatus = () =>
+      request.get(`${apiBaseURL}/api/user/security/status`, { headers: { Authorization: `Bearer ${otherToken}` } });
+    expect((await otherStatus()).status(), 'the other session works before').toBe(200);
+
+    // 1. The user signs in with password and second factor. The beats before
+    // the code keep this login in a later second than the enrolment above, so
+    // the two sessions' tokens differ.
+    await page.goto('/login');
+    await expect(page.getByTestId('login-page')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('login-username-input').fill(username);
+    await beat(page, SMALL);
+    await page.getByTestId('login-password-input').fill(password);
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await expect(page.getByTestId('two-factor-section')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('login-mfa-code-input').fill(computeTotp(secret));
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await page.waitForURL('**/dashboard');
+    await beat(page, LARGE);
+
+    // 2. Segurança da Conta lists both sessions, this one marked current, and
+    // the user ends the other one. (RNF021 AC6)
+    await page.goto('/user/security');
+    await expect(page.getByTestId('security-page-title')).toBeVisible();
+    const sessions = page.getByTestId('session-item');
+    await expect(sessions).toHaveCount(2);
+    await expect(page.locator('[data-testid="session-item"][data-session-current="true"]')).toHaveCount(1);
+    await page.getByTestId('sessions-list').scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+    await page
+      .locator('[data-testid="session-item"][data-session-current="false"] [data-testid^="revoke-session-button-"]')
+      .click();
+    await expect(page.getByTestId('security-confirm-proceed-button')).toBeVisible();
+    await beat(page, MEDIUM);
+    const ended = page.waitForResponse(
+      (response) => response.url().includes('/api/auth/sessions/') && response.request().method() === 'DELETE'
+    );
+    await page.getByTestId('security-confirm-proceed-button').click();
+    expect((await ended).status()).toBe(200);
+    await expect(sessions).toHaveCount(1);
+    await beat(page, MEDIUM);
+    expect((await otherStatus()).status(), 'the ended session is refused').toBe(401);
+
+    // 3. Sair ends the current session too. (RNF021 AC2, RF001 AC4)
+    await page.getByRole('button', { name: 'Sair' }).click();
+    await page.waitForURL('**/login');
+    await expect(page.getByTestId('login-page')).toBeVisible();
+    await beat(page, LARGE);
+
+    // 4. The administrator signs in and opens Logs. (RF012, RNF009)
+    await page.getByTestId('login-username-input').fill(testUser);
+    await beat(page, SMALL);
+    await page.getByTestId('login-password-input').fill(testPass);
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await page.waitForURL('**/system-management');
+    await beat(page, MEDIUM);
+    await page.locator('a[href="/logs"]').first().click();
+    await page.waitForURL('**/logs');
+    await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible();
+    await expect(page.locator('.logs-table-container')).toBeVisible();
+    await beat(page, LARGE);
+    await page.locator('.logs-table-container').scrollIntoViewIfNeeded();
+    await beat(page, MEDIUM);
+
+    // The session view, narrowed to sessions their own users ended: the one
+    // ended above is among them, its owner shown as a pseudonym.
+    const reasonsLoaded = page.waitForResponse(
+      (response) => response.url().includes('/api/logs/sessions') && response.url().includes('revocationReason=user_request')
+    );
+    await page.getByLabel('Motivo da revogação').selectOption('user_request');
+    expect((await reasonsLoaded).status()).toBe(200);
+    await expect(page.getByTestId('session-audit-reason').first()).toHaveText('Solicitação do usuário');
+    await page.getByTestId('session-audit-table').scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // 5. The Permissões tab: the seeded roles and the permissions enforcement
+    // reads, shown read-only. (RNF008 AC2)
+    await page.goto('/system-management?tab=security');
+    await expect(page.getByTestId('security-page')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('security-nav-permissions').click();
+    await expect(page.getByTestId('security-permissions-readonly-note')).toBeVisible();
+    const manageSystem = page.getByTestId('security-permission-toggle-administrator-manageSystem');
+    await expect(manageSystem).toBeChecked();
+    await expect(manageSystem).toBeDisabled();
+    await beat(page, LARGE);
+    await page.getByTestId('security-permission-role-auditor').scrollIntoViewIfNeeded();
+    await expect(page.getByTestId('security-permission-toggle-auditor-viewAuditLogs')).toBeChecked();
     await beat(page, LARGE);
   });
 });
