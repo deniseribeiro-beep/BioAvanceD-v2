@@ -20,6 +20,7 @@ import { createRealParticipant, closeSeedDb as closeSeedParticipantDb } from './
 import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
   findStagingRecordsByBatch,
+  findLgpdQuarantineBatch,
   findCommittedSample,
   findCommittedPatient,
   findCommittedParticipantIdentity,
@@ -928,6 +929,343 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       expect(committedSample).toBeNull();
     } finally {
       await removeFhirImportFixtures(specimenId, patientId, batchId);
+    }
+  });
+
+  // #1478, RF011 AC1-AC3, RNF024 AC1: the import validation reads its FHIR
+  // profiles and identifier namespaces from the stored registries, and the
+  // mapping release those rows hang off is created and read back.
+  test('validates an import against a registered FHIR profile and identifier namespace, read from the mapping and profile registries (RF011 AC1, AC2, AC3, RNF024 AC1)', async ({
+    request,
+  }) => {
+    const { token } = await realLogin(request);
+    const headers = { Authorization: `Bearer ${token}` };
+    const suffix = String(Date.now());
+    const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
+    const systemUri = `https://bioadvanced.dev/fhir/NamingSystem/e2e-rf011-${suffix}`;
+    const canonicalUrl = `https://bioadvanced.dev/fhir/StructureDefinition/e2e-rf011-patient-${suffix}`;
+
+    let namespaceId: string | undefined;
+    let releaseId: string | undefined;
+    let profileId: string | undefined;
+    try {
+      // RF011 AC3: the identifier namespace the Patient's identifier.system names.
+      const namespaceResponse = await request.post(`${apiBaseURL}/api/identifier-namespaces`, {
+        headers,
+        data: {
+          namespaceKey: `e2e-rf011-${suffix}`,
+          systemUri,
+          authorityDomain: 'bioadvanced.dev',
+          targetTypes: ['patient'],
+          semanticVersion: '1.0.0',
+          status: 'active',
+          effectivePeriod: { start: dayAgo },
+          configurationReleaseId: 'e2e-rf011-config',
+        },
+      });
+      expect(namespaceResponse.status(), await namespaceResponse.text()).toBe(201);
+      namespaceId = (await namespaceResponse.json()).data.identifierNamespaceRegistryId;
+
+      // RF011 AC2: a mapping release naming that namespace, read back from the registry.
+      const releaseResponse = await request.post(`${apiBaseURL}/api/interoperability-mapping-releases`, {
+        headers,
+        data: {
+          standard: 'FHIR R4',
+          mappingVersion: `e2e-rf011-${suffix}`,
+          mappingUri: `https://bioadvanced.dev/fhir/mappings/e2e-rf011-${suffix}`,
+          checksum: `sha256:${'a'.repeat(64)}`,
+          authorId: 'e2e-rf011-author',
+          status: 'approved',
+          roundTripLossReportUri: 'https://bioadvanced.dev/fhir/reports/e2e-rf011-loss',
+          canonicalModelReleaseId: 'canonical-model-v2.0.0',
+          fhirVersion: '4.0.1',
+          mappingDefinitionUri: 'https://bioadvanced.dev/fhir/mappings/e2e-rf011.map',
+          mappingDefinitionHash: 'b'.repeat(64),
+          conformanceTestReportUri: 'https://bioadvanced.dev/fhir/reports/e2e-rf011-conformance',
+          coverageNumerator: 3,
+          coverageDenominator: 4,
+          coverageRatio: 0.75,
+          roundTripLossesPresent: true,
+          profileRegistryIds: [`e2e-rf011-profile-${suffix}`],
+          resourceTypes: ['Patient'],
+          identifierNamespaceRegistryIds: [namespaceId],
+          approvedBy: ['e2e-rf011-approver'],
+          approvedAt: new Date().toISOString(),
+          effectivePeriod: { start: dayAgo },
+        },
+      });
+      expect(releaseResponse.status(), await releaseResponse.text()).toBe(201);
+      releaseId = (await releaseResponse.json()).data.interoperabilityMappingReleaseId;
+
+      const releaseRead = await request.get(`${apiBaseURL}/api/interoperability-mapping-releases/${releaseId}`, { headers });
+      expect(releaseRead.status()).toBe(200);
+      const release = (await releaseRead.json()).data;
+      expect(release.mappingVersion).toBe(`e2e-rf011-${suffix}`);
+      expect(release.status).toBe('approved');
+      expect(release.identifierNamespaceRegistryIds).toEqual([namespaceId]);
+      expect(release.coverageRatio).toBe(0.75);
+
+      // RF011 AC2: a profile must hang off a stored release.
+      const profileBody = {
+        canonicalUrl,
+        fhirVersion: '4.0.1',
+        profileVersion: '1.0.0',
+        identifierSystems: [systemUri],
+        status: 'active',
+      };
+      const orphanProfile = await request.post(`${apiBaseURL}/api/fhir-profiles`, {
+        headers,
+        data: { ...profileBody, mappingReleaseId: `no-such-release-${suffix}` },
+      });
+      expect(orphanProfile.status()).toBe(404);
+      expect((await orphanProfile.json()).error).toBe(`mappingReleaseId no-such-release-${suffix} não encontrado`);
+
+      const profileResponse = await request.post(`${apiBaseURL}/api/fhir-profiles`, {
+        headers,
+        data: { ...profileBody, mappingReleaseId: releaseId },
+      });
+      expect(profileResponse.status(), await profileResponse.text()).toBe(201);
+      profileId = (await profileResponse.json()).data.fhirProfileRegistryId;
+
+      const profileRead = await request.get(`${apiBaseURL}/api/fhir-profiles/${profileId}`, { headers });
+      expect(profileRead.status()).toBe(200);
+      const profile = (await profileRead.json()).data;
+      expect(profile.canonicalUrl).toBe(canonicalUrl);
+      expect(profile.mappingReleaseId).toBe(releaseId);
+      expect(profile.status).toBe('active');
+
+      const validate = (resource: unknown) =>
+        request.post(`${apiBaseURL}/api/import/validate`, {
+          headers,
+          multipart: {
+            dataType: 'patients',
+            file: {
+              name: 'rf011-patient.json',
+              mimeType: 'application/json',
+              buffer: Buffer.from(JSON.stringify(resource)),
+            },
+          },
+        });
+      const good = {
+        resourceType: 'Patient',
+        id: `rf011-validate-${suffix}`,
+        meta: { profile: [`${canonicalUrl}|1.0.0`] },
+        identifier: [{ system: systemUri, value: `rf011-${suffix}` }],
+        name: [{ text: 'RF011 validate' }],
+        gender: 'female',
+        birthDate: '1990-01-01',
+      };
+
+      // RF011 AC1, RNF024 AC1: the registered profile and namespace validate.
+      const accepted = await validate(good);
+      expect(accepted.status(), await accepted.text()).toBe(200);
+      const acceptedBody = await accepted.json();
+      expect(acceptedBody.success).toBe(true);
+      expect(acceptedBody.metadata.fhir).toBe(true);
+      expect(acceptedBody.metadata.fhirResourcesValidated).toBe(1);
+
+      // An unsupported FHIR version, an unregistered profile version and an
+      // unregistered identifier.system are each refused, located by expression.
+      const unregisteredSystem = `https://bioadvanced.dev/fhir/NamingSystem/e2e-rf011-unregistered-${suffix}`;
+      const refused = await validate({
+        ...good,
+        fhirVersion: '3.0.2',
+        meta: { profile: [`${canonicalUrl}|9.9.9`] },
+        identifier: [{ system: unregisteredSystem, value: 'x' }],
+      });
+      expect(refused.status()).toBe(400);
+      const refusedBody = await refused.json();
+      expect(refusedBody.errors).toEqual([
+        'Versão FHIR não suportada: 3.0.2 (aceitas: 4.0.1, R4)',
+        `Perfil FHIR não registrado: ${canonicalUrl}|9.9.9`,
+        `identifier.system fora de namespace registrado: ${unregisteredSystem}`,
+      ]);
+      expect(refusedBody.operationOutcome.issue.map((issue: { expression?: string[] }) => issue.expression)).toEqual([
+        ['/fhirVersion'],
+        ['/meta/profile/0'],
+        ['/identifier/0/system'],
+      ]);
+
+      // Control: with the profile row deleted the same resource is refused,
+      // so the 200 above came from the stored profile.
+      const profileDelete = await request.delete(`${apiBaseURL}/api/fhir-profiles/${profileId}`, { headers });
+      expect(profileDelete.status()).toBe(200);
+      profileId = undefined;
+      const afterDelete = await validate(good);
+      expect(afterDelete.status()).toBe(400);
+      expect((await afterDelete.json()).errors).toEqual([`Perfil FHIR não registrado: ${canonicalUrl}|1.0.0`]);
+    } finally {
+      if (profileId) await request.delete(`${apiBaseURL}/api/fhir-profiles/${profileId}`, { headers });
+      if (releaseId) await request.delete(`${apiBaseURL}/api/interoperability-mapping-releases/${releaseId}`, { headers });
+      if (namespaceId) await request.delete(`${apiBaseURL}/api/identifier-namespaces/${namespaceId}`, { headers });
+    }
+  });
+
+  // #1478, RF011 AC4, AC6: staging maps a ResearchStudy onto Study and writes
+  // the round-trip loss report on the batch and on each record, kept at rest.
+  test('stages a Bundle that writes its round-trip loss report and maps a ResearchStudy (RF011 AC4, AC6)', async ({
+    request,
+  }) => {
+    const { token } = await realLogin(request);
+    const headers = { Authorization: `Bearer ${token}` };
+    const suffix = String(Date.now());
+    const { patientId, specimenId, bundle } = buildFhirBundle(`loss-${suffix}`);
+    const payload = {
+      ...bundle,
+      entry: [
+        ...bundle.entry,
+        {
+          resource: {
+            resourceType: 'ResearchStudy',
+            id: `rf011-study-${suffix}`,
+            identifier: [{ value: `rf011-study-${suffix}` }],
+            title: `RF011 e2e study ${suffix}`,
+            status: 'active',
+            relatedArtifact: [{ type: 'documentation', label: 'CAAE-e2e-rf011' }],
+            keyword: [{ text: 'rf011-e2e' }],
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Organization',
+            id: `rf011-org-${suffix}`,
+            name: 'RF011 e2e unattached organization',
+          },
+        },
+      ],
+    };
+
+    let batchId: string | undefined;
+    try {
+      const stageResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, { headers, data: payload });
+      expect(stageResponse.status(), await stageResponse.text()).toBe(201);
+      const stageBody = await stageResponse.json();
+      batchId = stageBody.batch._id;
+
+      // RF011 AC4: the ResearchStudy maps onto Study, its keyword reported unmapped.
+      expect(stageBody.batch.mappedResources.mappedResourceCount).toBe(1);
+      expect(stageBody.batch.mappedResources.mappedResources[0]).toMatchObject({
+        resourceIndex: 4,
+        resourceType: 'ResearchStudy',
+        mappingId: 'MAP-V2-009',
+        canonicalEntity: 'Study',
+        canonicalFields: ['ethicsApprovalId', 'studyId', 'studyStatus', 'studyTitle'],
+        unmappedCount: 1,
+        unmapped: ['ResearchStudy.keyword[0].text'],
+        truncated: false,
+      });
+
+      // RF011 AC6: the batch's loss report names the resource no record took.
+      expect(stageBody.batch.roundTripLoss).toEqual({
+        unattachedResourceCount: 1,
+        unattached: [{ resourceIndex: 5, resourceType: 'Organization' }],
+      });
+
+      // RF011 AC6: each record's loss report names the paths it drops.
+      const record = stageBody.records[0];
+      expect(record.status).toBe('READY_TO_COMMIT');
+      expect(record.roundTripLoss.unmappedCount).toBe(2);
+      expect(record.roundTripLoss.unmapped).toEqual([
+        { source: 'patient', path: 'Patient.identifier[0].system' },
+        { source: 'specimen', path: 'Specimen.identifier[0].value' },
+      ]);
+      expect(record.roundTripLoss.truncated).toBe(false);
+      expect(record.roundTripLoss.limitations).toContain('O system do identificador do Patient não é mantido.');
+
+      // The reports are written at rest, in plain form, on the stored rows.
+      const storedBatch = await findLgpdQuarantineBatch(String(batchId));
+      expect(storedBatch?.roundTripLoss).toEqual(stageBody.batch.roundTripLoss);
+      expect(storedBatch?.mappedResources?.mappedResourceCount).toBe(1);
+      const [storedRecord] = await findStagingRecordsByBatch(String(batchId));
+      expect(storedRecord?.roundTripLoss?.unmapped).toEqual(record.roundTripLoss.unmapped);
+    } finally {
+      await removeFhirImportFixtures(specimenId, patientId, batchId);
+    }
+  });
+
+  // #1478, RNF024 AC1-AC3: the FHIR export carries each record's canonical
+  // identifier, validates as R4 under its mapping, and writes nothing back.
+  test('exports a Study and a WorkflowRun as FHIR R4 carrying their canonical identifiers, writing neither (RNF024 AC1, AC2, AC3)', async ({
+    request,
+  }) => {
+    const { token, user } = await realLogin(request);
+    const headers = { Authorization: `Bearer ${token}` };
+    const suffix = String(Date.now());
+    const studyId = `rf011-export-study-${suffix}`;
+    const ethics = `CAAE-e2e-rnf024-${suffix}`;
+
+    let workflowRunId: string | undefined;
+    try {
+      const createStudy = await request.post(`${apiBaseURL}/api/studies`, {
+        headers,
+        data: { studyId, studyTitle: `e2e RNF024 ${studyId}`, ethicsApprovalId: [ethics] },
+      });
+      expect(createStudy.status(), await createStudy.text()).toBe(201);
+      const before = await (await request.get(`${apiBaseURL}/api/studies/${studyId}`, { headers })).json();
+
+      const studyExport = await request.get(`${apiBaseURL}/api/export/fhir/studies/${studyId}`, { headers });
+      expect(studyExport.status(), await studyExport.text()).toBe(200);
+      const data = (await studyExport.json()).data;
+      expect(data.standard).toBe('HL7 FHIR');
+      expect(data.fhirVersion).toBe('4.0.1');
+      expect(data.mapping.mappingId).toBe('MAP-V2-009');
+      expect(data.mappingReleaseId).toBeNull();
+      expect(data.conformanceClaimed).toBe(false);
+      expect(data.bundle.resourceType).toBe('Bundle');
+      expect(data.bundle.type).toBe('collection');
+      expect(data.bundle.entry).toHaveLength(1);
+      // RNF024 AC2: the canonical studyId is the resource id and identifier.
+      const resource = data.bundle.entry[0].resource;
+      expect(resource.resourceType).toBe('ResearchStudy');
+      expect(resource.id).toBe(studyId);
+      expect(resource.identifier).toEqual([{ value: studyId }]);
+      expect(resource.title).toBe(`e2e RNF024 ${studyId}`);
+      expect(resource.status).toBe('active');
+      expect(resource.relatedArtifact).toEqual([{ type: 'documentation', label: ethics }]);
+
+      // RNF024 AC3: the export leaves the Study as it was.
+      const after = await (await request.get(`${apiBaseURL}/api/studies/${studyId}`, { headers })).json();
+      expect(after).toEqual(before);
+      const missingStudy = await request.get(`${apiBaseURL}/api/export/fhir/studies/no-such-study-${suffix}`, { headers });
+      expect(missingStudy.status()).toBe(404);
+
+      const createRun = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+        headers,
+        data: {
+          workflowId: 'variant-calling-pipeline',
+          workflowVersion: '2.3.1',
+          createdBy: `User/${user._id}`,
+          containerImageDigest: 'sha256:e2e0000000000000000000000000000000000000000000000000000000000',
+          softwareDependencies: [{ name: 'bwa', version: '0.7.17' }],
+          parameters: { threads: 8 },
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          runStatus: 'succeeded',
+          hardwareProfile: { cpu: 'synthetic', gpu: null },
+          environmentManifestUri: 'object://synthetic/environment.json',
+        },
+      });
+      expect(createRun.status(), await createRun.text()).toBe(201);
+      workflowRunId = (await createRun.json()).data.workflowRunId;
+
+      // RNF024 AC2: the run's id and its author's identifier carry into Provenance.
+      const runExport = await request.get(`${apiBaseURL}/api/export/fhir/workflow-runs/${workflowRunId}`, { headers });
+      expect(runExport.status(), await runExport.text()).toBe(200);
+      const runData = (await runExport.json()).data;
+      expect(runData.mapping.mappingId).toBe('MAP-V2-008');
+      const provenance = runData.bundle.entry[0].resource;
+      expect(provenance.resourceType).toBe('Provenance');
+      expect(provenance.id).toBe(workflowRunId);
+      expect(provenance.agent[0].who.identifier.value).toBe(`User/${user._id}`);
+
+      const lineageExport = await request.get(`${apiBaseURL}/api/export/fhir/workflow-runs/${workflowRunId}/lineage`, { headers });
+      expect(lineageExport.status(), await lineageExport.text()).toBe(200);
+      const lineageData = (await lineageExport.json()).data;
+      expect(lineageData.lineage.workflowRunId).toBe(workflowRunId);
+      expect(lineageData.bundle.entry[0].resource.id).toBe(workflowRunId);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/studies/${studyId}`, { headers });
+      if (workflowRunId) await request.delete(`${apiBaseURL}/api/workflow-runs/${workflowRunId}`, { headers });
     }
   });
 });
