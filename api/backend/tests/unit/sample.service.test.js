@@ -269,6 +269,57 @@ describe('sample.service', () => {
       expect(movementArg.destination).toBe(`storage:${BOX_ID.toString()}:A1`);
     });
 
+    it.each([
+      ['a formatted CPF', '123.456.789-09'],
+      ['a bare CPF', '52998224725'],
+      ['an e-mail', 'joana@example.com']
+    ])('refuses a caller-supplied barcode holding %s with BARCODE_PERSONAL_DATA before any write (RNF007 AC4, #1463)', async (_kind, barcode) => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await expect(sampleService.createSample(db, validSampleData({ barcode })))
+        .rejects.toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      expect(db.collections.sample_movements.insertOne).not.toHaveBeenCalled();
+    });
+
+    it.each([['JOANA-001'], ['JoanaXimenes'], ['XIMENES2026']])('refuses a caller-supplied barcode %s holding the participant name (RNF007 AC4, #1463)', async (barcode) => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collection('participantIdentities').findOne.mockResolvedValue({ participantId: '12345678', patientName: 'Joana Ximenes dos Santos' });
+
+      const error = await sampleService.createSample(db, validSampleData({ barcode })).catch((caught) => caught);
+      expect(error).toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      expect(error.message).not.toContain('Joana');
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      expect(db.collections.sample_movements.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('reads the participant name from a ciphertext-only identity record (RNF007 AC4, #1463)', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '12345678',
+        patientName: 'Joana Ximenes dos Santos'
+      });
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collection('participantIdentities').findOne.mockResolvedValue({ ...encrypted, patientName: null });
+
+      await expect(sampleService.createSample(db, validSampleData({ barcode: 'JOANA-001' })))
+        .rejects.toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('keeps an opaque caller-supplied barcode when the participant has a name on file (RNF007 AC4, #1463)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collection('participantIdentities').findOne.mockResolvedValue({ participantId: '12345678', patientName: 'Joana Ximenes dos Santos' });
+
+      const result = await sampleService.createSample(db, validSampleData());
+
+      expect(result.barcode).toBe('BR-TEST-001');
+    });
+
     it('persists the resolved storageLocation (boxId/positionCode) on the created sample, per issue #462', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
@@ -1920,6 +1971,18 @@ describe('sample.service', () => {
 
       const result = await sampleService.updateSample(db, 'missing', { quantity: 5 });
       expect(result).toBeNull();
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('refuses a barcode update holding a CPF or the participant name with BARCODE_PERSONAL_DATA (RNF007 AC4, #1463)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-U', participantId: '12345678', initialQuantity: 10, currentQuantity: 10 });
+      db.collection('participantIdentities').findOne.mockResolvedValue({ participantId: '12345678', patientName: 'Joana Ximenes dos Santos' });
+
+      for (const barcode of ['52998224725', 'JOANA-001']) {
+        await expect(sampleService.updateSample(db, 'SPC-U', { barcode }))
+          .rejects.toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      }
       expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
     });
 

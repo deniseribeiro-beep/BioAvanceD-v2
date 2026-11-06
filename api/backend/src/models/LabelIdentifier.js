@@ -108,11 +108,18 @@ class LabelIdentifierModel {
     return fields;
   }
 
-  static assertNoPersonalData(encodedValue) {
+  // The kind of personal data the value holds ('um CPF', 'um e-mail',
+  // 'texto livre'), or null. Names the kind, never the value.
+  static personalDataIn(encodedValue) {
     const value = String(encodedValue);
     const hit = PII_PATTERNS.find(({ test }) => test(value));
-    if (hit) {
-      throw new Error(`encodedValue não pode conter ${hit.what} (RULE-012)`);
+    return hit ? hit.what : null;
+  }
+
+  static assertNoPersonalData(encodedValue) {
+    const what = LabelIdentifierModel.personalDataIn(encodedValue);
+    if (what) {
+      throw new Error(`encodedValue não pode conter ${what} (RULE-012)`);
     }
   }
 }

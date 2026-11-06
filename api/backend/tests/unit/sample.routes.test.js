@@ -262,6 +262,22 @@ describe('sample.routes', () => {
       expect(res.body.details).toContain('participantId deve ser uma string com 8 dígitos');
     });
 
+    it('answers 422 BARCODE_PERSONAL_DATA on create when the barcode holds personal data (RNF007 AC4)', async () => {
+      const refusal = Object.assign(new Error('O código de barras não pode conter um e-mail (RNF007 AC4)'), { statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn().mockRejectedValue(refusal) });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({
+        success: false,
+        error: 'BARCODE_PERSONAL_DATA',
+        message: 'O código de barras não pode conter um e-mail (RNF007 AC4)',
+        details: ['O código de barras não pode conter um e-mail (RNF007 AC4)'],
+      });
+    });
+
     it('rejects registrationDate as a non-canonical alias of registeredAt', async () => {
       const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});
@@ -2623,6 +2639,24 @@ describe('sample.routes', () => {
         error: 'LEGACY_BARCODE_WRITE_REFUSED',
         message: 'Sample.barcode (ELM-0116) não é mais gravado',
         details: ['Sample.barcode (ELM-0116) não é mais gravado'],
+      });
+    });
+
+    // RNF007 AC4 (#1463): a barcode holding personal data answers 422 with its code.
+    it('answers 422 BARCODE_PERSONAL_DATA when the service refuses a barcode holding personal data', async () => {
+      const refusal = Object.assign(new Error('O código de barras não pode conter um CPF (RNF007 AC4)'), { statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ barcode: '52998224725' });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({
+        success: false,
+        error: 'BARCODE_PERSONAL_DATA',
+        message: 'O código de barras não pode conter um CPF (RNF007 AC4)',
+        details: ['O código de barras não pode conter um CPF (RNF007 AC4)'],
       });
     });
 

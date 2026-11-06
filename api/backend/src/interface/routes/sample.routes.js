@@ -509,6 +509,11 @@ router.post('/',
         });
       }
 
+      // RNF007 AC4 (#1463): a barcode holding personal data answers its stable code.
+      if (error.code === 'BARCODE_PERSONAL_DATA') {
+        return res.status(422).json({ success: false, error: 'BARCODE_PERSONAL_DATA', message: errorMessage, details: [errorMessage] });
+      }
+
       if ([400, 422].includes(error.status || error.statusCode)) {
         return res.status(error.status || error.statusCode).json({
           success: false,
@@ -1260,6 +1265,10 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
         message: error.message,
         details: [error.message]
       });
+    }
+    // RNF007 AC4 (#1463): a barcode holding personal data answers its stable code.
+    if (error.code === 'BARCODE_PERSONAL_DATA') {
+      return res.status(422).json({ success: false, error: 'BARCODE_PERSONAL_DATA', message: error.message, details: [error.message] });
     }
     return res.status(400).json({
       success: false,

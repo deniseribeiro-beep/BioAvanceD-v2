@@ -23,6 +23,7 @@ const operationalStateDecisionService = require('./operationalStateDecision.serv
 const { applySampleOrganizationScope } = require('./sampleTenancy.service');
 const participantIdentityService = require('./participantIdentity.service');
 const { issueSpecimenLabel } = require('./specimenLabel.service');
+const LabelIdentifierModel = require('../models/LabelIdentifier');
 const { withoutLegacyBarcode, assertLegacyBarcodeWritable } = require('../utils/sampleBarcodeWindow');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
@@ -56,6 +57,48 @@ function createStatusWriteRefusal(message) {
   const error = createSampleValidationError(message, 422);
   error.code = STATUS_WRITE_REFUSED;
   return error;
+}
+
+// RNF007 AC4 (#1463): a caller-supplied code carries no personal data. The
+// refusal names the kind, never the value, as the ingestion path does.
+const BARCODE_PERSONAL_DATA = 'BARCODE_PERSONAL_DATA';
+function createBarcodePersonalDataRefusal(what) {
+  const error = createSampleValidationError(`O código de barras não pode conter ${what} (RNF007 AC4)`, 422);
+  error.code = BARCODE_PERSONAL_DATA;
+  error.details = [error.message];
+  return error;
+}
+
+const NAME_PARTICLES = new Set(['das', 'dos']);
+function foldLetters(value) {
+  return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+// A name part (3+ letters, not a particle) that is a whole letter run of
+// the code, or the whole name or two adjacent parts run together.
+function containsPersonName(code, name) {
+  const foldedName = foldLetters(name);
+  const parts = foldedName.split(/[^a-z]+/).filter((part) => part.length >= 3 && !NAME_PARTICLES.has(part));
+  if (parts.length === 0) return false;
+  const foldedCode = foldLetters(code);
+  const runs = new Set(foldedCode.split(/[^a-z]+/).filter(Boolean));
+  if (parts.some((part) => runs.has(part))) return true;
+  const letters = foldedCode.replace(/[^a-z]/g, '');
+  const joined = [foldedName.replace(/[^a-z]/g, '')];
+  for (let i = 0; i + 1 < parts.length; i += 1) joined.push(parts[i] + parts[i + 1]);
+  return joined.some((candidate) => candidate.length >= 6 && letters.includes(candidate));
+}
+
+// Reads the name through ParticipantIdentity (decryptIdentity falls back to
+// the ciphertext sibling) and never logs or returns it.
+async function assertCodeHasNoPersonalData(db, code, participantId) {
+  const what = LabelIdentifierModel.personalDataIn(code);
+  if (what) throw createBarcodePersonalDataRefusal(what);
+  if (!participantId) return;
+  const identityRecord = await (await getCollection(db, 'participantIdentities')).findOne({ participantId: String(participantId) });
+  const identity = identityRecord ? participantIdentityService.decryptIdentity(identityRecord) : null;
+  if (identity?.patientName && containsPersonName(code, identity.patientName)) {
+    throw createBarcodePersonalDataRefusal('o nome do participante');
+  }
 }
 
 /**
@@ -342,7 +385,9 @@ class SampleService {
       } else {
         // Converte para string se necessário
         sampleData.barcode = String(sampleData.barcode).trim();
-        
+        // RNF007 AC4 (#1463): refused before any write.
+        await assertCodeHasNoPersonalData(db, sampleData.barcode, sampleData.participantId);
+
         // #944: era "RF004", que nao menciona barcode em nenhum criterio.
         // O requisito e dict-02 ELM-0116 (Specimen.barcodeValue, Unico).
         // Verifica duplicidade por barcode (se fornecido)
@@ -864,6 +909,10 @@ class SampleService {
       }
       // #1378 (ELM-0116): after the migration window, barcode is not written.
       assertLegacyBarcodeWritable(updateData);
+      // RNF007 AC4 (#1463): a written barcode carries no personal data.
+      if (Object.prototype.hasOwnProperty.call(updateData, 'barcode') && String(updateData.barcode ?? '').trim()) {
+        await assertCodeHasNoPersonalData(db, String(updateData.barcode).trim(), existing.participantId);
+      }
       if (requestedStatus) {
         // RF026 AC7: closed only by POST /api/samples/:id/close (validated
         // total consumption) or an executed disposition, never by an edit.
