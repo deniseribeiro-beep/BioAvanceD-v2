@@ -46,7 +46,6 @@ export default function AnalysisUploadModal({
   const [sampleInput, setSampleInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [showValidation, setShowValidation] = useState(false);
 
   const resolvedSampleId = sampleId || sampleInput;
   const canEditResearcher = hasRole(['Administrador']) || user?.roleName === 'Administrador';
@@ -155,7 +154,6 @@ export default function AnalysisUploadModal({
       setMethod('');
       setDescription('');
       setSubmitting(false);
-      setShowValidation(false);
       setResearcher(
         user?.name || user?.username || user?.email || ''
       );
@@ -168,21 +166,13 @@ export default function AnalysisUploadModal({
   }, [isOpen, sampleId, user]);
 
   const handleSubmit = async () => {
-    if (!isFormValid) {
-      setShowValidation(true);
-      setError('');
-      return;
-    }
+    // Types only: Enviar is disabled until isFormValid, which needs a file.
+    if (!file) return;
 
     setSubmitting(true);
     setError('');
-    setShowValidation(false);
 
     try {
-      if (!file) {
-        setShowValidation(true);
-        return;
-      }
       const formData = new FormData();
       formData.append('file', file);
       formData.append('analysisType', analysisType);
@@ -220,13 +210,6 @@ export default function AnalysisUploadModal({
     equipmentId
   );
 
-  const fileError = showValidation && !file ? 'Selecione um arquivo' : '';
-  const analysisTypeError = showValidation && !analysisType ? 'Selecione o tipo de análise' : '';
-  const equipmentError = showValidation && !equipmentId ? 'Selecione o equipamento utilizado' : '';
-  const methodError = showValidation && !method ? 'Selecione o método/protocolo' : '';
-  const researcherError = showValidation && !researcher.trim() ? 'Informe o pesquisador responsável' : '';
-  const sampleError = showValidation && !resolvedSampleId ? 'Selecione a amostra' : '';
-
   if (!isOpen) return null;
 
   const formContent = (
@@ -245,11 +228,6 @@ export default function AnalysisUploadModal({
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             disabled={submitting}
           />
-          {fileError && (
-            <span style={{ color: 'var(--danger)', fontSize: '0.85rem' }}>
-              {fileError}
-            </span>
-          )}
         </div>
 
         <div>
@@ -258,7 +236,6 @@ export default function AnalysisUploadModal({
             value={analysisType}
             onChange={(e) => setAnalysisType(e.target.value)}
             options={analysisTypeOptions}
-            error={analysisTypeError}
             disabled={loadingTypes}
           />
           {typesError && (
@@ -274,7 +251,6 @@ export default function AnalysisUploadModal({
             value={equipmentId}
             onChange={(e) => setEquipmentId(e.target.value)}
             options={equipmentOptions}
-            error={equipmentError}
             disabled={loadingAnalyticalEquipment || analyticalEquipment.length === 0}
           />
           {analyticalEquipment.filter(eq => eq.status === 'Maintenance').length > 0 && (
@@ -290,7 +266,6 @@ export default function AnalysisUploadModal({
             value={method}
             onChange={(e) => setMethod(e.target.value)}
             options={methodOptions}
-            error={methodError}
           />
         </div>
 
@@ -300,7 +275,6 @@ export default function AnalysisUploadModal({
             value={researcher}
             onChange={(e) => setResearcher(e.target.value)}
             placeholder="Pesquisador"
-            error={researcherError}
             disabled={!canEditResearcher}
           />
         </div>
@@ -313,7 +287,6 @@ export default function AnalysisUploadModal({
               value={sampleInput}
               onChange={(e) => setSampleInput(e.target.value)}
               placeholder="Digite ou selecione a amostra"
-              error={sampleError}
               helperText="Selecione um ID cadastrado ou digite manualmente"
             />
             <datalist id="sample-list">
