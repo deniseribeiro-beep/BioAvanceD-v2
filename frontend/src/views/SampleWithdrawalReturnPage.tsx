@@ -129,8 +129,7 @@ export default function SampleWithdrawalReturnPage() {
     return match?.label || String(quality);
   };
 
-  const getRcsQualityLabel = (currentSample: Sample | null) => {
-    if (!currentSample) return '-';
+  const getRcsQualityLabel = (currentSample: Sample) => {
     const rcs = currentSample.rcs_evaluation || currentSample;
     const grade = String(rcs.final_grade || '').trim();
     const score = rcs.rcs_score ?? null;
@@ -186,21 +185,21 @@ export default function SampleWithdrawalReturnPage() {
     try {
       const response = await sampleService.getByBarcode(searchBarcode.trim());
       
-      // Compatibilidade com estrutura { success, data: { sample, patient } }
+      // Compatibilidade com estrutura { success, data: { sample, participant } }
       const responseData = response.data as any;
       const result = responseData?.data || responseData;
       
       if (result?.sample) {
         setSample(result.sample);
-        if (result.patient) {
+        if (result.participant) {
           setPatientInfo({
-            patientID: String(result.patient.patientID),
-            patientName: result.patient.patientName
+            patientID: String(result.participant.participantId),
+            patientName: result.participant.patientName
           });
         }
         // Preencher projeto vinculado automaticamente
         if (result.sample.linkedProject) {
-          setWithdrawForm(prev => ({ ...prev, linkedProject: result.sample.linkedProject || '' }));
+          setWithdrawForm(prev => ({ ...prev, linkedProject: result.sample.linkedProject }));
         }
         // Carregar movimentações
         await loadMovements(result.sample._id || '');
@@ -267,9 +266,6 @@ export default function SampleWithdrawalReturnPage() {
   // Validar formulário de devolução
   const validateReturnForm = (): string | null => {
     const pendingQty = getPendingReturnQuantity(sample);
-    if (pendingQty <= 0) {
-      return 'Não há quantidade pendente de devolução';
-    }
     if (!returnForm.returnType) {
       return 'Tipo de devolução é obrigatório';
     }

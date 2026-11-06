@@ -57,8 +57,8 @@ const PARTIAL_SAMPLE = {
   quantityStatus: 'partial',
 };
 
-function found(sample: Record<string, unknown>, patient: Record<string, unknown> | null = null) {
-  return { data: { success: true, data: { sample, patient } } };
+function found(sample: Record<string, unknown>, participant: Record<string, unknown> | null = null) {
+  return { data: { success: true, data: { sample, participant } } };
 }
 
 async function search(barcode = 'BR-2026-001') {
@@ -88,7 +88,7 @@ describe('SampleWithdrawalReturnPage search', () => {
 
   it('shows the sample, its patient, storage, quality and movements on Enter', async () => {
     mocks.getByBarcode.mockResolvedValue(
-      found({ ...FULL_SAMPLE, withdrawalDate: '2026-01-02T10:00:00Z' }, { patientID: 42, patientName: 'Maria Silva' })
+      found({ ...FULL_SAMPLE, withdrawalDate: '2026-01-02T10:00:00Z' }, { participantId: 42, patientName: 'Maria Silva' })
     );
     mocks.getSampleLocation.mockResolvedValue({
       success: true,
