@@ -266,6 +266,34 @@ jobs:
       - name: Run frontend unit tests
         run: npm --prefix frontend run test:unit
 
+  # #1454: the backend vitest suite and its 90% coverage floor
+  # (api/backend/vitest.config.js) ran nowhere in CI. backend-unit-runner
+  # runs current-state:ci, which has no vitest run, and its image leaves
+  # tests/unit and tests/integration out (#947). The suite mocks its
+  # databases in tests/vitest.setup.js, so it runs natively, like the
+  # frontend unit job, with no compose stack.
+  backend-unit-tests:
+    name: Backend unit tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: api/backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm --prefix api/backend ci
+
+      - name: Run backend unit tests with coverage
+        run: npm --prefix api/backend run test:coverage
+
   # #1324: RNF017 criterion 1 also asks for security tests; this job audits
   # both lockfiles for known advisories. `npm audit` reads the lockfile
   # alone, so no install step is needed.
