@@ -441,6 +441,9 @@ services:
       # unsuffixed value that #959 item 4 had just finished fixing. Removed.
       # RF022 AC9, RNF014 C7: refuse to start without a ready ReadinessReport.
       FOUNDATION_READINESS_REQUIRED: "true"
+      # #1467: the platform alert check runs every 10 s on the test stack so the
+      # RNF015 C2 e2e proof sees a tick inside one test; the code default stays */5 * * * *.
+      PLATFORM_ALERT_CRON: "*/10 * * * * *"
     command: ["npm", "start"]
     # #828: the API writes the uploaded staging file to /app/uploads and the
     # worker reads it back by absolute path (staging-import.service.js ->
