@@ -2153,3 +2153,81 @@ describe('FHIR import staging', () => {
     });
   });
 });
+
+// RF011 AC5, RNF024 AC2 (#1479): a staged and committed import records the
+// mapping release each profile it declares is registered under.
+describe('FHIR import staging records the mapping release it was read with', () => {
+  const PROFILE = 'https://bioadvanced.dev/fhir/StructureDefinition/rf011-ac5';
+  let db;
+
+  function profileRow(overrides) {
+    return { canonicalUrl: PROFILE, fhirVersion: '4.0.1', profileVersion: '1.0.0', status: 'active', ...overrides };
+  }
+
+  function declaring(bundle, profiles) {
+    return {
+      ...bundle,
+      meta: { profile: profiles.bundle || [] },
+      entry: bundle.entry.map((entry) => {
+        const declared = profiles[entry.resource.resourceType];
+        return declared ? { resource: { ...entry.resource, meta: { profile: declared } } } : entry;
+      }),
+    };
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    db = createDb();
+    process.env.CONSENT_SECRET = 'test-consent-secret';
+    vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({ success: true, provider: 'resend', messageId: 'email-001' });
+    db.collection('fhirProfileRegistries').docs.push(
+      profileRow({ mappingReleaseId: 'REL-ACTIVE' }),
+      profileRow({ profileVersion: '2.0.0', mappingReleaseId: 'REL-BUNDLE' }),
+      profileRow({ profileVersion: '3.0.0', status: 'draft', mappingReleaseId: 'REL-DRAFT' }),
+      profileRow({ profileVersion: '4.0.0', mappingReleaseId: 'REL-MISSING' }),
+    );
+    db.collection('interoperabilityMappingReleases').docs.push(
+      { interoperabilityMappingReleaseId: 'REL-ACTIVE', mappingVersion: '2.1.0' },
+      { interoperabilityMappingReleaseId: 'REL-BUNDLE', mappingVersion: '5.0.0' },
+      { interoperabilityMappingReleaseId: 'REL-DRAFT', mappingVersion: '9.0.0' },
+    );
+  });
+
+  it('records on the batch and on each record only the releases their declared profiles name', async () => {
+    const bundle = declaring(signedBundle, {
+      bundle: [`${PROFILE}|2.0.0`],
+      Patient: [`${PROFILE}|1.0.0`],
+      Specimen: [`${PROFILE}|4.0.0`],
+      Observation: [`${PROFILE}|3.0.0`],
+    });
+    const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+    expect(result.batch.mappingReleases).toEqual([
+      { mappingReleaseId: 'REL-ACTIVE', mappingVersion: '2.1.0' },
+      { mappingReleaseId: 'REL-BUNDLE', mappingVersion: '5.0.0' },
+    ]);
+    expect(db.collections.import_batches.docs[0].mappingReleases).toEqual(result.batch.mappingReleases);
+    const bySpecimen = Object.fromEntries(db.collections.import_staging_records.docs
+      .map((doc) => [revealStagedRecord(doc).normalized.specimenId, doc.mappingReleases]));
+    expect(bySpecimen['S-001']).toEqual([{ mappingReleaseId: 'REL-ACTIVE', mappingVersion: '2.1.0' }]);
+    expect(bySpecimen['S-ERR']).toEqual([]);
+  });
+
+  it('records no release for a Bundle that declares no registered profile', async () => {
+    const result = await fhirImportStagingService.stageBundle(db, declaring(signedBundle, { Patient: [`${PROFILE}|7.7.7`] }), { fileName: 'bundle.json' });
+    expect(result.batch.mappingReleases).toEqual([]);
+    expect(db.collections.import_staging_records.docs.every((doc) => Array.isArray(doc.mappingReleases) && doc.mappingReleases.length === 0)).toBe(true);
+  });
+
+  it('keeps the release on the committed record and names it in the commit audit', async () => {
+    const staged = await fhirImportStagingService.stageBundle(db, declaring(signedBundle, { Patient: [`${PROFILE}|1.0.0`] }), { fileName: 'bundle.json' });
+    const committed = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+    expect(committed.committed).toBe(1);
+
+    const expected = [{ mappingReleaseId: 'REL-ACTIVE', mappingVersion: '2.1.0' }];
+    const committedRecord = db.collections.import_staging_records.docs.find((doc) => doc.status === 'COMMITTED');
+    expect(committedRecord.mappingReleases).toEqual(expected);
+    const auditDoc = db.collections.audit_logs.docs.find((doc) => doc.action === 'FHIR_IMPORT_RECORD_COMMITTED');
+    expect(auditDoc.mappingReleases).toEqual(expected);
+  });
+});

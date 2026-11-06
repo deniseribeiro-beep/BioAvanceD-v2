@@ -1183,6 +1183,144 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
     }
   });
 
+  // #1479, RF011 AC5, RNF024 AC2: a staged and committed import records the
+  // mapping release (id and version) its declared profile is registered under.
+  test('records on the staged and committed import the mapping release its declared profile names (RF011 AC5, RNF024 AC2)', async ({
+    request,
+  }) => {
+    const { token } = await realLogin(request);
+    const headers = { Authorization: `Bearer ${token}` };
+    const suffix = String(Date.now());
+    const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
+    const systemUri = `https://bioadvanced.dev/fhir/NamingSystem/e2e-rf011-map-${suffix}`;
+    const canonicalUrl = `https://bioadvanced.dev/fhir/StructureDefinition/e2e-rf011-map-${suffix}`;
+    const mappingVersion = `e2e-rf011-map-${suffix}`;
+    const declaring = (bundle: ReturnType<typeof buildFhirBundle>['bundle'], profile: string) => ({
+      ...bundle,
+      entry: bundle.entry.map((entry) =>
+        ['Patient', 'Specimen'].includes(entry.resource.resourceType)
+          ? { resource: { ...entry.resource, meta: { profile: [profile] } } }
+          : entry
+      ),
+    });
+
+    let namespaceId: string | undefined;
+    let releaseId: string | undefined;
+    let profileId: string | undefined;
+    const staged: { specimenId: string; patientId: string; batchId?: string }[] = [];
+    try {
+      const namespaceResponse = await request.post(`${apiBaseURL}/api/identifier-namespaces`, {
+        headers,
+        data: {
+          namespaceKey: `e2e-rf011-map-${suffix}`,
+          systemUri,
+          authorityDomain: 'bioadvanced.dev',
+          targetTypes: ['patient'],
+          semanticVersion: '1.0.0',
+          status: 'active',
+          effectivePeriod: { start: dayAgo },
+          configurationReleaseId: 'e2e-rf011-config',
+        },
+      });
+      expect(namespaceResponse.status(), await namespaceResponse.text()).toBe(201);
+      namespaceId = (await namespaceResponse.json()).data.identifierNamespaceRegistryId;
+
+      const releaseResponse = await request.post(`${apiBaseURL}/api/interoperability-mapping-releases`, {
+        headers,
+        data: {
+          standard: 'FHIR R4',
+          mappingVersion,
+          mappingUri: `https://bioadvanced.dev/fhir/mappings/e2e-rf011-map-${suffix}`,
+          checksum: `sha256:${'a'.repeat(64)}`,
+          authorId: 'e2e-rf011-author',
+          status: 'approved',
+          roundTripLossReportUri: 'https://bioadvanced.dev/fhir/reports/e2e-rf011-loss',
+          canonicalModelReleaseId: 'canonical-model-v2.0.0',
+          fhirVersion: '4.0.1',
+          mappingDefinitionUri: 'https://bioadvanced.dev/fhir/mappings/e2e-rf011.map',
+          mappingDefinitionHash: 'b'.repeat(64),
+          conformanceTestReportUri: 'https://bioadvanced.dev/fhir/reports/e2e-rf011-conformance',
+          coverageNumerator: 3,
+          coverageDenominator: 4,
+          coverageRatio: 0.75,
+          roundTripLossesPresent: true,
+          profileRegistryIds: [`e2e-rf011-map-profile-${suffix}`],
+          resourceTypes: ['Patient', 'Specimen'],
+          identifierNamespaceRegistryIds: [namespaceId],
+          approvedBy: ['e2e-rf011-approver'],
+          approvedAt: new Date().toISOString(),
+          effectivePeriod: { start: dayAgo },
+        },
+      });
+      expect(releaseResponse.status(), await releaseResponse.text()).toBe(201);
+      releaseId = (await releaseResponse.json()).data.interoperabilityMappingReleaseId;
+
+      const profileResponse = await request.post(`${apiBaseURL}/api/fhir-profiles`, {
+        headers,
+        data: {
+          canonicalUrl,
+          fhirVersion: '4.0.1',
+          profileVersion: '1.0.0',
+          identifierSystems: [systemUri],
+          mappingReleaseId: releaseId,
+          status: 'active',
+        },
+      });
+      expect(profileResponse.status(), await profileResponse.text()).toBe(201);
+      profileId = (await profileResponse.json()).data.fhirProfileRegistryId;
+
+      const expected = [{ mappingReleaseId: releaseId, mappingVersion }];
+
+      // RF011 AC5: the batch and its record carry the release, in the response and at rest.
+      const fixture: { specimenId: string; patientId: string; batchId?: string } = buildFhirBundle(`map-${suffix}`);
+      staged.push(fixture);
+      const stageResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
+        headers,
+        data: declaring(buildFhirBundle(`map-${suffix}`).bundle, `${canonicalUrl}|1.0.0`),
+      });
+      expect(stageResponse.status(), await stageResponse.text()).toBe(201);
+      const stageBody = await stageResponse.json();
+      const batchId = stageBody.batch._id;
+      fixture.batchId = batchId;
+      expect(stageBody.batch.mappingReleases).toEqual(expected);
+      expect(stageBody.records).toHaveLength(1);
+      expect(stageBody.records[0].status).toBe('READY_TO_COMMIT');
+      expect(stageBody.records[0].mappingReleases).toEqual(expected);
+      expect((await findLgpdQuarantineBatch(String(batchId)))?.mappingReleases).toEqual(expected);
+
+      // The commit keeps it on the committed record and names it in the commit audit.
+      const commitResponse = await request.post(`${apiBaseURL}/api/import/fhir/batches/${batchId}/commit`, { headers });
+      expect(commitResponse.status(), await commitResponse.text()).toBe(200);
+      expect((await commitResponse.json()).committed).toBe(1);
+      const [committedRecord] = await findStagingRecordsByBatch(String(batchId));
+      expect(committedRecord?.status).toBe('COMMITTED');
+      expect(committedRecord?.mappingReleases).toEqual(expected);
+      const committedLog = (await findFhirImportAuditLogs(String(batchId)))
+        .find((log) => log.action === 'FHIR_IMPORT_RECORD_COMMITTED');
+      expect(committedLog?.mappingReleases).toEqual(expected);
+
+      // Control: a profile version no row registers names no release.
+      const unregistered: { specimenId: string; patientId: string; batchId?: string } = buildFhirBundle(`map-none-${suffix}`);
+      staged.push(unregistered);
+      const noneResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
+        headers,
+        data: declaring(buildFhirBundle(`map-none-${suffix}`).bundle, `${canonicalUrl}|9.9.9`),
+      });
+      expect(noneResponse.status(), await noneResponse.text()).toBe(201);
+      const noneBody = await noneResponse.json();
+      unregistered.batchId = noneBody.batch._id;
+      expect(noneBody.batch.mappingReleases).toEqual([]);
+      expect(noneBody.records[0].mappingReleases).toEqual([]);
+    } finally {
+      for (const fixture of staged) {
+        await removeFhirImportFixtures(fixture.specimenId, fixture.patientId, fixture.batchId);
+      }
+      if (profileId) await request.delete(`${apiBaseURL}/api/fhir-profiles/${profileId}`, { headers });
+      if (releaseId) await request.delete(`${apiBaseURL}/api/interoperability-mapping-releases/${releaseId}`, { headers });
+      if (namespaceId) await request.delete(`${apiBaseURL}/api/identifier-namespaces/${namespaceId}`, { headers });
+    }
+  });
+
   // #1478, RNF024 AC1-AC3: the FHIR export carries each record's canonical
   // identifier, validates as R4 under its mapping, and writes nothing back.
   test('exports a Study and a WorkflowRun as FHIR R4 carrying their canonical identifiers, writing neither (RNF024 AC1, AC2, AC3)', async ({
