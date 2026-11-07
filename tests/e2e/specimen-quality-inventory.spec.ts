@@ -1142,6 +1142,56 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     ]);
   });
 
+  test('refuses a manual write to quantityStatus and to the RCS result, on edit and on create (RNF018 AC4, #1489)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { sampleID } = await seedWithdrawableSample(request, admin);
+
+    const quantityWrite = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { quantityStatus: 'depleted' },
+    });
+    expect(quantityWrite.status()).toBe(422);
+    const quantityBody = await quantityWrite.json();
+    expect(quantityBody.error).toBe('SPECIMEN_STATUS_WRITE_REFUSED');
+    expect(quantityBody.message).toMatch(/quantityStatus é derivado/);
+
+    const rcsWrite = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { rcsScore: 99, finalGrade: 'A', gradeRoute: 'Score-based certification', biologicalPenalty: 0, axisPenalties: [] },
+    });
+    expect(rcsWrite.status()).toBe(422);
+    const rcsBody = await rcsWrite.json();
+    expect(rcsBody.error).toBe('RCS_DERIVED_WRITE_REFUSED');
+    expect(rcsBody.fields).toEqual(['biologicalPenalty', 'rcsScore', 'finalGrade', 'gradeRoute', 'axisPenalties']);
+
+    const after = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const afterData = (await after.json()).data;
+    expect(afterData.quantityStatus).toBe('full');
+    expect(afterData.rcsScore ?? null).toBeNull();
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        quantity: 10,
+        boxId: seededStorageBox.boxId,
+        positionCode: seededStorageBox.positionCode,
+        rcsScore: 99,
+      },
+    });
+    expect(create.status()).toBe(422);
+    const createBody = await create.json();
+    expect(createBody.error).toBe('RCS_DERIVED_WRITE_REFUSED');
+    expect(createBody.fields).toEqual(['rcsScore']);
+  });
+
   test('custody events cannot be altered or deleted — no route accepts a mutation (criterion 5)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedWithdrawableSample(request, admin);
@@ -1393,6 +1443,31 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     expect(body.data.rcs_score).toBeNull();
     expect(body.data.grade_route).toBe('Governance failure');
     expect(body.data.governance_failure_reasons).toContain('Unknown SPREC code');
+  });
+
+  test('refuses certification when an axis is missing or its code is incompatible with the matrix (RNF018 AC5, #1489)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { longTermStorage: _omitted, ...missingAxis } = fluidSprec();
+    const cases = [
+      { sprec: missingAxis, reason: 'Missing critical metadata', ruleCode: 'MISSING_CRITICAL_METADATA' },
+      { sprec: fluidSprec({ preCentrifugation: 'Q' }), reason: 'SPREC code incompatible with matrix or axis', ruleCode: 'MATRIX_INCOMPATIBLE_CODE' },
+    ];
+
+    for (const { sprec, reason, ruleCode } of cases) {
+      const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { matrixType: sprec.matrixType, sprec },
+      });
+
+      expect(response.status()).toBe(200);
+      const body = await response.json();
+      expect(body.data.governance_status).toBe(0);
+      expect(body.data.final_grade).toBe('E');
+      expect(body.data.grade_route).toBe('Governance failure');
+      expect(body.data.rcs_score).toBeNull();
+      expect(body.data.governance_failure_reasons).toContain(reason);
+      expect(body.data.governance_rule_codes).toContain(ruleCode);
+    }
   });
 
   test('the backend enforces auth independently of the frontend — no token is rejected on its own merits', async ({ request }) => {

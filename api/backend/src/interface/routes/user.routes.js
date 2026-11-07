@@ -11,6 +11,7 @@ const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCas
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
+const { findRcsDerivedFields, rcsDerivedWriteDetails } = require('../../models/Sample');
 // #933: extraída para src/utils/userFilter.js para que os scripts de
 // manutenção em src/scripts/ usem exatamente esta regra em vez de uma cópia.
 const { buildUserFilterById } = require('../../utils/userFilter');
@@ -1214,6 +1215,16 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
         error: 'Payload inválido',
         message: contextErrors.join(', '),
         details: contextErrors
+      });
+    }
+    // RNF018 AC4 (#1489): nor does it let a caller write the RCS result.
+    const rcsDerivedFields = findRcsDerivedFields(req.body);
+    if (rcsDerivedFields.length > 0) {
+      return res.status(422).json({
+        success: false,
+        error: 'RCS_DERIVED_WRITE_REFUSED',
+        fields: rcsDerivedFields,
+        details: rcsDerivedWriteDetails(rcsDerivedFields)
       });
     }
 

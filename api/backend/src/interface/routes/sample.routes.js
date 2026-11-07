@@ -104,7 +104,7 @@ const {
   EXTRACTION_PROTOCOL_IDS,
   MIABIS_QUALITY_IDS,
 } = require('../../config/constants/specimen.constants');
-const { SPECIMEN_ROLE_VALUES } = require('../../models/Sample');
+const { SPECIMEN_ROLE_VALUES, findRcsDerivedFields, rcsDerivedWriteDetails } = require('../../models/Sample');
 
 // #789: the prohibited pre-rename vocabulary, in ONE place. It was inlined
 // in validateCreateSamplePayload only, so `GET /` had no way to reject the
@@ -154,6 +154,17 @@ function validateCreateSamplePayload(req, res, next) {
       error: 'NON_CANONICAL_FIELD',
       fields: [...new Set(aliasFields)],
       details: [...new Set(aliasFields)].map((field) => `${field}: campo não canônico`)
+    });
+  }
+
+  // RNF018 AC4: the RCS result is set only by certification, never by a caller.
+  const rcsDerivedFields = findRcsDerivedFields(payload);
+  if (rcsDerivedFields.length > 0) {
+    return res.status(422).json({
+      success: false,
+      error: 'RCS_DERIVED_WRITE_REFUSED',
+      fields: rcsDerivedFields,
+      details: rcsDerivedWriteDetails(rcsDerivedFields)
     });
   }
 
@@ -1257,6 +1268,8 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
         details: [error.message]
       });
     }
+    // RNF018 AC4: a write to the RCS result answers 422.
+    if (error.code === 'RCS_DERIVED_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'RCS_DERIVED_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
     // #1378 (ELM-0116): a barcode write after the migration window answers 422.
     if (error.code === 'LEGACY_BARCODE_WRITE_REFUSED') {
       return res.status(422).json({

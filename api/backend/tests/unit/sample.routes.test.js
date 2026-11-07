@@ -330,6 +330,26 @@ describe('sample.routes', () => {
       expect(executeMock).not.toHaveBeenCalled();
     });
 
+    it('refuses an RCS-derived field on create with 422 RCS_DERIVED_WRITE_REFUSED (RNF018 AC4, #1489)', () => {
+      const { router } = loadRoute();
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      };
+      const next = vi.fn();
+
+      router._test.validateCreateSamplePayload({ body: { ...VALID_PAYLOAD, finalGrade: 'A' } }, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: 'RCS_DERIVED_WRITE_REFUSED',
+        fields: ['finalGrade'],
+        details: ['finalGrade: derivado da certificação RCS e não pode ser informado']
+      }));
+      expect(next).not.toHaveBeenCalled();
+    });
+
     describe('#1368: parentSpecimenIds (ELM-0120)', () => {
       const callValidator = (body) => {
         const { router } = loadRoute();
@@ -2622,6 +2642,19 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(422);
       expect(res.body).toMatchObject({ success: false, error: 'SPECIMEN_STATUS_WRITE_REFUSED', message: 'quantityStatus é derivado' });
+    });
+
+    // RNF018 AC4 (#1489): a refused write to the RCS result answers 422 with its fields.
+    it('answers 422 RCS_DERIVED_WRITE_REFUSED when the service refuses a write to the RCS result', async () => {
+      const refusal = Object.assign(new Error('x'), { statusCode: 422, code: 'RCS_DERIVED_WRITE_REFUSED', fields: ['rcsScore'], details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ rcsScore: 99 });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({ success: false, error: 'RCS_DERIVED_WRITE_REFUSED', message: 'x', fields: ['rcsScore'], details: ['x'] });
     });
 
     // #1378 (ELM-0116): a barcode write refused after the migration window answers 422 with its code.

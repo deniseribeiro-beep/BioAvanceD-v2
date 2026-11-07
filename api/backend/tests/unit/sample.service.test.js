@@ -2133,6 +2133,32 @@ describe('sample.service', () => {
       expect(updateArg.$set.participantId).toBeUndefined();
     });
 
+    it('refuses a write to an RCS-derived field and persists nothing (RNF018 AC4, #1489)', async () => {
+      const writes = [
+        { rcsScore: 99 },
+        { gradeRoute: 'Score-based certification' },
+        { axisPenalties: [] },
+        { biologicalPenalty: 0 }
+      ];
+      for (const write of writes) {
+        const db = makeDb();
+        db.collections.samples.findOne.mockResolvedValue({
+          _id: 'sample-1',
+          quantity: 10,
+          initialQuantity: 10,
+          currentQuantity: 10,
+          specimenStatus: 'available'
+        });
+
+        await expect(sampleService.updateSample(db, 'sample-1', write)).rejects.toMatchObject({
+          statusCode: 422,
+          code: 'RCS_DERIVED_WRITE_REFUSED',
+          fields: Object.keys(write)
+        });
+        expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      }
+    });
+
     it('returns null when updateOne matches nothing', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10 });

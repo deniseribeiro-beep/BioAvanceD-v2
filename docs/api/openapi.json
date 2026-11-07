@@ -11828,7 +11828,7 @@
           "users"
         ],
         "summary": "Register a sample",
-        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope. The 503 comes from authenticate. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. The 403 is also STRICT_MODE_BLOCKED. The 404 is an organizationId a global caller names that does not exist. The 422 is a qualificationContext error or a 422-tagged failure and carries details; every other failure is 400.",
+        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope. The 503 comes from authenticate. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. The 403 is also STRICT_MODE_BLOCKED. The 404 is an organizationId a global caller names that does not exist. The 422 is a qualificationContext error, a field of the RCS result (RCS_DERIVED_WRITE_REFUSED with fields), or a 422-tagged failure and carries details; every other failure is 400.",
         "security": [
           {
             "bearerAuth": []
@@ -17705,7 +17705,7 @@
           "samples"
         ],
         "summary": "Register a sample",
-        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope, then the payload validation. The 503 comes from authenticate and from the handler. The 422 comes first from the payload validation (a prohibited legacy field such as patientID or sampleID, or a failed field check, with details) and then from the registration (a study or protocol that is not active or approved). The 403 is also STRICT_MODE_BLOCKED. The 404 is a participant, study, protocol, collection, collection site or parent sample that does not exist. The 409 is a storage position that is taken. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. Any other failure that names a missing or invalid field answers 400, and the rest 500.",
+        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope, then the payload validation. The 503 comes from authenticate and from the handler. The 422 comes first from the payload validation (a prohibited legacy field such as patientID or sampleID, a field of the RCS result as RCS_DERIVED_WRITE_REFUSED with fields, or a failed field check, with details) and then from the registration (a study or protocol that is not active or approved). The 403 is also STRICT_MODE_BLOCKED. The 404 is a participant, study, protocol, collection, collection site or parent sample that does not exist. The 409 is a storage position that is taken. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. Any other failure that names a missing or invalid field answers 400, and the rest 500.",
         "security": [
           {
             "bearerAuth": []
@@ -18662,7 +18662,7 @@
           "samples"
         ],
         "summary": "Update a sample",
-        "description": "Gates: authenticate, requirePermission('editSample'), requireOrganizationScope. The 503 comes from authenticate and from the handler. A sample of another organization answers 403. The 403 is also a move of a sample that has no organizationId to a collectionSite outside the caller's. The 404 is an unknown sample. The 409 is a quarantined sample set to available (QUARANTINE_RELEASE_REQUIRED: use POST /api/samples/{id}/quarantine/release). The 422 is a refused status write (SPECIMEN_STATUS_WRITE_REFUSED: quantityStatus, closed, an invalid or v1.3.0 status, or any change out of closed) or a barcode write after the migration window (LEGACY_BARCODE_WRITE_REFUSED). Every other failure answers 400. Only the listed fields are written; any other body field is ignored. The 200 returns the stored sample.",
+        "description": "Gates: authenticate, requirePermission('editSample'), requireOrganizationScope. The 503 comes from authenticate and from the handler. A sample of another organization answers 403. The 403 is also a move of a sample that has no organizationId to a collectionSite outside the caller's. The 404 is an unknown sample. The 409 is a quarantined sample set to available (QUARANTINE_RELEASE_REQUIRED: use POST /api/samples/{id}/quarantine/release). The 422 is a refused status write (SPECIMEN_STATUS_WRITE_REFUSED: quantityStatus, closed, an invalid or v1.3.0 status, or any change out of closed) or a barcode write after the migration window (LEGACY_BARCODE_WRITE_REFUSED), or a write to the RCS result (RCS_DERIVED_WRITE_REFUSED: biologicalPenalty, rcsScore, scoreBasedGrade, finalGrade, gradeRoute, axisPenalties, calculationTrace or rcsEvaluation, set only by RCS certification, with fields and details). Every other failure answers 400. Only the listed fields are written; any other body field is ignored. The 200 returns the stored sample.",
         "security": [
           {
             "bearerAuth": []
@@ -18740,14 +18740,6 @@
                   },
                   "governanceFailureReasons": {},
                   "governanceRuleCodes": {},
-                  "biologicalPenalty": {},
-                  "rcsScore": {},
-                  "scoreBasedGrade": {},
-                  "finalGrade": {},
-                  "gradeRoute": {},
-                  "axisPenalties": {},
-                  "calculationTrace": {},
-                  "rcsEvaluation": {},
                   "externalQualityAssessment": {},
                   "locationID": {},
                   "linkedProject": {

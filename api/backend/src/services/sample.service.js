@@ -1,4 +1,4 @@
-const { SampleModel, BLOCKED_SPECIMEN_STATUSES } = require('../models/Sample');
+const { SampleModel, BLOCKED_SPECIMEN_STATUSES, findRcsDerivedFields, rcsDerivedWriteDetails } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
 const collectionGovernanceService = require('./collectionGovernance.service');
 const logger = require('../utils/logger');
@@ -56,6 +56,16 @@ const STATUS_WRITE_REFUSED = 'SPECIMEN_STATUS_WRITE_REFUSED';
 function createStatusWriteRefusal(message) {
   const error = createSampleValidationError(message, 422);
   error.code = STATUS_WRITE_REFUSED;
+  return error;
+}
+
+// RNF018 AC4: a write to the RCS result is refused; only certification sets it.
+function createRcsDerivedWriteRefusal(fields) {
+  const details = rcsDerivedWriteDetails(fields);
+  const error = createSampleValidationError(details.join(', '), 422);
+  error.code = 'RCS_DERIVED_WRITE_REFUSED';
+  error.fields = fields;
+  error.details = details;
   return error;
 }
 
@@ -907,6 +917,11 @@ class SampleService {
       if (Object.prototype.hasOwnProperty.call(updateData, 'quantityStatus')) {
         throw createStatusWriteRefusal('quantityStatus é derivado de initialQuantity e currentQuantity e não pode ser editado');
       }
+      // RNF018 AC4: the RCS result is set only by certification.
+      const rcsDerivedFields = findRcsDerivedFields(updateData);
+      if (rcsDerivedFields.length > 0) {
+        throw createRcsDerivedWriteRefusal(rcsDerivedFields);
+      }
       // #1378 (ELM-0116): after the migration window, barcode is not written.
       assertLegacyBarcodeWritable(updateData);
       // RNF007 AC4 (#1463): a written barcode carries no personal data.
@@ -960,8 +975,7 @@ class SampleService {
         'withdrawnAt', 'receivedAt', 'quantity', 'unit', 'quality',
         'modelVersion', 'matrixType', 'governanceStatus',
         'governanceFailureReasons', 'governanceRuleCodes',
-        'biologicalPenalty', 'rcsScore', 'scoreBasedGrade', 'finalGrade',
-        'gradeRoute', 'axisPenalties', 'calculationTrace', 'rcsEvaluation',
+        // RCS_DERIVED_FIELDS are refused above (RNF018 AC4).
         'externalQualityAssessment', 'locationID', 'linkedProject',
         'collectionSite', 'sprec', 'merkleRoot', 'sealedRcsAssessmentId',
         'sealedSpecimenPreanalyticsId', 'consentTemplateId', 'clinicalData',

@@ -44,6 +44,19 @@ const QUANTITY_STATUS_VALUES = ['full', 'partial', 'depleted'];
 // docs/decisions/2026-10-13-specimen-role.md.
 const SPECIMEN_ROLE_VALUES = ['primary', 'aliquot', 'derivative', 'pool', 'control'];
 
+// RNF018 AC4: the RCS result, set only by RCS certification, never by a caller.
+const RCS_DERIVED_FIELDS = Object.freeze(['biologicalPenalty', 'rcsScore', 'scoreBasedGrade', 'finalGrade', 'gradeRoute', 'axisPenalties', 'calculationTrace', 'rcsEvaluation']);
+
+// RNF018 AC4: the RCS-derived fields a body names as own keys (null
+// included), and the refusal's detail per field; every write path reads these.
+function findRcsDerivedFields(source) {
+  const bag = source || {};
+  return RCS_DERIVED_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(bag, field));
+}
+function rcsDerivedWriteDetails(fields) {
+  return fields.map((field) => `${field}: derivado da certificação RCS e não pode ser informado`);
+}
+
 // The states that refuse withdrawal and return, and that no quantity change
 // moves.
 const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'quarantined', 'closed'];
@@ -427,3 +440,6 @@ module.exports.LEGACY_SPECIMEN_STATUS_VALUES = LEGACY_SPECIMEN_STATUS_VALUES;
 module.exports.LEGACY_SPECIMEN_STATUS_MAP = LEGACY_SPECIMEN_STATUS_MAP;
 module.exports.QUANTITY_STATUS_VALUES = QUANTITY_STATUS_VALUES;
 module.exports.SPECIMEN_ROLE_VALUES = SPECIMEN_ROLE_VALUES;
+module.exports.RCS_DERIVED_FIELDS = RCS_DERIVED_FIELDS;
+module.exports.findRcsDerivedFields = findRcsDerivedFields;
+module.exports.rcsDerivedWriteDetails = rcsDerivedWriteDetails;
