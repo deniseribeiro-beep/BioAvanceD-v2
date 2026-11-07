@@ -233,6 +233,15 @@ export async function configurationChangeEventsFor(releaseId: string): Promise<R
   return db.collection('configurationChangeEvents').find({ releaseId }).sort({ _id: 1 }).toArray();
 }
 
+/**
+ * RF014 AC3: one ConfigurationValidationRun, read by its id, with its four
+ * gate results. No route reads a run back.
+ */
+export async function configurationValidationRunById(configurationValidationRunId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('configurationValidationRuns').findOne({ configurationValidationRunId });
+}
+
 /** RF022 AC2: the index names a collection carries, read from Mongo itself. */
 export async function indexNamesOf(collection: string): Promise<string[]> {
   const db = await getDb();

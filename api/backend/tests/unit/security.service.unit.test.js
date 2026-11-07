@@ -264,7 +264,7 @@ describe('SecurityService.validateConfig', () => {
       .toThrow('session.timeoutMinutes deve ser um número');
   });
 
-  it('ignores top-level keys outside the eight groups, which updateConfig never stores', () => {
+  it('ignores the document\'s own top-level fields, which updateConfig never stores', () => {
     expect(() => securityService.validateConfig({ configVersion: 'x', governedBy: {}, updatedAt: 'y' })).not.toThrow();
   });
 });
@@ -481,15 +481,13 @@ describe('SecurityService.updateConfig', () => {
     vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
     const currentConfig = { configVersion: 3, lastUpdatedBy: 'admin1' };
-    const newConfig = { configVersion: 999, lastUpdatedBy: 'attacker', extra: 'x' };
+    const newConfig = { configVersion: 999, lastUpdatedBy: 'attacker' };
 
     const result = await securityService.updateConfig(db, newConfig, currentConfig, { user: { userID: 'admin2' } });
 
     // Server-owned: derived from the STORED value, never from the caller's.
     expect(result.configVersion).toBe(4);
     expect(result.lastUpdatedBy).toBe('admin2');
-    // And an unrecognised top-level key from the caller does not survive the merge.
-    expect(result.extra).toBeUndefined();
   });
 });
 

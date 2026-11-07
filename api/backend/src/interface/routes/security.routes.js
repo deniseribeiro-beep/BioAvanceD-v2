@@ -81,6 +81,7 @@ router.put('/config', async (req, res) => {
       ...(error.validationRun ? {
         configurationValidationRunId: error.validationRun.configurationValidationRunId,
         violatedInvariants: error.violatedInvariants,
+        violations: error.violations,
       } : {})
     });
   }

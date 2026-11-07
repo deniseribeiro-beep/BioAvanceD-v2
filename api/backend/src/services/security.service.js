@@ -53,7 +53,14 @@ const CONFIG_GROUPS = [
   'lgpd'
 ];
 
-const TYPE_NAMES = { number: 'um número', boolean: 'verdadeiro ou falso', string: 'um texto' };
+// The read model's own top-level fields. SecurityPage echoes them back on
+// every save; updateConfig never stores them from the caller.
+const DOCUMENT_FIELDS = [
+  'configVersion', 'lastUpdatedAt', 'lastUpdatedBy', 'securityConfigId', 'environment',
+  'effectivePeriod', 'configurationReleaseId', 'governedBy', 'updatedAt', 'createdAt', '_id'
+];
+
+const TYPE_NAMES ={ number: 'um número', boolean: 'verdadeiro ou falso', string: 'um texto' };
 
 function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date);
@@ -897,6 +904,19 @@ class SecurityService {
         const ok = expected === 'number' ? isNumber(value) : typeof value === expected;
         if (!ok) structural.push(`${group}.${key} deve ser ${TYPE_NAMES[expected]}`);
       }
+    }
+
+    // RNF018 AC2, RNF028 AC5: a top-level key outside the groups and the
+    // document's own fields is refused, not silently dropped. Outbox,
+    // provenance, store authority and RCS are not configurable here. A key
+    // the stored document already has passes as the page's echo; updateConfig
+    // stores only the groups, so such a key is never written.
+    for (const key of Object.keys(config || {})) {
+      if (CONFIG_GROUPS.includes(key) || DOCUMENT_FIELDS.includes(key)) continue;
+      if (config[key] === undefined) continue;
+      if (Object.prototype.hasOwnProperty.call(currentConfig || {}, key)) continue;
+      structural.push(`${key} não é uma configuração conhecida`);
+      unknownPaths.push(key);
     }
 
     // The ranges below check a number whenever one is present, 0 included;

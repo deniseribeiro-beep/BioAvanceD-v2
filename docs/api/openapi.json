@@ -12834,7 +12834,7 @@
           "security"
         ],
         "summary": "Update the security configuration",
-        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. The 400 and 422 are a refused validation run (422 when a governance invariant is violated, 400 otherwise) and add configurationValidationRunId and violatedInvariants; any other untagged failure is also 400. The 409 is another change activated first.",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. The 400 and 422 are a refused validation run (422 when a governance invariant is violated, 400 otherwise) and add configurationValidationRunId, violatedInvariants and violations, one { invariantId, fieldPath } per refused path; any other untagged failure is also 400. The 409 is another change activated first.",
         "security": [
           {
             "bearerAuth": []
@@ -12930,6 +12930,20 @@
                       "items": {
                         "type": "object"
                       }
+                    },
+                    "violations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "invariantId": {
+                            "type": "string"
+                          },
+                          "fieldPath": {
+                            "type": "string"
+                          }
+                        }
+                      }
                     }
                   },
                   "required": [
@@ -12981,6 +12995,20 @@
                       "type": "array",
                       "items": {
                         "type": "object"
+                      }
+                    },
+                    "violations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "invariantId": {
+                            "type": "string"
+                          },
+                          "fieldPath": {
+                            "type": "string"
+                          }
+                        }
                       }
                     }
                   },

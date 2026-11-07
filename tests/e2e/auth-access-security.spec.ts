@@ -7,7 +7,7 @@ import { computeTotp } from './helpers/totp';
 import { deleteOrganizations } from './helpers/listOrganizations';
 import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb, findLogRows } from './helpers/queryLoginAttempts';
 import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
-import { invariantViolationsFor, configurationChangeEventsFor, closeFoundationDb } from './helpers/queryFoundationData';
+import { invariantViolationsFor, configurationChangeEventsFor, configurationValidationRunById, closeFoundationDb } from './helpers/queryFoundationData';
 import { findStoredUser, setStoredSessionTimeoutMinutes, closeStoredCredentialsDb } from './helpers/storedCredentials1456';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
@@ -831,6 +831,69 @@ test.describe('Security policy management (RF014) — real backend', () => {
       })).json()).data;
       expect(inForce.configurationReleaseId).toBe(restored.configurationReleaseId);
       expect(inForce.logging.logAllActions).toBe(true);
+
+      // RF014 AC3/AC6, RNF018 AC2/AC3, RNF028 AC5 — the structural,
+      // dependency and security gates each refuse a candidate before
+      // activation, and a key outside the policy (an unknown one, or an
+      // attempt to switch off the outbox, provenance, store authority or RCS)
+      // is a 422 naming INV-SCOPE-001 and each fieldPath. Identity, consent
+      // and audit are proven at the #1260 #1261 test.
+      const gateCases: {
+        data: Record<string, unknown>;
+        status: number;
+        violatedInvariants: string[];
+        fieldPaths: string[];
+        gates: [string, string, string, string];
+      }[] = [
+        { data: { session: { timeoutMinutes: 'thirty' } }, status: 400, violatedInvariants: [], fieldPaths: [], gates: ['fail', 'pass', 'pass', 'pass'] },
+        { data: { passwordRules: { minLength: 10, minLengthWithMFA: 12 } }, status: 400, violatedInvariants: [], fieldPaths: [], gates: ['pass', 'pass', 'fail', 'pass'] },
+        { data: { passwordRules: { minLength: 7 } }, status: 400, violatedInvariants: [], fieldPaths: [], gates: ['pass', 'pass', 'pass', 'fail'] },
+        { data: { authentication: { mfaMethod: 'sms' } }, status: 400, violatedInvariants: [], fieldPaths: [], gates: ['pass', 'pass', 'pass', 'fail'] },
+        { data: { session: { timeout: 20 } }, status: 422, violatedInvariants: ['INV-SCOPE-001'], fieldPaths: ['session.timeout'], gates: ['fail', 'pass', 'pass', 'pass'] },
+        {
+          data: { outbox: { enabled: false }, provenance: { enabled: false }, storeAuthority: { mongo: false }, rcs: { admissibility: false } },
+          status: 422,
+          violatedInvariants: ['INV-SCOPE-001'],
+          fieldPaths: ['outbox', 'provenance', 'storeAuthority', 'rcs'],
+          gates: ['fail', 'pass', 'pass', 'pass'],
+        },
+      ];
+      const gateRuns: Record<string, any>[] = [];
+      for (const gateCase of gateCases) {
+        const label = JSON.stringify(gateCase.data);
+        const response = await request.put(`${apiBaseURL}/api/security/config`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
+          data: gateCase.data,
+        });
+        expect(response.status(), `${label}: ${await response.text()}`).toBe(gateCase.status);
+        const body = await response.json();
+        expect(body.violatedInvariants, label).toEqual(gateCase.violatedInvariants);
+        expect(body.violations, label).toEqual(gateCase.fieldPaths.map((fieldPath) => ({ invariantId: 'INV-SCOPE-001', fieldPath })));
+        const run = await configurationValidationRunById(body.configurationValidationRunId);
+        expect(run, label).toBeTruthy();
+        expect([run!.structuralResult, run!.semanticResult, run!.dependencyResult, run!.securityResult], label).toEqual(gateCase.gates);
+        expect(run!.status, label).toBe('failed');
+        if (gateCase.status === 422) {
+          expect(await invariantViolationsFor(run!.releaseId), label).toEqual([
+            expect.objectContaining({ invariantId: 'INV-SCOPE-001', outcome: 'block' }),
+          ]);
+        }
+        gateRuns.push(run!);
+      }
+      // RNF018 AC3: none of the refusals moved the active release; each
+      // refused candidate is a draft.
+      const inForceAfterGates = (await (await request.get(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data;
+      expect(inForceAfterGates.configurationReleaseId).toBe(restored.configurationReleaseId);
+      const afterGates = (await (await request.get(`${apiBaseURL}/api/security/config/releases?limit=200`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data as { configurationReleaseId: string; status: string }[];
+      expect(afterGates.filter((release) => release.status === 'active').map((release) => release.configurationReleaseId))
+        .toEqual([restored.configurationReleaseId]);
+      for (const run of gateRuns) {
+        expect(afterGates.find((release) => release.configurationReleaseId === run.releaseId)?.status, run.releaseId).toBe('draft');
+      }
 
       // Criterion 7 — the change is registered as a critical AuditEvent.
       // requireMFA is one of security.service.js's own criticalPaths, so
