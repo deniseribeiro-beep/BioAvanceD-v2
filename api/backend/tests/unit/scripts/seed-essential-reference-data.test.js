@@ -87,6 +87,31 @@ describe('Foundation job: apply', () => {
     expect(second.previousRunId).toBe(first.foundationDataRunId);
   });
 
+  it('records a step for each RF022 AC2 preparation, with a checkpoint on each it completed (AC2, AC5)', async () => {
+    const db = createFakeDb();
+    const { run } = await apply(db);
+
+    expect(run.steps.map((step) => step.step)).toEqual([
+      'entities', 'miabis-minimal', 'sprec-minimal', 'rcs-gov-1.0',
+      'governance-registry', 'rbac-catalog', 'report-templates', 'indexes',
+      'quarantine', 'outbox', 'audit', 'tests', 'rollback',
+    ]);
+    const stepOf = (name) => run.steps.find((step) => step.step === name);
+    expect(stepOf('entities')).toMatchObject({ status: 'completed', plannedCounts: { elements: 1644, entities: 146, historical: 929 } });
+    expect(stepOf('tests')).toMatchObject({ status: 'completed', plannedCounts: { failed: 0 } });
+    expect(stepOf('rollback')).toEqual({ step: 'rollback', status: 'prepared', plannedCounts: { removable: 0 } });
+    for (const name of ['quarantine', 'outbox', 'audit']) {
+      expect(stepOf(name)).toMatchObject({ status: 'deferred', builtIn: expect.any(String) });
+    }
+    const completed = run.steps.filter((step) => step.status === 'completed');
+    expect(completed.map((step) => step.step)).toEqual(['entities', 'governance-registry', 'rbac-catalog', 'report-templates', 'indexes', 'tests']);
+    expect(completed.map((step) => step.checkpoint.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    for (const step of completed) {
+      expect(step.checkpoint.completedAt).toBeInstanceOf(Date);
+      expect(step.checkpoint.insertedIds).toBeUndefined();
+    }
+  });
+
   it('blocks readiness when apply populates a reference collection (AC7)', async () => {
     const db = createFakeDb();
     const configurationSeeds = [{ step: 'leaky-seed', seed: async (fakeDb) => fakeDb.collection('sampleTypes').insertOne({ _id: 'leaked-reference' }), count: () => ({}) }];

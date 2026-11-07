@@ -26,6 +26,8 @@ describe('canonical-dictionary catalog v2.0.0 (docs/extracted-v2.0.0/dict-DICION
       loadedTotal: 1644,
       uniqueTotal: 1644,
       historicalTotal: 929,
+      expectedEntityTotal: 146,
+      entityTotal: 146,
       duplicateIds: [],
       missingRequiredFieldIds: [],
       unknownChangeStatusIds: [],
@@ -35,6 +37,16 @@ describe('canonical-dictionary catalog v2.0.0 (docs/extracted-v2.0.0/dict-DICION
     for (const element of v1.loadCanonicalDictionary()) {
       expect(v2.getElementById(element.elementId)).not.toBeNull();
     }
+  });
+
+  it('fails completeness when the 1644 elements fall in fewer than 146 entities (RNF031 AC1)', () => {
+    const catalog = v2.loadCanonicalDictionary();
+    const [first, second] = [...new Set(catalog.map((el) => el.entity))];
+    const merged = catalog.map((el) => (el.entity === first ? { ...el, entity: second } : el));
+    const result = v2.checkCompleteness(merged);
+    expect(result.entityTotal).toBe(145);
+    expect(result.missingHistoricalIds).toEqual([]);
+    expect(result.verified).toBe(false);
   });
 
   it('reports a dropped historical id, a duplicate and an unknown changeStatus (control rows)', () => {

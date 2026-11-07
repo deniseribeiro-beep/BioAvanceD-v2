@@ -17,6 +17,8 @@ const historicalCatalog = require('./catalog.1.3.0.json');
 const DICTIONARY_VERSION = '2.0.0';
 const EXPECTED_TOTAL_ELEMENTS = 1644;
 const EXPECTED_HISTORICAL_ELEMENTS = 929;
+// RNF031 AC1, plano F1.3: the 1644 elements fall in 146 entities/artefacts.
+const EXPECTED_ENTITY_TOTAL = 146;
 const REQUIRED_FIELDS = ['entity', 'field', 'cardinality', 'preparationPhase', 'changeStatus'];
 const CHANGE_STATUSES = ['maintained', 'altered', 'renamed', 'replaced', 'deprecated', 'added'];
 
@@ -45,6 +47,7 @@ function checkCompleteness(elements = catalog, historical = historicalCatalog) {
   const missingHistoricalIds = historical
     .map((element) => element.elementId)
     .filter((id) => !uniqueIds.has(id));
+  const entityTotal = new Set(elements.map((element) => element.entity).filter(Boolean)).size;
 
   return {
     dictionaryVersion: DICTIONARY_VERSION,
@@ -53,6 +56,8 @@ function checkCompleteness(elements = catalog, historical = historicalCatalog) {
     uniqueTotal: uniqueIds.size,
     expectedHistoricalTotal: EXPECTED_HISTORICAL_ELEMENTS,
     historicalTotal: historical.length,
+    expectedEntityTotal: EXPECTED_ENTITY_TOTAL,
+    entityTotal,
     duplicateIds,
     missingRequiredFieldIds,
     unknownChangeStatusIds,
@@ -63,7 +68,8 @@ function checkCompleteness(elements = catalog, historical = historicalCatalog) {
       && duplicateIds.length === 0
       && missingRequiredFieldIds.length === 0
       && unknownChangeStatusIds.length === 0
-      && missingHistoricalIds.length === 0,
+      && missingHistoricalIds.length === 0
+      && entityTotal === EXPECTED_ENTITY_TOTAL,
   };
 }
 
@@ -71,6 +77,7 @@ module.exports = {
   DICTIONARY_VERSION,
   EXPECTED_TOTAL_ELEMENTS,
   EXPECTED_HISTORICAL_ELEMENTS,
+  EXPECTED_ENTITY_TOTAL,
   CHANGE_STATUSES,
   loadCanonicalDictionary,
   getElementById,

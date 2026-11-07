@@ -288,8 +288,9 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
   });
 
   // RF022 AC1 (Requisitos v4.0.0): Foundation validates the approved v2.0.0
-  // dictionary, 1644 elements including the 929 historical ones.
-  test('the bootstrap run validated the v2.0.0 dictionary: 1644 elements, 929 historical', async () => {
+  // dictionary, 1644 elements including the 929 historical ones, in the 146
+  // entities/artefacts of plano F1.3 (RNF031 AC1).
+  test('the bootstrap run validated the v2.0.0 dictionary: 1644 elements in 146 entities, 929 historical', async () => {
     const run = await latestFoundationDataRun();
     expect(run).not.toBeNull();
     expect(run!.dictionaryVersion).toBe('2.0.0');
@@ -298,6 +299,8 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       loadedTotal: 1644,
       uniqueTotal: 1644,
       historicalTotal: 929,
+      expectedEntityTotal: 146,
+      entityTotal: 146,
       missingHistoricalIds: [],
       verified: true,
     });
@@ -371,6 +374,42 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     expect(constraints.evidence.failed).toEqual([]);
     expect(await indexNamesOf('samples')).toContain('samples_barcode_unique_v2');
     expect(await indexNamesOf('sessions')).toContain('sessions_accessTokenHash_v1');
+  });
+
+  // RF022 AC2/AC5, RNF031 AC2: the run records a step per preparation, the
+  // ones a later phase brings as deferred, and a checkpoint on each step it
+  // completed, in the order it completed them.
+  test('the bootstrap run records a step per preparation and a checkpoint per completed step', async () => {
+    const run = await latestFoundationDataRun();
+    const steps = run!.steps;
+    const byName = Object.fromEntries(steps.map((step: any) => [step.step, step]));
+    expect(steps.map((step: any) => step.step)).toEqual([
+      'entities', 'miabis-minimal', 'sprec-minimal', 'rcs-gov-1.0',
+      'governance-registry', 'rbac-catalog', 'report-templates', 'indexes',
+      'quarantine', 'outbox', 'audit', 'tests', 'rollback',
+    ]);
+    expect(byName.entities).toMatchObject({ status: 'completed', plannedCounts: { elements: 1644, entities: 146, historical: 929 } });
+    for (const key of ['miabis-minimal', 'sprec-minimal', 'rcs-gov-1.0']) {
+      expect(byName[key]).toMatchObject({ status: 'prepared', keyless: 0 });
+    }
+    for (const key of ['governance-registry', 'rbac-catalog', 'report-templates', 'indexes']) {
+      expect(byName[key].status).toBe('completed');
+    }
+    expect(byName.indexes.plannedCounts.indexes).toBeGreaterThan(0);
+    for (const key of ['quarantine', 'outbox', 'audit']) {
+      expect(byName[key]).toMatchObject({ status: 'deferred', builtIn: expect.any(String) });
+    }
+    expect(byName.tests).toMatchObject({ status: 'completed', plannedCounts: { failed: 0 } });
+    expect(byName.rollback).toMatchObject({ status: 'prepared', plannedCounts: { removable: 0 } });
+
+    const completed = steps.filter((step: any) => step.status === 'completed');
+    expect(completed.map((step: any) => step.step)).toEqual([
+      'entities', 'governance-registry', 'rbac-catalog', 'report-templates', 'indexes', 'tests',
+    ]);
+    expect(completed.map((step: any) => step.checkpoint.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    for (const step of completed) {
+      expect(Number.isNaN(new Date(step.checkpoint.completedAt).getTime())).toBe(false);
+    }
   });
 });
 
