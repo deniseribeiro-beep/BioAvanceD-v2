@@ -144,7 +144,9 @@ test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
 
 // Wave 3 reel (#646): demonstrates what's provably working end-to-end
 // through the real UI against the real backend for RF014 (security policy
-// management, including the login MFA-toggle round trip), RF017 (equipment
+// management: the setting catalog (AC1), an out-of-range change refused
+// with its message on the page (AC3), the MFA-toggle save and an on-camera
+// rollback to the release it replaced (AC4), #1490), RF017 (equipment
 // management), and RF016 (real symbology label generation + print-job
 // download, #655). RF015/RF024/RF025/RF026/RF029 are proven real-backend
 // but API-only today -- no frontend caller exists for any of them (see
@@ -201,7 +203,28 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
       await page.goto('/system-management?tab=security');
       await expect(page.getByTestId('security-page')).toBeVisible();
       await beat(page, MEDIUM);
+      // RF014 AC1 (#1490): the setting catalog, each key with its type,
+      // scope, allowed values, default, dependencies, owner and validity.
+      // maxLoginAttempts is range(5, 1, 10) in securitySettingCatalog.js.
+      await page.getByTestId('security-nav-catalog').click();
+      await expect(page.getByTestId('security-catalog-version')).toHaveText(/^\d+\.\d+\.\d+$/);
+      await expect(
+        page.locator('[data-testid="security-catalog-row"][data-path="authentication.maxLoginAttempts"]').getByTestId('security-catalog-allowed'),
+      ).toHaveText('1..10');
+      await beat(page, LARGE);
+      await page.getByTestId('security-catalog-row').last().scrollIntoViewIfNeeded();
+      await beat(page, MEDIUM);
+      // RF014 AC3 (#1490): a value outside the catalog's range is refused,
+      // and the server's message is on the page. The refusal leaves a draft
+      // release behind, but no active one.
       await page.getByTestId('security-nav-authentication').click();
+      await page.getByTestId('security-max-login-attempts-input').fill('15');
+      await beat(page, SMALL);
+      await page.getByTestId('security-save-config-button').click();
+      await expect(page.getByTestId('security-error')).toContainText('maxLoginAttempts deve estar entre 1 e 10');
+      await beat(page, MEDIUM);
+      // Back to the stored value, so the valid save below is not refused by it.
+      await page.getByTestId('security-max-login-attempts-input').fill(String(originalSecurityConfig!.authentication.maxLoginAttempts));
       await beat(page, SMALL);
       await page.getByTestId('security-require-mfa-toggle').click();
       await beat(page, SMALL);
@@ -211,12 +234,32 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
       // beat for less than that window so the confirmation is still on
       // screen while the viewer registers it.
       await expect(page.locator('.security-success')).toBeVisible();
+      // A save clears the refusal's message when it starts (useSecurity.ts).
+      await expect(page.getByTestId('security-error')).toHaveCount(0);
       await beat(page, MEDIUM);
       // RF014 AC4 (#1339): the save is a new release, active at the top of
       // the history, with the one it replaced offering a rollback.
       await page.getByTestId('security-nav-releases').click();
-      await expect(page.getByTestId('security-release-row').first()).toHaveAttribute('data-status', 'active');
+      const rows = page.getByTestId('security-release-row');
+      await expect(rows.first()).toHaveAttribute('data-status', 'active');
       await expect(page.getByTestId('security-release-rollback').first()).toBeVisible();
+      // RF014 AC4 (#1490): roll back on camera to the release the MFA save
+      // replaced. The refused draft sits between the two in the history, so
+      // the target is read through the API, never picked by position.
+      const history = (await (await request.get(`${apiBaseURL}/api/security/config/releases`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data;
+      const active = history.find((release: { status: string }) => release.status === 'active');
+      const superseded = history.find((release: { configurationReleaseId: string }) => release.configurationReleaseId === active.supersedesId);
+      await beat(page, MEDIUM);
+      await rows
+        .filter({ has: page.getByTestId('security-release-version').getByText(superseded.semanticVersion, { exact: true }) })
+        .getByTestId('security-release-rollback')
+        .click();
+      // The rollback is a new active release naming the one it restored. It
+      // flips only authentication.requireMFA back, which ends no session.
+      await expect(rows.first()).toHaveAttribute('data-status', 'active');
+      await expect(rows.first().getByTestId('security-release-restores')).toHaveText(superseded.semanticVersion);
       await beat(page, LARGE);
 
       // 3. Equipment management through the real UI. (RF017, #646 Wave 3)

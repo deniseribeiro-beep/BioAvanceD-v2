@@ -270,6 +270,7 @@ const rows: Row[] = [
   ['securityService.updateConfig', () => securityService.updateConfig({ a: 1 }), 'put', ['/security/config', { a: 1 }]],
   ['securityService.getReleases', () => securityService.getReleases(), 'get', ['/security/config/releases']],
   ['securityService.rollbackConfig', () => securityService.rollbackConfig('rel1'), 'post', ['/security/config/rollback', { configurationReleaseId: 'rel1' }]],
+  ['securityService.getCatalog', () => securityService.getCatalog(), 'get', ['/security/config/catalog']],
   ['securityService.getPermissions', () => securityService.getPermissions(), 'get', ['/security/permissions']],
   ['securityService.getSessions', () => securityService.getSessions(), 'get', ['/auth/sessions']],
   ['securityService.getConsentQueueStatus', () => securityService.getConsentQueueStatus(), 'get', ['/security/consent-queue']],

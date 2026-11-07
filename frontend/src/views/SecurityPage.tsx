@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
 import ConfigurationReleasesPanel from '../components/security/ConfigurationReleasesPanel';
+import SettingCatalogPanel from '../components/security/SettingCatalogPanel';
 
 // #1248: the retention keys are decided by the active RetentionPolicy, so
 // they render read-only with a line naming it.
@@ -195,7 +196,7 @@ export default function SecurityPage() {
       </div>
 
       {error && (
-        <div className="security-error">
+        <div className="security-error" data-testid="security-error">
           <AlertCircle size={20} />
           <span>{error}</span>
         </div>
@@ -289,6 +290,13 @@ export default function SecurityPage() {
             >
               {t('security.sections.releases')}
             </button>
+            <button
+              data-testid="security-nav-catalog"
+              className={activeSection === 'catalog' ? 'active' : ''}
+              onClick={() => setActiveSection('catalog')}
+            >
+              {t('security.sections.catalog')}
+            </button>
           </nav>
         </div>
 
@@ -337,6 +345,7 @@ export default function SecurityPage() {
                 <div className="config-field">
                   <label>{t('security.authentication.maxLoginAttempts')}</label>
                   <input title="security-input"
+                    data-testid="security-max-login-attempts-input"
                     type="number"
                     min="1"
                     max="10"
@@ -961,6 +970,7 @@ export default function SecurityPage() {
           {activeSection === 'releases' && (
             <ConfigurationReleasesPanel t={t} showToast={showToast} onRolledBack={loadConfig} />
           )}
+          {activeSection === 'catalog' && <SettingCatalogPanel t={t} />}
 
           {activeSection === 'policies' && (
             <div className="security-policies">

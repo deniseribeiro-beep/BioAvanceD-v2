@@ -1679,6 +1679,21 @@
       "requireMFA": "Requerir MFA para todos",
       "requireStrongPassword": "Requerir contraseña fuerte"
     },
+    "catalog": {
+      "allowedValues": "Valores permitidos",
+      "anyValue": "cualquier valor del tipo",
+      "default": "Predeterminado",
+      "dependencies": "Dependencias",
+      "intro": "Cada configuración con su tipo, alcance, valores permitidos, valor predeterminado, dependencias, responsable y vigencia.",
+      "loadError": "Error al cargar el catálogo de configuraciones.",
+      "owner": "Responsable",
+      "path": "Configuración",
+      "scope": "Alcance",
+      "title": "Catálogo de configuraciones",
+      "type": "Tipo",
+      "validity": "Vigencia",
+      "version": "Versión del catálogo"
+    },
     "enhanced": {
       "blockUnusualActivity": "Bloquear actividad inusual",
       "blockUnusualActivityHelp": "Bloquea una dirección de origen que falla inicios de sesión contra tantas cuentas distintas como el máximo de intentos de inicio de sesión, dentro de la duración del bloqueo. Requiere el rastreo por IP activado.",
@@ -1787,6 +1802,7 @@
     "saveSuccess": "Configuraciones guardadas con éxito",
     "sections": {
       "authentication": "Autenticación y acceso",
+      "catalog": "Catálogo de configuraciones",
       "enhanced": "Modo de seguridad reforzado",
       "lgpd": "LGPD",
       "logging": "Logs y auditoría",

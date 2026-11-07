@@ -1679,6 +1679,21 @@
       "requireMFA": "Require MFA for all users",
       "requireStrongPassword": "Require strong password"
     },
+    "catalog": {
+      "allowedValues": "Allowed values",
+      "anyValue": "any value of its type",
+      "default": "Default",
+      "dependencies": "Dependencies",
+      "intro": "Each setting with its type, scope, allowed values, default, dependencies, owner and validity.",
+      "loadError": "Error loading the settings catalog.",
+      "owner": "Owner",
+      "path": "Setting",
+      "scope": "Scope",
+      "title": "Settings catalog",
+      "type": "Type",
+      "validity": "Validity",
+      "version": "Catalog version"
+    },
     "enhanced": {
       "blockUnusualActivity": "Block unusual activity",
       "blockUnusualActivityHelp": "Blocks a source address that fails logins against as many different accounts as the maximum login attempts, within the lockout duration. Needs IP tracking on.",
@@ -1787,6 +1802,7 @@
     "saveSuccess": "Settings saved successfully!",
     "sections": {
       "authentication": "Authentication and Access",
+      "catalog": "Settings catalog",
       "enhanced": "Enhanced Security Mode",
       "lgpd": "LGPD",
       "logging": "Logs and Audit",

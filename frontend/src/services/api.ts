@@ -1089,6 +1089,8 @@ export const securityService = {
   // rollback to one of them, recorded as a new release.
   getReleases: () => api.get('/security/config/releases'),
   rollbackConfig: (configurationReleaseId: string) => api.post('/security/config/rollback', { configurationReleaseId }),
+  // RF014 AC1: the setting catalog, each key with its type, scope and allowed values.
+  getCatalog: () => api.get('/security/config/catalog'),
   // #1149: read-only. The PUT it paired with wrote a store nothing enforced.
   getPermissions: () => api.get('/security/permissions'),
   getSessions: () => api.get('/auth/sessions'),
