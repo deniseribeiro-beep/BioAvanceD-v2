@@ -14,6 +14,7 @@ import {
   closeSeedDb,
   readSampleFileStorage,
   readSampleFileRow,
+  readConsentAuthorizationDecision,
   readDataFileVersions,
   findSampleFileAuditRows,
   deleteRetentionPolicies,
@@ -1003,6 +1004,90 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       consentValid: false,
       consentAuthorizationResult: 'deny',
       consentAuthorizationReasons: [expect.stringContaining(healthCode)],
+    });
+  });
+
+  // #1492 (RF010 AC7): beside permit and deny, the third result. A consent
+  // partially revoked whose granted purposes cover none of the request's DUO
+  // purpose cannot be judged on it, so the item is sent to review, and the
+  // stored ConsentAuthorizationDecision says so.
+  test('a consent revoked for another purpose sends a request for an uncovered DUO purpose to review (RF010 AC7)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `rf1492-study-${run}`;
+    await seedStudy(studyId);
+    const healthCode = `DUO:rf1492-hmb-${run}`;
+    const diseaseCode = `DUO:rf1492-ds-${run}`;
+    const otherCode = `DUO:rf1492-gru-${run}`;
+    await seedDuoConcept(healthCode);
+    await seedDuoConcept(diseaseCode);
+    await seedDuoConcept(otherCode);
+
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, duoCode: otherCode });
+    const accessRequestId = accessRequest.accessRequestId;
+    const specimenId = accessRequest.requestedItems[0].itemId;
+    const evaluateUrl = `${apiBaseURL}/api/access-requests/${accessRequestId}/evaluate`;
+    const first = await request.post(evaluateUrl, { headers: auth });
+    expect(first.status()).toBe(200);
+    const participantId = (await first.json()).data.consentCompatibility[0].participantId;
+    expect(participantId).toBeTruthy();
+
+    const term = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
+      headers: auth,
+      data: {
+        title: `TCLE e2e 1492 ${run}`,
+        content: 'Termo com finalidades codificadas pela DUO (#1492).',
+        permissions: [
+          { key: 'health-1492', label: 'Pesquisa em saúde', required: false, purposeCode: healthCode },
+          { key: 'disease-1492', label: 'Pesquisa da doença', required: false, purposeCode: diseaseCode },
+        ],
+      },
+    });
+    expect(term.status(), await term.text()).toBe(201);
+    const termBody = (await term.json()).data;
+
+    const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: auth,
+      data: { participantId, consentTemplateId: String(termBody._id), responses: { 'health-1492': true, 'disease-1492': true } },
+    });
+    expect(signed.status(), await signed.text()).toBe(201);
+    const consentDocId = String((await signed.json()).data._id);
+
+    const revoked = await request.post(`${apiBaseURL}/api/e-consent/consents/${consentDocId}/revoke`, {
+      headers: auth,
+      data: { scope: ['health-1492'] },
+    });
+    expect(revoked.status(), await revoked.text()).toBe(200);
+
+    const evaluated = await request.post(evaluateUrl, { headers: auth });
+    expect(evaluated.status()).toBe(200);
+    const body = (await evaluated.json()).data;
+    // Review does not deny the consent: the item stays compatible.
+    expect(body.overallCompatible).toBe(true);
+    expect(body.consentCompatibility[0]).toMatchObject({
+      consentValid: true,
+      compatible: true,
+      consentAuthorizationResult: 'review_required',
+      consentAuthorizationDecisionId: expect.any(String),
+      consentAuthorizationReasons: [expect.stringContaining(otherCode)],
+    });
+    const decisionId = body.consentCompatibility[0].consentAuthorizationDecisionId;
+
+    const readBack = await request.get(`${apiBaseURL}/api/access-requests/${accessRequestId}`, { headers: auth });
+    expect(readBack.status()).toBe(200);
+    expect((await readBack.json()).data.consentCompatibility[0]).toMatchObject({
+      consentAuthorizationResult: 'review_required',
+      consentAuthorizationDecisionId: decisionId,
+    });
+
+    expect(await readConsentAuthorizationDecision(decisionId)).toMatchObject({
+      result: 'review_required',
+      accessRequestId,
+      itemId: specimenId,
+      policyVersion: 'rf010-consent-authorization/1.1.0',
+      appliedRules: expect.arrayContaining(['consent_partial_revocation']),
+      reasons: [expect.stringContaining(otherCode)],
     });
   });
 

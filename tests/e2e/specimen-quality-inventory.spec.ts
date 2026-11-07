@@ -245,7 +245,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     expect(persistedSprec).toMatchObject(sprec);
   });
 
-  test('blocks operations against a specimen whose participant has no active consent (criterion 6)', async ({
+  test('registers a specimen whose participant has no active consent, and blocks operations against it (criterion 6)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -267,7 +267,15 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.specimenId;
+    // RF004 AC7 (#1492), the ruling recorded: on the default (permissive)
+    // mount, registering a specimen with no consent in force is allowed. The
+    // block falls on the specimen's consent-bound operations (the withdraw
+    // below; the access-request evaluation, RF024 AC2) and on ingestion,
+    // whose consent gate fails closed.
+    const created = (await create.json()).data;
+    expect(created.operationMode).toBe('PERMISSIVE');
+    expect(created.specimenId).toBeTruthy();
+    const sampleID = created.specimenId;
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },

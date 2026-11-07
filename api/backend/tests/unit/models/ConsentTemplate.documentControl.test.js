@@ -35,4 +35,17 @@ describe('ConsentTemplateModel document control (RF010 AC1)', () => {
       expect.stringContaining('consentModel deve ser um de: specific, broad, tiered, dynamic'),
     ]));
   });
+
+  // P1X-0095 (#1492): the URI of the controlled document.
+  it('records a given document URI, trimmed, and null when absent', () => {
+    expect(ConsentTemplateModel.create({ ...base, documentUri: ' https://example.org/tcle-v1.pdf ' }).documentUri)
+      .toBe('https://example.org/tcle-v1.pdf');
+    expect(ConsentTemplateModel.create(base).documentUri).toBeNull();
+  });
+
+  it('refuses a document URI that is not a URI', () => {
+    expect(ConsentTemplateModel.validate({ ...base, documentUri: 'not a uri' }).errors)
+      .toContain('documentUri deve ser uma URI');
+    expect(ConsentTemplateModel.validate({ ...base, documentUri: 'https://example.org/t.pdf' }).isValid).toBe(true);
+  });
 });

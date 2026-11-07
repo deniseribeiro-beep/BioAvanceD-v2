@@ -92,6 +92,12 @@ export async function readSampleFileRow(fileId: string): Promise<Record<string, 
   return db.collection('sample_files').findOne({ _id: new ObjectId(fileId) });
 }
 
+/** RF010 AC7 (#1492): a stored ConsentAuthorizationDecision. No route reads these rows. */
+export async function readConsentAuthorizationDecision(consentAuthorizationDecisionId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('consentAuthorizationDecisions').findOne({ consentAuthorizationDecisionId });
+}
+
 /** RF007 AC4 (#1477): a file's DataFileVersion rows, oldest first. No route lists them. */
 export async function readDataFileVersions(fileId: string): Promise<Array<Record<string, any>>> {
   const db = await getDb();
