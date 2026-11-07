@@ -224,6 +224,15 @@ export async function invariantViolationsFor(correlationId: string): Promise<Rec
   return db.collection('invariantViolations').find({ correlationId }).toArray();
 }
 
+/**
+ * RF014 AC7, CFG-008 (#1487): the ConfigurationChangeEvents one configuration
+ * release recorded, in the order they were written. No route reads them.
+ */
+export async function configurationChangeEventsFor(releaseId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('configurationChangeEvents').find({ releaseId }).sort({ _id: 1 }).toArray();
+}
+
 /** RF022 AC2: the index names a collection carries, read from Mongo itself. */
 export async function indexNamesOf(collection: string): Promise<string[]> {
   const db = await getDb();

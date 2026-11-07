@@ -7,7 +7,7 @@ import { computeTotp } from './helpers/totp';
 import { deleteOrganizations } from './helpers/listOrganizations';
 import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb, findLogRows } from './helpers/queryLoginAttempts';
 import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
-import { invariantViolationsFor, closeFoundationDb } from './helpers/queryFoundationData';
+import { invariantViolationsFor, configurationChangeEventsFor, closeFoundationDb } from './helpers/queryFoundationData';
 import { findStoredUser, setStoredSessionTimeoutMinutes, closeStoredCredentialsDb } from './helpers/storedCredentials1456';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
@@ -806,6 +806,24 @@ test.describe('Security policy management (RF014) — real backend', () => {
       ]);
       expect(await invariantViolationsFor(secondRefusal.configurationReleaseId)).toEqual([]);
       expect(secondRefusal.settings.session.timeoutMinutes).toBe(1);
+      // RF014 AC7, CFG-008 (#1487): each lifecycle step is a ConfigurationChangeEvent
+      // keyed by its release: proposal, approval and activation for a change,
+      // rollback naming the activation it undoes, and a violation attempt for
+      // the refusal that broke an invariant (none for the plain 400).
+      const changeTypes = (events: Record<string, any>[]) => events.map((event) => event.changeType);
+      const updateEvents = await configurationChangeEventsFor(updated.configurationReleaseId);
+      expect(changeTypes(updateEvents)).toEqual(['proposed', 'approved', 'activated']);
+      const rollbackEvents = await configurationChangeEventsFor(restored.configurationReleaseId);
+      expect(changeTypes(rollbackEvents)).toEqual(['proposed', 'approved', 'rolled_back']);
+      expect(rollbackEvents[2].rollbackOf).toBe(updateEvents[2].configurationChangeEventId);
+      const overrideEvents = await configurationChangeEventsFor(firstRefusal.configurationReleaseId);
+      expect(changeTypes(overrideEvents)).toEqual(['proposed', 'violation_attempted']);
+      expect(overrideEvents[1].impactSummary).toContain('INV-AUDIT-001');
+      expect(changeTypes(await configurationChangeEventsFor(secondRefusal.configurationReleaseId))).toEqual(['proposed']);
+      for (const event of [...updateEvents, ...rollbackEvents, ...overrideEvents]) {
+        expect(event.actorId, event.changeType).toBe(updated.lastUpdatedBy);
+        expect(event.occurredAt, event.changeType).toBeInstanceOf(Date);
+      }
       expect(afterRefusals.filter((release: { status: string }) => release.status === 'active')
         .map((release: { configurationReleaseId: string }) => release.configurationReleaseId)).toEqual([restored.configurationReleaseId]);
       const inForce = (await (await request.get(`${apiBaseURL}/api/security/config`, {

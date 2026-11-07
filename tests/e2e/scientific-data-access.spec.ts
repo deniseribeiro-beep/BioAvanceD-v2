@@ -580,6 +580,67 @@ test.describe('Scientific files (RF007) — real backend', () => {
     const body = await upload.json();
     expect(body.success).toBe(false);
   });
+
+  test('a new RetentionPolicy version supersedes the previous one: previousPolicyId, version and active flag (RF014 AC5, #1487)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const policyBody = {
+      applicableEntityTypes: ['DataFile'],
+      triggerEvent: 'creation',
+      postRetentionAction: 'destroy',
+      retentionPeriod: 'P3650D',
+      jurisdiction: 'BR',
+      retentionBasis: ['RF014 AC5 e2e fixture basis'],
+      legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+      reviewRequired: false,
+    };
+
+    const created = await request.post(`${apiBaseURL}/api/retention-policies`, { headers: auth, data: policyBody });
+    expect(created.status(), await created.text()).toBe(201);
+    const v1 = (await created.json()).data;
+    const v1Id = String(v1._id);
+    createdRetentionPolicyIds.push(v1Id);
+
+    const updatedResponse = await request.put(`${apiBaseURL}/api/retention-policies/${v1Id}`, {
+      headers: auth,
+      data: { ...policyBody, retentionPeriod: 'P1825D' },
+    });
+    expect(updatedResponse.status(), await updatedResponse.text()).toBe(200);
+    const v2 = (await updatedResponse.json()).data;
+    const v2Id = String(v2._id);
+    createdRetentionPolicyIds.push(v2Id);
+
+    expect(v2Id).not.toBe(v1Id);
+    expect(v2.previousPolicyId).toBe(v1Id);
+    expect(v2.active).toBe(true);
+    expect(v2.retentionPeriod).toBe('P1825D');
+    expect(Number(v2.version.slice(1))).toBe(Number(v1.version.slice(1)) + 1);
+
+    // The superseded version is kept, inactive, with its period untouched.
+    const old = await request.get(`${apiBaseURL}/api/retention-policies/${v1Id}`, { headers: auth });
+    expect(old.status(), await old.text()).toBe(200);
+    const oldPolicy = (await old.json()).data;
+    expect(oldPolicy.active).toBe(false);
+    expect(oldPolicy.retentionPeriod).toBe('P3650D');
+    expect(oldPolicy.previousPolicyId).toBeNull();
+
+    // The DataFile family names only the new version as its active policy.
+    const classes = await request.get(`${apiBaseURL}/api/retention-policies/data-classes`, { headers: auth });
+    expect(classes.status(), await classes.text()).toBe(200);
+    const dataFileClass = (await classes.json()).data.find((entry: { code: string }) => entry.code === 'dataFile');
+    expect(dataFileClass.retentionPolicyId).toBe(v2Id);
+    expect(dataFileClass.retentionPeriod).toBe('P1825D');
+
+    const list = await request.get(`${apiBaseURL}/api/retention-policies`, { headers: auth });
+    expect(list.status(), await list.text()).toBe(200);
+    const activeDataFilePolicies = (await list.json()).data.filter(
+      (entry: { active: boolean; applicableEntityTypes: string[] }) =>
+        entry.active && entry.applicableEntityTypes.includes('DataFile')
+    );
+    expect(activeDataFilePolicies.map((entry: { _id: string }) => String(entry._id))).toEqual([v2Id]);
+  });
 });
 
 test.describe('Access and distribution requests (RF024) — real backend', () => {
