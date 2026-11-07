@@ -12,6 +12,7 @@
 const { randomUUID } = require('crypto');
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
+const { DICTIONARY_VERSION } = require('../reference-data/canonical-dictionary/v2');
 const LabelIdentifierModel = require('../models/LabelIdentifier');
 const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
@@ -296,6 +297,11 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   doc.sourceRecordId = outcome.provenance.sourceRecordId;
   doc.retrievedAt = outcome.provenance.retrievedAt;
   doc.canonicalModelReleaseId = releases.canonicalModelReleaseId;
+  // ELM-0004, RNF023 AC1: the schema version that validated the document.
+  // INFERENCE, not a citation: the release in force is release-<dictionary
+  // version> (readiness.js), so the schema version is DICTIONARY_VERSION;
+  // the server value overrides any payload value, as the release id does.
+  doc.schemaVersion = DICTIONARY_VERSION;
   doc.configurationReleaseId = releases.configurationReleaseId;
   // INFERENCE, not a citation: createdBy (ELM-0007) is the ator, per
   // provenanceEnvelope.js's header, so the server's Actor/<id> overrides any

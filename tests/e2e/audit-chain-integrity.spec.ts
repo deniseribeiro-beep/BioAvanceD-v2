@@ -47,6 +47,8 @@ test.describe('RF012 audit event chain (real backend)', () => {
     expect(newest.purpose).toBeTruthy();
     expect(newest.policyVersion).toBeTruthy();
     expect(newest.canonicalModelReleaseId).toMatch(/^release-/);
+    // RNF023 AC1 (#1489): the event carries its schemaVersion beside the release id.
+    expect(newest.schemaVersion).toBe('audit.event.v2');
 
     const anchor = await request.post(`${apiBaseURL}/api/audit/anchor`, {
       headers: auth,
@@ -177,6 +179,8 @@ test.describe('RF012 audit event chain (real backend)', () => {
       result: 'success',
       correlationId: requestId,
       canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID,
+      // RNF023 AC1 (#1489): the ingestion's own event carries schemaVersion beside the release id.
+      schemaVersion: 'audit.event.v2',
     });
     expect(event.actorPseudonym).toMatch(/^USR-/);
     expect(event.purpose).toBeTruthy();

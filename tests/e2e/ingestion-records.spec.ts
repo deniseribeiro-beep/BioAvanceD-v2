@@ -149,10 +149,12 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(typeof body.outboxEventId).toBe('string');
 
     const stored = await findIngestedRecord('datasets', 'datasetId', body.entityId);
+    // RNF023 AC1 (#1489): the document and its event carry schemaVersion beside the release id.
     expect(stored).toMatchObject({
       createdBy: `Actor/${admin.user._id}`,
       sourceRecordId,
       canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID,
+      schemaVersion: '2.0.0',
       configurationReleaseId: inForce,
     });
 
@@ -162,6 +164,7 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
       eventId: body.outboxEventId,
       aggregateType: 'Dataset',
       canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID,
+      schemaVersion: 1,
     });
     expect(events[0].payload.configurationReleaseId).toBe(inForce);
 

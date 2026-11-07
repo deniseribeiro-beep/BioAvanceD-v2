@@ -94,6 +94,7 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
       sourceRecordId: 'LIMS-DS-42',
       createdBy: 'Actor/u-1',
       canonicalModelReleaseId: 'release-2.0.0',
+      schemaVersion: '2.0.0',
       configurationReleaseId: 'cfg-release-7',
     });
     expect(db.collections.datasets.docs[0].retrievedAt).toEqual(new Date('2026-10-01T12:00:00.000Z'));
