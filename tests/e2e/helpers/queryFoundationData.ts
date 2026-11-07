@@ -248,3 +248,29 @@ export async function indexNamesOf(collection: string): Promise<string[]> {
   const indexes = await db.collection(collection).listIndexes().toArray();
   return indexes.map((index) => index.name as string);
 }
+
+/**
+ * #1485: the foundation-runs test-support route runs the Foundation job
+ * against an e2e_foundation_ scratch database on the same Mongo server,
+ * never the stack's own; these read and seed that database.
+ */
+async function scratchDb(database: string): Promise<Db> {
+  await getDb();
+  return client!.db(database);
+}
+export async function insertScratchFoundationDataRun(database: string, run: Record<string, unknown>): Promise<void> {
+  await (await scratchDb(database)).collection('foundationDataRuns').insertOne(run);
+}
+export async function scratchFoundationDataRun(database: string, foundationDataRunId: string): Promise<Record<string, any> | null> {
+  return (await scratchDb(database)).collection('foundationDataRuns').findOne({ foundationDataRunId });
+}
+export async function countScratchFoundationEvidence(database: string): Promise<{ runs: number; reports: number }> {
+  const db = await scratchDb(database);
+  return { runs: await db.collection('foundationDataRuns').countDocuments(), reports: await db.collection('readinessReports').countDocuments() };
+}
+export async function setScratchGovernanceChecksum(database: string, collection: 'canonicalModelReleases' | 'governanceInvariantCatalogs', canonicalModelReleaseId: string, checksum: string): Promise<void> {
+  await (await scratchDb(database)).collection(collection).updateOne({ canonicalModelReleaseId }, { $set: { checksum } });
+}
+export async function dropScratchFoundationDb(database: string): Promise<void> {
+  await (await scratchDb(database)).dropDatabase();
+}

@@ -59,6 +59,7 @@
     "/api/diagnostic-reports",
     "/api/_test-support/ingestion",
     "/api/_test-support/reference-import-runs",
+    "/api/_test-support/foundation-runs",
     "/api/terminologies",
     "/api/cids",
     "/api/phone-codes",
@@ -302,6 +303,10 @@
     {
       "name": "test-support-reference-import-runs",
       "description": "/api/_test-support/reference-import-runs: the test-support reference import into an E2E_ dataset and the check of its preserved asset, registered only where test-support routes are enabled (RF028, RNF032)."
+    },
+    {
+      "name": "test-support-foundation-runs",
+      "description": "/api/_test-support/foundation-runs: the test-support run of the Foundation job on an e2e_foundation_ scratch database, registered only where test-support routes are enabled (RF022, RNF031)."
     },
     {
       "name": "terminologies",
@@ -40658,6 +40663,123 @@
           },
           "500": {
             "description": "The gateway failed, including a missing entityType.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/_test-support/foundation-runs/run": {
+      "post": {
+        "tags": [
+          "test-support-foundation-runs"
+        ],
+        "summary": "Run the Foundation job on an e2e_foundation_ scratch database",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. Runs the Foundation job's own runSeed() in the posted mode against the posted scratch database on the same Mongo server, never the stack's own database, so a rollback or a failing gate leaves the stack's FoundationDataRun and ReadinessReport untouched (RF022, RNF031, #1485). A wrong or missing secret answers 403. 400 is a database outside the e2e_foundation_ namespace (invalid_database) or a mode the job does not run (invalid_mode); validation runs before any database access. 503 is no database or a database named as the stack's own; 500 is any failure of the job.",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "database": {
+                    "type": "string",
+                    "pattern": "^e2e_foundation_[a-z0-9_]{1,40}$"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "dry_run",
+                      "apply",
+                      "validate",
+                      "rollback"
+                    ]
+                  }
+                },
+                "required": [
+                  "database",
+                  "mode"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The FoundationDataRun, its ReadinessReport (null for a dry run) and the job's exit code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "run": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "report": {
+                          "type": "object",
+                          "nullable": true,
+                          "additionalProperties": true
+                        },
+                        "exitCode": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_database or invalid_mode.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The Foundation job failed.",
             "content": {
               "application/json": {
                 "schema": {

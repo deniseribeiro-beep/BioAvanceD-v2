@@ -45,6 +45,11 @@ import {
   terminologyConceptsBySystemUri,
   countTerminologyRelationsByRelease,
   findAuditLog,
+  insertScratchFoundationDataRun,
+  scratchFoundationDataRun,
+  countScratchFoundationEvidence,
+  setScratchGovernanceChecksum,
+  dropScratchFoundationDb,
   closeFoundationDb,
 } from './helpers/queryFoundationData';
 import {
@@ -346,9 +351,26 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       'zero-reference-data': 'pass',
       'governance-registry': 'pass',
       configuration: 'pass',
+      rcs: 'pass',
     });
     expect(report!.p0Coverage).toBeGreaterThan(0);
     expect(report!.p0Coverage).toBeLessThan(1);
+  });
+
+  // RF022 AC3, RNF031 AC3: the rcs gate is P0 and its evidence reads the
+  // rule package, the axes, the governance evidence, the input snapshot and
+  // the recalculation of the golden vectors.
+  test('the bootstrap ReadinessReport carries the P0 rcs gate with its five passing checks', async () => {
+    const report = await latestReadinessReport('test');
+    const rcs = report!.gateResults.find((gate: any) => gate.gate === 'rcs');
+    expect(rcs).toMatchObject({ result: 'pass', p0: true });
+    expect(rcs.evidence.error).toBeUndefined();
+    expect(rcs.evidence.checks.map((entry: any) => [entry.check, entry.passed])).toEqual([
+      ['releases', true], ['axes', true], ['governance-evidence', true], ['input-snapshot', true], ['golden-vectors', true],
+    ]);
+    for (const key of ['rulePackage', 'governanceRuleSet', 'matrixMappingRelease', 'sprecMappingRelease']) {
+      expect(rcs.evidence[key]).not.toBeNull();
+    }
   });
 
   // #1304, plano §4 F1.2: the job registered the release this build follows,
@@ -410,6 +432,122 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     for (const step of completed) {
       expect(Number.isNaN(new Date(step.checkpoint.completedAt).getTime())).toBe(false);
     }
+  });
+});
+
+// RF022 AC5/AC9/AC10, RNF031 AC4/AC6 (#1485): the one-shot runs once before
+// the API, and a rollback or a failing gate on the stack's database would
+// block its ReadinessReport. The test-support route runs the job's own
+// runSeed() against an e2e_foundation_ scratch database on the same Mongo,
+// which these tests drop afterwards.
+async function postFoundationRun(request: import('@playwright/test').APIRequestContext, database: string, mode: string) {
+  const response = await request.post(`${apiBaseURL}/api/_test-support/foundation-runs/run`, {
+    headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+    data: { database, mode },
+  });
+  expect(response.status()).toBe(200);
+  return (await response.json()).data;
+}
+
+function gateResultsByName(report: any): Record<string, string> {
+  return Object.fromEntries(report.gateResults.map((gate: any) => [gate.gate, gate.result]));
+}
+
+test.describe('Foundation job modes on a scratch database (RF022 AC5 AC9 AC10, RNF031 AC4 AC6) — real backend', () => {
+  test.describe.configure({ mode: 'serial' });
+  const suffix = `${Date.now()}`;
+  const cycleDb = `e2e_foundation_${suffix}_cycle`;
+  const driftDb = `e2e_foundation_${suffix}_drift`;
+  const registryDb = `e2e_foundation_${suffix}_registry`;
+  let applyRunId: string;
+
+  test.afterAll(async () => {
+    for (const database of [cycleDb, driftDb, registryDb]) await dropScratchFoundationDb(database);
+    await closeFoundationDb();
+  });
+
+  test('dry-run, apply and verify each leave their checkpoint and a ready report naming the rcs gate (RNF031 AC4, RF022 AC5)', async ({ request }) => {
+    const dry = await postFoundationRun(request, cycleDb, 'dry_run');
+    expect(dry.run).toMatchObject({
+      executionMode: 'dry_run', runStatus: 'completed', dryRunResult: 'pass', applyResult: 'not_run', verifyResult: 'not_run', rollbackResult: 'not_required',
+    });
+    expect(dry.run.steps.map((step: any) => [step.step, step.status])).toEqual([
+      ['miabis-minimal', 'planned'], ['sprec-minimal', 'planned'], ['rcs-gov-1.0', 'planned'],
+    ]);
+    expect(dry.report).toBeNull();
+    expect(dry.exitCode).toBe(0);
+
+    // The apply's steps and checkpoints are the bootstrap run's shape (RF022 AC2/AC5).
+    const applied = await postFoundationRun(request, cycleDb, 'apply');
+    expect(applied.run).toMatchObject({
+      executionMode: 'apply', runStatus: 'completed', dryRunResult: 'pass', applyResult: 'pass', verifyResult: 'pass', rollbackResult: 'not_required',
+      previousRunId: dry.run.foundationDataRunId,
+    });
+    expect(applied.run.steps.map((step: any) => [step.step, step.status])).toEqual([
+      ['entities', 'completed'],
+      ['miabis-minimal', 'prepared'], ['sprec-minimal', 'prepared'], ['rcs-gov-1.0', 'prepared'],
+      ['governance-registry', 'completed'], ['rbac-catalog', 'completed'], ['report-templates', 'completed'], ['indexes', 'completed'],
+      ['quarantine', 'deferred'], ['outbox', 'deferred'], ['audit', 'deferred'],
+      ['tests', 'completed'], ['rollback', 'prepared'],
+    ]);
+    expect(applied.run.steps.filter((step: any) => step.checkpoint).map((step: any) => [step.step, step.checkpoint.sequence])).toEqual([
+      ['entities', 1], ['governance-registry', 2], ['rbac-catalog', 3], ['report-templates', 4], ['indexes', 5], ['tests', 6],
+    ]);
+    expect(applied.report).toMatchObject({ status: 'ready', blockers: [], foundationDataRunId: applied.run.foundationDataRunId });
+    expect(gateResultsByName(applied.report)).toMatchObject({ rcs: 'pass' });
+    expect(applied.exitCode).toBe(0);
+    applyRunId = applied.run.foundationDataRunId;
+
+    const verified = await postFoundationRun(request, cycleDb, 'validate');
+    expect(verified.run).toMatchObject({ executionMode: 'validate', verifyResult: 'pass', applyResult: 'not_run', previousRunId: applyRunId });
+    expect(verified.run.steps.map((step: any) => [step.step, step.status])).toEqual([['verify', 'completed']]);
+    expect(verified.report.status).toBe('ready');
+  });
+
+  test('a rollback undoes the newest apply, blocks promotion and leaves the evidence append-only, and only a new apply promotes again (RF022 AC5 AC10)', async ({ request }) => {
+    const before = await scratchFoundationDataRun(cycleDb, applyRunId);
+    const rolled = await postFoundationRun(request, cycleDb, 'rollback');
+    expect(rolled.run).toMatchObject({
+      executionMode: 'rollback', runStatus: 'rolled_back', rollbackResult: 'pass', dryRunResult: 'not_run', applyResult: 'not_run', verifyResult: 'not_run',
+    });
+    expect(rolled.run.validationSummary.rollbackTargetRunId).toBe(applyRunId);
+    expect(rolled.run.steps).toEqual([{ step: 'rollback', status: 'pass', removed: {} }]);
+    expect(rolled.report).toMatchObject({ status: 'blocked', blockers: [`rolled_back:${applyRunId}`] });
+    expect(gateResultsByName(rolled.report)).toMatchObject({ rollback: 'pass' });
+    expect(rolled.exitCode).toBe(0);
+
+    // RF022 AC10: the apply run is never edited; dry_run writes no report.
+    expect(await scratchFoundationDataRun(cycleDb, applyRunId)).toEqual(before);
+    expect(await countScratchFoundationEvidence(cycleDb)).toEqual({ runs: 4, reports: 3 });
+
+    const reapplied = await postFoundationRun(request, cycleDb, 'apply');
+    expect(reapplied.report.status).toBe('ready');
+    expect(reapplied.run.previousRunId).toBe(rolled.run.foundationDataRunId);
+  });
+
+  test('an apply whose release arrives with a different dictionary checksum is blocked before it applies (RF022 AC9, RNF031 AC6)', async ({ request }) => {
+    await insertScratchFoundationDataRun(driftDb, {
+      environment: 'test', runStatus: 'completed', startedAt: new Date(0), canonicalModelReleaseId: 'release-2.0.0', dictionaryChecksum: 'a-different-catalog',
+    });
+    const { run, report, exitCode } = await postFoundationRun(request, driftDb, 'apply');
+    expect(run).toMatchObject({ runStatus: 'failed', dryRunResult: 'fail', applyResult: 'not_run' });
+    expect(report.status).toBe('blocked');
+    expect(report.blockers).toEqual(expect.arrayContaining(['gate:version', 'dry_run_failed']));
+    expect(report.gateResults.find((gate: any) => gate.gate === 'version')).toMatchObject({ result: 'fail', p0: true });
+    expect(exitCode).toBe(2);
+  });
+
+  test('an apply whose registered release and invariant catalog carry a different checksum is blocked on the governance registry (RF022 AC9, RNF031 AC6)', async ({ request }) => {
+    await postFoundationRun(request, registryDb, 'apply');
+    await setScratchGovernanceChecksum(registryDb, 'canonicalModelReleases', 'release-2.0.0', 'sha256:registered-elsewhere');
+    await setScratchGovernanceChecksum(registryDb, 'governanceInvariantCatalogs', 'release-2.0.0', 'sha256:registered-elsewhere');
+    const { report, exitCode } = await postFoundationRun(request, registryDb, 'apply');
+    expect(report.status).toBe('blocked');
+    expect(report.blockers).toEqual(['gate:governance-registry']);
+    expect(report.gateResults.find((gate: any) => gate.gate === 'governance-registry').evidence.failures).toEqual([
+      'checksum da canonicalModelRelease diverge', 'checksum do governanceInvariantCatalog diverge',
+    ]);
+    expect(exitCode).toBe(2);
   });
 });
 
