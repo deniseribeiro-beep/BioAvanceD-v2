@@ -9,6 +9,7 @@ import {
   cleanupStorageBoxLocation,
   seedStudy,
   seedProtocol,
+  seedCollectionEntity,
   seedActiveConsent,
   seedDuoConcept,
   closeSeedDb,
@@ -61,7 +62,11 @@ function binaryFieldPaths(value: unknown, at = ''): string[] {
   );
 }
 
-async function createRealSample(request: any, token: string): Promise<string> {
+async function createRealSample(
+  request: any,
+  token: string,
+  link?: { studyId: string; protocolId: string; collectionId: string }
+): Promise<string> {
   const participant = await createRealParticipant(request, apiBaseURL!, token);
   const seededStorageBox = await seedStorageBoxLocation();
   seededStorageBoxes.push(seededStorageBox);
@@ -74,6 +79,7 @@ async function createRealSample(request: any, token: string): Promise<string> {
       ...validSampleFields(),
       boxId,
       positionCode,
+      ...link,
     },
   });
   expect([201, 202]).toContain(create.status());
@@ -656,7 +662,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
   async function createRequestForSample(
     request: any,
     token: string,
-    opts: { studyId: string; duoCode?: string }
+    opts: { studyId: string; duoCode?: string; collection?: boolean }
   ): Promise<any> {
     const org = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -668,7 +674,52 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     const protocolId = `rf024-protocol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     await seedProtocol(protocolId, { protocolVersion: '1.2' });
 
-    const sampleID = await createRealSample(request, token);
+    // RNF008 AC3 (#1496): with opts.collection, the specimen is created into
+    // a collection governed for this study and protocol, so the request's
+    // item resolves to that collection.
+    let collectionId: string | undefined;
+    let sampleID: string;
+    if (opts.collection) {
+      collectionId = `rnf008-collection-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      await seedCollectionEntity(collectionId);
+      const headers = { Authorization: `Bearer ${token}` };
+      const approval = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/approvals`, {
+        headers,
+        data: {
+          authority: 'CEP sintético',
+          caae: '00000000.0.0000.0000',
+          documentUri: 'https://docs.example.org/parecer.pdf',
+          documentChecksum: `sha256:${'a'.repeat(64)}`,
+          effectivePeriod: { start: '2026-01-01', end: '2030-12-31' },
+          status: 'active',
+          responsibleOrganizationId: organizationId,
+        },
+      });
+      expect(approval.status(), await approval.text()).toBe(201);
+      const approvalId = (await approval.json()).data.approvalId as string;
+      const event = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/events`, {
+        headers,
+        data: {
+          justification: 'Contexto inicial do biorrepositório — RNF008 e2e',
+          governanceContext: {
+            studyId: opts.studyId,
+            protocolId,
+            // The version seedProtocol stored above; the service refuses a mismatch.
+            protocolVersion: '1.2',
+            caae: '00000000.0.0000.0000',
+            responsibleOrganizationId: organizationId,
+            responsibleInvestigatorId: 'investigator-e2e',
+            ethicsApprovalId: approvalId,
+            validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+            plannedEndDate: '2030-12-31',
+          },
+        },
+      });
+      expect(event.status(), await event.text()).toBe(201);
+      sampleID = await createRealSample(request, token, { studyId: opts.studyId, protocolId, collectionId });
+    } else {
+      sampleID = await createRealSample(request, token);
+    }
     const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -691,7 +742,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(create.status(), await create.text()).toBe(201);
     const created = (await create.json()).data;
     expect(created).toMatchObject({ organizationId, protocolId, protocolVersion: '1.2' });
-    return created;
+    return { ...created, collectionId };
   }
 
   // An approval needs a passing evaluation (AC#6): seed the ACTIVE consent
@@ -994,6 +1045,78 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       configurationReleaseId: inForce,
       policyReasons: expect.arrayContaining([`${policyBody.policyName} 1.1.0: deny`]),
     });
+  });
+
+  // RNF008 AC3 (#1496): an AccessPolicy scopes by study, protocol and
+  // collection through its conditions; a request outside each scope is not
+  // permitted by it, and one inside all three is.
+  test('an AccessPolicy conditioned on another study, protocol or collection does not permit the request (RNF008 AC3, #1496)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const studyId = `rnf008-study-${Date.now()}`;
+    await seedStudy(studyId);
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, collection: true });
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const createPolicy = async (policyName: string, conditions: Record<string, string>[]): Promise<string> => {
+      const created = await request.post(`${apiBaseURL}/api/access-policies`, {
+        headers: auth,
+        data: {
+          policyName,
+          policyVersion: '1.0.0',
+          applicableEntityTypes: ['AccessRequest'],
+          decisionEffect: 'permit',
+          ruleExpression: 'all-conditions',
+          effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+          roleCodes: ['researcher'],
+          organizationScopeIds: [accessRequest.organizationId],
+          resourceScopes: ['Specimen'],
+          conditions,
+          decisionReasonsRequired: true,
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      return (await created.json()).data.accessPolicyId as string;
+    };
+
+    const outOfScope = [
+      { name: `RNF008 e2e outro estudo ${stamp}`, conditions: [{ consent: 'compatible', studyId: `${studyId}-other` }] },
+      { name: `RNF008 e2e outro protocolo ${stamp}`, conditions: [{ consent: 'compatible', protocolId: 'rnf008-other-protocol' }] },
+      { name: `RNF008 e2e outra coleção ${stamp}`, conditions: [{ consent: 'compatible', collectionId: 'rnf008-other-collection' }] },
+    ];
+    for (const policy of outOfScope) {
+      await createPolicy(policy.name, policy.conditions);
+    }
+
+    const evaluateUrl = `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`;
+    const outside = await request.post(evaluateUrl, { headers: auth });
+    expect(outside.status(), await outside.text()).toBe(200);
+    const outsideData = (await outside.json()).data;
+    // The item's own study, protocol and collection, read off its specimen.
+    expect(outsideData.consentCompatibility[0]).toMatchObject({
+      studyId,
+      protocolId: accessRequest.protocolId,
+      collectionId: accessRequest.collectionId,
+    });
+    expect(outsideData.policyDecision.effect).toBe('review_required');
+    expect(outsideData.policyDecision.appliedPolicies).toEqual([]);
+    expect(outsideData.policyDecision.reasons).toEqual(
+      expect.arrayContaining(outOfScope.map((policy) => `${policy.name} 1.0.0: condições não atendidas`))
+    );
+
+    const inScopeId = await createPolicy(`RNF008 e2e no escopo ${stamp}`, [
+      { consent: 'compatible', studyId, protocolId: accessRequest.protocolId, collectionId: accessRequest.collectionId },
+    ]);
+    const inside = await request.post(evaluateUrl, { headers: auth });
+    expect(inside.status(), await inside.text()).toBe(200);
+    const insideDecision = (await inside.json()).data.policyDecision;
+    expect(insideDecision.effect).toBe('permit');
+    expect(insideDecision.appliedPolicies).toEqual([
+      { accessPolicyId: inScopeId, policyVersion: '1.0.0', decisionEffect: 'permit', decisionReasonsRequired: true },
+    ]);
   });
 
   // #1347 (RF010 AC3/AC7): a term's permissions name governed purposes (DUO

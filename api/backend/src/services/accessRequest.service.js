@@ -158,6 +158,10 @@ class AccessRequestService {
    * Sample/Consent/Patient) e as AccessPolicy vigentes. AC#3: o resultado
    * das políticas é `policyDecision` (permit, deny ou review_required, com
    * as políticas aplicadas e as razões; ver models/AccessPolicy.js).
+   * RNF008 AC3 (#1496): cada entrada registra o estudo, o protocolo e a
+   * coleção da amostra do seu item (studyId, protocolId, collectionId; null
+   * para dataset ou item não resolvido), lidos pelas condições de mesmo nome
+   * da AccessPolicy.
    *
    * #661: 'file' items (SampleFile) always carry the specimenId they were
    * uploaded against, so they resolve to a real participant the same way a
@@ -247,12 +251,18 @@ class AccessRequestService {
     const consentCompatibility = [];
     for (const item of accessRequest.requestedItems) {
       let participantId = null;
+      let studyId = null;
+      let protocolId = null;
+      let collectionId = null;
       let consentValid = null;
       let decision = null;
 
       if (item.itemType === 'specimen') {
         const sample = await samples.findOne({ specimenId: item.itemId });
         participantId = sample?.participantId || null;
+        studyId = sample?.studyId || null;
+        protocolId = sample?.protocolId || null;
+        collectionId = sample?.collectionId || null;
         ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
       } else if (item.itemType === 'file') {
         const file = ObjectId.isValid(item.itemId)
@@ -260,6 +270,9 @@ class AccessRequestService {
           : null;
         const sample = file?.specimenId ? await samples.findOne({ specimenId: file.specimenId }) : null;
         participantId = sample?.participantId || null;
+        studyId = sample?.studyId || null;
+        protocolId = sample?.protocolId || null;
+        collectionId = sample?.collectionId || null;
         ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
       }
       // 'dataset' items: intentionally left untouched — participantId/
@@ -272,6 +285,9 @@ class AccessRequestService {
         itemId: item.itemId,
         itemType: item.itemType,
         participantId,
+        studyId,
+        protocolId,
+        collectionId,
         consentValid,
         consentAuthorizationDecisionId: decision?.consentAuthorizationDecisionId || null,
         consentAuthorizationResult: decision?.result || null,

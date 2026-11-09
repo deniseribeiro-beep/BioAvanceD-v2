@@ -192,6 +192,9 @@ describe('accessRequest.service', () => {
           itemId: 'SPEC-1',
           itemType: 'specimen',
           participantId: 'participant-1',
+          studyId: null,
+          protocolId: null,
+          collectionId: null,
           consentValid: true,
           consentAuthorizationDecisionId: expect.any(String),
           consentAuthorizationResult: 'permit',
@@ -425,6 +428,36 @@ describe('accessRequest.service', () => {
         consentValid: true,
         compatible: true,
       });
+    });
+
+    // RNF008 AC3 (#1496): the AccessPolicy collectionId condition reads it.
+    it('records the study, protocol and collection of each specimen and file item on its compatibility entry', async () => {
+      const fileId = new ObjectId();
+      const db = createFakeDb({
+        sampleFiles: [{ _id: fileId, specimenId: 'SPEC-2' }],
+        samples: [
+          { specimenId: 'SPEC-1', participantId: 'participant-1', studyId: 'study-1', protocolId: 'protocol-1', collectionId: 'COL-1' },
+          { specimenId: 'SPEC-2', participantId: 'participant-1', studyId: 'study-2', protocolId: 'protocol-2', collectionId: 'COL-2' },
+        ],
+        consents: [{ participantId: 'participant-1', status: 'ACTIVE' }],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({
+          requestedItems: [
+            { itemType: 'specimen', itemId: 'SPEC-1' },
+            { itemType: 'file', itemId: fileId.toString() },
+          ],
+        })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.consentCompatibility.map((entry) => [entry.itemType, entry.studyId, entry.protocolId, entry.collectionId])).toEqual([
+        ['specimen', 'study-1', 'protocol-1', 'COL-1'],
+        ['file', 'study-2', 'protocol-2', 'COL-2'],
+      ]);
     });
 
     it('#661: marks a file item incompatible when its resolved participant has no ACTIVE consent', async () => {

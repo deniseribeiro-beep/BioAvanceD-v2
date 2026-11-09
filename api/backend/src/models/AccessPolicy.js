@@ -25,6 +25,7 @@ const CONDITION_FACTS = {
   organizationId: null,
   studyId: null,
   protocolId: null,
+  collectionId: null,
   requestedPurpose: null,
   duoCode: null,
 };
@@ -177,14 +178,60 @@ function policiesInForce(policies, now = new Date()) {
   return [...latest.values()];
 }
 
+// RNF008 AC3 (#1496): the facts each requested item resolves to (its
+// specimen's study, protocol and collection), recorded on its
+// consentCompatibility entry.
+const ITEM_FACTS = ['studyId', 'protocolId', 'collectionId'];
+
 function conditionHolds(condition, facts) {
   return Object.entries(condition).every(([fact, value]) => facts[fact] === value);
 }
 
 /**
+ * RNF008 AC3 (#1496): a deny or review_required policy restricts, so its
+ * item facts hold when ANY requested item matches them: one item, the same
+ * one for every item fact of the condition, whose study, protocol and
+ * collection are the required values (an item's study and protocol also
+ * match the request's declared ones). Adding an item of another collection,
+ * study or protocol, or a dataset item, never switches such a policy off.
+ * The other facts are the request's, as for a permit.
+ */
+function restrictiveConditionHolds(condition, facts, accessRequest, entries) {
+  const pairs = Object.entries(condition);
+  const itemPairs = pairs.filter(([fact]) => ITEM_FACTS.includes(fact));
+  if (!pairs.filter(([fact]) => !ITEM_FACTS.includes(fact)).every(([fact, value]) => facts[fact] === value)) return false;
+  if (itemPairs.length === 0) return true;
+  return entries.some((entry) => itemPairs.every(([fact, value]) => entry[fact] === value
+    || (fact !== 'collectionId' && accessRequest[fact] === value)));
+}
+
+/**
+ * RNF008 AC3 (#1496): for a permit, the one value of `fact` every requested
+ * item resolves to. Items of two values, a dataset item or an item that
+ * resolves to none give null, so a permit conditioned on that fact does not
+ * apply: the scope fails closed to review_required, never to permit.
+ */
+function singleItemValue(entries, fact) {
+  const ids = entries.map((entry) => entry[fact] || null);
+  if (ids.length === 0 || ids.some((id) => id === null)) return null;
+  return ids.every((id) => id === ids[0]) ? ids[0] : null;
+}
+
+/** The items' one value, and only where the request declares the same one. */
+function agreedItemValue(entries, fact, declared) {
+  const value = singleItemValue(entries, fact);
+  return value !== null && value === declared ? value : null;
+}
+
+/**
  * The facts an access request evaluation knows, from the request and its
  * compatibility evaluation (consentCompatibility entries, as
- * accessRequest.service's evaluateCompatibility builds them).
+ * accessRequest.service's evaluateCompatibility builds them). studyId,
+ * protocolId and collectionId are the one value every requested item
+ * resolves to (singleItemValue), and studyId and protocolId must also be the
+ * request's declared ones. These are the facts a permit is read against; a
+ * deny or review_required reads its item facts per item
+ * (restrictiveConditionHolds).
  */
 function accessRequestFacts(accessRequest, consentCompatibility) {
   const entries = consentCompatibility || [];
@@ -194,8 +241,9 @@ function accessRequestFacts(accessRequest, consentCompatibility) {
     duo: !anyDuo ? 'not_requested' : (entries.every((entry) => entry.duoCompatible !== false) ? 'compatible' : 'incompatible'),
     study: entries.length > 0 && entries.every((entry) => entry.studyActive) ? 'active' : 'inactive',
     organizationId: accessRequest.organizationId || null,
-    studyId: accessRequest.studyId || null,
-    protocolId: accessRequest.protocolId || null,
+    studyId: agreedItemValue(entries, 'studyId', accessRequest.studyId || null),
+    protocolId: agreedItemValue(entries, 'protocolId', accessRequest.protocolId || null),
+    collectionId: singleItemValue(entries, 'collectionId'),
     requestedPurpose: accessRequest.requestedPurpose || null,
     duoCode: accessRequest.duoCode || null,
   };
@@ -230,7 +278,9 @@ function evaluatePolicies(policies, accessRequest, consentCompatibility, now = n
 
   for (const policy of policiesInForce(policies, now)) {
     if (!policyCovers(policy, accessRequest)) continue;
-    const results = policy.conditions.map((condition) => conditionHolds(condition, facts));
+    const results = policy.conditions.map((condition) => (policy.decisionEffect === 'permit'
+      ? conditionHolds(condition, facts)
+      : restrictiveConditionHolds(condition, facts, accessRequest, consentCompatibility || [])));
     const met = policy.ruleExpression === 'any-condition' ? results.some(Boolean) : results.every(Boolean);
     if (!met) {
       reasons.push(`${policy.policyName} ${policy.policyVersion}: condições não atendidas`);
