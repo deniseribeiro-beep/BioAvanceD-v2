@@ -2,6 +2,7 @@
 // and, with --repair, requeues the dead letters that hold them.
 const { reconcile, findSamplesMissingFromGraph, findSamplesDriftedFromGraph, planDriftRepair } = require('../../../scripts/graph-projection-reconcile');
 const { PROJECTOR_NAME } = require('../../../src/workers/neo4jProjection.worker');
+const { ObjectId } = require('mongodb');
 
 function makeOutbox(unprojected) {
   const calls = [];
@@ -281,6 +282,81 @@ describe('graph-projection-reconcile', () => {
         ['specimen', { specimenId: 'smp-nodonor', participantId: 'p-2', sourceService: 'graph-projection-reconcile' }],
         ['specimen', { specimenId: 'smp-wrongdonor', participantId: 'p-3', sourceService: 'graph-projection-reconcile' }],
       ]);
+    });
+  });
+
+  // #1502: the test-support route scopes the reconciliation to the samples it
+  // names, so a repair on the shared e2e database touches no other sample.
+  describe('scoped to named samples', () => {
+    const samples = [
+      { _id: 'smp-1', participantId: 'p-1' },
+      { _id: 'smp-2', participantId: 'p-2' },
+      { _id: 'smp-3' },
+    ];
+    const pseudonymizeDonorId = (participantId) => `DONOR_${participantId}`;
+    const present = { 'smp-1': { donorIds: ['DONOR_p-1'] } };
+
+    // makeDb whose samples.find records its filter and honours an _id.$in.
+    function makeScopedDb(rows) {
+      const filters = [];
+      const base = makeDb(rows);
+      return {
+        filters,
+        collection: (name) => {
+          if (name !== 'samples') return base.collection(name);
+          return {
+            find: (filter) => {
+              filters.push(filter);
+              const keys = filter._id ? filter._id.$in.map(String) : null;
+              const yielded = keys ? rows.filter((row) => keys.includes(String(row._id))) : rows;
+              return { async *[Symbol.asyncIterator]() { yield* yielded; } };
+            },
+          };
+        },
+      };
+    }
+
+    it('reports and re-appends only the named sample missing from the graph', async () => {
+      const appended = [];
+      const graphProjection = { appendSpecimenEvent: async (_db, payload) => { appended.push(payload); } };
+
+      const result = await reconcile(makeScopedDb(samples), {
+        specimenIds: ['smp-2'], repair: true, neo4jSession: makeNeo4jSession(present),
+        outboxService: makeOutbox([]), graphProjection, pseudonymizeDonorId,
+      });
+
+      expect(result.samplesMissingFromGraph).toEqual([{ specimenId: 'smp-2', participantId: 'p-2' }]);
+      expect(result.reappended).toBe(1);
+      expect(appended).toEqual([{ specimenId: 'smp-2', participantId: 'p-2', sourceService: 'graph-projection-reconcile' }]);
+    });
+
+    it('matches a 24-hex id as its string and its ObjectId, and any other id as its string only', async () => {
+      const hex = '64b0c0ffee0000000000abcd';
+      const hexDb = makeScopedDb([]);
+      await findSamplesMissingFromGraph(hexDb, makeNeo4jSession({}), { specimenIds: [hex] });
+      const [hexFilter] = hexDb.filters;
+      expect(hexFilter._id.$in).toHaveLength(2);
+      expect(hexFilter._id.$in[0]).toBe(hex);
+      expect(hexFilter._id.$in[1]).toBeInstanceOf(ObjectId);
+      expect(String(hexFilter._id.$in[1])).toBe(hex);
+
+      const plainDb = makeScopedDb([]);
+      await findSamplesMissingFromGraph(plainDb, makeNeo4jSession({}), { specimenIds: ['smp-2'] });
+      expect(plainDb.filters).toEqual([{ _id: { $in: ['smp-2'] } }]);
+    });
+
+    it('reports and requeues only the named samples\' stalled aggregates', async () => {
+      const first = makeOutbox([stalled, gap]);
+      const stalledOnly = await reconcile({}, { outboxService: first, specimenIds: ['s-1'], repair: true });
+      expect(stalledOnly.unprojected).toEqual([stalled]);
+      expect(stalledOnly.needsRebuild).toEqual([]);
+      expect(first.calls[1]).toEqual(['requeue', ['d-2']]);
+
+      const second = makeOutbox([stalled, gap]);
+      const gapOnly = await reconcile({}, { outboxService: second, specimenIds: ['s-2'], repair: true });
+      expect(gapOnly.unprojected).toEqual([gap]);
+      expect(second.calls[1]).toEqual(['requeue', []]);
+      expect(gapOnly.requeued).toBe(0);
     });
   });
 });

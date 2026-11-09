@@ -529,6 +529,9 @@ app.use("/api/_test-support/reference-import-runs",require("./src/interface/rout
 // RF022/RNF031 (#1485): test-support-only Foundation job run on a scratch
 // database, under the same gates, so the e2e suite can roll back and fail a gate.
 app.use("/api/_test-support/foundation-runs", require("./src/interface/routes/foundationRunsTestSupport.routes"));
+// RF023/RNF019 (#1502): test-support-only scoped reconciliation, under the same
+// gates, so the e2e suite can delete a Sample node and see it replayed from the outbox.
+app.use("/api/_test-support/graph-projection", require("./src/interface/routes/graphProjectionTestSupport.routes"));
 // RF029 (#1318): the production ingestion route; it persists and audits.
 app.use("/api/ingestion", require("./src/interface/routes/ingestion.routes"));
 app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));

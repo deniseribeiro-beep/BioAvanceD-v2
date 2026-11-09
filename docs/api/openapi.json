@@ -60,6 +60,7 @@
     "/api/_test-support/ingestion",
     "/api/_test-support/reference-import-runs",
     "/api/_test-support/foundation-runs",
+    "/api/_test-support/graph-projection",
     "/api/terminologies",
     "/api/cids",
     "/api/phone-codes",
@@ -307,6 +308,10 @@
     {
       "name": "test-support-foundation-runs",
       "description": "/api/_test-support/foundation-runs: the test-support run of the Foundation job on an e2e_foundation_ scratch database, registered only where test-support routes are enabled (RF022, RNF031)."
+    },
+    {
+      "name": "test-support-graph-projection",
+      "description": "/api/_test-support/graph-projection: the test-support run of the graph projection reconciliation, scoped to named samples, registered only where test-support routes are enabled (RF023, RNF016, RNF019)."
     },
     {
       "name": "terminologies",
@@ -40758,6 +40763,109 @@
           },
           "500": {
             "description": "The Foundation job failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/_test-support/graph-projection/reconcile": {
+      "post": {
+        "tags": [
+          "test-support-graph-projection"
+        ],
+        "summary": "Run the graph projection reconciliation scoped to named samples",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. Runs the reconciliation script's own reconcile() scoped to the posted specimenIds, never over the whole database: it reports the named samples with no Sample node or a drifted one, and the named samples' stalled outbox aggregates; with repair it requeues their dead letters and appends their events to the outbox again. The graph is only read (RF023 AC6, RNF016 C2, RNF019 C6 C7, #1502). A wrong or missing secret answers 403. 400 is a specimenIds that is not a list of 1 to 50 24-hex ids (invalid_specimen_ids) or a repair that is not a boolean (invalid_repair); validation runs before any database access. 503 is no database or no Neo4j driver; 500 is any failure of the reconciliation.",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "specimenIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{24}$"
+                    }
+                  },
+                  "repair": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "specimenIds",
+                  "repair"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The reconciliation result: the stalled aggregates, the samples missing from or drifted from the graph, and what the repair requeued or appended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_specimen_ids or invalid_repair.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The reconciliation failed.",
             "content": {
               "application/json": {
                 "schema": {

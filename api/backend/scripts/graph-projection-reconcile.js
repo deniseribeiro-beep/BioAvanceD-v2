@@ -14,7 +14,10 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.e
 //
 //   npm run neo4j:projection:reconcile             report only
 //   npm run neo4j:projection:reconcile -- --repair report, then requeue
+//
+// The optional specimenIds scope is the test-support route's (#1502).
 
+const { ObjectId } = require('mongodb');
 const logger = require('../src/utils/logger');
 const env = require('../src/config/env');
 const { connectDB } = require('../src/database/mongo');
@@ -28,12 +31,22 @@ const { legacyPositionCode, splitPositionId } = require('../src/services/legacyP
 
 const SAMPLE_BATCH_SIZE = 500;
 
+// No scope reads every sample. A scope matches each id as written and, for
+// a 24-hex id, as the ObjectId a sample's _id is stored as.
+function sampleScopeFilter(specimenIds) {
+  if (!Array.isArray(specimenIds)) return {};
+  const keys = specimenIds.flatMap((id) => (
+    ObjectId.isValid(id) && String(new ObjectId(id)) === id ? [id, new ObjectId(id)] : [id]
+  ));
+  return { _id: { $in: keys } };
+}
+
 // The graph side: a Mongo sample with no Sample node never reached the
 // graph, whatever the outbox says. The graph is only read here; the repair
 // appends the sample's SPECIMEN_UPSERTED to the outbox, as its create does.
-async function findSamplesMissingFromGraph(db, neo4jSession) {
+async function findSamplesMissingFromGraph(db, neo4jSession, options = {}) {
   const missing = [];
-  const cursor = db.collection(CANONICAL_COLLECTIONS.samples).find({}, { projection: { _id: 1, participantId: 1 } });
+  const cursor = db.collection(CANONICAL_COLLECTIONS.samples).find(sampleScopeFilter(options.specimenIds), { projection: { _id: 1, participantId: 1 } });
   let batch = [];
   const flush = async () => {
     if (!batch.length) return;
@@ -87,7 +100,7 @@ async function findSamplesDriftedFromGraph(db, neo4jSession, options = {}) {
     }
   };
 
-  const cursor = db.collection(CANONICAL_COLLECTIONS.samples).find({}, { projection: { _id: 1, participantId: 1, specimenId: 1 } });
+  const cursor = db.collection(CANONICAL_COLLECTIONS.samples).find(sampleScopeFilter(options.specimenIds), { projection: { _id: 1, participantId: 1, specimenId: 1 } });
   let batch = [];
   const flush = async () => {
     if (!batch.length) return;
@@ -204,7 +217,12 @@ function planDriftRepair(entry) {
 async function reconcile(db, options = {}) {
   const outbox = options.outboxService || new Neo4jOutboxService();
   const projectorName = options.projectorName || PROJECTOR_NAME;
-  const unprojected = await outbox.findUnprojectedAggregates(db, projectorName);
+  let unprojected = await outbox.findUnprojectedAggregates(db, projectorName);
+  if (Array.isArray(options.specimenIds)) {
+    unprojected = unprojected.filter((aggregate) => (
+      aggregate.aggregateType === 'Sample' && options.specimenIds.includes(String(aggregate.aggregateId))
+    ));
+  }
   const deadLetterEventIds = unprojected.flatMap((aggregate) => aggregate.deadLetterEventIds);
   const requeued = options.repair ? await outbox.requeueDeadLetters(db, deadLetterEventIds) : 0;
 
@@ -215,7 +233,7 @@ async function reconcile(db, options = {}) {
   let driftRepaired = 0;
   const driftNeedsRebuild = [];
   if (options.neo4jSession) {
-    samplesMissingFromGraph = await findSamplesMissingFromGraph(db, options.neo4jSession);
+    samplesMissingFromGraph = await findSamplesMissingFromGraph(db, options.neo4jSession, options);
     ({ drifted: samplesDriftedFromGraph, donorCheck } = await findSamplesDriftedFromGraph(db, options.neo4jSession, options));
     for (const entry of samplesDriftedFromGraph) {
       if (planDriftRepair(entry).needsRebuild) driftNeedsRebuild.push(entry);

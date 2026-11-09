@@ -10,7 +10,8 @@ import {
 } from './helpers/seedParticipant';
 import { seedSensorOnFreezer, removeSensorOnFreezer, closeSeedSensorDb, type SeededFreezerSensor } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
-import { waitForDerivedFrom, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
+import { waitForDerivedFrom, readSampleStatus, removeSampleNodes, countSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
+import { sampleOutboxEvents, closeOutboxDb } from './helpers/queryOutbox';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -75,6 +76,7 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
     await closeSeedSensorDb();
     await closeSeedDb();
     await closeNeo4jDriver();
+    await closeOutboxDb();
   });
 
   async function createSample(
@@ -198,5 +200,53 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
       .poll(async () => readSampleStatus(derivative.mongoId), { timeout: 15_000 })
       .toBe('COMPROMISED');
     expect(await readSampleStatus(control.mongoId)).not.toBe('COMPROMISED');
+  });
+
+  // #1502 (RF023 AC6, RNF016 C2, RNF019 C6 C7): the reconciliation runs
+  // through its test-support route, scoped to this spec's own sample, since
+  // the runner has no command line into the backend.
+  async function reconcile(request: import('@playwright/test').APIRequestContext, specimenId: string, repair: boolean) {
+    const response = await request.post(`${apiBaseURL}/api/_test-support/graph-projection/reconcile`, {
+      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+      data: { specimenIds: [specimenId], repair },
+    });
+    expect(response.status()).toBe(200);
+    return (await response.json()).data as { samplesMissingFromGraph: Array<{ specimenId: string }>; reappended: number };
+  }
+
+  test('a deleted Sample node is reported missing, and the reconciliation\'s repair replays it from the outbox (RF023 AC6, RNF016 C2, RNF019 C6 C7)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const box = await seedStorageBoxLocation();
+    seededBoxes.push(box);
+    const sample = await createSample(request, admin.token, participant.participantId, box);
+
+    // The projector created the node, and has applied every event of the
+    // sample: each Sample projection MERGEs the node, so one still queued
+    // would re-create it after the delete below.
+    await expect.poll(() => countSampleNodes(sample.mongoId), { timeout: 15_000 }).toBe(1);
+    await expect
+      .poll(async () => {
+        const events = await sampleOutboxEvents(sample.mongoId);
+        return events.length > 0 && events.every((event) => event.status === 'PROJECTED');
+      }, { timeout: 15_000 })
+      .toBe(true);
+
+    await removeSampleNodes([sample.mongoId]);
+    expect(await countSampleNodes(sample.mongoId)).toBe(0);
+
+    const report = await reconcile(request, sample.mongoId, false);
+    expect(report.samplesMissingFromGraph.map((missing) => missing.specimenId)).toEqual([sample.mongoId]);
+    expect(report.reappended).toBe(0);
+    expect(await countSampleNodes(sample.mongoId)).toBe(0);
+
+    const repaired = await reconcile(request, sample.mongoId, true);
+    expect(repaired.reappended).toBe(1);
+    await expect.poll(() => countSampleNodes(sample.mongoId), { timeout: 15_000 }).toBe(1);
+
+    const after = await reconcile(request, sample.mongoId, false);
+    expect(after.samplesMissingFromGraph).toEqual([]);
   });
 });
