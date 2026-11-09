@@ -17,6 +17,7 @@ import {
   readConsentAuthorizationDecision,
   readDataFileVersions,
   findSampleFileAuditRows,
+  findAccessRequestAuditRows,
   deleteRetentionPolicies,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
@@ -705,6 +706,31 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect((await second.json()).data.overallCompatible).toBe(true);
   }
 
+  // RF024 AC4 (#1493): the configuration release a decision must record.
+  async function configurationReleaseInForce(request: any, token: string): Promise<string> {
+    const auth = { Authorization: `Bearer ${token}` };
+    // A fresh stack has no configuration release until PUT
+    // /api/security/config activates one. Re-sending the current
+    // passwordRules.expirationDays changes nothing and ends no session.
+    const readConfig = async () => {
+      const res = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      return (await res.json()).data;
+    };
+    let config = await readConfig();
+    if (!config.configurationReleaseId) {
+      const put = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { expirationDays: config.passwordRules.expirationDays } },
+      });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      config = await readConfig();
+    }
+    expect(typeof config.configurationReleaseId).toBe('string');
+    expect(config.configurationReleaseId.length).toBeGreaterThan(0);
+    return config.configurationReleaseId as string;
+  }
+
   test('registers a request, evaluates real consent/DUO/study compatibility, and only an approved in-force decision unblocks distribution (AC#1/2/3/4)', async ({
     request,
   }) => {
@@ -771,6 +797,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     });
 
     // AC#3 - committee decision recorded with justification and validity.
+    const inForce = await configurationReleaseInForce(request, admin.token);
     const decision = await request.post(
       `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`,
       {
@@ -791,7 +818,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(decisionBody.committeeDecision.decidedBy).toBeTruthy();
     // AC#4 - the policy version, the configuration release key and the instant.
     expect(decisionBody.committeeDecision.policyVersion).toBeTruthy();
-    expect(decisionBody.committeeDecision).toHaveProperty('configurationReleaseId');
+    expect(decisionBody.committeeDecision.configurationReleaseId).toBe(inForce);
     expect(decisionBody.committeeDecision.decidedAt).toBeTruthy();
     expect(decisionBody.committeeDecision.decisionId).toBeTruthy();
     // AC#3 - no AccessPolicy covers this request's organization, so the
@@ -837,6 +864,23 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(distributeBody.distributedAt).toBeTruthy();
     // AC#7 - the distribution names the decision that authorized it.
     expect(distributeBody.distributionDecisionId).toBe(decisionBody.committeeDecision.decisionId);
+
+    // AC#7 (#1493) - each operation wrote its own audit row: two evaluations
+    // (incompatible, then compatible), one decision (the refused approval
+    // wrote none) and one distribution (the quarantine refusal wrote none).
+    const rows = await findAccessRequestAuditRows(accessRequest.accessRequestId);
+    const evaluateRows = rows.filter((r) => /^Compatibilidade avaliada/.test(r.message));
+    expect(evaluateRows.map((r) => r.payload.overallCompatible)).toEqual([false, true]);
+    const decisionRows = rows.filter((r) => /^Decisão do comitê registrada/.test(r.message));
+    expect(decisionRows).toHaveLength(1);
+    expect(decisionRows[0].payload.committeeDecision).toMatchObject({
+      decisionId: decisionBody.committeeDecision.decisionId,
+      status: 'approved',
+      configurationReleaseId: inForce,
+    });
+    const distributeRows = rows.filter((r) => /^Solicitação de acesso vinculada à disponibilização/.test(r.message));
+    expect(distributeRows).toHaveLength(1);
+    expect(distributeRows[0].payload.distributionDecisionId).toBe(decisionBody.committeeDecision.decisionId);
 
     // #660 (RF024 AC5): the released distribution is carried out by a
     // Shipment of the specimens it names, received by the recipient.
@@ -935,6 +979,9 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(approval.status()).toBe(400);
     expect((await approval.json()).message).toMatch(/negada pela política de acesso/);
 
+    // RNF008 AC4 (#1493): the decision records the policy versions, the
+    // configuration release in force and the reasons together.
+    const inForce = await configurationReleaseInForce(request, admin.token);
     const rejection = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
       headers: auth,
       data: { status: 'rejected', justification: 'Negada pela política de acesso — RF024 e2e' },
@@ -944,6 +991,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       status: 'rejected',
       policyEffect: 'deny',
       appliedPolicies: [{ accessPolicyId, policyVersion: '1.1.0', decisionEffect: 'deny' }],
+      configurationReleaseId: inForce,
+      policyReasons: expect.arrayContaining([`${policyBody.policyName} 1.1.0: deny`]),
     });
   });
 
@@ -1137,13 +1186,26 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       },
     });
     expect(approve.status(), await approve.text()).toBe(200);
+    const approveBody = (await approve.json()).data;
 
+    // AC#4/AC#7 (#1493): a revocation is a decision of its own, recorded
+    // with the release in force and audited.
+    const inForce = await configurationReleaseInForce(request, admin.token);
     const revoke = await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/revoke`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { justification: 'Participante retirou o consentimento — RF024 e2e' },
     });
     expect(revoke.status()).toBe(200);
-    expect((await revoke.json()).data.committeeDecision.status).toBe('revoked');
+    const revokeDecision = (await revoke.json()).data.committeeDecision;
+    expect(revokeDecision.status).toBe('revoked');
+    expect(revokeDecision.configurationReleaseId).toBe(inForce);
+    expect(revokeDecision.decisionId).toBeTruthy();
+    expect(revokeDecision.decisionId).not.toBe(approveBody.committeeDecision.decisionId);
+    const revokeRows = (await findAccessRequestAuditRows(toRevoke.accessRequestId)).filter((r) =>
+      /^Acesso revogado para solicitação/.test(r.message)
+    );
+    expect(revokeRows).toHaveLength(1);
+    expect(revokeRows[0].payload.committeeDecision).toMatchObject({ status: 'revoked', decisionId: revokeDecision.decisionId });
 
     const revokedCheck = await request.get(
       `${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/access-check`,
@@ -1174,6 +1236,47 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       { headers: { Authorization: `Bearer ${admin.token}` } }
     );
     expect((await expiredCheck.json()).data).toMatchObject({ allowed: false, reason: 'expired' });
+  });
+
+  // RF024 AC1 (#1311, #1493): the organization and the protocol are
+  // references, so an unknown organization or an unapproved protocol is refused.
+  test('refuses a request naming an unknown organization or an unapproved protocol (AC#1, #1311)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `rf024-refusal-study-${run}`;
+    await seedStudy(studyId);
+    const validBody = {
+      requesterId: `researcher-${run}`,
+      studyId,
+      requestedPurpose: 'RF024 e2e — recusa de referências inválidas',
+      requestedItems: [{ itemType: 'dataset', itemId: 'rf024-refusal-dataset' }],
+    };
+
+    const approvedProtocolId = `rf024-refusal-approved-${run}`;
+    await seedProtocol(approvedProtocolId);
+    const unknownOrganization = await request.post(`${apiBaseURL}/api/access-requests`, {
+      headers: auth,
+      data: { ...validBody, organizationId: `org-unknown-${run}`, protocolId: approvedProtocolId },
+    });
+    expect(unknownOrganization.status(), await unknownOrganization.text()).toBe(422);
+    expect((await unknownOrganization.json()).message).toMatch(/organizationId .* não encontrado/);
+
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName: `RF024 refusal ${run}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    const draftProtocolId = `rf024-refusal-draft-${run}`;
+    await seedProtocol(draftProtocolId, { approvalStatus: 'draft' });
+    const unapprovedProtocol = await request.post(`${apiBaseURL}/api/access-requests`, {
+      headers: auth,
+      data: { ...validBody, organizationId, protocolId: draftProtocolId },
+    });
+    expect(unapprovedProtocol.status(), await unapprovedProtocol.text()).toBe(422);
+    expect((await unapprovedProtocol.json()).message).toMatch(/não está aprovado/);
   });
 });
 

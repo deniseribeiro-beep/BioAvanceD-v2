@@ -110,6 +110,12 @@ export async function findSampleFileAuditRows(action: string, fileId: string): P
   return db.collection('logs').find({ action, resourceType: 'SampleFile', resourceId: fileId }).toArray();
 }
 
+/** RF024 AC7 (#1493): the audit rows the access-request controller wrote for one request, oldest first. */
+export async function findAccessRequestAuditRows(accessRequestId: string): Promise<Array<Record<string, any>>> {
+  const db = await getDb();
+  return db.collection('logs').find({ resourceType: 'AccessRequest', resourceId: accessRequestId }).sort({ timestamp: 1, _id: 1 }).toArray();
+}
+
 /** Removes the retention policies a spec created, so a kept volume does not gather them. */
 export async function deleteRetentionPolicies(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
