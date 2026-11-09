@@ -51,12 +51,24 @@ const GOVERNANCE_RULE_BY_REASON = Object.freeze({
 const TERMINOLOGY_FAILURE_CODES = Object.freeze(['UNKNOWN_SPREC_CODE', 'INVALID_SPREC_CODE', 'OTHER_WITHOUT_LOCAL_INTERPRETATION']);
 const SEMANTIC_FAILURE_CODES = Object.freeze(['MATRIX_INCOMPATIBLE_CODE', 'SEMANTIC_INCOMPATIBILITY']);
 
+// RNF018 AC5 (#1524): the evidence categories a request may present
+// references for, each with the reason, rule code and flag a non-resolved
+// reference fails. The references are resolved against the stored records
+// before certify() (governance-evidence-resolver.service.js) and read here
+// only from the frozen governanceEvidenceResolution (see
+// docs/decisions/2026-11-09-rcs-governance-evidence-readers.md).
+const EVIDENCE_CATEGORIES = Object.freeze({
+  traceability: Object.freeze({ reason: 'Insufficient traceability', ruleCode: 'INSUFFICIENT_TRACEABILITY', flag: 'traceabilityOk' }),
+  monitoring: Object.freeze({ reason: 'Missing required monitoring', ruleCode: 'MISSING_REQUIRED_MONITORING', flag: 'monitoringOk' }),
+  documentation: Object.freeze({ reason: 'Insufficient documentation', ruleCode: 'INSUFFICIENT_DOCUMENTATION', flag: 'documentationOk' }),
+});
+
 // Why a criterion this calculation does not read stays null, never true.
 const UNRESOLVED_REASONS = Object.freeze({
   terminologyValid: 'códigos SPREC não verificados: matriz não resolvida',
-  traceabilityOk: 'identificação, custódia e linhagem não são lidas por este cálculo (V2E-0528)',
-  monitoringOk: 'monitoramento e telemetria não são lidos por este cálculo (V2E-0529)',
-  documentationOk: 'registros, SOPs e evidências documentais não são lidos por este cálculo (V2E-0530)',
+  traceabilityOk: 'nenhuma referência de identificação, custódia ou linhagem foi apresentada (V2E-0528)',
+  monitoringOk: 'nenhuma referência de monitoramento ou telemetria foi apresentada (V2E-0529)',
+  documentationOk: 'nenhum registro, SOP ou evidência documental foi apresentado (V2E-0530)',
   semanticCompatible: 'eventos não são lidos por este cálculo (V2E-0531)',
   gateResult: 'nem todos os seis critérios têm evidência; nenhum falhou',
 });
@@ -113,6 +125,8 @@ const READ_KEYS = Object.freeze([
   'monitoringRequired', 'monitoring_required', 'monitoringPresent', 'monitoring_present',
   'semanticIncompatibility', 'semantic_incompatibility', 'workflow_context', 'workflowContext',
   'primaryCentrifugationApplicable', 'secondCentrifugationRequired',
+  // RNF018 AC5 (#1524): set only by the server's evidence resolver.
+  'governanceEvidenceResolution',
   ...[...new Set(Object.values(AXES).flat().map((axis) => axis.axis_code))]
     .flatMap((axisCode) => [`${axisCode}_workflow_rule`, `${axisCode}WorkflowRule`]),
 ]);
@@ -182,6 +196,18 @@ class RcsCertificationService {
     const codes = new Set(gate.trace.map((item) => item.rule_code));
     const failed = (ruleCodes) => ruleCodes.some((ruleCode) => codes.has(ruleCode));
     const falseOrNull = (isFailed) => (isFailed ? false : null);
+    // RNF018 AC5 (#1524): true only where references were presented and
+    // every one resolved against its stored record.
+    const resolution = normalizeObject(samplePayload.governanceEvidenceResolution);
+    const evidenceFlag = (category) => {
+      const { ruleCode } = EVIDENCE_CATEGORIES[category];
+      if (codes.has(ruleCode)) return false;
+      const entries = resolution[category];
+      return Array.isArray(entries) && entries.length > 0
+        && entries.every((entry) => normalizeObject(entry).status === 'resolved')
+        ? true
+        : null;
+    };
 
     let terminologyValid = null;
     if (failed(TERMINOLOGY_FAILURE_CODES)) terminologyValid = false;
@@ -190,9 +216,9 @@ class RcsCertificationService {
     const flags = {
       metadataComplete: !codes.has('MISSING_CRITICAL_METADATA'),
       terminologyValid,
-      traceabilityOk: falseOrNull(codes.has('INSUFFICIENT_TRACEABILITY')),
-      monitoringOk: falseOrNull(codes.has('MISSING_REQUIRED_MONITORING')),
-      documentationOk: falseOrNull(codes.has('INSUFFICIENT_DOCUMENTATION')),
+      traceabilityOk: evidenceFlag('traceability'),
+      monitoringOk: evidenceFlag('monitoring'),
+      documentationOk: evidenceFlag('documentation'),
       semanticCompatible: falseOrNull(failed(SEMANTIC_FAILURE_CODES)
         || result.governance_rule_codes.includes('SEMANTIC_INCOMPATIBILITY')),
     };
@@ -274,8 +300,9 @@ class RcsCertificationService {
     if (result.governance_status === 1 && scoreRoutes.includes(result.grade_route)
       && typeof result.score_based_grade === 'string' && result.score_based_grade !== '') {
       // INFERENCE, not a citation: V2E-0543's example reads "governance gate
-      // passed", but the gate never reads traceability, monitoring or
-      // documentation evidence and evaluateGovernanceEvidence leaves its
+      // passed", but the gate reads traceability, monitoring and
+      // documentation evidence only where references are presented (#1524),
+      // never semantic events, and evaluateGovernanceEvidence leaves its
       // aggregate unresolved, never pass; so only no failure was found.
       return ['no governance failure found', `score threshold ${result.score_based_grade}`];
     }
@@ -582,6 +609,25 @@ class RcsCertificationService {
       trace.push({ rule_code: 'SEMANTIC_INCOMPATIBILITY', reason: 'Semantic incompatibility between matrix, SPREC axis, event, or context' });
     }
 
+    // RNF018 AC5 (#1524): a presented evidence reference that did not
+    // resolve (missing hash, unresolvable URI, hash mismatch) fails its
+    // category. A resolved category adds nothing, so the trace of an input
+    // with no resolution is unchanged; the client booleans above can fail a
+    // category but never pass one.
+    const resolution = normalizeObject(payload.governanceEvidenceResolution);
+    for (const [category, { reason, ruleCode }] of Object.entries(EVIDENCE_CATEGORIES)) {
+      const entries = resolution[category];
+      if (!Array.isArray(entries)) continue;
+      const failing = entries.filter((entry) => normalizeObject(entry).status !== 'resolved');
+      if (!failing.length) continue;
+      if (!reasons.includes(reason)) reasons.push(reason);
+      trace.push({
+        rule_code: ruleCode,
+        reason,
+        evidence: failing.map((entry) => ({ uri: normalizeObject(entry).uri ?? null, status: normalizeObject(entry).status ?? null })),
+      });
+    }
+
     return {
       status: reasons.length ? 0 : 1,
       reasons: unique(reasons),
@@ -711,3 +757,5 @@ module.exports.RcsCertificationService = RcsCertificationService;
 module.exports.referenceData = referenceData;
 module.exports.AXES = AXES;
 module.exports.RCS_SCOPE_STATEMENT = RCS_SCOPE_STATEMENT;
+module.exports.samplePayloadOf = samplePayloadOf;
+module.exports.EVIDENCE_CATEGORIES = EVIDENCE_CATEGORIES;

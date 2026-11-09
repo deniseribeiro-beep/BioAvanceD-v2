@@ -39757,7 +39757,7 @@
           "quality"
         ],
         "summary": "Preview the quality assessment of a sample payload",
-        "description": "Gates: authenticate. Evaluates the quality of the posted sample without storing anything; no body field is required and any body is assessed. The 500 is only authenticate's (or an unexpected throw in the evaluation); the 503 is authenticate's.",
+        "description": "Gates: authenticate. Evaluates the quality of the posted sample without storing anything; no body field is required and any body is assessed. The 500 is only authenticate's (or an unexpected throw in the evidence lookup or the evaluation); the 503 is authenticate's.",
         "security": [
           {
             "bearerAuth": []
@@ -39770,7 +39770,7 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": true,
-                "description": "The sample fields to assess; legacy quality fields are normalized to the canonical ones."
+                "description": "The sample fields to assess; legacy quality fields are normalized to the canonical ones. Optional governanceEvidence (RNF018 AC5): an object with optional arrays traceability, monitoring and documentation (at most 20 each) of { uri, hash }, where uri is urn:bioavanced:custody-event:<eventId>, urn:bioavanced:telemetry-exposure-summary:<id> or urn:bioavanced:collection-governance-approval:<approvalId> respectively, and hash is sha256:<64 lower-case hex> of the stored record. Optional specimenId names the specimen a custody event or telemetry summary must belong to. Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A governanceEvidenceResolution the client sends is ignored."
               }
             }
           }
@@ -39791,7 +39791,7 @@
                         "data": {
                           "type": "object",
                           "additionalProperties": true,
-                          "description": "The certification result, with rcs_input, deprecated_legacy_fields and, when the payload carried one, qualification_context."
+                          "description": "The certification result, with rcs_input, deprecated_legacy_fields, governance_evidence and, when the payload carried one, qualification_context. governance_evidence holds the six governance criteria (metadataComplete, terminologyValid, traceabilityOk, monitoringOk, documentationOk, semanticCompatible), each true, false or null, with unresolvedReasons, gateResult ('fail' or null), failureReasons and the validation rule set's version and checksum; traceabilityOk, monitoringOk and documentationOk are true only when governanceEvidence references of that category were presented and all resolved."
                         }
                       },
                       "required": [

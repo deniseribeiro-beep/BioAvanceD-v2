@@ -18,6 +18,13 @@ import {
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { deleteOrganizations } from './helpers/listOrganizations';
+import { sampleMongoId, sampleOutboxEvents, closeOutboxDb } from './helpers/queryOutbox';
+import {
+  seedTelemetrySummary,
+  seedApprovalDocument,
+  cleanupGovernanceEvidence,
+  closeGovernanceEvidenceDb,
+} from './helpers/seedGovernanceEvidence';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -1436,6 +1443,20 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     };
   }
 
+  // #1524: the governance evidence test creates a real sample in a seeded
+  // box and seeds the records its references resolve against.
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
+  test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
+    await cleanupGovernanceEvidence().catch(() => {});
+    await closeSeedDb();
+    await closeOutboxDb();
+    await closeGovernanceEvidenceDb();
+  });
+
   test('scores a well-formed SPREC payload and returns a non-compensable-free grade', async ({ request }) => {
     const admin = await realLogin(request);
     const sprec = fluidSprec();
@@ -1495,6 +1516,98 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
       expect(body.data.governance_failure_reasons).toContain(reason);
       expect(body.data.governance_rule_codes).toContain(ruleCode);
     }
+  });
+
+  test('refuses certification for each governance evidence with a missing hash or an unresolvable URI, and reads all three when they resolve (RNF018 AC5, #1524)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    // A real sample, created as the RF006 describe's seedWithdrawableSample does.
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        quantity: 10,
+        boxId,
+        positionCode,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId: string = (await create.json()).data.specimenId;
+
+    // Its custody event, a telemetry summary of it and an approval document.
+    const events = await sampleOutboxEvents(await sampleMongoId(specimenId));
+    const custody = events.find((event) => event.eventType === 'CUSTODY_EVENT_RECORDED');
+    expect(custody).toBeTruthy();
+    const summary = await seedTelemetrySummary(specimenId);
+    const approval = await seedApprovalDocument();
+
+    type Ref = { uri: string; hash?: string };
+    const valid = (): Record<'traceability' | 'monitoring' | 'documentation', Ref[]> => ({
+      traceability: [{ uri: `urn:bioavanced:custody-event:${custody!.eventId}`, hash: `sha256:${custody!.payloadHash}` }],
+      monitoring: [{ uri: `urn:bioavanced:telemetry-exposure-summary:${summary.telemetryExposureSummaryId}`, hash: summary.sourceReadingSetHash }],
+      documentation: [{ uri: `urn:bioavanced:collection-governance-approval:${approval.approvalId}`, hash: approval.documentChecksum }],
+    });
+    const preview = async (extra: Record<string, unknown>) => {
+      const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { matrixType: 'fluid', sprec: fluidSprec(), specimenId, ...extra },
+      });
+      expect(response.status()).toBe(200);
+      return (await response.json()).data;
+    };
+
+    const passed = await preview({ governanceEvidence: valid() });
+    expect(passed.governance_status).toBe(1);
+    expect(passed.grade_route).toBe('Score-based certification');
+    expect(passed.final_grade).toBe('A');
+    expect(passed.governance_evidence.traceabilityOk).toBe(true);
+    expect(passed.governance_evidence.monitoringOk).toBe(true);
+    expect(passed.governance_evidence.documentationOk).toBe(true);
+
+    const categories = [
+      { category: 'traceability', reason: 'Insufficient traceability', ruleCode: 'INSUFFICIENT_TRACEABILITY', flag: 'traceabilityOk' },
+      { category: 'monitoring', reason: 'Missing required monitoring', ruleCode: 'MISSING_REQUIRED_MONITORING', flag: 'monitoringOk' },
+      { category: 'documentation', reason: 'Insufficient documentation', ruleCode: 'INSUFFICIENT_DOCUMENTATION', flag: 'documentationOk' },
+    ] as const;
+    for (const { category, reason, ruleCode, flag } of categories) {
+      const missingHash = valid();
+      delete missingHash[category][0].hash;
+      const unresolvable = valid();
+      unresolvable[category][0].uri = unresolvable[category][0].uri.replace(/:[^:]+$/, ':no-such-record-1524');
+
+      for (const governanceEvidence of [missingHash, unresolvable]) {
+        const refused = await preview({ governanceEvidence });
+        expect(refused.governance_status).toBe(0);
+        expect(refused.final_grade).toBe('E');
+        expect(refused.grade_route).toBe('Governance failure');
+        expect(refused.governance_failure_reasons).toContain(reason);
+        expect(refused.governance_rule_codes).toContain(ruleCode);
+        expect(refused.governance_evidence[flag]).toBe(false);
+      }
+    }
+
+    // A resolution the client sends is never read: no criterion passes from it.
+    const resolved = (refs: Ref[]) => refs.map((ref) => ({ ...ref, status: 'resolved' }));
+    const references = valid();
+    const forged = await preview({
+      governanceEvidenceResolution: {
+        traceability: resolved(references.traceability),
+        monitoring: resolved(references.monitoring),
+        documentation: resolved(references.documentation),
+      },
+    });
+    expect(forged.governance_status).toBe(1);
+    expect(forged.governance_evidence.traceabilityOk).toBeNull();
+    expect(forged.governance_evidence.monitoringOk).toBeNull();
+    expect(forged.governance_evidence.documentationOk).toBeNull();
   });
 
   test('the backend enforces auth independently of the frontend — no token is rejected on its own merits', async ({ request }) => {

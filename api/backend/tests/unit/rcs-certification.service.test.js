@@ -266,15 +266,22 @@ describe('evaluateGovernanceEvidence', () => {
     secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A',
   };
   const UNREAD = {
-    traceabilityOk: 'identificação, custódia e linhagem não são lidas por este cálculo (V2E-0528)',
-    monitoringOk: 'monitoramento e telemetria não são lidos por este cálculo (V2E-0529)',
-    documentationOk: 'registros, SOPs e evidências documentais não são lidos por este cálculo (V2E-0530)',
+    traceabilityOk: 'nenhuma referência de identificação, custódia ou linhagem foi apresentada (V2E-0528)',
+    monitoringOk: 'nenhuma referência de monitoramento ou telemetria foi apresentada (V2E-0529)',
+    documentationOk: 'nenhum registro, SOP ou evidência documental foi apresentado (V2E-0530)',
     semanticCompatible: 'eventos não são lidos por este cálculo (V2E-0531)',
   };
   const flags = (overrides = {}) => ({
     metadataComplete: true, terminologyValid: true, traceabilityOk: null,
     monitoringOk: null, documentationOk: null, semanticCompatible: null, ...overrides,
   });
+  // RNF018 AC5 (#1524): a server-resolved evidence category.
+  const entry = (kind, status = 'resolved') => ({ uri: `urn:bioavanced:${kind}:1`, hash: `sha256:${'0'.repeat(64)}`, status });
+  const resolvedAll = {
+    traceability: [entry('custody-event')],
+    monitoring: [entry('telemetry-exposure-summary')],
+    documentation: [entry('collection-governance-approval')],
+  };
 
   it.each([
     ['pass', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false }, flags(), null],
@@ -289,6 +296,22 @@ describe('evaluateGovernanceEvidence', () => {
     ['docFalse', { matrix_type: 'fluid', sprec: F, documentationSufficient: false }, flags({ documentationOk: false }), 'fail'],
     ['trace', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, traceabilityBroken: true }, flags({ traceabilityOk: false }), 'fail'],
     ['mon', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, monitoringRequired: true }, flags({ monitoringOk: false }), 'fail'],
+    ['evidenceResolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, governanceEvidenceResolution: resolvedAll },
+      flags({ traceabilityOk: true, monitoringOk: true, documentationOk: true }), null],
+    ['traceabilityUnresolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
+      governanceEvidenceResolution: { ...resolvedAll, traceability: [entry('custody-event'), entry('custody-event', 'hash_mismatch')] } },
+    flags({ traceabilityOk: false, monitoringOk: true, documentationOk: true }), 'fail'],
+    ['monitoringUnresolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
+      governanceEvidenceResolution: { ...resolvedAll, monitoring: [entry('telemetry-exposure-summary', 'missing_hash')] } },
+    flags({ traceabilityOk: true, monitoringOk: false, documentationOk: true }), 'fail'],
+    ['documentationUnresolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
+      governanceEvidenceResolution: { ...resolvedAll, documentation: [entry('collection-governance-approval', 'unresolvable_uri')] } },
+    flags({ traceabilityOk: true, monitoringOk: true, documentationOk: false }), 'fail'],
+    ['traceBrokenResolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, traceabilityBroken: true,
+      governanceEvidenceResolution: resolvedAll }, flags({ traceabilityOk: false, monitoringOk: true, documentationOk: true }), 'fail'],
+    ['evidenceEmptyCategory', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
+      governanceEvidenceResolution: { traceability: [], monitoring: [entry('telemetry-exposure-summary')] } },
+    flags({ monitoringOk: true }), null],
   ])('reads the six flags of the %s row from the gate', (_name, raw, expectedFlags, gateResult) => {
     const payload = qualityCompatibility.normalizeSample(raw);
     const before = rcsService.certify(payload);
@@ -323,6 +346,64 @@ describe('evaluateGovernanceEvidence', () => {
   ])('reads the %s row the same under a sample wrapper, as certify does', (_name, raw) => {
     const input = rcsService.readInput(qualityCompatibility.normalizeSample(raw));
     expect(rcsService.evaluateGovernanceEvidence({ sample: input })).toEqual(rcsService.evaluateGovernanceEvidence(input));
+  });
+
+  // RNF018 AC5 (#1524): a presented evidence category that did not
+  // resolve fails certification with its reason and rule code; one that
+  // resolved changes nothing in the result.
+  describe('certify with a governance evidence resolution (RNF018 AC5, #1524)', () => {
+    const base = { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false };
+
+    it('passes with every category resolved, with the same calculation_trace as without it', () => {
+      const without = rcsService.certify(base);
+      const withEvidence = rcsService.certify({ ...base, governanceEvidenceResolution: resolvedAll });
+      expect(withEvidence.governance_status).toBe(1);
+      expect(withEvidence).toEqual(without);
+      const evidence = rcsService.evaluateGovernanceEvidence(rcsService.readInput({ ...base, governanceEvidenceResolution: resolvedAll }));
+      expect([evidence.traceabilityOk, evidence.monitoringOk, evidence.documentationOk]).toEqual([true, true, true]);
+      expect(Object.keys(evidence.unresolvedReasons).sort()).toEqual(['gateResult', 'semanticCompatible']);
+    });
+
+    it.each([
+      ['traceability', 'custody-event', 'Insufficient traceability', 'INSUFFICIENT_TRACEABILITY', 'traceabilityOk'],
+      ['monitoring', 'telemetry-exposure-summary', 'Missing required monitoring', 'MISSING_REQUIRED_MONITORING', 'monitoringOk'],
+      ['documentation', 'collection-governance-approval', 'Insufficient documentation', 'INSUFFICIENT_DOCUMENTATION', 'documentationOk'],
+    ])('refuses a %s category with one non-resolved reference', (category, kind, reason, ruleCode, flag) => {
+      const failing = entry(kind, 'unresolvable_uri');
+      const payload = { ...base, governanceEvidenceResolution: { ...resolvedAll, [category]: [entry(kind), failing, failing] } };
+      const result = rcsService.certify(payload);
+      expect(result).toMatchObject({ governance_status: 0, final_grade: 'E', grade_route: 'Governance failure' });
+      expect(result.governance_failure_reasons).toEqual([reason]);
+      expect(result.governance_rule_codes).toEqual([ruleCode]);
+      expect(result.calculation_trace.governance_trace).toEqual([{
+        rule_code: ruleCode,
+        reason,
+        evidence: [{ uri: failing.uri, status: 'unresolvable_uri' }, { uri: failing.uri, status: 'unresolvable_uri' }],
+      }]);
+      const evidence = rcsService.evaluateGovernanceEvidence(rcsService.readInput(payload));
+      const others = ['traceabilityOk', 'monitoringOk', 'documentationOk'].filter((name) => name !== flag);
+      expect(evidence[flag]).toBe(false);
+      for (const other of others) expect(evidence[other]).toBe(true);
+      expect(evidence.gateResult).toBe('fail');
+    });
+
+    it('pushes a reason once when a client boolean already failed the same category', () => {
+      const result = rcsService.certify({
+        ...base,
+        documentationSufficient: false,
+        governanceEvidenceResolution: { documentation: [entry('collection-governance-approval', 'missing_hash')] },
+      });
+      expect(result.governance_failure_reasons).toEqual(['Insufficient documentation']);
+      expect(result.governance_rule_codes).toEqual(['INSUFFICIENT_DOCUMENTATION']);
+    });
+
+    it('recalculates from readInput with the resolution frozen', () => {
+      const payload = { ...base, governanceEvidenceResolution: { ...resolvedAll, monitoring: [entry('telemetry-exposure-summary', 'hash_mismatch')] } };
+      const input = rcsService.readInput(payload);
+      expect(input.governanceEvidenceResolution).toEqual(payload.governanceEvidenceResolution);
+      expect(rcsService.certify(input)).toEqual(rcsService.certify(payload));
+      expect(rcsService.certify(input).governance_status).toBe(0);
+    });
   });
 
   it('names the workflow-context mismatch reason for the wfMismatch row', () => {
