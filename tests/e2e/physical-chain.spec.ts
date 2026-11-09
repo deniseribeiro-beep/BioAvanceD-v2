@@ -6,6 +6,9 @@ import {
   seedCustodyFixture,
   setApprovalStatus,
   countScanEvents,
+  countSamples,
+  containerContent,
+  seedRackLabel,
   cleanupCustodyFixture,
   closeCustodyDb,
   type CustodyFixture,
@@ -16,7 +19,12 @@ import {
 // location chain (RF016 AC3, RF017 AC3/AC4) over StorageLocation records
 // (RF017 AC1/AC8), the label route and the scan resolver (RF016 AC4/AC6),
 // all scoped by the specimen's custodian, and a scanner's lifecycle
-// (RF017 AC6/AC8). Two organizations, a
+// (RF017 AC6/AC8). Also: an occupied position refuses a second container
+// and rack, position and container stay apart (RF017 AC2, RF016 AC2); a
+// specimen loaded twice or over a back-dated interval is checked half-open
+// (RF017 AC4); code_128 and qr_code labels resolve and a rack's linear code
+// is not a container (RF016 AC5); an empty tube creates no Specimen (RF016
+// AC1). Not covered: the 96-position grid of RF016 AC2. Two organizations, a
 // Coordenador and a Tecnico in the first, a Tecnico in the second.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
@@ -36,12 +44,19 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
   const emptyRackId = `rack-empty-${suffix}`;
   const emptyLocationId = `freezer-empty-${suffix}`;
   const emptyTubeCode = `BVA2:synthetic:empty-${suffix}`;
+  const secondContainerId = `CT-CHAIN2-${suffix}`;
+  const code128Value = `BVA2:synthetic:c128-${suffix}`;
+  const qrValue = `BVA2:synthetic:qr-${suffix}`;
+  const rackCode = `BVA2:synthetic:rack-${suffix}`;
+  const emptyScannerId = `scanner-empty-${suffix}`;
+  const iso = (ms: number) => new Date(ms).toISOString();
 
   test.afterAll(async ({ request }) => {
     // The empty-tube case seeds no specimen; its rows go with the same sweep.
     const swept = fixture ?? { specimenId: `none-${suffix}`, collectionId: `none-${suffix}`, approvalId: `none-${suffix}` };
     await cleanupCustodyFixture(
-      swept, [containerId, emptyContainerId], [rackId, emptyRackId], [tubeCode, emptyTubeCode], [scannerId],
+      swept, [containerId, emptyContainerId, secondContainerId], [rackId, emptyRackId],
+      [tubeCode, emptyTubeCode, code128Value, qrValue, rackCode], [scannerId, emptyScannerId],
       [roomId, freezerId, `${freezerId}-x`, emptyLocationId],
     ).catch(() => {});
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
@@ -116,7 +131,8 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     // a freezer inside a room). Another organization does not see it.
     const placed = await post(`/containers/${containerId}/position`, techA, { storagePositionId: `${rackId}:A01` });
     expect(placed.status(), await placed.text()).toBe(201);
-    const room = await post('/locations', coordA, { storageLocationId: roomId, locationType: 'room', name: 'Sala criogenica', code: `R-${suffix}`, organizationId: orgA });
+    const placedAt = (await placed.json()).data.placedAt as string;
+    const room =await post('/locations', coordA, { storageLocationId: roomId, locationType: 'room', name: 'Sala criogenica', code: `R-${suffix}`, organizationId: orgA });
     expect(room.status(), await room.text()).toBe(201);
     const foreignLocation = await post('/locations', coordA, { storageLocationId: `${freezerId}-x`, locationType: 'freezer', name: 'Freezer B', code: `FZB-${suffix}`, organizationId: orgB });
     expect((await foreignLocation.json()).error).toBe('LOCATION_OUT_OF_SCOPE');
@@ -142,6 +158,33 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(location.status(), await location.text()).toBe(200);
     expect((await location.json()).data).toMatchObject({ containerId, storagePositionId: `${rackId}:A01`, storageRackId: rackId, storageLocationId: freezerId });
     expect((await get(`/specimens/${specimenId}/location`, techB)).status()).toBe(403);
+
+    // RF017 AC2, RULE-030, RF016 AC2: an occupied position refuses a second
+    // container over any interval that meets the open placement, checked
+    // half-open; rack, position and container stay separate records. The
+    // rack is located above, so the empty, unplaced container is in scope.
+    const P = Date.parse(placedAt);
+    const second = await post('/containers', coordA, { containerId: secondContainerId, containerType: 'cryovial' });
+    expect(second.status(), await second.text()).toBe(201);
+    const occupied = await post(`/containers/${secondContainerId}/position`, techA, { storagePositionId: `${rackId}:A01` });
+    expect(occupied.status(), await occupied.text()).toBe(409);
+    expect((await occupied.json()).error).toBe('ASSIGNMENT_OVERLAP');
+    const straddling = await post(`/containers/${secondContainerId}/position`, techA, {
+      storagePositionId: `${rackId}:A01`, placedAt: iso(P - 3_600_000), removedAt: iso(P + 1_000),
+    });
+    expect(straddling.status(), await straddling.text()).toBe(409);
+    expect((await straddling.json()).error).toBe('ASSIGNMENT_OVERLAP');
+    const before = await post(`/containers/${secondContainerId}/position`, techA, {
+      storagePositionId: `${rackId}:A01`, placedAt: iso(P - 3_600_000), removedAt: placedAt,
+    });
+    expect(before.status(), await before.text()).toBe(201);
+    expect((await before.json()).data.assignmentStatus).toBe('ended');
+    const besides = await post(`/containers/${secondContainerId}/position`, techA, { storagePositionId: `${rackId}:A02` });
+    expect(besides.status(), await besides.text()).toBe(201);
+    expect((await besides.json()).data).toMatchObject({ containerId: secondContainerId, storagePositionId: `${rackId}:A02` });
+    const stillA01 = await get(`/specimens/${specimenId}/location`, techA);
+    expect(stillA01.status(), await stillA01.text()).toBe(200);
+    expect((await stillA01.json()).data).toMatchObject({ containerId, storagePositionId: `${rackId}:A01`, storageRackId: rackId, storageLocationId: freezerId });
 
     // RF016 AC4: the custodian's Coordenador issues the tube's institutional
     // label, which carries no personal data (RULE-012).
@@ -181,10 +224,39 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect((await resolved.json()).data).toMatchObject({ resolved: true, specimenId, containerId });
     expect(await countScanEvents(specimenId)).toBe(1);
 
+    // RF016 AC5: code_128 and qr_code labels on the tube resolve like its
+    // Data Matrix, another symbology is refused, and a rack's linear code
+    // reads as a rack, not a container, leaving no ScanEvent.
+    for (const [encodedValue, symbology] of [[code128Value, 'code_128'], [qrValue, 'qr_code']]) {
+      const extra = await post(`/containers/${containerId}/labels`, coordA, { ...labelBody, encodedValue, symbology, printBatchId: `batch-${symbology}-${suffix}` });
+      expect(extra.status(), await extra.text()).toBe(201);
+      expect((await extra.json()).data).toMatchObject({ symbology, targetType: 'container', targetId: containerId });
+    }
+    const ean = await post(`/containers/${containerId}/labels`, coordA, { ...labelBody, encodedValue: `BVA2:synthetic:ean-${suffix}`, symbology: 'ean_13' });
+    expect(ean.status(), await ean.text()).toBe(422);
+    expect((await ean.json()).error).toBe('VALIDATION_ERROR');
+    for (const linear of [
+      { rawValue: `]C1${code128Value}`, symbology: 'code_128', deviceId: scannerId },
+      { rawValue: `]Q1${qrValue}`, symbology: 'qr_code', deviceId: scannerId },
+    ]) {
+      const read = await post('/scan', techA, linear);
+      expect(read.status(), await read.text()).toBe(200);
+      expect((await read.json()).data).toMatchObject({ resolved: true, specimenId, containerId });
+    }
+    expect(await countScanEvents(specimenId)).toBe(3);
+    await seedRackLabel(rackId, rackCode, suffix);
+    const rackScan = await post('/scan', techA, { rawValue: `]C1${rackCode}`, symbology: 'code_128', deviceId: scannerId });
+    expect(rackScan.status(), await rackScan.text()).toBe(200);
+    const rackRead = (await rackScan.json()).data;
+    expect(rackRead).toMatchObject({ resolved: false, reason: 'NOT_A_CONTAINER' });
+    expect(rackRead.label).toMatchObject({ targetType: 'storage_rack', targetId: rackId, symbology: 'code_128' });
+    expect(await countScanEvents(specimenId)).toBe(3);
+
     // RF021 AC6: with the approval suspended, the specimen cannot be loaded
     // again; restored, it can.
     const unloaded = await post(`/specimen-assignments/${load.specimenContainerAssignmentId}/unload`, techA);
     expect(unloaded.status(), await unloaded.text()).toBe(200);
+    const unload = (await unloaded.json()).data;
     await setApprovalStatus(fixture.approvalId, 'suspended');
     const inactive = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
     expect(inactive.status(), await inactive.text()).toBe(422);
@@ -207,6 +279,21 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
 
     const reloaded = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
     expect(reloaded.status(), await reloaded.text()).toBe(201);
+
+    // RF017 AC4: a specimen is in one container at a time, checked
+    // half-open: the open reload and the closed first load each refuse a
+    // second container; an interval ending where the first load starts fits.
+    const L = load.loadedAt as string;
+    const U = unload.unloadedAt as string;
+    const twice = await post(`/containers/${secondContainerId}/specimens`, techA, { specimenId });
+    expect(twice.status(), await twice.text()).toBe(409);
+    expect((await twice.json()).error).toBe('ASSIGNMENT_OVERLAP');
+    const sameInterval = await post(`/containers/${secondContainerId}/specimens`, techA, { specimenId, loadedAt: L, unloadedAt: U });
+    expect(sameInterval.status(), await sameInterval.text()).toBe(409);
+    expect((await sameInterval.json()).error).toBe('ASSIGNMENT_OVERLAP');
+    const backDated = await post(`/containers/${secondContainerId}/specimens`, techA, { specimenId, loadedAt: iso(Date.parse(L) - 3_600_000), unloadedAt: L });
+    expect(backDated.status(), await backDated.text()).toBe(201);
+    expect((await backDated.json()).data.assignmentStatus).toBe('ended');
   });
 
   // #1314: an empty tube holds no specimen, so it is in scope through the
@@ -231,6 +318,7 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     const coordB = await registerUser(request, adminAuth, 'emptyCoordB', 3, 'Coordenador', orgB);
     const techA = await registerUser(request, adminAuth, 'emptyTechA', 2, 'Técnico', orgA);
     const techB = await registerUser(request, adminAuth, 'emptyTechB', 2, 'Técnico', orgB);
+    const samplesBefore = await countSamples();
     const post = (path: string, headers: Record<string, string>, data: Record<string, unknown> = {}) =>
       request.post(`${apiBaseURL}/api/physical-chain${path}`, { headers, data });
 
@@ -257,6 +345,23 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     const issued = await post(`/containers/${emptyContainerId}/labels`, coordA, labelBody);
     expect(issued.status(), await issued.text()).toBe(201);
     expect((await issued.json()).data).toMatchObject({ targetType: 'container', targetId: emptyContainerId, status: 'active' });
+
+    // RF016 AC1: the empty tube's code reads as an empty container; no
+    // Specimen exists for it and none is created.
+    const device = (path: string, data: Record<string, unknown>) => request.post(`${apiBaseURL}/api/devices${path}`, { headers: coordA, data });
+    const registered = await device('', { deviceId: emptyScannerId, deviceType: 'scanner', maintenanceRecords: ['maint-chain'] });
+    expect(registered.status(), await registered.text()).toBe(201);
+    const installed = await device(`/${emptyScannerId}/events`, { eventType: 'installed', locationId: emptyLocationId });
+    expect(installed.status(), await installed.text()).toBe(201);
+    const qualified = await device(`/${emptyScannerId}/events`, { eventType: 'qualified', evidenceUri: 'object://synthetic/scanner-pq.pdf' });
+    expect(qualified.status(), await qualified.text()).toBe(201);
+    const scanned = await post('/scan', techA, { rawValue: `]d2${emptyTubeCode}`, symbology: 'data_matrix', deviceId: emptyScannerId });
+    expect(scanned.status(), await scanned.text()).toBe(200);
+    const read = (await scanned.json()).data;
+    expect(read).toMatchObject({ resolved: false, reason: 'EMPTY_CONTAINER', containerId: emptyContainerId });
+    expect(read.specimenId).toBeUndefined();
+    expect(await containerContent(emptyContainerId)).toEqual({ emptyStatus: 'empty', specimenAssignments: 0 });
+    expect(await countSamples()).toBe(samplesBefore);
   });
 });
 
