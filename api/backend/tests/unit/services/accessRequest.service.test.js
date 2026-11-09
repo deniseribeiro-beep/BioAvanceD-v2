@@ -63,6 +63,9 @@ function createFakeDb({
   accessPolicies = [],
   consentPermissions = [],
   terminologyRelations = [],
+  governedCollections = [],
+  collectionGovernanceApprovals = [],
+  custodianshipAssignments = [],
 } = {}) {
   const collections = {
     accessRequests: createFakeCollection(),
@@ -78,6 +81,9 @@ function createFakeDb({
     consentAuthorizationDecisions: createFakeCollection(),
     consentPermissions: createFakeCollection(consentPermissions),
     terminologyRelations: createFakeCollection(terminologyRelations),
+    collections: createFakeCollection(governedCollections),
+    collectionGovernanceApprovals: createFakeCollection(collectionGovernanceApprovals),
+    custodianshipAssignments: createFakeCollection(custodianshipAssignments),
   };
   return {
     collections,
@@ -201,9 +207,46 @@ describe('accessRequest.service', () => {
           consentAuthorizationReasons: ['consentimento vigente, sem restrição aplicável ao uso'],
           duoCompatible: true,
           studyActive: true,
+          governanceValid: null,
+          governanceReasons: [],
           compatible: true,
         },
       ]);
+    });
+
+    // #1495 (RF024 AC2): a specimen in a collection is evaluated against the
+    // collection's regime, its approval in force and the specimen's custody.
+    describe('collection regime, approval and custody (#1495)', () => {
+      const governedDb = (overrides = {}) => ({
+        samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1', collectionId: 'COL-1' }],
+        governedCollections: [{ collectionId: 'COL-1', governanceRegime: 'biobank', governanceContext: { biobankGovernanceContextId: 'ctx-1' } }],
+        collectionGovernanceApprovals: [{ approvalId: 'APPR-1', collectionId: 'COL-1', status: 'active', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }],
+        custodianshipAssignments: [{ specimenId: 'SPEC-1', assignmentStatus: 'active', authorizationId: 'APPR-1', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }],
+        ...overrides,
+      });
+
+      it('keeps the item compatible when the regime, the approval and the custody hold', async () => {
+        const { db, created } = await seedAndCreate({}, governedDb());
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.overallCompatible).toBe(true);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({ governanceValid: true, governanceReasons: [], compatible: true });
+        expect(evaluated.policyDecision.effect).not.toBe('deny');
+      });
+
+      it.each([
+        ['no regime', { governedCollections: [{ collectionId: 'COL-1', governanceContext: { biobankGovernanceContextId: 'ctx-1' } }] }, /sem regime de governança/],
+        ['an approval out of force', { collectionGovernanceApprovals: [{ approvalId: 'APPR-1', collectionId: 'COL-1', status: 'suspended', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }] }, /sem aprovação de governança vigente/],
+        ['no custody in force', { custodianshipAssignments: [] }, /sem custódia vigente/],
+        ['an unknown collection', { governedCollections: [] }, /Coleção COL-1 do espécime SPEC-1 não encontrada/],
+      ])('denies, naming the reason, a specimen whose collection has %s', async (_label, overrides, reason) => {
+        const { db, created } = await seedAndCreate({}, governedDb(overrides));
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.overallCompatible).toBe(false);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({ consentValid: true, governanceValid: false, compatible: false });
+        expect(evaluated.consentCompatibility[0].governanceReasons).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+        expect(evaluated.policyDecision.effect).toBe('deny');
+        expect(evaluated.policyDecision.reasons).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+      });
     });
 
     // RF010 AC7: the consent in force answers for the requested use, and

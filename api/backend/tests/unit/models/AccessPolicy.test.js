@@ -129,6 +129,15 @@ describe('AccessPolicy model', () => {
       expect(result.reasons[0]).toMatch(/incompatível/);
     });
 
+    // #1495 (RF024 AC2): an item whose collection governance does not hold
+    // denies whatever the policies say, naming its reasons.
+    it('denies an item whose collection regime, approval or custody does not hold, naming the reason', () => {
+      const ungoverned = [{ ...compatible[0], governanceValid: false, governanceReasons: ['Espécime SPEC-1 sem custódia vigente'] }];
+      const result = evaluatePolicies([policy()], request, ungoverned, now);
+      expect(result.effect).toBe('deny');
+      expect(result.reasons[0]).toBe('Espécime SPEC-1 sem custódia vigente');
+    });
+
     it('records a policy in scope whose conditions fail as a reason, not as applied', () => {
       const result = evaluatePolicies([policy({ conditions: [{ protocolId: 'protocol-x' }] })], request, compatible, now);
       expect(result.appliedPolicies).toEqual([]);

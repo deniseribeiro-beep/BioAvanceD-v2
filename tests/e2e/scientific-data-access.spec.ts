@@ -12,6 +12,7 @@ import {
   seedCollectionEntity,
   seedActiveConsent,
   seedDuoConcept,
+  clearCollectionRegime,
   closeSeedDb,
   readSampleFileStorage,
   readSampleFileRow,
@@ -62,11 +63,7 @@ function binaryFieldPaths(value: unknown, at = ''): string[] {
   );
 }
 
-async function createRealSample(
-  request: any,
-  token: string,
-  link?: { studyId: string; protocolId: string; collectionId: string }
-): Promise<string> {
+async function createRealSample(request: any, token: string, extra: Record<string, unknown> = {}): Promise<string> {
   const participant = await createRealParticipant(request, apiBaseURL!, token);
   const seededStorageBox = await seedStorageBoxLocation();
   seededStorageBoxes.push(seededStorageBox);
@@ -79,10 +76,10 @@ async function createRealSample(
       ...validSampleFields(),
       boxId,
       positionCode,
-      ...link,
+      ...extra,
     },
   });
-  expect([201, 202]).toContain(create.status());
+  expect([201, 202], await create.text()).toContain(create.status());
   return (await create.json()).data.specimenId;
 }
 
@@ -662,7 +659,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
   async function createRequestForSample(
     request: any,
     token: string,
-    opts: { studyId: string; duoCode?: string; collection?: boolean }
+    opts: { studyId: string; duoCode?: string; collection?: boolean; specimenId?: string }
   ): Promise<any> {
     const org = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -678,8 +675,10 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     // a collection governed for this study and protocol, so the request's
     // item resolves to that collection.
     let collectionId: string | undefined;
-    let sampleID: string;
-    if (opts.collection) {
+    let specimenId = opts.specimenId;
+    let sampleID: string | undefined;
+    // #1495: with opts.specimenId, the caller registered the specimen itself.
+    if (!specimenId && opts.collection) {
       collectionId = `rnf008-collection-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       await seedCollectionEntity(collectionId);
       const headers = { Authorization: `Bearer ${token}` };
@@ -717,14 +716,23 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       });
       expect(event.status(), await event.text()).toBe(201);
       sampleID = await createRealSample(request, token, { studyId: opts.studyId, protocolId, collectionId });
-    } else {
+      // RF024 AC2 (#1495): a specimen in a collection is released only while
+      // a custody under the collection's approval in force holds it.
+      const custody = await request.post(`${apiBaseURL}/api/physical-chain/custody`, {
+        headers,
+        data: { specimenId: sampleID, custodianOrganizationId: organizationId, authorizationId: approvalId, responsibleInvestigatorId: 'investigator-e2e' },
+      });
+      expect(custody.status(), await custody.text()).toBe(201);
+    } else if (!specimenId) {
       sampleID = await createRealSample(request, token);
     }
-    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    expect(sampleDoc.status()).toBe(200);
-    const specimenId = (await sampleDoc.json()).data.specimenId;
+    if (!specimenId) {
+      const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(sampleDoc.status()).toBe(200);
+      specimenId = (await sampleDoc.json()).data.specimenId;
+    }
     expect(specimenId).toBeTruthy();
 
     const create = await request.post(`${apiBaseURL}/api/access-requests`, {
@@ -1261,6 +1269,107 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       appliedRules: expect.arrayContaining(['consent_partial_revocation']),
       reasons: [expect.stringContaining(otherCode)],
     });
+  });
+
+  // #1495 (RF024 AC2): a specimen registered into a collection is released
+  // only while the collection holds its regime and an approval in force and
+  // the specimen's custody holds; the denial names each refusal.
+  test('denies a specimen whose collection has no custody, no approval in force or no regime, naming the reason (AC#2, #1495)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `rf024-gov-study-${stamp}`;
+    const protocolId = `rf024-gov-protocol-${stamp}`;
+    const collectionId = `rf024-gov-collection-${stamp}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(collectionId);
+
+    // The collection's governance through the real API: an organization, an
+    // ethics approval in force, then the `created` event with its context.
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName: `RF024 #1495 ${stamp}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    const approval = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/approvals`, {
+      headers: auth,
+      data: {
+        authority: 'CEP sintético',
+        caae: '00000000.0.0000.0000',
+        documentUri: 'https://docs.example.org/parecer.pdf',
+        documentChecksum: `sha256:${'a'.repeat(64)}`,
+        effectivePeriod: { start: '2026-01-01', end: '2030-12-31' },
+        status: 'active',
+        responsibleOrganizationId: organizationId,
+      },
+    });
+    expect(approval.status(), await approval.text()).toBe(201);
+    const approvalId = (await approval.json()).data.approvalId as string;
+    const governed = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/events`, {
+      headers: auth,
+      data: {
+        justification: 'Contexto inicial do biorrepositório — RF024 #1495 e2e',
+        governanceContext: {
+          studyId,
+          protocolId,
+          protocolVersion: '1.0',
+          caae: '00000000.0.0000.0000',
+          responsibleOrganizationId: organizationId,
+          responsibleInvestigatorId: 'investigator-e2e',
+          ethicsApprovalId: approvalId,
+          validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+          plannedEndDate: '2030-12-31',
+        },
+      },
+    });
+    expect(governed.status(), await governed.text()).toBe(201);
+
+    const specimenId = await createRealSample(request, admin.token, { collectionId });
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, specimenId });
+    const evaluate = async (): Promise<any> => {
+      const res = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, { headers: auth });
+      expect(res.status(), await res.text()).toBe(200);
+      return (await res.json()).data;
+    };
+    const expectDenied = (body: any, reason: RegExp) => {
+      expect(body.overallCompatible).toBe(false);
+      expect(body.consentCompatibility[0]).toMatchObject({ consentValid: true, governanceValid: false, compatible: false });
+      expect(body.consentCompatibility[0].governanceReasons).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+      expect(body.policyDecision.effect).toBe('deny');
+      expect(body.policyDecision.reasons).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+    };
+
+    // The consent in force, but no custody holds the specimen yet.
+    await seedActiveConsent((await evaluate()).consentCompatibility[0].participantId);
+    expectDenied(await evaluate(), /sem custódia vigente/);
+
+    // In custody under the collection's approval in force: compatible.
+    const custody = await request.post(`${apiBaseURL}/api/physical-chain/custody`, {
+      headers: auth,
+      data: { specimenId, custodianOrganizationId: organizationId, authorizationId: approvalId, responsibleInvestigatorId: 'investigator-e2e' },
+    });
+    expect(custody.status(), await custody.text()).toBe(201);
+    const inForce = await evaluate();
+    expect(inForce.overallCompatible).toBe(true);
+    expect(inForce.consentCompatibility[0]).toMatchObject({ governanceValid: true, governanceReasons: [] });
+    expect(inForce.policyDecision.effect).not.toBe('deny');
+
+    // The approval suspended: the collection has no approval in force.
+    const suspend = await request.post(
+      `${apiBaseURL}/api/collections/${collectionId}/governance/approvals/${approvalId}/status`,
+      { headers: auth, data: { status: 'suspended', reason: 'Parecer em reanálise — RF024 #1495 e2e' } }
+    );
+    expect(suspend.status(), await suspend.text()).toBe(200);
+    expectDenied(await evaluate(), /sem aprovação de governança vigente/);
+
+    // The collection's regime gone, as a legacy row reads: denied for that.
+    await clearCollectionRegime(collectionId);
+    expectDenied(await evaluate(), /sem regime de governança/);
   });
 
   test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {

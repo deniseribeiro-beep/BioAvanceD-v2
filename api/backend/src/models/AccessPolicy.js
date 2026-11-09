@@ -295,10 +295,16 @@ function evaluatePolicies(policies, accessRequest, consentCompatibility, now = n
     reasons.push(`${policy.policyName} ${policy.policyVersion}: ${policy.decisionEffect}`);
   }
 
+  // #1495 (RF024 AC2): a specimen whose collection regime, approval or custody
+  // does not hold denies the request, naming each reason.
+  const entries = consentCompatibility || [];
+  const governanceIncompatible = entries.some((entry) => entry.governanceValid === false);
+  const baseIncompatible = facts.consent !== 'compatible' || facts.duo === 'incompatible' || facts.study !== 'active';
   let effect;
-  if (facts.consent !== 'compatible' || facts.duo === 'incompatible' || facts.study !== 'active') {
+  if (baseIncompatible || governanceIncompatible) {
     effect = 'deny';
-    reasons.unshift('incompatível com consentimento, DUO ou estudo');
+    reasons.unshift(...entries.flatMap((entry) => (entry.governanceValid === false ? entry.governanceReasons || [] : [])));
+    if (baseIncompatible) reasons.unshift('incompatível com consentimento, DUO ou estudo');
   } else if (appliedPolicies.some((p) => p.decisionEffect === 'deny')) {
     effect = 'deny';
   } else if (appliedPolicies.some((p) => p.decisionEffect === 'review_required')) {
