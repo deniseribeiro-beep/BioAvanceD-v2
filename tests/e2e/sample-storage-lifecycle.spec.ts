@@ -1,5 +1,16 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
+import { deleteOrganizations } from './helpers/listOrganizations';
+import {
+  setEquipmentOrganization,
+  specimenChainRows,
+  rackLocationRows,
+  storageLocationById,
+  countStorageAssignments,
+  cleanupSpecimenChains,
+  closeChainDb,
+  type ChainPositionRow,
+} from './helpers/queryPhysicalChain';
 import {
   createRealParticipant,
   seedActiveConsent,
@@ -79,18 +90,67 @@ function expectEventContract(events: OutboxEvent[], mongoId: string) {
   expect(new Set(events.map((e) => e.idempotencyKey)).size).toBe(events.length);
 }
 
+// #1508 (RF017 AC4): a container holds one position at a time, so no two of
+// its position rows' half-open [placedAt, removedAt) intervals intersect, and
+// each row closes no later than the next one opens.
+function expectNoOverlappingPositions(positions: ChainPositionRow[]) {
+  const end = (row: ChainPositionRow) => (row.removedAt === null ? Number.POSITIVE_INFINITY : Date.parse(row.removedAt));
+  for (let i = 0; i + 1 < positions.length; i += 1) {
+    expect(positions[i].removedAt).not.toBeNull();
+    expect(Date.parse(positions[i].removedAt!)).toBeLessThanOrEqual(Date.parse(positions[i + 1].placedAt));
+  }
+  for (let i = 0; i < positions.length; i += 1) {
+    for (let j = i + 1; j < positions.length; j += 1) {
+      const intersects =
+        Date.parse(positions[i].placedAt) < end(positions[j]) && Date.parse(positions[j].placedAt) < end(positions[i]);
+      expect(intersects, `${positions[i].containerPositionAssignmentId} overlaps ${positions[j].containerPositionAssignmentId}`).toBe(false);
+    }
+  }
+}
+
 test.describe('Sample storage lifecycle (#321) — real backend, withTransaction proof', () => {
   const seededStorageBoxes: SeededStorageBox[] = [];
   const seededLabelCodes: string[] = [];
+  // #1508: the organizations the seeded equipment is given, and the
+  // specimens whose physical-chain rows the afterAll removes.
+  const organizationIds: string[] = [];
+  const chainSpecimenIds: string[] = [];
 
-  test.afterAll(async () => {
+  test.afterAll(async ({ request }) => {
+    await cleanupSpecimenChains(chainSpecimenIds, seededStorageBoxes).catch(() => {});
     await Promise.all(
       seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
     );
     await removeSpecimenLabels(seededLabelCodes).catch(() => {});
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
     await closeOutboxDb();
     await closeSeedDb();
+    await closeChainDb();
   });
+
+  // #1508: the legacy path resolves a rack's StorageLocation through the
+  // freezer equipment's organization (P1X-0103), so each test gives its
+  // seeded equipment one before the first placement.
+  async function makeOrganization(request: APIRequestContext, token: string): Promise<string> {
+    const res = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { officialName: `#1508 legacy chain ${Date.now()}`, countryCode: 'BR' },
+    });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    const organizationId = (await res.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    return organizationId;
+  }
+
+  // RF016 AC3: where the chain says the specimen is, now or at `at`.
+  async function readLocation(request: APIRequestContext, token: string, specimenId: string, at?: string) {
+    const query = at ? `?at=${encodeURIComponent(at)}` : '';
+    const res = await request.get(`${apiBaseURL}/api/physical-chain/specimens/${specimenId}/location${query}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+    return (await res.json()).data;
+  }
 
   test('allocate (at create) -> move -> release -> allocate all commit through the real Mongo replica-set transaction', async ({
     request,
@@ -105,6 +165,9 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     const boxA = await seedStorageBoxLocation();
     const boxB = await seedStorageBoxLocation();
     seededStorageBoxes.push(boxA, boxB);
+    const org = await makeOrganization(request, admin.token);
+    await setEquipmentOrganization(boxA.equipmentId, org);
+    await setEquipmentOrganization(boxB.equipmentId, org);
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -118,6 +181,23 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect([201, 202]).toContain(create.status());
     const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
+    chainSpecimenIds.push(sampleId);
+
+    // #1508 (RF016 AC3): the allocation at create loads the specimen into a
+    // container and places it at boxA's A01, the box (as a StorageRack)
+    // located at its RACK storageContainer's StorageLocation.
+    const atCreate = await readLocation(request, admin.token, sampleId);
+    expect(atCreate).toMatchObject({ storagePositionId: `${boxA.boxId}:A01`, storageRackId: boxA.boxId });
+    const containerId = atCreate.containerId as string;
+    expect(containerId).toBeTruthy();
+    const locationA = atCreate.storageLocationId as string;
+    expect(locationA).toBeTruthy();
+    expect(await storageLocationById(locationA)).toEqual({
+      code: `legacy-storage-container:${boxA.rackId}`,
+      organizationId: org,
+    });
+    const chainAtCreate = await specimenChainRows(sampleId);
+    expect(chainAtCreate.positions).toHaveLength(1);
 
     // #1499 (RF023 AC1/AC2, RNF019 C2): the create appends exactly three
     // Sample events at versions 1..3 -- the allocation's custody event, the
@@ -159,6 +239,14 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(afterMoveBody.data.box.boxId).toBe(boxB.boxId);
     expect(afterMoveBody.data.box.position).toBe(boxB.positionCode);
 
+    // #1508 (RF017 AC3): the chain follows the legacy move, same container.
+    const atMove = await readLocation(request, admin.token, sampleId);
+    expect(atMove).toMatchObject({ containerId, storagePositionId: `${boxB.boxId}:A01`, storageRackId: boxB.boxId });
+    const locationB = atMove.storageLocationId as string;
+    expect(locationB).toBeTruthy();
+    expect(locationB).not.toBe(locationA);
+    expect((await storageLocationById(locationB))?.code).toBe(`legacy-storage-container:${boxB.rackId}`);
+
     // --- ReleaseSampleUseCase#execute -> withTransaction ---
     const releaseWatch = await watchAuditTrail(request, apiBaseURL!, admin.token);
     const release = await request.delete(`${apiBaseURL}/api/storage/release/${sampleId}`, {
@@ -180,6 +268,15 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(afterRelease.status()).toBe(400);
     const afterReleaseBody = await afterRelease.json();
     expect(afterReleaseBody.success).toBe(false);
+
+    // #1508: the release takes the container off its position; the
+    // specimen stays loaded in it.
+    expect(await readLocation(request, admin.token, sampleId)).toMatchObject({
+      containerId,
+      storagePositionId: null,
+      storageRackId: null,
+      storageLocationId: null,
+    });
 
     // --- AllocateSampleUseCase#execute -> withTransaction (re-allocate a released sample) ---
     const allocateWatch = await watchAuditTrail(request, apiBaseURL!, admin.token);
@@ -209,6 +306,15 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(afterAllocateBody.data.box.boxId).toBe(boxA.boxId);
     expect(afterAllocateBody.data.box.position).toBe(boxA.positionCode);
 
+    // #1508: the re-allocate places the same container back at boxA's A01,
+    // under boxA's same StorageLocation.
+    expect(await readLocation(request, admin.token, sampleId)).toMatchObject({
+      containerId,
+      storagePositionId: `${boxA.boxId}:A01`,
+      storageRackId: boxA.boxId,
+      storageLocationId: locationA,
+    });
+
     // #1499: move, release and the re-allocate each add one custody event at
     // the next version, and the contract still holds across all six.
     const finalEvents = await sampleOutboxEvents(mongoId);
@@ -219,6 +325,47 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       [6, 'CUSTODY_EVENT_RECORDED', 'allocate'],
     ]);
     expectEventContract(finalEvents, mongoId);
+
+    // #1508 (RF016 AC3, RF017 AC4): the chain is append-only and its
+    // intervals never overlap. One load, opened once and still open; each
+    // legacy call closed or opened a position row, never rewrote one.
+    const chain = await specimenChainRows(sampleId);
+    expect(chain.loads).toHaveLength(1);
+    expect(chain.loads[0]).toMatchObject({ containerId, assignmentStatus: 'active' });
+    const { positions } = chain;
+    expect(positions.map((p) => [p.storagePositionId, p.assignmentStatus])).toEqual([
+      [`${boxA.boxId}:A01`, 'ended'],
+      [`${boxB.boxId}:A01`, 'ended'],
+      [`${boxA.boxId}:A01`, 'active'],
+    ]);
+    expect(positions[2].removedAt).toBeNull();
+    expectNoOverlappingPositions(positions);
+    // The move closes the old row and opens the new one at one instant.
+    expect(positions[0].removedAt).toBe(positions[1].placedAt);
+    expect(positions[0]).toMatchObject({
+      containerPositionAssignmentId: chainAtCreate.positions[0].containerPositionAssignmentId,
+      storagePositionId: chainAtCreate.positions[0].storagePositionId,
+      placedAt: chainAtCreate.positions[0].placedAt,
+    });
+    // No legacy call moves a box, so each rack was located once and stays.
+    const rackRowsA = await rackLocationRows(boxA.boxId);
+    expect(rackRowsA).toHaveLength(1);
+    expect(rackRowsA[0]).toMatchObject({ assignmentStatus: 'active', storageLocationId: locationA });
+    const rackRowsB = await rackLocationRows(boxB.boxId);
+    expect(rackRowsB).toHaveLength(1);
+    expect(rackRowsB[0]).toMatchObject({ assignmentStatus: 'active', storageLocationId: locationB });
+
+    // The history through the API, half-open: at the move instant the
+    // specimen is already in boxB.
+    expect((await readLocation(request, admin.token, sampleId, positions[0].placedAt)).storagePositionId).toBe(
+      `${boxA.boxId}:A01`
+    );
+    expect((await readLocation(request, admin.token, sampleId, positions[1].placedAt)).storagePositionId).toBe(
+      `${boxB.boxId}:A01`
+    );
+
+    // Nothing wrote a legacy StorageAssignment row, under either key.
+    expect(await countStorageAssignments([sampleId, mongoId])).toBe(0);
   });
 
   test('a create whose label issue fails rolls back its sample, movement, allocation and outbox events together (RF023 AC3, RNF019 C1)', async ({
@@ -341,7 +488,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(collidingBody.message).toMatch(/STORAGE_COLLISION/);
   });
 
-  test('POST /allocate/auto (release -> auto-assign) commits through the real Mongo transaction, opens a StorageAssignment, and frees the slot on release (#1015)', async ({
+  test('POST /allocate/auto (release -> auto-assign) commits through the real Mongo transaction, places the specimen on the physical chain, and frees the slot on release (#1015, #1508)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -360,6 +507,9 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     const homeBox = await seedStorageBoxLocation();
     const autoBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(homeBox, autoBox);
+    const org = await makeOrganization(request, admin.token);
+    await setEquipmentOrganization(homeBox.equipmentId, org);
+    await setEquipmentOrganization(autoBox.equipmentId, org);
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -373,6 +523,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect([201, 202]).toContain(create.status());
     const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
+    chainSpecimenIds.push(sampleId);
 
     // The only way to reach an unallocated sample: release it first, since
     // creation cannot skip boxId/positionCode.
@@ -380,6 +531,12 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(release.status()).toBe(200);
+
+    // #1508: released, the container is off its position, the specimen still in it.
+    const afterFirstRelease = await readLocation(request, admin.token, sampleId);
+    expect(afterFirstRelease).toMatchObject({ storagePositionId: null, storageRackId: null, storageLocationId: null });
+    const containerId = afterFirstRelease.containerId as string;
+    expect(containerId).toBeTruthy();
 
     // --- POST /api/storage/allocate/auto -> withTransaction ---
     // The one storage mutation endpoint with no real-backend coverage
@@ -439,12 +596,23 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(afterAutoAssignBody.data.box.boxId).toBe(autoBox.boxId);
     expect(afterAutoAssignBody.data.box.position).toBe('A1');
 
-    // #1015 / #1003: MongoStorageRepository's autoAssignSamplePosition now
-    // calls openStorageAssignment inside the same transaction as the
-    // occupancyGrid/sample write. Before that fix, releasing an
-    // auto-assigned sample answered 400 RELEASE_ERROR, because
-    // release-sample.controller.js's use case found no open
-    // StorageAssignment to close. A 200 here is the actual invariant
+    // #1508 (RF016 AC3): the auto-assign placed the same container at
+    // autoBox's A01, under autoBox's RACK StorageLocation.
+    const afterAutoLocation = await readLocation(request, admin.token, sampleId);
+    expect(afterAutoLocation).toMatchObject({
+      containerId,
+      storagePositionId: `${autoBox.boxId}:A01`,
+      storageRackId: autoBox.boxId,
+    });
+    const autoLocation = afterAutoLocation.storageLocationId as string;
+    expect(autoLocation).toBeTruthy();
+
+    // #1015 / #1374: MongoStorageRepository's autoAssignSamplePosition
+    // places the specimen's container on the physical chain inside the
+    // same transaction as the occupancyGrid/sample write, which is why the
+    // release below finds a placement to close. Before #1015, releasing an
+    // auto-assigned sample answered 400 RELEASE_ERROR, because the release
+    // found nothing open to close. A 200 here is the actual invariant
     // #1015 asks for.
     const releaseAfterAuto = await request.delete(`${apiBaseURL}/api/storage/release/${sampleId}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -463,6 +631,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(afterSecondRelease.status()).toBe(400);
     const afterSecondReleaseBody = await afterSecondRelease.json();
     expect(afterSecondReleaseBody.success).toBe(false);
+    expect((await readLocation(request, admin.token, sampleId)).storagePositionId).toBeNull();
 
     // Proves the slot was genuinely freed (occupancyGrid entry removed),
     // not just the sample's own pointer cleared: re-auto-assigning into
@@ -482,5 +651,24 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       boxId: autoBox.boxId,
       position: 'A1',
     });
+
+    // #1508 (RF016 AC3, RF017 AC4): back at autoBox's A01, same location;
+    // one load, and three position rows that never overlap.
+    expect(await readLocation(request, admin.token, sampleId)).toMatchObject({
+      containerId,
+      storagePositionId: `${autoBox.boxId}:A01`,
+      storageRackId: autoBox.boxId,
+      storageLocationId: autoLocation,
+    });
+    const chain = await specimenChainRows(sampleId);
+    expect(chain.loads).toHaveLength(1);
+    expect(chain.loads[0]).toMatchObject({ containerId, assignmentStatus: 'active' });
+    expect(chain.positions.map((p) => [p.storagePositionId, p.assignmentStatus])).toEqual([
+      [`${homeBox.boxId}:A01`, 'ended'],
+      [`${autoBox.boxId}:A01`, 'ended'],
+      [`${autoBox.boxId}:A01`, 'active'],
+    ]);
+    expectNoOverlappingPositions(chain.positions);
+    expect(await countStorageAssignments([sampleId])).toBe(0);
   });
 });
