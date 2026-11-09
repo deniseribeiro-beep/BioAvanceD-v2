@@ -1419,6 +1419,8 @@ export default function ClinicalIntakeWizard(props) {
   const [formData, setFormData] = useState(initialState);
   const [touched, setTouched] = useState(false);
   const [step1Attempted, setStep1Attempted] = useState(false);
+  // RNF018 AC1 (#1525): the sample step shows its quantity message once Next was refused there.
+  const [step2Attempted, setStep2Attempted] = useState(false);
   const [submitError, setSubmitError] = useState('');
   // #1354/#1355: the organization the intake stamps, sent as organizationId (#1376).
   // Asked only when the caller has a choice; a single-organization caller's
@@ -2365,7 +2367,10 @@ export default function ClinicalIntakeWizard(props) {
   const handleNext = () => {
     setTouched(true);
     if (activeStep === 0 && !isStep1Valid) return;
-    if (activeStep === 1 && !isStep2Valid) return;
+    if (activeStep === 1 && !isStep2Valid) {
+      setStep2Attempted(true);
+      return;
+    }
     setActiveStep((current) => Math.min(current + 1, stepMeta.length - 1));
     if (typeof onStepChange === 'function') {
       onStepChange(Math.min(activeStep + 1, stepMeta.length - 1));
@@ -2467,6 +2472,7 @@ export default function ClinicalIntakeWizard(props) {
       setActiveStep(0);
       setTouched(false);
       setStep1Attempted(false);
+      setStep2Attempted(false);
     } catch (error) {
       const message = error?.response?.data?.message || error?.response?.data?.error || error?.message || t('wizard.errors.submit', 'Erro ao finalizar o cadastro integrado.');
       setSubmitError(message);
@@ -2764,7 +2770,7 @@ export default function ClinicalIntakeWizard(props) {
             <div className="w-full">
               <label htmlFor="wizard-quantity" className="mb-1.5 block text-sm font-semibold text-gray-700">{t('common.quantity', 'Quantidade')}</label>
               <div className="flex items-center gap-2">
-                <Input id="wizard-quantity" data-testid="wizard-quantity" className="w-full rounded-lg px-3 py-2" type="number" value={formData.quantity} onChange={handleFieldChange('quantity')} required />
+                <Input id="wizard-quantity" data-testid="wizard-quantity" className="w-full rounded-lg px-3 py-2" type="number" value={formData.quantity} onChange={handleFieldChange('quantity')} error={step2Attempted ? getFieldError(sampleValidation, 'quantity') : ''} required />
                 <span className="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-700">{quantityUnit}</span>
               </div>
             </div>

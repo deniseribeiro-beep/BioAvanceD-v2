@@ -129,6 +129,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// RNF018 AC1 (#1525): the wizard refuses a quantity at or below zero, and says so.
+describe('ClinicalIntakeWizard sample quantity', () => {
+  it.each(['0', '-1'])('shows the quantity message for %s and stays on the sample step', async (quantity) => {
+    renderWizard();
+    await goToSampleStep();
+    fillSampleStep();
+    set('wizard-quantity', quantity);
+    expect(screen.queryByText(/Enter a quantity greater than zero|Informe um volume maior que zero/)).not.toBeInTheDocument();
+    next();
+    expect(await screen.findByText(/Enter a quantity greater than zero|Informe um volume maior que zero/)).toBeInTheDocument();
+    expect(onSampleStep()).toBe(true);
+  });
+});
+
 describe('ClinicalIntakeWizard submit and sample label', () => {
   it('submits the three steps, shows the sample label and the unsaved clinical entities, and prints the label', async () => {
     await submitWith(() => Promise.resolve({ data: { message: 'ok', sample: { specimenId: 'SP-9', sampleType: 'PLASMA', collectionDate: '2026-01-02T00:00:00Z' }, clinicalEntities: { failed: [{ entity: 'allergy', reference: 'A1' }] } }, status: 201 }));

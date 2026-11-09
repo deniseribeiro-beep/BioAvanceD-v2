@@ -69,6 +69,27 @@ function createRcsDerivedWriteRefusal(fields) {
   return error;
 }
 
+// RNF018 AC1 (#1525): the backend twin of SampleDetailsPage's quantity check.
+// A quantity field the edit names is a finite number at or above zero, or
+// null; anything else is refused before anything is written.
+const QUANTITY_UPDATE_FIELDS = ['quantity', 'currentQuantity', 'initialQuantity'];
+function findInvalidQuantityFields(updateData) {
+  return QUANTITY_UPDATE_FIELDS.filter((field) => {
+    if (!Object.prototype.hasOwnProperty.call(updateData, field)) return false;
+    const value = updateData[field];
+    if (value === null) return false;
+    return !(typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  });
+}
+function createInvalidQuantityRefusal(fields) {
+  const details = fields.map((field) => `${field} deve ser um número maior ou igual a zero`);
+  const error = createSampleValidationError(details.join(', '), 422);
+  error.code = 'INVALID_QUANTITY';
+  error.fields = fields;
+  error.details = details;
+  return error;
+}
+
 // RNF007 AC4 (#1463): a caller-supplied code carries no personal data. The
 // refusal names the kind, never the value, as the ingestion path does.
 const BARCODE_PERSONAL_DATA = 'BARCODE_PERSONAL_DATA';
@@ -921,6 +942,11 @@ class SampleService {
       const rcsDerivedFields = findRcsDerivedFields(updateData);
       if (rcsDerivedFields.length > 0) {
         throw createRcsDerivedWriteRefusal(rcsDerivedFields);
+      }
+      // RNF018 AC1 (#1525): a negative or non-numeric quantity is refused.
+      const invalidQuantityFields = findInvalidQuantityFields(updateData);
+      if (invalidQuantityFields.length > 0) {
+        throw createInvalidQuantityRefusal(invalidQuantityFields);
       }
       // #1378 (ELM-0116): after the migration window, barcode is not written.
       assertLegacyBarcodeWritable(updateData);

@@ -792,6 +792,15 @@ async function handleIntakeWizard(req, res) {
       return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)], details: [...new Set(fields)].map((field) => `${field}: campo não canônico`) });
     }
 
+    // RNF018 AC1 (#1525): the backend twin of the wizard's quantity check. A
+    // quantity at or below zero is refused before the participant match, the
+    // audit entry or the sample is written.
+    const specimenQuantity = data?.specimen?.quantity;
+    if (specimenQuantity !== undefined && !(Number(specimenQuantity) > 0)) {
+      const detail = 'specimen.quantity deve ser um número maior que zero';
+      return res.status(422).json({ success: false, error: 'INVALID_QUANTITY', fields: ['specimen.quantity'], details: [detail] });
+    }
+
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({

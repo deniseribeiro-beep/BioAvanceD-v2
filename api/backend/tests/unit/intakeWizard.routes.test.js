@@ -134,6 +134,27 @@ describe('intakeWizard routes', () => {
     clearCache();
   });
 
+  // RNF018 AC1 (#1525): the backend twin of the wizard's quantity check.
+  it.each([0, -1])('refuses a specimen quantity of %s with 422 INVALID_QUANTITY, writing nothing', async (quantity) => {
+    const { router, patientIdentityServiceModule, auditLoggerModule } = loadRoute();
+    const sampleServiceModule = require(sampleServicePath);
+    vi.spyOn(sampleServiceModule, 'createSample');
+
+    const res = await request(buildApp(router, {})).post('/api/intake-wizard')
+      .send({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, quantity } });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({
+      success: false,
+      error: 'INVALID_QUANTITY',
+      fields: ['specimen.quantity'],
+      details: ['specimen.quantity deve ser um número maior que zero'],
+    });
+    expect(patientIdentityServiceModule.matchOrUpsertParticipant).not.toHaveBeenCalled();
+    expect(auditLoggerModule.log).not.toHaveBeenCalled();
+    expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
+  });
+
   describe('POST / (handleIntakeWizard)', () => {
     it('returns 400 when the body is missing/invalid', async () => {
       const { router } = loadRoute();

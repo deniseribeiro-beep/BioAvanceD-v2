@@ -2189,6 +2189,35 @@ describe('sample.service', () => {
       }
     });
 
+    it('refuses a negative or non-numeric quantity and persists nothing (RNF018 AC1, #1525)', async () => {
+      const writes = [
+        { currentQuantity: -1 },
+        { quantity: -0.5 },
+        { initialQuantity: -10 },
+        { currentQuantity: 'abc' }
+      ];
+      for (const write of writes) {
+        const db = makeDb();
+        db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10, initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' });
+
+        await expect(sampleService.updateSample(db, 'sample-1', write)).rejects.toMatchObject({
+          statusCode: 422,
+          code: 'INVALID_QUANTITY',
+          fields: Object.keys(write)
+        });
+        expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      }
+    });
+
+    it('writes a currentQuantity of zero, the lowest the edit allows (RNF018 AC1, #1525)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-1', quantity: 10, initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' });
+
+      await sampleService.updateSample(db, 'sample-1', { currentQuantity: 0 });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.currentQuantity).toBe(0);
+    });
+
     it('returns null when updateOne matches nothing', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10 });
