@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { randomUUID } from 'crypto';
 import { MongoClient } from 'mongodb';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
@@ -30,7 +31,11 @@ import {
   projectionCheckpoint,
   requeueOutboxEvents,
   waitForOutboxEventsProjected,
+  insertPoisonOutboxEvent,
+  readOutboxEvent,
+  deleteOutboxEvents,
   closeOutboxDb,
+  OUTBOX_POISON_ERROR,
 } from './helpers/queryOutbox';
 import { countAllPoints } from './helpers/queryInflux';
 import {
@@ -399,6 +404,112 @@ test.describe('Outbox → Neo4j projection (RF028 AC9) — real backend', () => 
 
   test('a bootstrapped HPO is_a relation projects into Neo4j as a TERMINOLOGY_RELATION edge', async () => {
     await waitForTerminologyRelation('HP:0000118', 'HP:0000001', 'http://purl.obolibrary.org/obo/hp.owl', 'is_a');
+  });
+});
+
+// #1501 (RF023 AC7, RNF019 C5): lease, retry, backoff, lease timeout and dead
+// letter, on the real neo4j-projection-worker-test. Each event is a poison
+// event (queryOutbox.ts's insertPoisonOutboxEvent) the worker fails on every
+// try. The test stack sets neither GRAPH_OUTBOX_MAX_ATTEMPTS nor
+// GRAPH_OUTBOX_RETRY_BACKOFF_MS, so the worker runs on config/env.js's
+// defaults: 8 attempts and a 1000 ms base, a failed try k waiting
+// 1000 * 2^(k-1) ms (neo4jOutbox.service.js's retryDelayMs).
+test.describe('Outbox lease, retry, backoff and dead letter (RF023 AC7, RNF019 C5) — real backend', () => {
+  const MAX_ATTEMPTS = 8;
+  const BACKOFF_BASE_MS = 1000;
+  const eventIds: string[] = [];
+
+  function newEventId(label: string): string {
+    const eventId = `e2e-1501-${label}-${randomUUID()}`;
+    eventIds.push(eventId);
+    return eventId;
+  }
+
+  test.afterAll(async () => {
+    await deleteOutboxEvents(eventIds).catch(() => {});
+    await closeOutboxDb();
+  });
+
+  test('a failed projection is leased, reads RETRYING and waits a backoff that doubles with each try', async () => {
+    test.setTimeout(60_000);
+    const eventId = newEventId('retry');
+    await insertPoisonOutboxEvent(eventId);
+
+    // Any try k the poll lands on: the lease counted it, and the wait is
+    // the base doubled k-1 times.
+    let first: Awaited<ReturnType<typeof readOutboxEvent>> = null;
+    await expect.poll(async () => {
+      first = await readOutboxEvent(eventId);
+      return first?.status === 'RETRYING' && Number(first.attempts) >= 1;
+    }, { timeout: 15_000, intervals: [250] }).toBe(true);
+    const k = Number(first!.attempts);
+    expect(first!.lastError).toContain(OUTBOX_POISON_ERROR);
+    expect(first!.leaseUntil).toBeNull();
+    expect(first!.nextAttemptAt.getTime() - first!.updatedAt.getTime()).toBe(BACKOFF_BASE_MS * 2 ** (k - 1));
+
+    let next: Awaited<ReturnType<typeof readOutboxEvent>> = null;
+    await expect.poll(async () => {
+      next = await readOutboxEvent(eventId);
+      return next?.status === 'RETRYING' && Number(next.attempts) === k + 1;
+    }, { timeout: 20_000, intervals: [250] }).toBe(true);
+    expect(next!.nextAttemptAt.getTime() - next!.updatedAt.getTime()).toBe(BACKOFF_BASE_MS * 2 ** k);
+    // The next try was leased only once the first backoff ran out.
+    expect(next!.updatedAt.getTime()).toBeGreaterThanOrEqual(first!.nextAttemptAt.getTime());
+  });
+
+  test('the next-to-last try is retried and the last try dead-letters the event', async () => {
+    test.setTimeout(60_000);
+    const nextToLast = newEventId('next-to-last');
+    const last = newEventId('last');
+    const priorTries = { status: 'RETRYING', lastError: 'e2e-1501 seeded earlier failure' };
+    await insertPoisonOutboxEvent(nextToLast, { ...priorTries, attempts: MAX_ATTEMPTS - 2 });
+    await insertPoisonOutboxEvent(last, { ...priorTries, attempts: MAX_ATTEMPTS - 1 });
+
+    await expect.poll(async () => (await readOutboxEvent(last))?.status, { timeout: 15_000, intervals: [250] })
+      .toBe('DEAD_LETTER');
+    const dead = await readOutboxEvent(last);
+    expect(dead!.attempts).toBe(MAX_ATTEMPTS);
+    expect(dead!.lastError).toContain(OUTBOX_POISON_ERROR);
+    expect(dead!.processedAt).not.toBeNull();
+    expect(dead!.leaseUntil).toBeNull();
+
+    // Status and count in one read: the lease sets attempts to 7 while the
+    // row is still PROCESSING, before the failure marks it RETRYING.
+    await expect.poll(async () => {
+      const row = await readOutboxEvent(nextToLast);
+      return `${row?.status}:${row?.attempts}`;
+    }, { timeout: 15_000, intervals: [250] }).toBe(`RETRYING:${MAX_ATTEMPTS - 1}`);
+    const retried = await readOutboxEvent(nextToLast);
+    expect(retried!.lastError).toContain(OUTBOX_POISON_ERROR);
+
+    // A dead letter is never leased again.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const still = await readOutboxEvent(last);
+    expect(still!.status).toBe('DEAD_LETTER');
+    expect(still!.attempts).toBe(MAX_ATTEMPTS);
+  });
+
+  test('an event whose lease ran out goes back to RETRYING with the lease cleared', async () => {
+    test.setTimeout(60_000);
+    const eventId = newEventId('lease');
+    const now = Date.now();
+    // Leased ten minutes ago, past GRAPH_OUTBOX_LEASE_MS's 5-minute default.
+    // Its nextAttemptAt lies ahead so the worker's lease in the same pass
+    // leaves it alone and the expiry's own reading stays visible.
+    await insertPoisonOutboxEvent(eventId, {
+      status: 'PROCESSING',
+      attempts: 1,
+      leaseUntil: new Date(now - 5 * 60 * 1000),
+      nextAttemptAt: new Date(now + 120_000),
+      updatedAt: new Date(now - 10 * 60 * 1000),
+    });
+
+    await expect.poll(async () => (await readOutboxEvent(eventId))?.status, { timeout: 15_000, intervals: [250] })
+      .toBe('RETRYING');
+    const expired = await readOutboxEvent(eventId);
+    expect(expired!.lastError).toBe('processing_lease_expired');
+    expect(expired!.leaseUntil).toBeNull();
+    expect(expired!.updatedAt.getTime()).toBeGreaterThan(now - 60_000);
   });
 });
 

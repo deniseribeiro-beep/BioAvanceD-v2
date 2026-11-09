@@ -108,7 +108,8 @@ async function runProjectionOnce(options = {}) {
         projected += 1;
       } catch (error) {
         failed += 1;
-        const nextAttempts = Number(event.attempts || 0) + 1;
+        // #1501: leaseNextBatch already counted this try in event.attempts.
+        const nextAttempts = Number(event.attempts || 0);
         if (nextAttempts >= maxAttempts) {
           await outboxService.markDeadLetter(db, event.eventId, error);
           // #1313 (RNF019 C5/C7): a dead letter holds its aggregate's later

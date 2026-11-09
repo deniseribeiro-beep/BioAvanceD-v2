@@ -193,3 +193,54 @@ export async function waitForOutboxEventsProjected(
       `(last seen: ${eventIds.map((id) => `${id}=${lastSeen[id] ?? 'not read'}`).join(', ')})`
   );
 }
+
+/**
+ * #1501 fixture for pipeline-continuity.spec.ts: an outbox event the real
+ * projection worker leases and fails on every try. Its payload's
+ * terminologyConceptId is an object whose own `toString` is a string, so the
+ * projector's String() of it throws a TypeError before any Neo4j write: a
+ * poison event, failed in data alone, with no test hook in the backend. Each
+ * event gets its own aggregate, so the version-order check never defers it.
+ */
+export const OUTBOX_POISON_ERROR = 'Cannot convert object to primitive value';
+
+export async function insertPoisonOutboxEvent(
+  eventId: string,
+  fields: Record<string, unknown> = {}
+): Promise<void> {
+  const db = await getDb();
+  const now = new Date();
+  await db.collection('graph_projection_outbox').insertOne({
+    eventId,
+    eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
+    eventTypeVersion: '1',
+    aggregateType: 'E2EFixture1501',
+    aggregateId: `${eventId}-aggregate`,
+    aggregateVersion: 1,
+    payload: { terminologyConceptId: { toString: 'e2e-1501-poison' } },
+    schemaVersion: 1,
+    occurredAt: now,
+    status: 'PENDING',
+    attempts: 0,
+    lastError: null,
+    projectedAt: null,
+    processedAt: null,
+    leaseUntil: null,
+    nextAttemptAt: null,
+    sourceService: 'e2e-1501',
+    traceId: null,
+    createdAt: now,
+    updatedAt: now,
+    ...fields,
+  });
+}
+
+export async function readOutboxEvent(eventId: string) {
+  const db = await getDb();
+  return db.collection('graph_projection_outbox').findOne({ eventId });
+}
+
+export async function deleteOutboxEvents(eventIds: string[]): Promise<void> {
+  const db = await getDb();
+  await db.collection('graph_projection_outbox').deleteMany({ eventId: { $in: eventIds } });
+}

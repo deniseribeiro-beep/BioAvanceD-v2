@@ -18,7 +18,7 @@ describe('neo4jProjection.worker', () => {
   it('replays outbox events idempotently and marks dead letters after repeated failures', async () => {
     const events = [
       { eventId: 'evt-1', eventType: 'CONSENT_UPSERTED', aggregateType: 'EthicalConsent', aggregateId: 'consent-1', attempts: 0, schemaVersion: 1, payload: { donorKey: 'patient-1' } },
-      { eventId: 'evt-2', eventType: 'QUALITY_ASSESSED', aggregateType: 'Sample', aggregateId: 'sample-1', attempts: 7, schemaVersion: 1, payload: { sampleId: 'sample-1' } },
+      { eventId: 'evt-2', eventType: 'QUALITY_ASSESSED', aggregateType: 'Sample', aggregateId: 'sample-1', attempts: 8, schemaVersion: 1, payload: { sampleId: 'sample-1' } },
     ];
 
     const state = {
@@ -104,7 +104,7 @@ describe('neo4jProjection.worker', () => {
     const retries = [];
     const outboxService = {
       rescheduleStaleProcessing: async () => 0,
-      leaseNextBatch: async () => [{ eventId: 'evt-b', aggregateType: 'Sample', aggregateId: 's-b', attempts: 2 }],
+      leaseNextBatch: async () => [{ eventId: 'evt-b', aggregateType: 'Sample', aggregateId: 's-b', attempts: 3 }],
       markProjected: async () => undefined,
       markRetrying: async (_db, eventId, _error, options) => retries.push({ eventId, options }),
       markDeadLetter: async () => undefined,
@@ -117,13 +117,36 @@ describe('neo4jProjection.worker', () => {
     expect(retries).toEqual([{ eventId: 'evt-b', options: { attempts: 3 } }]);
   });
 
+  // #1501 (RNF019 C5): leaseNextBatch counts the try before the projector runs,
+  // so an event leased on its seventh try of eight is retried, and only the
+  // eighth try's failure dead-letters it.
+  it('retries an event leased on its next-to-last try and dead-letters it on the last', async () => {
+    const run = async (attempts) => {
+      const state = { retrying: [], dead: [] };
+      const outboxService = {
+        rescheduleStaleProcessing: async () => 0,
+        leaseNextBatch: async () => [{ eventId: `evt-${attempts}`, aggregateType: 'Sample', aggregateId: 's-l', attempts }],
+        markProjected: async () => undefined,
+        markRetrying: async (_db, eventId, _error, options) => state.retrying.push({ eventId, options }),
+        markDeadLetter: async (_db, eventId) => state.dead.push(eventId),
+      };
+      const projector = { applyEvent: async () => { throw new Error('neo4j offline'); } };
+      const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+      await runProjectionOnce({ db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8 });
+      return state;
+    };
+
+    expect(await run(7)).toEqual({ retrying: [{ eventId: 'evt-7', options: { attempts: 7 } }], dead: [] });
+    expect(await run(8)).toEqual({ retrying: [], dead: ['evt-8'] });
+  });
+
   // #1313 (RNF019 C5/C7): a dead letter is logged as an error, naming it.
   it('logs a dead letter as an error with its aggregate and version', async () => {
     const logger = require('../../src/utils/logger');
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
     const outboxService = {
       rescheduleStaleProcessing: async () => 0,
-      leaseNextBatch: async () => [{ eventId: 'evt-x', eventType: 'T', aggregateType: 'Sample', aggregateId: 's-x', attempts: 7 }],
+      leaseNextBatch: async () => [{ eventId: 'evt-x', eventType: 'T', aggregateType: 'Sample', aggregateId: 's-x', attempts: 8 }],
       markProjected: async () => undefined,
       markRetrying: async () => undefined,
       markDeadLetter: async () => undefined,
