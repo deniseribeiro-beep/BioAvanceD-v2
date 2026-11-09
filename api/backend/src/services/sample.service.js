@@ -973,11 +973,9 @@ class SampleService {
         'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
         'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
         'withdrawnAt', 'receivedAt', 'quantity', 'unit', 'quality',
-        'modelVersion', 'matrixType', 'governanceStatus',
-        'governanceFailureReasons', 'governanceRuleCodes',
         // RCS_DERIVED_FIELDS are refused above (RNF018 AC4).
         'externalQualityAssessment', 'locationID', 'linkedProject',
-        'collectionSite', 'sprec', 'merkleRoot', 'sealedRcsAssessmentId',
+        'collectionSite', 'sprec', 'merkleRoot',
         'sealedSpecimenPreanalyticsId', 'consentTemplateId', 'clinicalData',
         'pharmacologyData', 'consentStatus', 'quarantineReason',
         'importBatchId', 'importedAt', 'importedBy', 'currentQuantity',

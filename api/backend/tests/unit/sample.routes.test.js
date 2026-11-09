@@ -350,6 +350,25 @@ describe('sample.routes', () => {
       expect(next).not.toHaveBeenCalled();
     });
 
+    it('refuses a governance or seal field of the RCS result on create with 422 RCS_DERIVED_WRITE_REFUSED (RNF018 AC4, #1526)', () => {
+      const { router } = loadRoute();
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      };
+      const next = vi.fn();
+
+      router._test.validateCreateSamplePayload({ body: { ...VALID_PAYLOAD, governanceStatus: 1, sealedRcsAssessmentId: 'forged' } }, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: 'RCS_DERIVED_WRITE_REFUSED',
+        fields: ['governanceStatus', 'sealedRcsAssessmentId']
+      }));
+      expect(next).not.toHaveBeenCalled();
+    });
+
     describe('#1368: parentSpecimenIds (ELM-0120)', () => {
       const callValidator = (body) => {
         const { router } = loadRoute();

@@ -45,7 +45,10 @@ const QUANTITY_STATUS_VALUES = ['full', 'partial', 'depleted'];
 const SPECIMEN_ROLE_VALUES = ['primary', 'aliquot', 'derivative', 'pool', 'control'];
 
 // RNF018 AC4: the RCS result, set only by RCS certification, never by a caller.
-const RCS_DERIVED_FIELDS = Object.freeze(['biologicalPenalty', 'rcsScore', 'scoreBasedGrade', 'finalGrade', 'gradeRoute', 'axisPenalties', 'calculationTrace', 'rcsEvaluation']);
+// That covers the governance outcome (modelVersion, matrixType, governanceStatus,
+// governanceFailureReasons, governanceRuleCodes) and the sealed-assessment pin
+// (sealedRcsAssessmentId) from the same certification.
+const RCS_DERIVED_FIELDS = Object.freeze(['biologicalPenalty', 'rcsScore', 'scoreBasedGrade', 'finalGrade', 'gradeRoute', 'axisPenalties', 'calculationTrace', 'rcsEvaluation', 'modelVersion', 'matrixType', 'governanceStatus', 'governanceFailureReasons', 'governanceRuleCodes', 'sealedRcsAssessmentId']);
 
 // RNF018 AC4: the RCS-derived fields a body names as own keys (null
 // included), and the refusal's detail per field; every write path reads these.

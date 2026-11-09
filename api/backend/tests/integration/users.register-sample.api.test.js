@@ -282,6 +282,24 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     expect(sampleService.createSample).not.toHaveBeenCalled();
   });
 
+  it('RNF018 AC4: refuses a governance or seal field of the RCS result with 422 RCS_DERIVED_WRITE_REFUSED and creates nothing (#1526)', async () => {
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, governanceStatus: 1, sealedRcsAssessmentId: 'forged' })
+    );
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      success: false,
+      error: 'RCS_DERIVED_WRITE_REFUSED',
+      fields: ['governanceStatus', 'sealedRcsAssessmentId'],
+      details: [
+        'governanceStatus: derivado da certificação RCS e não pode ser informado',
+        'sealedRcsAssessmentId: derivado da certificação RCS e não pode ser informado'
+      ]
+    });
+    expect(sampleService.createSample).not.toHaveBeenCalled();
+  });
+
   it('RNF018 AC4: passes a sprec with no RCS-derived field on to createSample', async () => {
     const sprec = { matrixType: 'fluid', sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A' };
 

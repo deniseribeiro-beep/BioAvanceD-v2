@@ -2159,6 +2159,36 @@ describe('sample.service', () => {
       }
     });
 
+    it('refuses a write to a governance or seal field of the RCS result and persists nothing (RNF018 AC4, #1526)', async () => {
+      const writes = [
+        { modelVersion: 'RCS-GOV-v9' },
+        { matrixType: 'solid' },
+        { governanceStatus: 1 },
+        { governanceFailureReasons: [] },
+        { governanceRuleCodes: [] },
+        { sealedRcsAssessmentId: 'forged-assessment' },
+        { governanceStatus: null }
+      ];
+      for (const write of writes) {
+        const db = makeDb();
+        db.collections.samples.findOne.mockResolvedValue({
+          _id: 'sample-1',
+          quantity: 10,
+          initialQuantity: 10,
+          currentQuantity: 10,
+          specimenStatus: 'available',
+          governanceStatus: 0
+        });
+
+        await expect(sampleService.updateSample(db, 'sample-1', write)).rejects.toMatchObject({
+          statusCode: 422,
+          code: 'RCS_DERIVED_WRITE_REFUSED',
+          fields: Object.keys(write)
+        });
+        expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      }
+    });
+
     it('returns null when updateOne matches nothing', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10 });

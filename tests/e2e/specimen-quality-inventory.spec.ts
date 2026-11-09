@@ -1150,7 +1150,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     ]);
   });
 
-  test('refuses a manual write to quantityStatus and to the RCS result, on edit and on create (RNF018 AC4, #1489)', async ({ request }) => {
+  test('refuses a manual write to quantityStatus and to the RCS result, on edit and on create (RNF018 AC4, #1489, #1526)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedWithdrawableSample(request, admin);
 
@@ -1172,12 +1172,30 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(rcsBody.error).toBe('RCS_DERIVED_WRITE_REFUSED');
     expect(rcsBody.fields).toEqual(['biologicalPenalty', 'rcsScore', 'finalGrade', 'gradeRoute', 'axisPenalties']);
 
+    const governanceWrite = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        modelVersion: 'RCS-GOV-forged',
+        matrixType: 'solid',
+        governanceStatus: 1,
+        governanceFailureReasons: [],
+        governanceRuleCodes: [],
+        sealedRcsAssessmentId: 'forged-assessment',
+      },
+    });
+    expect(governanceWrite.status()).toBe(422);
+    const governanceBody = await governanceWrite.json();
+    expect(governanceBody.error).toBe('RCS_DERIVED_WRITE_REFUSED');
+    expect(governanceBody.fields).toEqual(['modelVersion', 'matrixType', 'governanceStatus', 'governanceFailureReasons', 'governanceRuleCodes', 'sealedRcsAssessmentId']);
+
     const after = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     const afterData = (await after.json()).data;
     expect(afterData.quantityStatus).toBe('full');
     expect(afterData.rcsScore ?? null).toBeNull();
+    expect(afterData.governanceStatus ?? null).toBeNull();
+    expect(afterData.sealedRcsAssessmentId ?? null).toBeNull();
 
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     await seedActiveConsent(participant.participantId);
@@ -1192,12 +1210,13 @@ test.describe('Chain of custody (RF006) — real backend', () => {
         boxId: seededStorageBox.boxId,
         positionCode: seededStorageBox.positionCode,
         rcsScore: 99,
+        governanceStatus: 1,
       },
     });
     expect(create.status()).toBe(422);
     const createBody = await create.json();
     expect(createBody.error).toBe('RCS_DERIVED_WRITE_REFUSED');
-    expect(createBody.fields).toEqual(['rcsScore']);
+    expect(createBody.fields).toEqual(['rcsScore', 'governanceStatus']);
   });
 
   test('custody events cannot be altered or deleted — no route accepts a mutation (criterion 5)', async ({ request }) => {
