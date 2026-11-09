@@ -58,6 +58,24 @@ export async function seedCustodyFixture(suffix: string, collectionSite: string)
   return fixture;
 }
 
+/** #1509 (RF026 AC6): an ethics approval in force, named by the fixture collection's governanceContext; returns its id. */
+export async function seedEthicsApproval(fixture: CustodyFixture): Promise<string> {
+  const db = await getDb();
+  const ethicsApprovalId = `${fixture.approvalId}-ETH`;
+  await db.collection('collectionGovernanceApprovals').insertOne({
+    approvalId: ethicsApprovalId,
+    collectionId: fixture.collectionId,
+    status: 'active',
+    effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null },
+    createdAt: new Date(),
+  });
+  await db.collection('collections').updateOne(
+    { collectionId: fixture.collectionId },
+    { $set: { 'governanceContext.ethicsApprovalId': ethicsApprovalId } }
+  );
+  return ethicsApprovalId;
+}
+
 /** RF021 AC6: withdraws (or restores) the approval the custody rests on. */
 export async function setApprovalStatus(approvalId: string, status: string): Promise<void> {
   const db = await getDb();
@@ -116,7 +134,7 @@ export async function cleanupCustodyFixture(fixture: CustodyFixture, containerId
   await Promise.all([
     db.collection('samples').deleteMany({ specimenId: fixture.specimenId }),
     db.collection('collections').deleteMany({ collectionId: fixture.collectionId }),
-    db.collection('collectionGovernanceApprovals').deleteMany({ approvalId: fixture.approvalId }),
+    db.collection('collectionGovernanceApprovals').deleteMany({ approvalId: { $in: [fixture.approvalId, `${fixture.approvalId}-ETH`] } }),
     db.collection('custodianshipAssignments').deleteMany({ specimenId: fixture.specimenId }),
     db.collection('specimenContainerAssignments').deleteMany({ specimenId: fixture.specimenId }),
     db.collection('scanEvents').deleteMany({ targetId: fixture.specimenId }),

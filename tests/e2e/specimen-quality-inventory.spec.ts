@@ -2397,6 +2397,110 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
     expect(certificate.dispositionMethod).toBe('secure-wipe');
   });
 
+  test('a return and a cancellation each pass the lifecycle: return is approved, executed with evidence and certified; a cancelled action admits nothing further (RF006 AC5, RF026 AC3 AC4, RNF022 AC4; #1509)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const retentionPolicyId = await createRetentionPolicy(request, admin, { reviewRequired: true });
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const record = async (dispositionAction: string, affectedRecordIds: string[]) => {
+      const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+        headers: auth,
+        data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+      return (await res.json()).data;
+    };
+
+    // A return is recorded planned and executes only once approved.
+    const returned = await record('return', [`log-rf026-return-${suffix}`]);
+    expect(returned).toMatchObject({ actionStatus: 'planned', dispositionAction: 'return' });
+    const returnBase = `${apiBaseURL}/api/disposition-actions/${returned.dispositionActionId}`;
+    const returnEvidence = { evidenceIds: ['file-rf026-return'] };
+    expect((await request.post(`${returnBase}/execute`, { headers: auth, data: returnEvidence })).status()).toBe(409);
+    const approvedReturn = await request.post(`${returnBase}/approve`, { headers: auth });
+    expect(approvedReturn.status(), await approvedReturn.text()).toBe(200);
+    expect((await approvedReturn.json()).data).toMatchObject({ actionStatus: 'approved', authorizationId: expect.any(String) });
+    const executedReturn = await request.post(`${returnBase}/execute`, { headers: auth, data: returnEvidence });
+    expect(executedReturn.status(), await executedReturn.text()).toBe(200);
+    const executedReturnBody = (await executedReturn.json()).data;
+    expect(executedReturnBody).toMatchObject({ actionStatus: 'executed', dispositionAction: 'return', evidenceIds: ['file-rf026-return'] });
+    expect(executedReturnBody.executedBy).toBeTruthy();
+    const returnCertificate = await request.get(`${returnBase}/certificate`, { headers: auth });
+    expect(returnCertificate.status(), await returnCertificate.text()).toBe(200);
+    expect((await returnCertificate.json()).data).toMatchObject({ dispositionAction: 'return', evidenceIds: ['file-rf026-return'] });
+
+    // A cancellation needs its reason, and a cancelled action admits no
+    // execution, approval or certificate.
+    const cancelled = await record('destroy', [`log-rf026-cancel-${suffix}`]);
+    const cancelBase = `${apiBaseURL}/api/disposition-actions/${cancelled.dispositionActionId}`;
+    const approvedCancel = await request.post(`${cancelBase}/approve`, { headers: auth });
+    expect(approvedCancel.status(), await approvedCancel.text()).toBe(200);
+    expect((await request.post(`${cancelBase}/cancel`, { headers: auth, data: {} })).status()).toBe(422);
+    const reason = 'Destinação desnecessária — RF026 e2e fixture';
+    const cancelRes = await request.post(`${cancelBase}/cancel`, { headers: auth, data: { reason } });
+    expect(cancelRes.status(), await cancelRes.text()).toBe(200);
+    const cancelBody = (await cancelRes.json()).data;
+    expect(cancelBody).toMatchObject({ actionStatus: 'cancelled', cancellationReason: reason });
+    expect(cancelBody.cancelledBy).toBeTruthy();
+    expect((await request.post(`${cancelBase}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-cancel'] } })).status()).toBe(409);
+    expect((await request.post(`${cancelBase}/approve`, { headers: auth })).status()).toBe(409);
+    expect((await request.get(`${cancelBase}/certificate`, { headers: auth })).status()).toBe(409);
+    const stored = await request.get(cancelBase, { headers: auth });
+    expect(stored.status(), await stored.text()).toBe(200);
+    expect((await stored.json()).data.actionStatus).toBe('cancelled');
+  });
+
+  test('an execution a legal hold refuses is stored blocked, and re-approved after the release it executes (RF006 AC5, RF026 AC4 AC6, RNF022 AC4; #1509)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const retentionPolicyId = await createRetentionPolicy(request, admin, { reviewRequired: true });
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const affectedRecordIds = [`log-rf026-blocked-${suffix}`];
+
+    // Recorded and approved while no hold covers the record.
+    const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: auth,
+      data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction: 'destroy' },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const action = (await res.json()).data;
+    expect(action).toMatchObject({ actionStatus: 'planned', legalHold: false });
+    const base = `${apiBaseURL}/api/disposition-actions/${action.dispositionActionId}`;
+    const approved = await request.post(`${base}/approve`, { headers: auth });
+    expect(approved.status(), await approved.text()).toBe(200);
+
+    const holdRes = await request.post(`${apiBaseURL}/api/legal-holds`, {
+      headers: auth,
+      data: { targetEntityType: 'Log', targetEntityIds: affectedRecordIds, reason: 'Ordem judicial superveniente — RF026 e2e fixture' },
+    });
+    expect(holdRes.status(), await holdRes.text()).toBe(201);
+    const hold = (await holdRes.json()).data;
+
+    // The hold refuses the execution and the action is stored blocked.
+    const evidence = { evidenceIds: ['file-rf026-blocked'] };
+    const refused = await request.post(`${base}/execute`, { headers: auth, data: evidence });
+    expect(refused.status(), await refused.text()).toBe(409);
+    expect((await refused.json()).message).toMatch(/bloqueio legal ou ético ativo/);
+    const stored = await request.get(base, { headers: auth });
+    expect(stored.status(), await stored.text()).toBe(200);
+    expect((await stored.json()).data).toMatchObject({ actionStatus: 'blocked', legalHold: true });
+    expect((await request.get(`${base}/certificate`, { headers: auth })).status()).toBe(409);
+    expect((await request.post(`${base}/execute`, { headers: auth, data: evidence })).status()).toBe(409);
+
+    // Released, the blocked action is approved again and executes.
+    const releaseRes = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, {
+      headers: auth,
+      data: { releaseReason: 'Ordem revogada — RF026 e2e fixture' },
+    });
+    expect(releaseRes.status(), await releaseRes.text()).toBe(200);
+    const reapproved = await request.post(`${base}/approve`, { headers: auth });
+    expect(reapproved.status(), await reapproved.text()).toBe(200);
+    expect((await reapproved.json()).data.actionStatus).toBe('approved');
+    const executed = await request.post(`${base}/execute`, { headers: auth, data: evidence });
+    expect(executed.status(), await executed.text()).toBe(200);
+    expect((await executed.json()).data).toMatchObject({ actionStatus: 'executed', legalHold: false });
+  });
+
   test('rejects a disposition action whose retentionPolicyId does not resolve to a real policy (criterion 1)', async ({ request }) => {
     const admin = await realLogin(request);
 

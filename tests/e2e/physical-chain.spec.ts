@@ -4,6 +4,7 @@ import { deleteOrganizations } from './helpers/listOrganizations';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   seedCustodyFixture,
+  seedEthicsApproval,
   setApprovalStatus,
   countScanEvents,
   countSamples,
@@ -368,7 +369,10 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
 // #1363 (RF026 AC6): a specimen's destruction or transfer executes only when
 // compatible with custody, the collection's ethics approval and, for a
 // transfer, the participant's consent. The fixture specimen names no
-// participant, so its transfer can never pass the consent rule.
+// participant, so its transfer can never pass the consent rule. The
+// collection names an ethics approval (#1509): suspended, it refuses the
+// destruction with the ethics rule; restored, the destruction executes. Each
+// action is approved first, as a policy with review requires (RNF022 AC4).
 test.describe('Disposition compatibility (#1363, RF026 AC6) — real backend', () => {
   const organizationIds: string[] = [];
   let fixture: CustodyFixture | null = null;
@@ -380,7 +384,7 @@ test.describe('Disposition compatibility (#1363, RF026 AC6) — real backend', (
     await closeCustodyDb();
   });
 
-  test('a specimen destruction waits for custody, and a transfer without consent is refused', async ({ request }) => {
+  test('a specimen destruction waits for custody and the collection\'s ethics approval, and a transfer without consent is refused', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const org = await request.post(`${apiBaseURL}/api/organizations`, { headers: auth, data: { officialName: `#1363 custodian ${suffix}`, countryCode: 'BR' } });
@@ -388,6 +392,7 @@ test.describe('Disposition compatibility (#1363, RF026 AC6) — real backend', (
     const organizationId = (await org.json()).data.organizationId as string;
     organizationIds.push(organizationId);
     fixture = await seedCustodyFixture(suffix, organizationId);
+    const ethicsApprovalId = await seedEthicsApproval(fixture);
     const { specimenId, approvalId } = fixture;
 
     const policy = await request.post(`${apiBaseURL}/api/retention-policies`, {
@@ -400,7 +405,7 @@ test.describe('Disposition compatibility (#1363, RF026 AC6) — real backend', (
         jurisdiction: 'BR',
         retentionBasis: ['RF026 AC6 e2e fixture basis'],
         legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
-        reviewRequired: false,
+        reviewRequired: true,
       },
     });
     expect(policy.status(), await policy.text()).toBe(201);
@@ -411,18 +416,21 @@ test.describe('Disposition compatibility (#1363, RF026 AC6) — real backend', (
         data: { retentionPolicyId, entityType: 'Specimen', affectedRecordIds: [specimenId], dispositionAction },
       });
       expect(res.status(), await res.text()).toBe(201);
-      return `${apiBaseURL}/api/disposition-actions/${(await res.json()).data.dispositionActionId}`;
+      const base = `${apiBaseURL}/api/disposition-actions/${(await res.json()).data.dispositionActionId}`;
+      const approved = await request.post(`${base}/approve`, { headers: auth });
+      expect(approved.status(), await approved.text()).toBe(200);
+      return base;
     };
     const execute = (base: string) => request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-ac6'] } });
 
-    // No custody holds the specimen: the destruction is refused and stays planned.
+    // No custody holds the specimen: the destruction is refused and stays approved.
     const destroy = await plan('destroy');
     const refused = await execute(destroy);
     expect(refused.status(), await refused.text()).toBe(409);
     const refusedBody = await refused.json();
     expect(refusedBody.code).toBe('DISPOSITION_INCOMPATIBLE');
     expect(refusedBody.unsatisfied).toEqual([expect.objectContaining({ specimenId, rule: 'custody' })]);
-    expect((await (await request.get(destroy, { headers: auth })).json()).data.actionStatus).toBe('planned');
+    expect((await (await request.get(destroy, { headers: auth })).json()).data.actionStatus).toBe('approved');
 
     const custody = await request.post(`${apiBaseURL}/api/physical-chain/custody`, {
       headers: auth,
@@ -435,6 +443,19 @@ test.describe('Disposition compatibility (#1363, RF026 AC6) — real backend', (
     expect(transfer.status(), await transfer.text()).toBe(409);
     expect((await transfer.json()).unsatisfied).toEqual([expect.objectContaining({ specimenId, rule: 'consent' })]);
 
+    // In custody, a suspended ethics approval still refuses the destruction,
+    // naming the approval, and the action stays approved.
+    await setApprovalStatus(ethicsApprovalId, 'suspended');
+    const unethical = await execute(destroy);
+    expect(unethical.status(), await unethical.text()).toBe(409);
+    const unethicalBody = await unethical.json();
+    expect(unethicalBody.code).toBe('DISPOSITION_INCOMPATIBLE');
+    expect(unethicalBody.unsatisfied).toEqual([
+      expect.objectContaining({ specimenId, rule: 'ethics', message: expect.stringContaining(ethicsApprovalId) }),
+    ]);
+    expect((await (await request.get(destroy, { headers: auth })).json()).data.actionStatus).toBe('approved');
+
+    await setApprovalStatus(ethicsApprovalId, 'active');
     const executed = await execute(destroy);
     expect(executed.status(), await executed.text()).toBe(200);
     expect((await executed.json()).data.actionStatus).toBe('executed');
