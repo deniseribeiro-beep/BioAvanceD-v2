@@ -575,17 +575,12 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     // nested under `data` (auto-assign-sample.controller.js's success
     // response spreads `result.graphPersisted` alongside `data`).
     //
-    // The Neo4j hazard this assertion guards against: after the Mongo
-    // transaction commits, storageService.js runs a Cypher MERGE against
-    // the graph driver. If that driver is unhealthy or never wired up,
-    // the MERGE throws, the Mongo write gets compensated via
-    // rollbackAutoAssignedPosition, and the error is re-thrown into the
-    // controller's catch block as a 500 -- which reads exactly like a
-    // storage bug, not an absent graph driver. Without this assertion, a
-    // stack with no working Neo4j would make this whole test fail at a
-    // confusing, unrelated-looking step instead of failing exactly here
-    // with a clear cause; asserting graphPersisted: true is what stops a
-    // green run from silently meaning "no graph driver was wired".
+    // graphPersisted: true means the placement's STORAGE_POSITION_ASSIGNED
+    // outbox event was appended inside the same Mongo transaction as the
+    // placement (storageService.js, #1313); it is false only when no
+    // position was assigned. No Neo4j write runs on this request (#1312,
+    // RF023 AC8): the projector writes Sample-[:STORED_AT]->StoragePosition
+    // later, from the outbox.
     expect(autoAssignBody.graphPersisted).toBe(true);
 
     const afterAutoAssign = await request.get(`${apiBaseURL}/api/storage/sample/${sampleId}`, {

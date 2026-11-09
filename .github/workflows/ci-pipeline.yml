@@ -326,7 +326,9 @@ jobs:
   # #284: no job ran Playwright; this one runs the in-container e2e gate the
   # way it runs locally, on push/PR to main and to the integration branch
   # (#599). The job's exit is the gate's: 3 build, 4 stack up, 5 one-shot,
-  # 6 projection worker, otherwise the runner's own code.
+  # 6 projection worker, 7 the projection worker did not stop or restart,
+  # 8 the stopped-worker phase failed (its log in e2e-worker-stopped.txt),
+  # 9 the main run never started, otherwise the runner's own code (#1503).
   e2e-tests:
     name: E2E tests (in-container Playwright)
     runs-on: ubuntu-latest

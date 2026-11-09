@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'crypto';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -20,6 +20,7 @@ import {
   waitForTerminologyRelation,
   waitForSampleGovernedBy,
   countSampleNodes,
+  countEthicalConsentNodes,
   countGraph,
   closeNeo4jDriver,
   readConsentProjection,
@@ -377,6 +378,94 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     expect(edgeB.validTo).toBeNull();
     expect(edgeB.transactionTime).not.toBeNull();
     expect(edgeB.sampleId).toBe(edgeA.sampleId);
+  });
+});
+
+// #1503 (RF023 AC8, RNF019 C8, RNF028 C2): a write request persists to Mongo
+// and appends its outbox event, and returns without writing Neo4j itself (no
+// direct Neo4j write, no Mongo/Neo4j dual-write). Proven with the projection
+// worker stopped, so the only writer left that could touch the graph is the
+// request: scripts/e2e-gate.sh stops neo4j-projection-worker-test, runs the
+// test tagged @projection-worker-stopped alone with
+// E2E_PROJECTION_WORKER_STOPPED=1, and starts the worker again before the
+// full run, where this describe skips.
+test.describe('Outbox → Neo4j projection with the projection worker stopped (RF023 AC8, RNF019 C8, RNF028 C2) — real backend', () => {
+  test.skip(
+    process.env.E2E_PROJECTION_WORKER_STOPPED !== '1',
+    'runs only in the e2e gate phase that stops neo4j-projection-worker-test'
+  );
+
+  const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
+  const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
+  let mongoClient: MongoClient | null = null;
+
+  async function mongoDb() {
+    if (!mongoClient) {
+      mongoClient = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
+      await mongoClient.connect();
+    }
+    return mongoClient.db(mongoDbName);
+  }
+
+  test.afterAll(async () => {
+    await closeSeedDb();
+    await closeNeo4jDriver();
+    await closeOutboxDb();
+    if (mongoClient) {
+      await mongoClient.close();
+      mongoClient = null;
+    }
+  });
+
+  // Same signature fields as the RF023 describe above (normalizeSignaturePayload).
+  function signatureFields() {
+    return { signatureName: 'RF023 e2e signer', signatureImageBase64: 'e2e-fixture-signature' };
+  }
+
+  test('@projection-worker-stopped a created consent returns while Mongo holds it and its PENDING outbox event, and the graph is unchanged', async ({
+    request,
+  }) => {
+    const before = await countGraph();
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        consentTemplateId: participant.consentTemplateId,
+        responses: {},
+        ...signatureFields(),
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const consentId = String((await response.json())?.data?._id || '');
+    expect(consentId).toBeTruthy();
+
+    // Mongo holds the consent and the one CONSENT_UPSERTED event the request
+    // appended, still unleased (a new event is PENDING with 0 attempts).
+    const db = await mongoDb();
+    // The consents key's collection (config/collections.js, COLL_CONSENTS unset in the test stack).
+    expect(await db.collection('patientConsents').findOne({ _id: new ObjectId(consentId) })).not.toBeNull();
+    const queued = await consentOutboxEvents(consentId);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].status).toBe('PENDING');
+    expect(queued[0].attempts).toBe(0);
+
+    // Three of the worker's 1000 ms poll intervals: a running worker would
+    // have leased the row (leaseNextBatch is the only PENDING -> PROCESSING
+    // move), so a row still PENDING with 0 attempts shows nothing drained it.
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const after = await consentOutboxEvents(consentId);
+    expect(after).toHaveLength(1);
+    expect(after[0].eventId).toBe(queued[0].eventId);
+    expect(after[0].status).toBe('PENDING');
+    expect(after[0].attempts).toBe(0);
+
+    // The request returned and Neo4j was not written: no node for the
+    // consent and no change anywhere in the graph.
+    expect(await countEthicalConsentNodes(consentId)).toBe(0);
+    expect(await countGraph()).toEqual(before);
   });
 });
 

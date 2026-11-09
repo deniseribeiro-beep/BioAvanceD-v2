@@ -448,6 +448,52 @@ export async function countSampleNodes(sampleId: string): Promise<number> {
   }
 }
 
+/** #1503 (RF023 AC8): counts `:EthicalConsent` nodes with the given id. */
+export async function countEthicalConsentNodes(consentId: string): Promise<number> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run('MATCH (c:EthicalConsent {id: $consentId}) RETURN count(c) AS n', { consentId });
+    return Number(result.records[0].get('n'));
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * #1503 (RNF007 AC3, RNF028 C2): an EthicalConsent node's own properties and
+ * the properties of every node within two hops of it, either direction.
+ */
+export async function readConsentNeighbourhood(
+  consentId: string
+): Promise<{ consent: Record<string, unknown> | null; neighbours: Record<string, unknown>[] }> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (c:EthicalConsent {id: $consentId}) OPTIONAL MATCH (c)-[*1..2]-(n) ' +
+        'RETURN properties(c) AS consent, collect(DISTINCT properties(n)) AS neighbours',
+      { consentId }
+    );
+    if (result.records.length === 0) return { consent: null, neighbours: [] };
+    return { consent: result.records[0].get('consent'), neighbours: result.records[0].get('neighbours') };
+  } finally {
+    await session.close();
+  }
+}
+
+/** #1503 (RNF019 C8): nodes that are a TelemetryReading, or carry the reading's id or its sensor's id. */
+export async function countTelemetryReadingNodes(readingId: string, sensorId: string): Promise<number> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (n) WHERE n:TelemetryReading OR n.id = $readingId OR n.sensorId = $sensorId RETURN count(n) AS n',
+      { readingId, sensorId }
+    );
+    return Number(result.records[0].get('n'));
+  } finally {
+    await session.close();
+  }
+}
+
 /** #1325: every node and relationship in the database, the scope of the backup's Neo4j export. */
 export async function countGraph(): Promise<{ nodes: number; relationships: number }> {
   const session = getDriver().session({ database });
