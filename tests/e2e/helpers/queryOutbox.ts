@@ -8,6 +8,11 @@ import { MongoClient, Db } from 'mongodb';
  * spec can prove the event contract (RF023 AC1/AC2, RNF019 C2) and the
  * aggregate/event atomicity (RF023 AC3, RNF019 C1). Same URI and direct
  * connection as seedCustody.ts.
+ *
+ * #1500: pipeline-continuity.spec.ts reads a consent's outbox events and the
+ * projector's per-partition checkpoint through it too, and re-queues an
+ * applied event to prove the projector's version order and idempotent
+ * re-apply (RF023 AC4/AC6, RNF019 C3/C4).
  */
 
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
@@ -115,4 +120,76 @@ export async function countAbortedWrites(q: { linkedProject: string; barcode: st
       .countDocuments({ eventType: 'CUSTODY_EVENT_RECORDED', 'payload.to.boxId': q.boxId }),
     labels: await db.collection('labelIdentifiers').countDocuments({ encodedValue: q.barcode }),
   };
+}
+
+/** #1500: a consent's outbox events, in aggregateVersion order. */
+export async function consentOutboxEvents(consentId: string) {
+  const db = await getDb();
+  return db
+    .collection('graph_projection_outbox')
+    .find({ aggregateType: 'EthicalConsent', aggregateId: consentId })
+    .sort({ aggregateVersion: 1 })
+    .toArray();
+}
+
+/** #1500: the Neo4j projector's checkpoint for one partition (`<aggregateType>:<aggregateId>`). */
+export async function projectionCheckpoint(partitionKey: string) {
+  const db = await getDb();
+  return db
+    .collection<{ _id: string } & Record<string, unknown>>('graph_projection_checkpoints')
+    .findOne({ _id: 'neo4j-canonical-projection:' + partitionKey });
+}
+
+/**
+ * #1500 (RF023 AC6, RNF019 C3): puts applied events back in the queue, the
+ * at-least-once re-delivery a consumer must absorb. The same reset the
+ * dead-letter requeue applies, plus projectedAt so the re-delivery shows.
+ */
+export async function requeueOutboxEvents(eventIds: string[]): Promise<void> {
+  const db = await getDb();
+  await db.collection('graph_projection_outbox').updateMany(
+    { eventId: { $in: eventIds } },
+    {
+      $set: {
+        status: 'PENDING',
+        attempts: 0,
+        nextAttemptAt: null,
+        leaseUntil: null,
+        projectedAt: null,
+        processedAt: null,
+        updatedAt: new Date(),
+      },
+    }
+  );
+}
+
+/** #1500: polls until every event is PROJECTED with a projectedAt, or throws naming each one's last status. */
+export async function waitForOutboxEventsProjected(
+  eventIds: string[],
+  { timeoutMs = 15_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<void> {
+  const db = await getDb();
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen: Record<string, string> = {};
+
+  while (Date.now() < deadline) {
+    const docs = await db
+      .collection('graph_projection_outbox')
+      .find({ eventId: { $in: eventIds } })
+      .toArray();
+    lastSeen = {};
+    for (const id of eventIds) {
+      const doc = docs.find((d) => d.eventId === id);
+      lastSeen[id] = doc ? `${doc.status}${doc.projectedAt ? '' : ' (no projectedAt)'}` : 'no event found';
+    }
+    if (eventIds.every((id) => lastSeen[id] === 'PROJECTED')) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `waitForOutboxEventsProjected: timed out after ${timeoutMs}ms waiting for events to be PROJECTED ` +
+      `(last seen: ${eventIds.map((id) => `${id}=${lastSeen[id] ?? 'not read'}`).join(', ')})`
+  );
 }

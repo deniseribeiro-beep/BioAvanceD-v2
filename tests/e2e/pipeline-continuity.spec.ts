@@ -21,7 +21,17 @@ import {
   countSampleNodes,
   countGraph,
   closeNeo4jDriver,
+  readConsentProjection,
+  readStoredAtEdges,
+  waitForStoredAtEdge,
 } from './helpers/queryNeo4j';
+import {
+  consentOutboxEvents,
+  projectionCheckpoint,
+  requeueOutboxEvents,
+  waitForOutboxEventsProjected,
+  closeOutboxDb,
+} from './helpers/queryOutbox';
 import { countAllPoints } from './helpers/queryInflux';
 import {
   countEssentialReferenceDocs,
@@ -73,6 +83,7 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
   test.afterAll(async () => {
     await closeSeedDb();
     await closeNeo4jDriver();
+    await closeOutboxDb();
   });
 
   // POST /api/e-consent/consents (consent.service.js's createPatientConsent,
@@ -217,6 +228,150 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
 
     await waitForSampleGovernedBy(sampleMongoId, consentId);
     expect(await countSampleNodes(consentId)).toBe(0);
+  });
+
+  async function revokeConsent(request: any, token: string, consentId: string) {
+    const revoke = await request.post(`${apiBaseURL}/api/e-consent/consents/${consentId}/revoke`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(revoke.ok()).toBe(true);
+  }
+
+  // #1500 (RF023 AC4, RNF019 C4): the revoke is sent without waiting for the
+  // create's projection, so both events may share one lease batch; the
+  // projector must still apply v1 before v2. The node turns REVOKED inside
+  // the apply, before the checkpoint and the PROJECTED mark are written, so
+  // the outbox and checkpoint are read only once both events are PROJECTED.
+  test("a consent's create and revoke apply in aggregateVersion order and leave the projector's checkpoint at the revoke (RF023 AC4, RNF019 C4)", async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const consentId = await signConsent(request, admin.token, participant);
+    await revokeConsent(request, admin.token, consentId);
+
+    await waitForEthicalConsentStatus(consentId, 'REVOKED');
+    const queued = await consentOutboxEvents(consentId);
+    await waitForOutboxEventsProjected(queued.map((e) => String(e.eventId)));
+
+    const events = await consentOutboxEvents(consentId);
+    expect(events).toHaveLength(2);
+    expect(events.map((e) => e.aggregateVersion)).toEqual([1, 2]);
+    expect(events.map((e) => e.eventType)).toEqual(['CONSENT_UPSERTED', 'CONSENT_REVOKED']);
+    expect(events.map((e) => e.status)).toEqual(['PROJECTED', 'PROJECTED']);
+    expect(new Date(events[0].projectedAt).getTime()).toBeLessThanOrEqual(new Date(events[1].projectedAt).getTime());
+
+    const checkpoint = await projectionCheckpoint('EthicalConsent:' + consentId);
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint!.lastAggregateVersion).toBe(2);
+    expect(checkpoint!.lastEventId).toBe(events[1].eventId);
+    expect(checkpoint!.partitionKey).toBe('EthicalConsent:' + consentId);
+    expect(checkpoint!.projectorName).toBe('neo4j-canonical-projection');
+  });
+
+  // #1500 (RF023 AC6, RNF019 C3): delivery is at-least-once, so an applied
+  // event can come back. The projector must mark it PROJECTED again without
+  // re-applying it: a re-apply would rewrite the node's updatedAt and
+  // lastProjectionAt, and move the checkpoint's updatedAt.
+  test('re-queuing an applied consent event leaves the projected node and the checkpoint unchanged (RF023 AC6, RNF019 C3)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const consentId = await signConsent(request, admin.token, participant);
+    await waitForEthicalConsentStatus(consentId, 'ACTIVE');
+    await revokeConsent(request, admin.token, consentId);
+    await waitForEthicalConsentStatus(consentId, 'REVOKED');
+
+    const events = await consentOutboxEvents(consentId);
+    expect(events).toHaveLength(2);
+    const eventIds = events.map((e) => String(e.eventId));
+    await waitForOutboxEventsProjected(eventIds);
+
+    const before = await readConsentProjection(consentId);
+    expect(before.consent?.status).toBe('REVOKED');
+    const cpBefore = await projectionCheckpoint('EthicalConsent:' + consentId);
+    expect(cpBefore).not.toBeNull();
+
+    await requeueOutboxEvents(eventIds);
+    await waitForOutboxEventsProjected(eventIds);
+
+    const after = await readConsentProjection(consentId);
+    expect(after).toEqual(before);
+    expect(after.consent?.status).toBe('REVOKED');
+    expect(after.consent?.lastProjectionEventId).toBe(eventIds[1]);
+
+    const cpAfter = await projectionCheckpoint('EthicalConsent:' + consentId);
+    expect(cpAfter).not.toBeNull();
+    expect(cpAfter!.lastAggregateVersion).toBe(2);
+    expect(cpAfter!.lastEventId).toBe(cpBefore!.lastEventId);
+    expect(cpAfter!.updatedAt).toEqual(cpBefore!.updatedAt);
+  });
+
+  // #1500 (RF023 AC5): a placement projects as a STORED_AT edge carrying
+  // validTime [validFrom, validTo) and the projection's transactionTime; the
+  // next placement closes the open edge at its own validFrom instead of
+  // deleting it. Each edge is read by the box it points into, since the
+  // event keys the Sample by the id auto-assign received.
+  test('a placement projects as a STORED_AT edge with validTime [from,to) and transactionTime, closed by the next placement (RF023 AC5)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const homeBox = await seedStorageBoxLocation();
+    seededBoxes.push(homeBox);
+    const boxA = await seedStorageBoxLocation();
+    seededBoxes.push(boxA);
+    const boxB = await seedStorageBoxLocation();
+    seededBoxes.push(boxB);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'RF023 #1500 placement validTime e2e fixture',
+        registeredAt: new Date().toISOString(),
+        boxId: homeBox.boxId,
+        positionCode: homeBox.positionCode,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId;
+    expect(specimenId).toBeTruthy();
+
+    async function placeInto(boxId: string) {
+      const release = await request.delete(`${apiBaseURL}/api/storage/release/${specimenId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(release.status()).toBe(200);
+      const assign = await request.post(`${apiBaseURL}/api/storage/allocate/auto`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { sampleId: specimenId, boxId },
+      });
+      expect(assign.status()).toBe(201);
+      expect((await assign.json()).success).toBe(true);
+    }
+
+    await placeInto(boxA.boxId);
+    const edgesA = await waitForStoredAtEdge(boxA.boxId);
+    expect(edgesA).toHaveLength(1);
+    expect(edgesA[0].validFrom).not.toBeNull();
+    expect(edgesA[0].transactionTime).not.toBeNull();
+    expect(edgesA[0].validTo).toBeNull();
+
+    await placeInto(boxB.boxId);
+    const edgesB = await waitForStoredAtEdge(boxB.boxId);
+    expect(edgesB).toHaveLength(1);
+    await expect
+      .poll(async () => (await readStoredAtEdges(boxA.boxId))[0]?.validTo ?? null, { timeout: 15_000 })
+      .not.toBeNull();
+
+    const [edgeA] = await readStoredAtEdges(boxA.boxId);
+    const [edgeB] = await readStoredAtEdges(boxB.boxId);
+    expect(edgeA.validTo).toBe(edgeB.validFrom);
+    expect(Date.parse(edgeA.validFrom!)).toBeLessThan(Date.parse(edgeA.validTo!));
+    expect(edgeB.validTo).toBeNull();
+    expect(edgeB.transactionTime).not.toBeNull();
+    expect(edgeB.sampleId).toBe(edgeA.sampleId);
   });
 });
 

@@ -101,6 +101,53 @@ export async function readConsentProjection(consentId: string): Promise<{ consen
   }
 }
 
+/** #1500 (RF023 AC5): one STORED_AT placement edge into a box, its times as ISO strings. */
+export interface StoredAtEdge {
+  sampleId: string | null;
+  position: string | null;
+  validFrom: string | null;
+  validTo: string | null;
+  transactionTime: string | null;
+}
+
+/** #1500 (RF023 AC5): every Sample-[:STORED_AT]->StoragePosition edge into `boxId`. */
+export async function readStoredAtEdges(boxId: string): Promise<StoredAtEdge[]> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (s:Sample)-[r:STORED_AT]->(p:StoragePosition {boxId: $boxId}) ' +
+        'RETURN s.id AS sampleId, p.position AS position, toString(r.validFrom) AS validFrom, ' +
+        'toString(r.validTo) AS validTo, toString(r.transactionTime) AS transactionTime',
+      { boxId }
+    );
+    return result.records.map((record) => ({
+      sampleId: record.get('sampleId') ?? null,
+      position: record.get('position') ?? null,
+      validFrom: record.get('validFrom') ?? null,
+      validTo: record.get('validTo') ?? null,
+      transactionTime: record.get('transactionTime') ?? null,
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
+/** #1500: polls until a STORED_AT edge into `boxId` exists and returns the edges, or throws on timeout. */
+export async function waitForStoredAtEdge(
+  boxId: string,
+  { timeoutMs = 15_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<StoredAtEdge[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const edges = await readStoredAtEdges(boxId);
+    if (edges.length > 0) {
+      return edges;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`waitForStoredAtEdge: timed out after ${timeoutMs}ms waiting for a STORED_AT edge into box ${boxId}`);
+}
+
 /**
  * RF009 (#304) fixture: seeds a bare `:Sample {id}` node plus an optional
  * `DERIVED_FROM` edge to a parent's node, so propagateCompromise's
