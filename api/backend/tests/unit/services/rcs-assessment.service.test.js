@@ -283,6 +283,26 @@ describe('rcs-assessment.service', () => {
       expect(await getGovernanceEvidenceById(db, null)).toBeNull();
     });
 
+    // RNF018 AC5 (#1524), V2E-0532: the evidence row keeps the URI of each
+    // reference that resolved, and leaves a non-resolved one out.
+    it('writes the resolved references into the evidence row evidenceRefs', async () => {
+      const db = createFakeDb();
+      const hash = `sha256:${'0'.repeat(64)}`;
+      const rcsInput = rcsCertificationService.readInput({
+        ...certified().rcs_input,
+        governanceEvidenceResolution: {
+          documentation: [
+            { uri: 'urn:bioavanced:collection-governance-approval:1', hash, status: 'resolved' },
+            { uri: 'urn:bioavanced:collection-governance-approval:2', hash, status: 'hash_mismatch' },
+          ],
+        },
+      });
+      await recordAssessment(db, 'SPEC-1', { ...rcsCertificationService.certify(rcsInput), rcs_input: rcsInput });
+
+      const [evidence] = db.collections.rcsGovernanceEvidenceSnapshots.docs;
+      expect(evidence.evidenceRefs).toEqual(['urn:bioavanced:collection-governance-approval:1']);
+    });
+
     it('keeps the score, grade, route, governance status, penalties and trace of the result', async () => {
       const db = createFakeDb();
       const result = certified();

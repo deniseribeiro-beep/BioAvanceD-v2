@@ -208,6 +208,20 @@ class RcsCertificationService {
         ? true
         : null;
     };
+    // RNF018 AC5 (#1524), V2E-0532: the URIs of the references that resolved,
+    // in category then presented order, each once (see
+    // docs/decisions/2026-11-10-rcs-governance-evidence-refs.md).
+    const evidenceRefs = [];
+    for (const category of Object.keys(EVIDENCE_CATEGORIES)) {
+      const entries = resolution[category];
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        const { uri, status } = normalizeObject(entry);
+        if (status !== 'resolved') continue;
+        if (typeof uri !== 'string' || uri.trim() === '') continue;
+        if (!evidenceRefs.includes(uri)) evidenceRefs.push(uri);
+      }
+    }
 
     let terminologyValid = null;
     if (failed(TERMINOLOGY_FAILURE_CODES)) terminologyValid = false;
@@ -236,6 +250,7 @@ class RcsCertificationService {
       unresolvedReasons,
       gateResult: gateFailed ? 'fail' : null,
       failureReasons: gateFailed ? [...result.governance_failure_reasons] : [],
+      evidenceRefs,
       validationRuleSetVersion: ruleSet.version,
       validationRuleSetChecksum: ruleSet.checksum,
     };

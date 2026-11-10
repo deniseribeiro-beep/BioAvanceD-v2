@@ -134,6 +134,12 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
       expect(response.body.data.governance_evidence).toMatchObject({
         traceabilityOk: true, monitoringOk: true, documentationOk: true, semanticCompatible: null, gateResult: null,
       });
+      // RNF018 AC5 (#1524), V2E-0532: the URIs of the resolved references.
+      expect(response.body.data.governance_evidence.evidenceRefs).toEqual([
+        'urn:bioavanced:custody-event:evt-1',
+        'urn:bioavanced:telemetry-exposure-summary:tes-1',
+        'urn:bioavanced:collection-governance-approval:apr-1',
+      ]);
     });
 
     it('refuses certification when a reference is missing its hash', async () => {
@@ -151,6 +157,11 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
       expect(response.body.data.governance_evidence).toMatchObject({
         traceabilityOk: true, monitoringOk: true, documentationOk: false, gateResult: 'fail',
       });
+      // RNF018 AC5 (#1524), V2E-0532: the reference missing its hash is left out.
+      expect(response.body.data.governance_evidence.evidenceRefs).toEqual([
+        'urn:bioavanced:custody-event:evt-1',
+        'urn:bioavanced:telemetry-exposure-summary:tes-1',
+      ]);
     });
   });
 

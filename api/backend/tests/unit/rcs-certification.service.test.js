@@ -404,6 +404,47 @@ describe('evaluateGovernanceEvidence', () => {
       expect(rcsService.certify(input)).toEqual(rcsService.certify(payload));
       expect(rcsService.certify(input).governance_status).toBe(0);
     });
+
+    // RNF018 AC5 (#1524), V2E-0532: evidenceRefs lists the URIs of the
+    // references that resolved, in category then presented order, each once.
+    const refsOf = (resolution) => rcsService.evaluateGovernanceEvidence(rcsService.readInput(
+      resolution === undefined ? base : { ...base, governanceEvidenceResolution: resolution },
+    )).evidenceRefs;
+    const allUris = [
+      'urn:bioavanced:custody-event:1',
+      'urn:bioavanced:telemetry-exposure-summary:1',
+      'urn:bioavanced:collection-governance-approval:1',
+    ];
+
+    it('lists the URI of every resolved reference in evidenceRefs', () => {
+      expect(refsOf(resolvedAll)).toEqual(allUris);
+    });
+
+    it('leaves a non-resolved reference out of evidenceRefs and keeps a repeated URI once', () => {
+      expect(refsOf({
+        ...resolvedAll,
+        traceability: [
+          entry('custody-event'),
+          { uri: 'urn:bioavanced:custody-event:2', hash: `sha256:${'0'.repeat(64)}`, status: 'hash_mismatch' },
+          entry('custody-event'),
+        ],
+      })).toEqual(allUris);
+    });
+
+    it('gives an empty evidenceRefs when no resolution is presented', () => {
+      expect(refsOf(undefined)).toEqual([]);
+    });
+
+    it('leaves a resolved entry with no usable URI out of evidenceRefs', () => {
+      expect(refsOf({
+        ...resolvedAll,
+        traceability: [
+          { uri: null, hash: null, status: 'resolved' },
+          { uri: '  ', hash: null, status: 'resolved' },
+          { uri: null, hash: null, status: 'unresolvable_uri' },
+        ],
+      })).toEqual(allUris.slice(1));
+    });
   });
 
   it('names the workflow-context mismatch reason for the wfMismatch row', () => {

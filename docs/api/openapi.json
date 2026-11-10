@@ -40134,7 +40134,7 @@
                         "data": {
                           "type": "object",
                           "additionalProperties": true,
-                          "description": "The certification result, with rcs_input, deprecated_legacy_fields, governance_evidence and, when the payload carried one, qualification_context. governance_evidence holds the six governance criteria (metadataComplete, terminologyValid, traceabilityOk, monitoringOk, documentationOk, semanticCompatible), each true, false or null, with unresolvedReasons, gateResult ('fail' or null), failureReasons and the validation rule set's version and checksum; traceabilityOk, monitoringOk and documentationOk are true only when governanceEvidence references of that category were presented and all resolved."
+                          "description": "The certification result, with rcs_input, deprecated_legacy_fields, governance_evidence and, when the payload carried one, qualification_context. governance_evidence holds the six governance criteria (metadataComplete, terminologyValid, traceabilityOk, monitoringOk, documentationOk, semanticCompatible), each true, false or null, with unresolvedReasons, gateResult ('fail' or null), failureReasons, evidenceRefs (the URIs of the references that resolved) and the validation rule set's version and checksum; traceabilityOk, monitoringOk and documentationOk are true only when governanceEvidence references of that category were presented and all resolved."
                         }
                       },
                       "required": [
