@@ -598,6 +598,8 @@ test.describe('Outbox lease, retry, backoff and dead letter (RF023 AC7, RNF019 C
     const expired = await readOutboxEvent(eventId);
     expect(expired!.lastError).toBe('processing_lease_expired');
     expect(expired!.leaseUntil).toBeNull();
+    // #1527: the timeout keeps the one try the seeded lease counted.
+    expect(expired!.attempts).toBe(1);
     expect(expired!.updatedAt.getTime()).toBeGreaterThan(now - 60_000);
   });
 });

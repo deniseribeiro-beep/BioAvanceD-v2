@@ -226,6 +226,7 @@ class Neo4jOutboxService {
     const now = new Date();
     const staleProcessingBefore = new Date(now.getTime() - Number(options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000));
 
+    // #1527 (RNF019 C5): the lease already counted this try; a timeout does not count it again.
     await collection.updateMany(
       {
         status: 'PROCESSING',
@@ -237,7 +238,6 @@ class Neo4jOutboxService {
           leaseUntil: null,
           updatedAt: new Date()
         },
-        $inc: { attempts: 1 },
         $setOnInsert: { lastError: 'leased_processing_timeout' }
       }
     );
@@ -278,6 +278,7 @@ class Neo4jOutboxService {
     const now = new Date();
     const leaseMs = Number(options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000);
     const staleBefore = new Date(now.getTime() - leaseMs);
+    // #1527 (RNF019 C5): the lease already counted this try; a timeout does not count it again.
     const result = await collection.updateMany(
       {
         status: 'PROCESSING',
@@ -289,8 +290,7 @@ class Neo4jOutboxService {
           leaseUntil: null,
           updatedAt: now,
           lastError: 'processing_lease_expired'
-        },
-        $inc: { attempts: 1 }
+        }
       }
     );
     return result.modifiedCount || 0;
