@@ -77,6 +77,9 @@
     "/api/imaging-derived-data",
     "/api/imaging-studies",
     "/api/networks",
+    "/api/research-resources",
+    "/api/research-resource-collections",
+    "/api/research-resource-biobanks",
     "/api/biomarker-associations",
     "/api/assays",
     "/api/assays/{assayId}/files",
@@ -376,6 +379,18 @@
     {
       "name": "networks",
       "description": "/api/networks: the networks (name, juristic person, countries, contact and members)."
+    },
+    {
+      "name": "research-resources",
+      "description": "/api/research-resources: the research resources (name, contact, sex categories, sample types and design) a collection and a biobank are linked through (RNF008 AC3)."
+    },
+    {
+      "name": "research-resource-collections",
+      "description": "/api/research-resource-collections: the links from a collection to the research resource it belongs to, with a role and an effective period (RNF008 AC3)."
+    },
+    {
+      "name": "research-resource-biobanks",
+      "description": "/api/research-resource-biobanks: the links from a biobank to a research resource it holds, with a role and an effective period (RNF008 AC3)."
     },
     {
       "name": "biomarker-associations",
@@ -47302,6 +47317,1389 @@
         }
       }
     },
+    "/api/research-resources": {
+      "get": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "List the research resources",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The research-resources records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ResearchResourceRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "Create a ResearchResource",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; researchResourceId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a name that is not a non-empty string, a contactInformation that is not a non-empty array of contacts each with a filled value, a sexCategories that is not a non-empty array of non-empty codes, a sampleTypes that is not a non-empty array, a url that is not a URI, a sampleCollectionSettings, researchResourceDesigns or inclusionCriteria that is not a list of non-empty codes, a datasetTypes, storageTemperatures, diseases, useAccessConditions or publications that is not a list, an ageLow or ageHigh that is not a finite number, or a totalNumberOfSubjects that is not a non-negative integer. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "researchResourceId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "acronym": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A URI that new URL() accepts when sent."
+                  },
+                  "contactInformation": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "description": "Required, a non-empty array of contacts, each an object with at least one non-empty string value."
+                  },
+                  "description": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "sampleSource": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "sexCategories": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array of non-empty codes."
+                  },
+                  "ageLow": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "A finite number when sent."
+                  },
+                  "ageHigh": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "A finite number when sent."
+                  },
+                  "ageLowUnit": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "ageHighUnit": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "datasetTypes": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "sampleTypes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {},
+                    "description": "Required, a non-empty array of CodeableConcepts; its entries are not checked."
+                  },
+                  "storageTemperatures": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "diseases": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of diseases when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "sampleCollectionSettings": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "researchResourceDesigns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "useAccessConditions": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "researchResourceStatus": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "totalNumberOfSubjects": {
+                    "type": "integer",
+                    "nullable": true,
+                    "minimum": 0,
+                    "description": "A non-negative integer when sent."
+                  },
+                  "inclusionCriteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "publications": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of identifiers when sent; its entries are not checked; stored as [] when omitted."
+                  }
+                },
+                "required": [
+                  "name",
+                  "contactInformation",
+                  "sexCategories",
+                  "sampleTypes"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The ResearchResource is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resources/{id}": {
+      "get": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "Read a ResearchResource",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the researchResourceId as a number, the researchResourceId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its researchResourceId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "Update a ResearchResource",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches), keeps the allowed keys the body names, and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its researchResourceId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; researchResourceId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "acronym": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A URI that new URL() accepts when sent."
+                  },
+                  "contactInformation": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "description": "Required, a non-empty array of contacts, each an object with at least one non-empty string value."
+                  },
+                  "description": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "sampleSource": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "sexCategories": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array of non-empty codes."
+                  },
+                  "ageLow": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "A finite number when sent."
+                  },
+                  "ageHigh": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "A finite number when sent."
+                  },
+                  "ageLowUnit": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "ageHighUnit": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "datasetTypes": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "sampleTypes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {},
+                    "description": "Required, a non-empty array of CodeableConcepts; its entries are not checked."
+                  },
+                  "storageTemperatures": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "diseases": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of diseases when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "sampleCollectionSettings": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "researchResourceDesigns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "useAccessConditions": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "researchResourceStatus": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "totalNumberOfSubjects": {
+                    "type": "integer",
+                    "nullable": true,
+                    "minimum": 0,
+                    "description": "A non-negative integer when sent."
+                  },
+                  "inclusionCriteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "publications": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of identifiers when sent; its entries are not checked; stored as [] when omitted."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ResearchResource is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "Delete a ResearchResource",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its researchResourceId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResource is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resource-collections": {
+      "get": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "List the research resource collection links",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The research-resource-collections records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ResearchResourceCollectionRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "Create a ResearchResourceCollection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; associationId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a researchResourceId or collectionId that is not a non-empty string, an associationRole that is sent but empty, or an effectivePeriod that is not an object, has a bound that is not a date, or ends at or before its start. The 404 is checked after the 422: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or collectionId names no collection (looked up in collections by collectionId). The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "associationId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "researchResourceId": {
+                    "type": "string",
+                    "description": "Required, the researchResourceId of an existing research resource.",
+                    "minLength": 1
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "description": "Required, the collectionId of an existing collection.",
+                    "minLength": 1
+                  },
+                  "associationRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A non-empty code when sent."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "researchResourceId",
+                  "collectionId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The ResearchResourceCollection is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceCollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "A reference is unresolved: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or collectionId names no collection (looked up in collections by collectionId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resource-collections/{id}": {
+      "get": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "Read a ResearchResourceCollection",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the associationId as a number, the associationId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceCollection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceCollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "Update a ResearchResourceCollection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches), keeps the allowed keys the body names, and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. The 404 is also an unresolved reference, checked on the keys the body sends: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or collectionId names no collection (looked up in collections by collectionId). There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; associationId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "researchResourceId": {
+                    "type": "string",
+                    "description": "Required, the researchResourceId of an existing research resource.",
+                    "minLength": 1
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "description": "Required, the collectionId of an existing collection.",
+                    "minLength": 1
+                  },
+                  "associationRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A non-empty code when sent."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceCollection is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceCollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No record matches the id, or a reference is unresolved: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or collectionId names no collection (looked up in collections by collectionId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "Delete a ResearchResourceCollection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceCollection is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resource-biobanks": {
+      "get": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "List the research resource biobank links",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The research-resource-biobanks records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ResearchResourceBiobankRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "Create a ResearchResourceBiobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; associationId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a researchResourceId or biobankId that is not a non-empty string, an associationRole that is sent but empty, or an effectivePeriod that is not an object, has a bound that is not a date, or ends at or before its start. The 404 is checked after the 422: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or biobankId names no biobank (looked up in biobanks by biobankId). The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "associationId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "researchResourceId": {
+                    "type": "string",
+                    "description": "Required, the researchResourceId of an existing research resource.",
+                    "minLength": 1
+                  },
+                  "biobankId": {
+                    "type": "string",
+                    "description": "Required, the biobankId of an existing biobank.",
+                    "minLength": 1
+                  },
+                  "associationRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A non-empty code when sent."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "researchResourceId",
+                  "biobankId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The ResearchResourceBiobank is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceBiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "A reference is unresolved: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or biobankId names no biobank (looked up in biobanks by biobankId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resource-biobanks/{id}": {
+      "get": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "Read a ResearchResourceBiobank",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the associationId as a number, the associationId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceBiobank.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceBiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "Update a ResearchResourceBiobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches), keeps the allowed keys the body names, and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. The 404 is also an unresolved reference, checked on the keys the body sends: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or biobankId names no biobank (looked up in biobanks by biobankId). There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; associationId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "researchResourceId": {
+                    "type": "string",
+                    "description": "Required, the researchResourceId of an existing research resource.",
+                    "minLength": 1
+                  },
+                  "biobankId": {
+                    "type": "string",
+                    "description": "Required, the biobankId of an existing biobank.",
+                    "minLength": 1
+                  },
+                  "associationRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A non-empty code when sent."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceBiobank is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceBiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No record matches the id, or a reference is unresolved: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or biobankId names no biobank (looked up in biobanks by biobankId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "Delete a ResearchResourceBiobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceBiobank is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/biomarker-associations": {
       "get": {
         "tags": [
@@ -57568,6 +58966,261 @@
           "networkType": {
             "type": "string",
             "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "ResearchResourceRecord": {
+        "type": "object",
+        "description": "A ResearchResource document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "researchResourceId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "acronym": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "nullable": true,
+            "description": "A URI that new URL() accepts when sent."
+          },
+          "contactInformation": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {}
+            },
+            "description": "Required, a non-empty array of contacts, each an object with at least one non-empty string value."
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "sampleSource": {
+            "type": "string",
+            "nullable": true
+          },
+          "sexCategories": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Required, a non-empty array of non-empty codes."
+          },
+          "ageLow": {
+            "type": "number",
+            "nullable": true,
+            "description": "A finite number when sent."
+          },
+          "ageHigh": {
+            "type": "number",
+            "nullable": true,
+            "description": "A finite number when sent."
+          },
+          "ageLowUnit": {
+            "type": "string",
+            "nullable": true
+          },
+          "ageHighUnit": {
+            "type": "string",
+            "nullable": true
+          },
+          "datasetTypes": {
+            "type": "array",
+            "items": {},
+            "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "sampleTypes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {},
+            "description": "Required, a non-empty array of CodeableConcepts; its entries are not checked."
+          },
+          "storageTemperatures": {
+            "type": "array",
+            "items": {},
+            "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "diseases": {
+            "type": "array",
+            "items": {},
+            "description": "A list of diseases when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "sampleCollectionSettings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "researchResourceDesigns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "useAccessConditions": {
+            "type": "array",
+            "items": {},
+            "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "researchResourceStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "totalNumberOfSubjects": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "description": "A non-negative integer when sent."
+          },
+          "inclusionCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "publications": {
+            "type": "array",
+            "items": {},
+            "description": "A list of identifiers when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "ResearchResourceCollectionRecord": {
+        "type": "object",
+        "description": "A ResearchResourceCollection document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "associationId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "researchResourceId": {
+            "type": "string",
+            "description": "Required, the researchResourceId of an existing research resource.",
+            "minLength": 1
+          },
+          "collectionId": {
+            "type": "string",
+            "description": "Required, the collectionId of an existing collection.",
+            "minLength": 1
+          },
+          "associationRole": {
+            "type": "string",
+            "nullable": true,
+            "description": "A non-empty code when sent."
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "nullable": true,
+            "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "nullable": true
+              },
+              "end": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "ResearchResourceBiobankRecord": {
+        "type": "object",
+        "description": "A ResearchResourceBiobank document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "associationId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "researchResourceId": {
+            "type": "string",
+            "description": "Required, the researchResourceId of an existing research resource.",
+            "minLength": 1
+          },
+          "biobankId": {
+            "type": "string",
+            "description": "Required, the biobankId of an existing biobank.",
+            "minLength": 1
+          },
+          "associationRole": {
+            "type": "string",
+            "nullable": true,
+            "description": "A non-empty code when sent."
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "nullable": true,
+            "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "nullable": true
+              },
+              "end": {
+                "type": "string",
+                "nullable": true
+              }
+            }
           },
           "createdAt": {
             "type": "string",

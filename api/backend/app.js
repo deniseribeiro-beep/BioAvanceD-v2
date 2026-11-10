@@ -443,6 +443,25 @@ app.use("/api/networks", createMasterDataRouter({
   model: require("./src/models/Network"),
   validateReferences: require("./src/services/institutionalReferenceValidator").validateNetworkReferences
 }));
+// RNF008 AC3 (#1496): ResearchResource and its links to a Collection and a
+// Biobank, the dictionary's only path from a collection to its biobank.
+app.use("/api/research-resources", createMasterDataRouter({
+  collectionName: "researchResources",
+  idField: "researchResourceId",
+  model: require("./src/models/ResearchResource")
+}));
+app.use("/api/research-resource-collections", createMasterDataRouter({
+  collectionName: "researchResourceCollections",
+  idField: "associationId",
+  model: require("./src/models/ResearchResourceCollection"),
+  validateReferences: require("./src/services/institutionalReferenceValidator").validateResearchResourceCollectionReferences
+}));
+app.use("/api/research-resource-biobanks", createMasterDataRouter({
+  collectionName: "researchResourceBiobanks",
+  idField: "associationId",
+  model: require("./src/models/ResearchResourceBiobank"),
+  validateReferences: require("./src/services/institutionalReferenceValidator").validateResearchResourceBiobankReferences
+}));
 // ELM-0275..0285 (#1206): BiomarkerAssociation reference data, entered by a
 // Coordenador or Administrador; each association names its evidence (1..*).
 app.use("/api/biomarker-associations", createMasterDataRouter({
