@@ -243,6 +243,8 @@ module.exports = {
   COLL_RACK_LOCATION_ASSIGNMENTS: process.env.COLL_RACK_LOCATION_ASSIGNMENTS || 'rackLocationAssignments',
   COLL_TELEMETRY_EXPOSURE_SUMMARIES: process.env.COLL_TELEMETRY_EXPOSURE_SUMMARIES || 'telemetryExposureSummaries',
   COLL_STORAGE_LOCATIONS: process.env.COLL_STORAGE_LOCATIONS || 'storageLocations',
+  COLL_STORAGE_RACKS: process.env.COLL_STORAGE_RACKS || 'storageRacks',
+  COLL_STORAGE_POSITIONS: process.env.COLL_STORAGE_POSITIONS || 'storagePositions',
   COLL_OPERATIONAL_STATE_DECISIONS: process.env.COLL_OPERATIONAL_STATE_DECISIONS || 'operationalStateDecisions',
   COLL_LABEL_IDENTIFIERS: process.env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
   COLL_SCAN_EVENTS: process.env.COLL_SCAN_EVENTS || 'scanEvents',

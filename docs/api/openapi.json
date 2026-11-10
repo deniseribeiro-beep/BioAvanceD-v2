@@ -37820,7 +37820,7 @@
           "physical-chain"
         ],
         "summary": "Locate a rack at a storage location",
-        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RULE-035: a rack is in one location at a time. The rack is in scope through the location: 404 LOCATION_NOT_FOUND, 403 LOCATION_OUT_OF_SCOPE, and 422 LOCATION_UNUSABLE when the location or an ancestor is not active (RF017 AC8). The 409 is an interval that overlaps another location of the rack, history included (ASSIGNMENT_OVERLAP); the 422 is also a missing storageLocationId, an unknown assignmentStatus or a removedAt not after placedAt (VALIDATION_ERROR). The rack itself is not looked up. The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RULE-035: a rack is in one location at a time. The rack is in scope through the location: 404 LOCATION_NOT_FOUND, 403 LOCATION_OUT_OF_SCOPE, and 422 LOCATION_UNUSABLE when the location or an ancestor is not active (RF017 AC8). A caller of organization scope must also hold the location a prepared rack's own record names, if any (403 LOCATION_OUT_OF_SCOPE). The 409 is an interval that overlaps another location of the rack, history included (ASSIGNMENT_OVERLAP); the 422 is also a missing storageLocationId, an unknown assignmentStatus or a removedAt not after placedAt (VALIDATION_ERROR). The rack itself is not looked up. The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
         "security": [
           {
             "bearerAuth": []
@@ -38145,6 +38145,344 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/racks": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Create a rack and its grid of storage positions",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF016 AC2: writes the StorageRack and one StoragePosition per cell of its grid, rows A upwards and columns 01 upwards (top_left_origin). An omitted grid field takes the approved fixture: cryogenic_rack, 8 rows by 12 columns, alpha_numeric, top_left_origin, so 96 positions. A storageLocationId given must name a location of the caller's organization: 404 LOCATION_NOT_FOUND, 403 LOCATION_OUT_OF_SCOPE; and a usable one: 422 LOCATION_UNUSABLE when it or an ancestor is not active (RF017 AC8). A caller of organization scope must also hold the location the rack is already open at, if any (LOCATION_OUT_OF_SCOPE). The 409 is a rack id already created (RACK_EXISTS); the 422 a storageRackId given that is not a non-empty string, or a grid the model refuses, such as a rowCount outside 1-26, a columnCount outside 1-99 or an unknown coordinateScheme, orientationRule or status (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "storageRackId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A non-empty string; minted when absent."
+                  },
+                  "rackType": {
+                    "type": "string",
+                    "description": "cryogenic_rack when absent."
+                  },
+                  "rowCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 26,
+                    "description": "8 when absent."
+                  },
+                  "columnCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99,
+                    "description": "12 when absent."
+                  },
+                  "coordinateScheme": {
+                    "type": "string",
+                    "enum": [
+                      "alpha_numeric"
+                    ]
+                  },
+                  "orientationRule": {
+                    "type": "string",
+                    "enum": [
+                      "top_left_origin"
+                    ]
+                  },
+                  "storageLocationId": {
+                    "type": "string",
+                    "description": "A location of the caller's organization."
+                  },
+                  "catalogReference": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active"
+                    ]
+                  },
+                  "sourceEventId": {
+                    "type": "string",
+                    "description": "The audit entry's source event id (V2E-0683, V2E-0690); minted when absent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The rack and its positions are created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "The StorageRack, with the number of StoragePosition rows written.",
+                          "properties": {
+                            "storageRackId": {
+                              "type": "string"
+                            },
+                            "rackType": {
+                              "type": "string"
+                            },
+                            "rowCount": {
+                              "type": "integer"
+                            },
+                            "columnCount": {
+                              "type": "integer"
+                            },
+                            "coordinateScheme": {
+                              "type": "string",
+                              "enum": [
+                                "alpha_numeric"
+                              ]
+                            },
+                            "orientationRule": {
+                              "type": "string",
+                              "enum": [
+                                "top_left_origin"
+                              ]
+                            },
+                            "storageLocationId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "catalogReference": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "active"
+                              ]
+                            },
+                            "positionCount": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "storageRackId",
+                            "rackType",
+                            "rowCount",
+                            "columnCount",
+                            "coordinateScheme",
+                            "orientationRule",
+                            "status",
+                            "positionCount"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the location belongs to another organization (LOCATION_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The location is not found (LOCATION_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The rack already exists (RACK_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The location is not usable, or the rack id or grid is invalid (LOCATION_UNUSABLE, VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/racks/{storageRackId}/positions": {
+      "get": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "List a rack's storage positions",
+        "description": "Gates: authenticate (router.use), requirePermission('viewStorageTopology'), requireOrganizationScope. RF016 AC2: the rack's StoragePosition rows in top_left_origin order, row A first and columns 01 upwards within a row. 404 RACK_NOT_FOUND for a rack never created. The rack is in scope through the location it is open at, or else the location its record names; a caller of organization scope outside it is refused 403 RACK_OUT_OF_SCOPE, and a rack located nowhere is a global caller's only. The failures are coded: the error is the code and message the reason. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "storageRackId",
+            "in": "path",
+            "required": true,
+            "description": "The rack.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rack's positions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "description": "A StoragePosition: one cell of the grid, its id the rack id and the position code.",
+                            "properties": {
+                              "storagePositionId": {
+                                "type": "string"
+                              },
+                              "storageRackId": {
+                                "type": "string"
+                              },
+                              "rowIndex": {
+                                "type": "integer"
+                              },
+                              "columnIndex": {
+                                "type": "integer"
+                              },
+                              "positionCode": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "available"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "storagePositionId",
+                              "storageRackId",
+                              "rowIndex",
+                              "columnIndex",
+                              "positionCode",
+                              "status"
+                            ],
+                            "additionalProperties": true
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the rack's location belongs to another organization or the rack is located nowhere (RACK_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The rack is not found (RACK_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }

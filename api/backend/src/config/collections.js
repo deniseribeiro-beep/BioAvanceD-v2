@@ -46,6 +46,8 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   rackLocationAssignments: env.COLL_RACK_LOCATION_ASSIGNMENTS || 'rackLocationAssignments',
   telemetryExposureSummaries: env.COLL_TELEMETRY_EXPOSURE_SUMMARIES || 'telemetryExposureSummaries',
   storageLocations: env.COLL_STORAGE_LOCATIONS || 'storageLocations',
+  storageRacks: env.COLL_STORAGE_RACKS || 'storageRacks',
+  storagePositions: env.COLL_STORAGE_POSITIONS || 'storagePositions',
   operationalStateDecisions: env.COLL_OPERATIONAL_STATE_DECISIONS || 'operationalStateDecisions',
   labelIdentifiers: env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
   scanEvents: env.COLL_SCAN_EVENTS || 'scanEvents',

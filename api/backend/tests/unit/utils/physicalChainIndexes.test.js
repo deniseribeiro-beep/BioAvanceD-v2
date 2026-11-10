@@ -42,12 +42,24 @@ const EXPECTED = {
   ],
 };
 
+// #1513 (RF016 AC2): the rack grid's own specs, built by the rack service
+// and never by ensurePhysicalChainIndexes.
+const RACK_EXPECTED = {
+  storageRacks: [[{ storageRackId: 1 }, { unique: true, name: 'uniq_storageRackId' }]],
+  storagePositions: [
+    [{ storagePositionId: 1 }, { unique: true, name: 'uniq_storagePositionId' }],
+    [{ storageRackId: 1 }],
+  ],
+};
+
 const HELPERS = {
   containers: indexes.ensureContainerIndexes,
   specimenContainerAssignments: indexes.ensureSpecimenContainerAssignmentIndexes,
   containerPositionAssignments: indexes.ensureContainerPositionAssignmentIndexes,
   rackLocationAssignments: indexes.ensureRackLocationAssignmentIndexes,
   storageLocations: indexes.ensureStorageLocationIndexes,
+  storageRacks: indexes.ensureStorageRackIndexes,
+  storagePositions: indexes.ensureStoragePositionIndexes,
 };
 
 describe('physicalChainIndexes (#1314)', () => {
@@ -55,7 +67,7 @@ describe('physicalChainIndexes (#1314)', () => {
     it(`${name}: keys, names and partial filters as the services built them`, async () => {
       const collection = recordingCollection();
       await helper(collection);
-      expect(collection.calls).toEqual(EXPECTED[name]);
+      expect(collection.calls).toEqual({ ...EXPECTED, ...RACK_EXPECTED }[name]);
     });
   }
 

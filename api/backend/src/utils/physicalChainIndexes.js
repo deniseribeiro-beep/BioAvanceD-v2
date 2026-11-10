@@ -49,6 +49,20 @@ async function ensureStorageLocationIndexes(collection) {
   await collection.createIndex({ organizationId: 1 });
 }
 
+// #1513 (RF016 AC2): one row per rack, and one per cell of its grid, read
+// back by the rack. Built by storageRack.service.js, not by
+// ensurePhysicalChainIndexes.
+async function ensureStorageRackIndexes(collection) {
+  if (!canIndex(collection)) return;
+  await collection.createIndex({ storageRackId: 1 }, { unique: true, name: 'uniq_storageRackId' });
+}
+
+async function ensureStoragePositionIndexes(collection) {
+  if (!canIndex(collection)) return;
+  await collection.createIndex({ storagePositionId: 1 }, { unique: true, name: 'uniq_storagePositionId' });
+  await collection.createIndex({ storageRackId: 1 });
+}
+
 // #1378: one active label per value in a namespace (RF016 AC4). A label
 // issued inside a caller's transaction relies on this boot-time build.
 async function ensureLabelIdentifierIndexes(collection) {
@@ -78,6 +92,8 @@ module.exports = {
   ensureContainerPositionAssignmentIndexes,
   ensureRackLocationAssignmentIndexes,
   ensureStorageLocationIndexes,
+  ensureStorageRackIndexes,
+  ensureStoragePositionIndexes,
   ensureLabelIdentifierIndexes,
   ensureScanEventIndexes,
 };

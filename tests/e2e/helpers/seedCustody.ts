@@ -141,6 +141,8 @@ export async function cleanupCustodyFixture(fixture: CustodyFixture, containerId
     db.collection('containers').deleteMany({ containerId: { $in: containerIds } }),
     db.collection('containerPositionAssignments').deleteMany({ containerId: { $in: containerIds } }),
     db.collection('rackLocationAssignments').deleteMany({ storageRackId: { $in: rackIds } }),
+    db.collection('storageRacks').deleteMany({ storageRackId: { $in: rackIds } }),
+    db.collection('storagePositions').deleteMany({ storageRackId: { $in: rackIds } }),
     db.collection('labelIdentifiers').deleteMany({ encodedValue: { $in: labelValues } }),
     db.collection('devices').deleteMany({ deviceId: { $in: deviceIds } }),
     db.collection('deviceLifecycleEvents').deleteMany({ deviceId: { $in: deviceIds } }),

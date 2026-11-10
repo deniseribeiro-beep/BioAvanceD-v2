@@ -25,8 +25,9 @@ import {
 // specimen loaded twice or over a back-dated interval is checked half-open
 // (RF017 AC4); code_128 and qr_code labels resolve and a rack's linear code
 // is not a container (RF016 AC5); an empty tube creates no Specimen (RF016
-// AC1). Not covered: the 96-position grid of RF016 AC2. Two organizations, a
-// Coordenador and a Tecnico in the first, a Tecnico in the second.
+// AC1); and the rack's 8x12 grid is prepared as 96 StoragePosition rows and
+// read back (RF016 AC2, #1513). Two organizations, a Coordenador and a
+// Tecnico in the first, a Tecnico in the second.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
@@ -153,6 +154,25 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect((await post(`/locations/${roomId}/status`, coordA, { locationStatus: 'active' })).status()).toBe(200);
     const located = await post(`/racks/${rackId}/location`, coordA, { storageLocationId: freezerId });
     expect(located.status(), await located.text()).toBe(201);
+
+    // RF016 AC2 (#1513): the located rack's approved 8x12 grid is prepared
+    // as 96 StoragePosition rows, by the topology manager only and once, and
+    // read back in top_left_origin order by its location's organization only.
+    expect((await post('/racks', techA, { storageRackId: rackId })).status()).toBe(403);
+    const rack = await post('/racks', coordA, { storageRackId: rackId, storageLocationId: freezerId });
+    expect(rack.status(), await rack.text()).toBe(201);
+    expect((await rack.json()).data).toMatchObject({ storageRackId: rackId, rowCount: 8, columnCount: 12, positionCount: 96 });
+    expect((await (await post('/racks', coordA, { storageRackId: rackId, storageLocationId: freezerId })).json()).error).toBe('RACK_EXISTS');
+    const grid = await get(`/racks/${rackId}/positions`, techA);
+    expect(grid.status(), await grid.text()).toBe(200);
+    const cells = (await grid.json()).data as Array<{ storagePositionId: string; storageRackId: string; positionCode: string }>;
+    expect(cells).toHaveLength(96);
+    expect(new Set(cells.map((cell) => cell.storagePositionId)).size).toBe(96);
+    expect(cells.every((cell) => cell.storageRackId === rackId)).toBe(true);
+    expect(cells.map((cell) => cell.storagePositionId)).toContain(`${rackId}:A01`);
+    expect(cells[0].positionCode).toBe('A01');
+    expect(cells[95].positionCode).toBe('H12');
+    expect((await get(`/racks/${rackId}/positions`, techB)).status()).toBe(403);
 
     // RF016 AC3: the chain resolves link by link, for the custodian only.
     const location = await get(`/specimens/${specimenId}/location`, techA);

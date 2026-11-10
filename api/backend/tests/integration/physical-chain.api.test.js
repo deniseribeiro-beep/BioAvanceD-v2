@@ -32,6 +32,7 @@ function fakeCollection() {
     docs,
     createIndex: async () => undefined,
     insertOne: async (doc) => { docs.push(structuredClone(doc)); return { insertedId: docs.length }; },
+    insertMany: async (rows) => { for (const doc of rows) docs.push(structuredClone(doc)); return { insertedCount: rows.length }; },
     findOne: async (filter) => docs.find((doc) => matches(doc, filter)) || null,
     find: (filter = {}) => ({ toArray: async () => docs.filter((doc) => matches(doc, filter)) }),
     updateOne: async (filter, update) => {
@@ -52,6 +53,7 @@ const DOMAIN = [
   'samples', 'collections', 'organizations', 'collectionGovernanceApprovals', 'custodianshipAssignments',
   'containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments',
   'labelIdentifiers', 'scanEvents', 'devices', 'storageLocations', 'legalHolds', 'telemetryDatastreams', 'telemetryExposureSummaries',
+  'storageRacks', 'storagePositions',
 ];
 
 // Users: Coordenador and Técnico in org-A, the same pair in org-B, and an
@@ -453,5 +455,86 @@ describe('an empty container and a load by any id (#1314)', () => {
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('SPECIMEN_NOT_FOUND');
     expect(domain.specimenContainerAssignments.docs).toHaveLength(0);
+  });
+});
+
+describe('rack grid (#1513, RF016 AC2)', () => {
+  beforeEach(async () => {
+    expect((await post('/locations', 'coord-a', locationBody())).status).toBe(201);
+  });
+
+  it('creates a rack and its 96 positions for the topology manager, and refuses a duplicate or an invalid grid', async () => {
+    expect((await post('/racks', 'tech-a', { storageRackId: 'rack-96', storageLocationId: 'loc-1' })).status).toBe(403);
+    const created = await post('/racks', 'coord-a', { storageRackId: 'rack-96', storageLocationId: 'loc-1' });
+    expect(created.status).toBe(201);
+    expect(created.body.data).toMatchObject({ storageRackId: 'rack-96', rowCount: 8, columnCount: 12, positionCount: 96 });
+    expect(domain.storagePositions.docs).toHaveLength(96);
+    const again = await post('/racks', 'coord-a', { storageRackId: 'rack-96', storageLocationId: 'loc-1' });
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe('RACK_EXISTS');
+    const invalid = await post('/racks', 'coord-a', { storageRackId: 'rack-bad', rowCount: 0 });
+    expect(invalid.status).toBe(422);
+    expect(invalid.body.error).toBe('VALIDATION_ERROR');
+    expect(Array.isArray(invalid.body.details)).toBe(true);
+    expect(domain.storagePositions.docs).toHaveLength(96);
+  });
+
+  it("refuses a rack at another organization's location", async () => {
+    const refused = await post('/racks', 'coord-b', { storageRackId: 'rack-x', storageLocationId: 'loc-1' });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('LOCATION_OUT_OF_SCOPE');
+    expect(domain.storageRacks.docs).toHaveLength(0);
+  });
+
+  it("refuses the grid of a rack already located at another organization's location", async () => {
+    expect((await post('/racks/rack-loc/location', 'coord-a', { storageLocationId: 'loc-1' })).status).toBe(201);
+    const refused = await post('/racks', 'coord-b', { storageRackId: 'rack-loc' });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('LOCATION_OUT_OF_SCOPE');
+    expect(domain.storageRacks.docs.some((rack) => rack.storageRackId === 'rack-loc')).toBe(false);
+  });
+
+  it("reads the grid back in order for the holder of the rack's location only", async () => {
+    expect((await post('/racks', 'coord-a', { storageRackId: 'rack-96', storageLocationId: 'loc-1' })).status).toBe(201);
+    const read = await get('/racks/rack-96/positions', 'tech-a');
+    expect(read.status).toBe(200);
+    expect(read.body.data).toHaveLength(96);
+    expect(new Set(read.body.data.map((p) => p.storagePositionId)).size).toBe(96);
+    expect(read.body.data[0].storagePositionId).toBe('rack-96:A01');
+    expect(read.body.data[95].positionCode).toBe('H12');
+    const refused = await get('/racks/rack-96/positions', 'tech-b');
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('RACK_OUT_OF_SCOPE');
+    const unknown = await get('/racks/nope/positions', 'tech-a');
+    expect(unknown.status).toBe(404);
+    expect(unknown.body.error).toBe('RACK_NOT_FOUND');
+  });
+
+  it('keeps the grid of a rack located nowhere global-only', async () => {
+    expect((await post('/racks', 'admin', { storageRackId: 'rack-free' })).status).toBe(201);
+    const refused = await get('/racks/rack-free/positions', 'coord-a');
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('RACK_OUT_OF_SCOPE');
+    expect((await get('/racks/rack-free/positions', 'admin')).status).toBe(200);
+  });
+
+  it('refuses another organization placing a rack whose record names a location of yours', async () => {
+    expect((await post('/racks', 'coord-a', { storageRackId: 'rack-own', storageLocationId: 'loc-1' })).status).toBe(201);
+    expect((await post('/locations', 'coord-b', locationBody({ storageLocationId: 'loc-2', code: 'FZ-2', organizationId: 'org-B' }))).status).toBe(201);
+    const refused = await post('/racks/rack-own/location', 'coord-b', { storageLocationId: 'loc-2' });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('LOCATION_OUT_OF_SCOPE');
+    expect(domain.rackLocationAssignments.docs).toHaveLength(0);
+    expect((await get('/racks/rack-own/positions', 'tech-a')).status).toBe(200);
+    expect((await post('/racks/rack-own/location', 'coord-a', { storageLocationId: 'loc-1' })).status).toBe(201);
+  });
+
+  it('refuses a rack at an unusable location and writes no row', async () => {
+    expect((await post('/locations/loc-1/status', 'coord-a', { locationStatus: 'unavailable' })).status).toBe(200);
+    const refused = await post('/racks', 'coord-a', { storageRackId: 'rack-r', storageLocationId: 'loc-1' });
+    expect(refused.status).toBe(422);
+    expect(refused.body).toMatchObject({ error: 'LOCATION_UNUSABLE', details: [expect.stringContaining('Local loc-1 está unavailable')] });
+    expect(domain.storageRacks.docs).toHaveLength(0);
+    expect(domain.storagePositions.docs).toHaveLength(0);
   });
 });
