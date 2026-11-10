@@ -81,7 +81,8 @@ async function validateSpecimenReferences(db, payload) {
   }
 
   // dict-02 ELM-0120 (#1368): each parent exists, belongs to the same
-  // participant and is not terminal.
+  // participant, is not terminal and is not quarantined, since deriving is
+  // processing (RF019 AC3).
   const samples = db.collection(CANONICAL_COLLECTIONS.samples);
   const parentIds = parentIdsOf(payload);
   if (parentIds.length > 0) {
@@ -97,6 +98,9 @@ async function validateSpecimenReferences(db, payload) {
       }
       if (SampleModel.isTerminalSpecimen(parent)) {
         throw referenceError(409, `parentSpecimenIds ${parentId} está encerrada (status: ${parent.specimenStatus})`);
+      }
+      if (SampleModel.resolveSpecimenStatus(parent) === 'quarantined') {
+        throw referenceError(409, `parentSpecimenIds ${parentId} está em quarentena e não pode ser processada (RF019)`);
       }
     }
   }

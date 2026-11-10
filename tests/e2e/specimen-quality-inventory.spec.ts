@@ -1351,6 +1351,14 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
   test('release requires an authorized actor and is audited with an evidence trail (criteria 7, 8)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedQuarantinableSample(request, admin);
+    // RF019 AC2: quarantine and its release move specimenStatus only; the
+    // quantity reading is the same before, during and after.
+    const readQuantityStatus = async () => {
+      const res = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: { Authorization: `Bearer ${admin.token}` } });
+      expect(res.status()).toBe(200);
+      return (await res.json()).data.quantityStatus;
+    };
+    expect(await readQuantityStatus()).toBe('full');
 
     const quarantine = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1360,6 +1368,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       },
     });
     expect(quarantine.status()).toBe(200);
+    expect(await readQuantityStatus()).toBe('full');
 
     // No token — release is not open to unauthenticated callers.
     const unauthorized = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
@@ -1393,8 +1402,96 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect((await specimen.json()).data.specimenStatus).toBe('available');
     const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, { headers: { Authorization: `Bearer ${admin.token}` } });
     expect((await decisions.json()).data.at(-1)).toMatchObject({ newStatus: 'available', rulesApplied: ['quarantine_release'] });
+    expect(await readQuantityStatus()).toBe('full');
 
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+
+  // RF019 AC2, AC4: the record of a quarantine is spread over reads. The
+  // QuarantineAction carries the dictionary's seven fields (cause and
+  // instant); the rule and the originating event are on the state decision,
+  // the event is the ledger movement, and the correlation to the
+  // nonconformance is on the sample.
+  test('a nonconformance quarantine records its action, rule, originating event and correlation, keeps quantityStatus, and its evidenced release closes the action (RF019 AC2, AC4)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const { sampleID } = await seedQuarantinableSample(request, admin);
+
+    const opened = await request.post(`${apiBaseURL}/api/nonconformances`, {
+      headers: auth,
+      data: {
+        nonconformanceType: 'deviation',
+        detectedAt: new Date().toISOString(),
+        description: 'RF019 e2e: tubo com rótulo ilegível',
+        affectedEntityIds: [sampleID],
+      },
+    });
+    expect(opened.status(), await opened.text()).toBe(201);
+    const openedBody = (await opened.json()).data;
+    expect(openedBody.quarantinedSpecimenCount).toBe(1);
+    const nonconformanceId = String(openedBody.nonconformanceId);
+    expect(nonconformanceId).toBeTruthy();
+
+    const actionsRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/quarantine-actions`, { headers: auth });
+    expect(actionsRes.status()).toBe(200);
+    const actions = (await actionsRes.json()).data;
+    expect(actions).toHaveLength(1);
+    const [action] = actions;
+    expect(action.specimenIds).toEqual([sampleID]);
+    expect(action.reasonCodes).toEqual(['nonconformance']);
+    expect(action.actionStatus).toBe('active');
+    expect(action.startedAt).toBeTruthy();
+    expect(action.releasedAt).toBeNull();
+
+    const sampleRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
+    expect(sampleRes.status()).toBe(200);
+    const quarantined = (await sampleRes.json()).data;
+    expect(quarantined.specimenStatus).toBe('quarantined');
+    expect(quarantined.quantityStatus).toBe('full');
+    expect(quarantined.quarantineSource).toBe('nonconformance');
+    expect(quarantined.quarantineSourceId).toBe(nonconformanceId);
+
+    const movementsRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, { headers: auth });
+    expect(movementsRes.status()).toBe(200);
+    const quarantineMovements = ((await movementsRes.json()).data as Array<Record<string, unknown>>)
+      .filter((movement) => movement.type === 'adjust' && movement.destination === 'Quarentena');
+    expect(quarantineMovements).toHaveLength(1);
+    const [movement] = quarantineMovements;
+    expect(movement.purpose).toBe('nonconformance_quarantine');
+
+    const decisionsRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, { headers: auth });
+    expect(decisionsRes.status()).toBe(200);
+    expect((await decisionsRes.json()).data.at(-1)).toMatchObject({
+      previousStatus: 'available',
+      newStatus: 'quarantined',
+      rulesApplied: ['nonconformance_quarantine'],
+      reasonCodes: ['nonconformance'],
+      // SampleMovement stores its id as movementId; the decision keeps it as a string.
+      triggerEventId: String(movement.movementId),
+    });
+
+    const release = await request.post(`${apiBaseURL}/api/samples/${sampleID}/quarantine/release`, {
+      headers: auth,
+      data: { evidenceIds: ['file-rf019-nc-review'], reason: 'RF019 e2e: nonconformance reviewed and cleared' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
+    const released = (await release.json()).data;
+    expect(released.releasedActions[0].quarantineActionId).toBe(action.quarantineActionId);
+    expect(released.evidenceIds).toEqual(['file-rf019-nc-review']);
+
+    const afterRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/quarantine-actions`, { headers: auth });
+    expect(afterRes.status()).toBe(200);
+    const closed = ((await afterRes.json()).data as Array<Record<string, unknown>>)
+      .find((candidate) => candidate.quarantineActionId === action.quarantineActionId);
+    expect(closed).toBeDefined();
+    expect(closed!.actionStatus).toBe('released');
+    expect(closed!.releasedAt).toBeTruthy();
+    expect(closed!.authorizedBy).toBe(String(admin.user._id));
+
+    const afterRelease = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
+    expect((await afterRelease.json()).data.quantityStatus).toBe('full');
   });
   // #1219: every QuarantineAction writer recorded the sample's Mongo _id, and
   // this read queried the canonical specimenId, so it could not return a
@@ -2073,8 +2170,58 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     const organizationId = (await orgRes.json()).data.organizationId;
     organizationIdsToDelete.push(organizationId);
 
-    return { specimenId, operatorId: String(admin.user._id), organizationId };
+    return { specimenId, operatorId: String(admin.user._id), organizationId, participantId: participant.participantId };
   }
+
+  // RF019 AC3: a quarantined specimen is not processed. An assay naming it
+  // and a derivative naming it as its parent are both refused.
+  test('a quarantined specimen is refused for processing: an assay and a derivative naming it (RF019 AC3)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+    const { specimenId, operatorId, organizationId, participantId } = await seedRealAssayLinkage(request, admin);
+
+    const quarantine = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { specimenStatus: 'quarantined', quarantineReason: 'RF019 e2e: processing block' },
+    });
+    expect(quarantine.status(), await quarantine.text()).toBe(200);
+
+    const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: auth,
+      data: {
+        studyId,
+        specimenIds: [specimenId],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId,
+        laboratoryId: organizationId,
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RF019 e2e quarantined specimen',
+      },
+    });
+    expect(assayRes.status(), await assayRes.text()).toBe(409);
+    expect((await assayRes.json()).message).toMatch(/em quarentena e não pode ser processado/);
+
+    const derivativeBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(derivativeBox);
+    const derivativeRes = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: auth,
+      data: {
+        participantId,
+        ...validSampleFields(),
+        boxId: derivativeBox.boxId,
+        positionCode: derivativeBox.positionCode,
+        parentSpecimenIds: [specimenId],
+      },
+    });
+    expect(derivativeRes.status(), await derivativeRes.text()).toBe(422);
+    expect((await derivativeRes.json()).message).toMatch(/em quarentena/);
+  });
 
   test('rejects a control entry with no valid controlType (criterion 4)', async ({ request }) => {
     const admin = await realLogin(request);

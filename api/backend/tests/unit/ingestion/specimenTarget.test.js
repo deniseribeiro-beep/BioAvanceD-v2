@@ -109,6 +109,14 @@ describe('ingestion/specimenTarget validateSpecimenReferences (RF029, #1318)', (
     expect(error).toMatchObject({ statusCode: 409, message: expect.stringContaining('está encerrada') });
   });
 
+  it('10b. a quarantined parent is 409', async () => {
+    const db = specimenDb({ samples: [{ _id: 'p-1', specimenId: '1111111', participantId: PARTICIPANT, specimenStatus: 'quarantined' }] });
+
+    const error = await refusal(db, { ...SPECIMEN, parentSpecimenIds: ['1111111'] });
+
+    expect(error).toMatchObject({ statusCode: 409, message: expect.stringContaining('em quarentena') });
+  });
+
   it('11. a parent of the same participant that is not terminal resolves', async () => {
     const db = specimenDb({ samples: [{ _id: 'p-1', specimenId: '1111111', participantId: PARTICIPANT, specimenStatus: 'available' }] });
 

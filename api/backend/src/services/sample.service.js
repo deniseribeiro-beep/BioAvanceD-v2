@@ -331,7 +331,8 @@ class SampleService {
 
       // dict-02 ELM-0120 (#1368): a derivative names its parents by
       // specimenId. Each must exist, belong to the same participant (consent
-      // governance flows through the donor) and not be closed. The sample
+      // governance flows through the donor), not be closed and not be
+      // quarantined, since deriving is processing (RF019 AC3). The sample
       // stores the specimenIds; the lineage event carries each parent's
       // _id, the key the graph holds a Sample under.
       const parentSpecimenIds = [...new Set((Array.isArray(sampleData.parentSpecimenIds) ? sampleData.parentSpecimenIds : [])
@@ -354,6 +355,9 @@ class SampleService {
           }
           if (SampleModel.isTerminalSpecimen(parent)) {
             throw createSampleValidationError(`parentSpecimenIds ${parentId} está encerrada (status: ${parent.specimenStatus})`, 422);
+          }
+          if (SampleModel.resolveSpecimenStatus(parent) === 'quarantined') {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} está em quarentena e não pode ser processada (RF019)`, 422);
           }
         }
         parentMongoIds = parentSpecimenIds.map((parentId) => String(byId.get(parentId)._id));

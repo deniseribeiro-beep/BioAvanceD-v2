@@ -974,6 +974,16 @@ describe('sample.service', () => {
         expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
       });
 
+      it('refuses a quarantined parent with 422 before any write (RF019 AC3)', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, [parentSample({ specimenStatus: 'quarantined' })]);
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
+          .rejects.toMatchObject({ statusCode: 422, message: expect.stringContaining('em quarentena') });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      });
+
       it('#1368: the sample named as its own parent is refused with 422', async () => {
         const { db } = makeTransactionalDb();
         seedParents(db, []);
