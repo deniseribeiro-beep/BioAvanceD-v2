@@ -1009,6 +1009,8 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const partialBody = (await partial.json()).data;
     expect(partialBody.newStatus).toBe('available');
     expect(partialBody.quantityStatus).toBe('partial');
+    // RF006 AC4 (#1512): each withdrawal raises the quantity ledger version by one.
+    expect(partialBody.quantityLedgerVersion).toBe(1);
 
     const afterPartial = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1016,6 +1018,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const afterPartialBody = (await afterPartial.json()).data;
     expect(afterPartialBody.specimenStatus).toBe('available');
     expect(afterPartialBody.quantityStatus).toBe('partial');
+    expect(afterPartialBody.quantityLedgerVersion).toBe(1);
 
     // A specimen still holding material is not closed.
     const earlyClose = await request.post(`${apiBaseURL}/api/samples/${sampleID}/close`, {
@@ -1037,6 +1040,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const totalBody = (await total.json()).data;
     expect(totalBody.newStatus).toBe('available');
     expect(totalBody.quantityStatus).toBe('depleted');
+    expect(totalBody.quantityLedgerVersion).toBe(2);
 
     const afterTotal = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1044,6 +1048,22 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const afterTotalBody = (await afterTotal.json()).data;
     expect(afterTotalBody.specimenStatus).toBe('available');
     expect(afterTotalBody.quantityStatus).toBe('depleted');
+    expect(afterTotalBody.quantityLedgerVersion).toBe(2);
+
+    // RF006 AC4 (#1512): the balance reconciles with the ledger head, the movement stamped with the specimen's version.
+    const ledger = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(ledger.status()).toBe(200);
+    const movements = (await ledger.json()).data;
+    const ledgered = movements
+      .filter((m: any) => m.type === 'withdraw')
+      .map((m: any) => m.quantityLedgerVersion)
+      .sort();
+    expect(ledgered).toEqual([1, 2]);
+    const head = movements.find((m: any) => m.quantityLedgerVersion === 2);
+    expect(head.newQuantity).toBe(afterTotalBody.currentQuantity);
+    expect(afterTotalBody.currentQuantity).toBe(0);
 
     // RF006 AC7 (#1315): withdrawals change no status, so they record no decision.
     const beforeClose = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {

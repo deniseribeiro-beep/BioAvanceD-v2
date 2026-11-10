@@ -1821,6 +1821,49 @@ describe('sample.service', () => {
       expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
       expect(db.session.endSession).toHaveBeenCalledTimes(1);
     });
+
+    it('stamps quantityLedgerVersion v+1 on the balance and its movement, written only on the version it read (RF006 AC4)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1', quantityLedgerVersion: 3 }));
+
+      const result = await sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Parcial',
+        withdrawalQuantity: 2,
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ specimenId: 'SPC-1', quantityLedgerVersion: 3 });
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.quantityLedgerVersion).toBe(4);
+      expect(db.collections.sample_movements.insertOne.mock.calls[0][0].quantityLedgerVersion).toBe(4);
+      expect(result.quantityLedgerVersion).toBe(4);
+    });
+
+    it('reads a specimen with no quantityLedgerVersion as version 0 (RF006 AC4)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1' }));
+
+      await sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][0].quantityLedgerVersion).toBeNull();
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.quantityLedgerVersion).toBe(1);
+    });
+
+    it('refuses with 409 when the ledger version moved between read and write (RF006 AC4)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1', quantityLedgerVersion: 3 }));
+      db.collections.samples.updateOne.mockResolvedValue({ matchedCount: 0 });
+
+      await expect(sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      })).rejects.toMatchObject({ statusCode: 409, message: 'Amostra alterada concorrentemente; leia-a de novo' });
+    });
   });
 
   // -------------------------------------------------------------------
@@ -2573,6 +2616,21 @@ describe('sample.service', () => {
       expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
     });
 
+    it('a return moves quantityLedgerVersion too, on the version it read (RF006 AC4)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample({ specimenId: 'SPC-1', quantityLedgerVersion: 1 }));
+
+      await sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Parcial',
+        returnQuantity: 3
+      });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][0].quantityLedgerVersion).toBe(1);
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.quantityLedgerVersion).toBe(2);
+    });
+
     it('refuses a return to a closed specimen (RF026 AC7)', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(withdrawnSample({ specimenStatus: 'closed' }));
@@ -2785,6 +2843,34 @@ describe('sample.service', () => {
 
       expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
       expect(db.session.endSession).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  describe('reconcileQuantityLedger', () => {
+    function reconcileDb(sample, movements) {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(sample);
+      db.collections.sample_movements.find.mockReturnValue(makeCursor(movements));
+      return db;
+    }
+
+    it('reconciles when the ledger head carries the specimen version and currentQuantity', async () => {
+      const db = reconcileDb({ specimenId: 'SPC-1', currentQuantity: 6, quantityLedgerVersion: 2 }, [{ quantityLedgerVersion: 2, newQuantity: 6 }]);
+      const result = await sampleService.reconcileQuantityLedger(db, 'SPC-1');
+      expect(result.reconciled).toBe(true);
+    });
+
+    it('does not reconcile when currentQuantity differs from the ledger head', async () => {
+      const db = reconcileDb({ specimenId: 'SPC-1', currentQuantity: 5, quantityLedgerVersion: 2 }, [{ quantityLedgerVersion: 2, newQuantity: 6 }]);
+      const result = await sampleService.reconcileQuantityLedger(db, 'SPC-1');
+      expect(result.reconciled).toBe(false);
+    });
+
+    it('does not reconcile a versioned specimen with no versioned movement', async () => {
+      const db = reconcileDb({ specimenId: 'SPC-1', currentQuantity: 6, quantityLedgerVersion: 2 }, []);
+      const result = await sampleService.reconcileQuantityLedger(db, 'SPC-1');
+      expect(result.reconciled).toBe(false);
     });
   });
 

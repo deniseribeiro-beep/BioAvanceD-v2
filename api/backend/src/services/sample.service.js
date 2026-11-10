@@ -49,6 +49,14 @@ function createSampleValidationError(message, statusCode = 422) {
   return error;
 }
 
+// RF006 AC4 (V2E-0438): a quantity write lands only on the ledger version
+// it read; a write that matched nothing lost a race and is refused.
+function assertQuantityLedgerWrite(result) {
+  if (!result || result.matchedCount === 0) {
+    throw createSampleValidationError('Amostra alterada concorrentemente; leia-a de novo', 409);
+  }
+}
+
 // RF006 AC3 / RF026 AC7: a status write the generic update refuses (a
 // quantityStatus, `closed`, a v1.3.0 value, a change out of closed). The
 // code lets the route answer 422 for exactly these.
@@ -766,6 +774,8 @@ class SampleService {
       // RF006 AC2/AC3: a withdrawal moves quantityStatus only; specimenStatus
       // is an operational state no quantity change moves.
       const quantityStatus = SampleModel.computeQuantityStatus(sample.initialQuantity || sample.quantity, newAvailableQty);
+      const readLedgerVersion = sample.quantityLedgerVersion ?? null;
+      const nextLedgerVersion = (readLedgerVersion ?? 0) + 1;
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -787,12 +797,14 @@ class SampleService {
         ipAddress: auditInfo.ipAddress || null,
         userAgent: auditInfo.userAgent || null,
         previousQuantity: availableQty,
-        newQuantity: newAvailableQty
+        newQuantity: newAvailableQty,
+        quantityLedgerVersion: nextLedgerVersion
       });
 
       // RF006 AC#6: ledger append + balance update must land atomically —
       // a crash between the two would desync the movement ledger from
       // currentQuantity, silently.
+      // RF006 AC4: the balance write is guarded by the ledger version it read.
       await withMongoTransaction(db, async (session) => {
         await appendMovementWithHashChain(movementsCollection, movement, { session });
 
@@ -806,14 +818,16 @@ class SampleService {
           linkedProject: withdrawalData.linkedProject || sample.linkedProject,
           lastWithdrawalID: movementID,
           quantityStatus,
+          quantityLedgerVersion: nextLedgerVersion,
           updatedAt: new Date()
         };
 
-        await samplesCollection.updateOne(
-          { specimenId: sample.specimenId },
+        const result = await samplesCollection.updateOne(
+          { specimenId: sample.specimenId, quantityLedgerVersion: readLedgerVersion },
           { $set: update },
           { session }
         );
+        assertQuantityLedgerWrite(result);
       });
 
       logger.info(`Retirada registrada: Sample ${sample.barcode || sample._id}, Qtd: ${withdrawQty}, Novo saldo: ${newAvailableQty}`);
@@ -824,7 +838,8 @@ class SampleService {
         withdrawnQuantity: withdrawQty,
         remainingQuantity: newAvailableQty,
         newStatus: currentSpecimenStatus,
-        quantityStatus
+        quantityStatus,
+        quantityLedgerVersion: nextLedgerVersion
       };
     } catch (error) {
       logger.error('Erro ao retirar amostra:', error.message);
@@ -999,6 +1014,7 @@ class SampleService {
       // flag, not this change's call.
       // parentSpecimenIds (ELM-0120, #1368) is set at creation, where its
       // LINEAGE_REGISTERED is appended, and is deliberately not updatable.
+      // quantityLedgerVersion (RF006 AC4) is excluded on purpose: server-owned like the status fields.
       const ALLOWED_UPDATE_FIELDS = [
         'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
         'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
@@ -1295,6 +1311,8 @@ class SampleService {
       // RF006 AC2/AC3: a return moves quantityStatus only (a depleted
       // specimen becomes partial or full again); specimenStatus stays.
       const quantityStatus = SampleModel.computeQuantityStatus(sample.initialQuantity || sample.quantity, newAvailableQty);
+      const readLedgerVersion = sample.quantityLedgerVersion ?? null;
+      const nextLedgerVersion = (readLedgerVersion ?? 0) + 1;
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -1316,7 +1334,8 @@ class SampleService {
         ipAddress: auditInfo.ipAddress || null,
         userAgent: auditInfo.userAgent || null,
         previousQuantity: sample.currentQuantity || 0,
-        newQuantity: newAvailableQty
+        newQuantity: newAvailableQty,
+        quantityLedgerVersion: nextLedgerVersion
       });
 
       // RF006 AC#6: ledger append + balance update must land atomically —
@@ -1328,6 +1347,7 @@ class SampleService {
           currentQuantity: newAvailableQty,
           totalReturned: newTotalReturned,
           quantityStatus,
+          quantityLedgerVersion: nextLedgerVersion,
           updatedAt: new Date()
         };
 
@@ -1339,11 +1359,12 @@ class SampleService {
           update.sampleDestination = null;
         }
 
-        await samplesCollection.updateOne(
-          { specimenId: sample.specimenId },
+        const result = await samplesCollection.updateOne(
+          { specimenId: sample.specimenId, quantityLedgerVersion: readLedgerVersion },
           { $set: update },
           { session }
         );
+        assertQuantityLedgerWrite(result);
       });
 
       logger.info(`Devolução registrada: Sample ${sample.barcode || sample._id}, Qtd: ${returnQty}, Condição: ${returnData.condition}, Novo saldo: ${newAvailableQty}`);
@@ -1355,7 +1376,8 @@ class SampleService {
         condition: returnData.condition,
         newAvailableQuantity: newAvailableQty,
         newStatus: currentSpecimenStatus,
-        quantityStatus
+        quantityStatus,
+        quantityLedgerVersion: nextLedgerVersion
       };
     } catch (error) {
       logger.error('Erro ao retornar amostra:', error.message);
@@ -1397,6 +1419,31 @@ class SampleService {
       logger.error('Erro ao buscar movimentações:', error.message);
       throw error;
     }
+  }
+
+  // RF006 AC4: compares a specimen's currentQuantity and quantityLedgerVersion
+  // with the ledger head, the movement stamped with the highest version.
+  async reconcileQuantityLedger(db, specimenId) {
+    const samplesCollection = await getCollection(db, 'samples');
+    const movementsCollection = await getCollection(db, 'sampleMovements');
+    const sample = await findSampleByAnyId(samplesCollection, specimenId);
+    if (!sample) return null;
+    const version = sample.quantityLedgerVersion ?? 0;
+    const currentQuantity = sample.currentQuantity ?? sample.quantity ?? null;
+    const [head] = await movementsCollection
+      .find({ specimenId: sample.specimenId, quantityLedgerVersion: { $type: 'number' } })
+      .sort({ quantityLedgerVersion: -1 })
+      .limit(1)
+      .toArray();
+    const reconciled = version === 0 ? !head : Boolean(head) && head.quantityLedgerVersion === version && head.newQuantity === currentQuantity;
+    return {
+      specimenId: sample.specimenId,
+      currentQuantity,
+      quantityLedgerVersion: version,
+      ledgerHeadVersion: head ? head.quantityLedgerVersion : null,
+      ledgerHeadQuantity: head ? head.newQuantity : null,
+      reconciled
+    };
   }
 
   /**

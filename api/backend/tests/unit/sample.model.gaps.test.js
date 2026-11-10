@@ -221,6 +221,10 @@ describe('SampleModel.create - field normalization', () => {
     expect(sample.totalWithdrawn).toBe(0);
     expect(sample.totalReturned).toBe(0);
   });
+
+  it('starts quantityLedgerVersion at 0 whatever the caller sent (RF006 AC4)', () => {
+    expect(Sample.create({ ...validData, quantityLedgerVersion: 9 }).quantityLedgerVersion).toBe(0);
+  });
 });
 
 describe('Sample.create - sourceRecordId (v2.0.0 ELM-0011)', () => {

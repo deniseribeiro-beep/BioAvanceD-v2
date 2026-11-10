@@ -162,6 +162,9 @@ const SampleSchema = new Schema({
   initialQuantity: { type: Number, default: null },
   totalWithdrawn: { type: Number, default: 0 },
   totalReturned: { type: Number, default: 0 },
+  // V2E-0438 / RF006 AC4: server-owned version of the quantity ledger, raised
+  // by one on every ledgered quantity change (withdrawal, return).
+  quantityLedgerVersion: { type: Number, default: 0 },
   accessionNumber: { type: String, default: null },
   orderNumber: { type: String, default: null },
   processingStatus: { type: String, default: null },
@@ -410,6 +413,7 @@ class SampleModel {
       initialQuantity,
       totalWithdrawn: data.totalWithdrawn || 0,
       totalReturned: data.totalReturned || 0,
+      quantityLedgerVersion: 0,
       accessionNumber: data.accessionNumber || null,
       orderNumber: data.orderNumber || null,
       processingStatus: data.processingStatus || null,
