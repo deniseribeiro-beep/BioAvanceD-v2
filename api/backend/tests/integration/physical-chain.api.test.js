@@ -393,6 +393,55 @@ describe('label issuing (#1314, RF016 AC4/AC5)', () => {
     expect((await post('/containers/CT-1/labels', 'coord-a', { ...institutional, printBatchId: undefined })).body.details).toEqual([expect.stringContaining('printBatchId')]);
     expect(domain.labelIdentifiers.docs).toHaveLength(0);
   });
+
+  // #1528 (RF016 AC5): the rack's linear code is issued by the holder of the
+  // rack's location, in code_128 only, and never to a target that is not a
+  // located rack; the scan reads it as a rack, not a container.
+  it("issues a rack's code_128 label for the holder of its location, and refuses another target or symbology", async () => {
+    const rackLabel = { ...institutional, encodedValue: 'BVA2:synthetic:RACK-1', symbology: 'code_128', carrierPlacement: 'front' };
+    await withCustodyAndContainer();
+    expect((await post('/racks/rack-1/labels', 'coord-a', rackLabel)).body.error).toBe('RACK_NOT_FOUND');
+    expect((await post('/racks/CT-1/labels', 'coord-a', rackLabel)).body.error).toBe('RACK_NOT_FOUND');
+    expect((await post('/locations', 'coord-a', locationBody())).status).toBe(201);
+    expect((await post('/racks/rack-1/location', 'coord-a', { storageLocationId: 'loc-1' })).status).toBe(201);
+    expect((await post('/racks/rack-1/labels', 'coord-b', rackLabel)).body.error).toBe('RACK_OUT_OF_SCOPE');
+    expect((await post('/racks/rack-1/labels', 'tech-a', rackLabel)).status).toBe(403);
+    const matrix = await post('/racks/rack-1/labels', 'coord-a', { ...rackLabel, symbology: 'data_matrix' });
+    expect(matrix.status).toBe(422);
+    expect(matrix.body).toMatchObject({ error: 'VALIDATION_ERROR', details: [expect.stringContaining('code_128')] });
+    expect((await post('/racks/rack-1/labels', 'coord-a', { ...rackLabel, identifierOrigin: 'manufacturer_applied' })).body.details).toEqual([expect.stringContaining('RULE-034')]);
+    expect(domain.labelIdentifiers.docs).toHaveLength(0);
+
+    const issued = await post('/racks/rack-1/labels', 'coord-a', { ...rackLabel, targetType: 'container', targetId: 'CT-1' });
+    expect(issued.status).toBe(201);
+    expect(issued.body.data).toMatchObject({ targetType: 'storage_rack', targetId: 'rack-1', symbology: 'code_128', status: 'active', issuedBy: 'coord-a' });
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ resourceType: 'LabelIdentifier', payload: expect.objectContaining({ storageRackId: 'rack-1' }) }));
+
+    const scan = await post('/scan', 'tech-a', { rawValue: ']C1BVA2:synthetic:RACK-1', symbology: 'code_128', deviceId: 'scanner-1' });
+    expect(scan.body.data).toMatchObject({ resolved: false, reason: 'NOT_A_CONTAINER', label: { targetType: 'storage_rack', targetId: 'rack-1' } });
+    expect(domain.scanEvents.docs).toHaveLength(0);
+  });
+
+  // #1528 with #1513: a rack recorded by its StorageRack row but placed
+  // nowhere is labelled through the location on its own record, and one
+  // with no location at all is a global caller's only.
+  it("issues an unplaced rack's label through the location on its StorageRack row", async () => {
+    const rackLabel = { ...institutional, encodedValue: 'BVA2:synthetic:RACK-OWN', symbology: 'code_128', carrierPlacement: 'front' };
+    expect((await post('/locations', 'coord-a', locationBody())).status).toBe(201);
+    expect((await post('/racks', 'coord-a', { storageRackId: 'rack-own', storageLocationId: 'loc-1' })).status).toBe(201);
+    expect((await post('/racks', 'admin', { storageRackId: 'rack-free' })).status).toBe(201);
+    expect(domain.rackLocationAssignments.docs).toHaveLength(0);
+
+    const foreign = await post('/racks/rack-own/labels', 'coord-b', rackLabel);
+    expect(foreign.status).toBe(403);
+    expect(foreign.body.error).toBe('RACK_OUT_OF_SCOPE');
+    expect((await post('/racks/rack-free/labels', 'coord-a', { ...rackLabel, encodedValue: 'BVA2:synthetic:RACK-FREE' })).body.error).toBe('RACK_OUT_OF_SCOPE');
+    expect(domain.labelIdentifiers.docs).toHaveLength(0);
+
+    const issued = await post('/racks/rack-own/labels', 'coord-a', rackLabel);
+    expect(issued.status).toBe(201);
+    expect(issued.body.data).toMatchObject({ targetType: 'storage_rack', targetId: 'rack-own', symbology: 'code_128', status: 'active' });
+  });
 });
 
 describe('an empty container and a load by any id (#1314)', () => {

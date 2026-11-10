@@ -9,7 +9,6 @@ import {
   countScanEvents,
   countSamples,
   containerContent,
-  seedRackLabel,
   cleanupCustodyFixture,
   closeCustodyDb,
   type CustodyFixture,
@@ -24,7 +23,7 @@ import {
 // and rack, position and container stay apart (RF017 AC2, RF016 AC2); a
 // specimen loaded twice or over a back-dated interval is checked half-open
 // (RF017 AC4); code_128 and qr_code labels resolve and a rack's linear code
-// is not a container (RF016 AC5); an empty tube creates no Specimen (RF016
+// is not a container, issued through the rack label route (RF016 AC5); an empty tube creates no Specimen (RF016
 // AC1); and the rack's 8x12 grid is prepared as 96 StoragePosition rows and
 // read back (RF016 AC2, #1513). Two organizations, a Coordenador and a
 // Tecnico in the first, a Tecnico in the second.
@@ -265,7 +264,18 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
       expect((await read.json()).data).toMatchObject({ resolved: true, specimenId, containerId });
     }
     expect(await countScanEvents(specimenId)).toBe(3);
-    await seedRackLabel(rackId, rackCode, suffix);
+    // #1528: the rack's code is issued through its own route, in code_128
+    // only, and a container's id is not a rack.
+    const rackLabelBody = { ...labelBody, encodedValue: rackCode, symbology: 'code_128', carrierPlacement: 'front', printBatchId: `batch-rack-${suffix}` };
+    const notRack = await post(`/racks/${containerId}/labels`, coordA, rackLabelBody);
+    expect(notRack.status(), await notRack.text()).toBe(404);
+    expect((await notRack.json()).error).toBe('RACK_NOT_FOUND');
+    const rackMatrix = await post(`/racks/${rackId}/labels`, coordA, { ...rackLabelBody, symbology: 'data_matrix' });
+    expect(rackMatrix.status(), await rackMatrix.text()).toBe(422);
+    expect((await rackMatrix.json()).error).toBe('VALIDATION_ERROR');
+    const rackIssued = await post(`/racks/${rackId}/labels`, coordA, rackLabelBody);
+    expect(rackIssued.status(), await rackIssued.text()).toBe(201);
+    expect((await rackIssued.json()).data).toMatchObject({ targetType: 'storage_rack', targetId: rackId, symbology: 'code_128', status: 'active' });
     const rackScan = await post('/scan', techA, { rawValue: `]C1${rackCode}`, symbology: 'code_128', deviceId: scannerId });
     expect(rackScan.status(), await rackScan.text()).toBe(200);
     const rackRead = (await rackScan.json()).data;

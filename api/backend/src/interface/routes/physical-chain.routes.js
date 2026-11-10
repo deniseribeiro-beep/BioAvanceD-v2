@@ -496,6 +496,54 @@ router.post('/containers/:containerId/labels', requirePermission('manageStorageT
   }
 });
 
+/**
+ * POST /api/physical-chain/racks/:storageRackId/labels
+ * Body: { encodedValue, symbology, identifierOrigin, namespaceRegistryId,
+ *         carrierPlacement, immutableAtSource, templateVersionId?, printBatchId? }
+ * Issues the rack's linear code (RF016 AC5). The target is the rack, known
+ * by its open RackLocationAssignment or its StorageRack row (#1513), and in
+ * scope as for reading its grid: through its open location first, then the
+ * location on its own record; a rack located nowhere is a global caller's
+ * only. Its symbology is code_128, the one linear symbology RF016 AC5
+ * names; the rack's code is institutional (RULE-034).
+ * 201; 403 RACK_OUT_OF_SCOPE; 404 RACK_NOT_FOUND (neither an open placement
+ * nor a StorageRack row under that id, a container's id included); 409
+ * LABEL_EXISTS; 422 VALIDATION_ERROR (another symbology, personal data,
+ * RULE-012).
+ */
+const RACK_LABEL_SYMBOLOGY = 'code_128';
+
+router.post('/racks/:storageRackId/labels', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const storageRackId = String(req.params.storageRackId);
+    const located = await (await getCollection(db, 'rackLocationAssignments')).findOne({ storageRackId, assignmentStatus: 'active' });
+    const recorded = located ? null : await (await getCollection(db, 'storageRacks')).findOne({ storageRackId });
+    if (!located && !recorded) {
+      return res.status(404).json({ success: false, error: 'RACK_NOT_FOUND', message: `Rack ${storageRackId} não encontrado` });
+    }
+    await scope.assertRackInScope(db, storageRackId, req.organizationScope);
+    const body = req.body || {};
+    if (String(body.symbology ?? '').toLowerCase() !== RACK_LABEL_SYMBOLOGY) {
+      const message = `O código linear do rack exige symbology ${RACK_LABEL_SYMBOLOGY} (RF016 AC5)`;
+      return res.status(422).json({ success: false, error: 'VALIDATION_ERROR', message, details: [message] });
+    }
+    const actor = actorId(req);
+    const label = await labelResolver.registerLabel(db, {
+      ...body,
+      targetType: 'storage_rack',
+      targetId: storageRackId,
+      status: 'active',
+      issuedAt: new Date(),
+      issuedBy: actor ? String(actor) : null,
+    });
+    await audit(req, 'LabelIdentifier', label.labelIdentifierId, { storageRackId, symbology: label.symbology, identifierOrigin: label.identifierOrigin });
+    return res.status(201).json({ success: true, data: label });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
 // ==================== SCAN (RF016 AC6) ====================
 
 /**

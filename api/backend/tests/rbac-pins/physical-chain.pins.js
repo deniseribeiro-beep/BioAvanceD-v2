@@ -19,6 +19,7 @@ module.exports = {
     { method: 'POST', path: '/locations/:storageLocationId/status', permission: 'manageStorageTopology' },
     { method: 'POST', path: '/containers/:containerId/labels', permission: 'manageStorageTopology' },
     { method: 'POST', path: '/racks/:storageRackId/location', permission: 'manageStorageTopology' },
+    { method: 'POST', path: '/racks/:storageRackId/labels', permission: 'manageStorageTopology' },
     { method: 'POST', path: '/rack-assignments/:rackLocationAssignmentId/remove', permission: 'manageStorageTopology' },
     { method: 'POST', path: '/racks', permission: 'manageStorageTopology' },
     { method: 'GET', path: '/racks/:storageRackId/positions', permission: 'viewStorageTopology' },

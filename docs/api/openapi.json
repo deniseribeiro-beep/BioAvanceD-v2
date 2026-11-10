@@ -38503,6 +38503,242 @@
         }
       }
     },
+    "/api/physical-chain/racks/{storageRackId}/labels": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Issue a rack's linear code",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF016 AC5. The target is the rack, the status active, and issuedAt and issuedBy are set here from the request; those four are never read from the body. The rack must have an open RackLocationAssignment or a StorageRack row (RACK_NOT_FOUND otherwise, a container's id included) and be in scope as for reading its grid: through its open location first, then the location on its own record; a rack located nowhere is a global caller's only (RACK_OUT_OF_SCOPE). The symbology must be code_128, the one linear symbology RF016 AC5 names; another or a missing one is a 422 before anything is written. The 422 is also a missing or unknown field, a non-boolean immutableAtSource, a manufacturer_applied origin (RULE-034), an institution_applied label without templateVersionId and printBatchId, or an encodedValue holding a CPF, an e-mail or whitespace (VALIDATION_ERROR, RULE-012). The 409 is a value already active in the namespace (LABEL_EXISTS). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "storageRackId",
+            "in": "path",
+            "required": true,
+            "description": "The rack.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "encodedValue": {
+                    "type": "string",
+                    "description": "No CPF, e-mail or whitespace."
+                  },
+                  "symbology": {
+                    "type": "string",
+                    "enum": [
+                      "code_128"
+                    ],
+                    "description": "Read case-insensitively; the rack's code is linear (RF016 AC5)."
+                  },
+                  "identifierOrigin": {
+                    "type": "string",
+                    "enum": [
+                      "institution_applied"
+                    ],
+                    "description": "Read case-insensitively; a rack's code is institutional (RULE-034)."
+                  },
+                  "namespaceRegistryId": {
+                    "type": "string"
+                  },
+                  "carrierPlacement": {
+                    "type": "string"
+                  },
+                  "immutableAtSource": {
+                    "type": "boolean"
+                  },
+                  "templateVersionId": {
+                    "type": "string",
+                    "description": "Required for an institution_applied label."
+                  },
+                  "printBatchId": {
+                    "type": "string",
+                    "description": "Required for an institution_applied label."
+                  },
+                  "checksum": {
+                    "type": "string"
+                  },
+                  "replacesIdentifierId": {
+                    "type": "string"
+                  },
+                  "labelIdentifierId": {
+                    "type": "string",
+                    "description": "Minted when absent."
+                  }
+                },
+                "required": [
+                  "encodedValue",
+                  "symbology",
+                  "identifierOrigin",
+                  "namespaceRegistryId",
+                  "carrierPlacement",
+                  "immutableAtSource"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The rack's code is issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "labelIdentifierId": {
+                              "type": "string"
+                            },
+                            "encodedValue": {
+                              "type": "string"
+                            },
+                            "symbology": {
+                              "type": "string"
+                            },
+                            "targetType": {
+                              "type": "string",
+                              "enum": [
+                                "storage_rack"
+                              ]
+                            },
+                            "targetId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "active"
+                              ]
+                            },
+                            "issuedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "issuedBy": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "identifierOrigin": {
+                              "type": "string"
+                            },
+                            "namespaceRegistryId": {
+                              "type": "string"
+                            },
+                            "carrierPlacement": {
+                              "type": "string"
+                            },
+                            "immutableAtSource": {
+                              "type": "boolean"
+                            },
+                            "templateVersionId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "printBatchId": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "labelIdentifierId",
+                            "encodedValue",
+                            "symbology",
+                            "targetType",
+                            "targetId",
+                            "status"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the rack is outside the caller's organizations (RACK_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No open placement and no StorageRack row under that id (RACK_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The value is already active in the namespace (LABEL_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid label, a symbology other than code_128 included (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/physical-chain/containers/{containerId}/labels": {
       "post": {
         "tags": [

@@ -101,33 +101,6 @@ export async function containerContent(containerId: string): Promise<{ emptyStat
   return { emptyStatus: container ? (container.emptyStatus ?? null) : null, specimenAssignments };
 }
 
-/**
- * RF016 AC5: a rack's linear code. No route issues a rack's label (the
- * container label route fixes the target to `container`), so the rack's
- * code_128 LabelIdentifier is written here, the way the specimen stub above is.
- */
-export async function seedRackLabel(storageRackId: string, encodedValue: string, suffix: string): Promise<void> {
-  const db = await getDb();
-  await db.collection('labelIdentifiers').insertOne({
-    labelIdentifierId: `LBL-RACK-${suffix}`,
-    encodedValue,
-    symbology: 'code_128',
-    targetType: 'storage_rack',
-    targetId: storageRackId,
-    status: 'active',
-    checksum: null,
-    issuedAt: new Date(),
-    issuedBy: 'e2e-seed',
-    templateVersionId: 'tpl-chain',
-    printBatchId: `batch-rack-${suffix}`,
-    replacesIdentifierId: null,
-    identifierOrigin: 'institution_applied',
-    namespaceRegistryId: 'ns-chain',
-    carrierPlacement: 'front',
-    immutableAtSource: true,
-  });
-}
-
 /** Removes every row the spec wrote, the assignments its routes created included. */
 export async function cleanupCustodyFixture(fixture: CustodyFixture, containerIds: string[], rackIds: string[], labelValues: string[], deviceIds: string[], locationIds: string[] = []): Promise<void> {
   const db = await getDb();
