@@ -51,7 +51,8 @@ async function runProjectionOnce(options = {}) {
   const maxAttempts = Number(options.maxAttempts || env.GRAPH_OUTBOX_MAX_ATTEMPTS || 8);
 
   await outboxService.rescheduleStaleProcessing(db, {
-    leaseMs: options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000
+    leaseMs: options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000,
+    maxAttempts,
   });
 
   const events = await outboxService.leaseNextBatch(db, {

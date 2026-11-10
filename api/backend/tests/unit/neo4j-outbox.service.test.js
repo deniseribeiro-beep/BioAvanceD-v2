@@ -92,9 +92,11 @@ describe('Neo4jOutboxService', () => {
 
     const modified = await service.rescheduleStaleProcessing(db, { leaseMs: 1 });
 
-    expect(modified).toBe(2);
-    expect(updateManyCalls.length).toBe(1);
-    expect(updateManyCalls[0][0].status).toBe('PROCESSING');
+    // #1529: the dead-letter sweep and the retry sweep each report 2 here.
+    expect(modified).toBe(4);
+    expect(updateManyCalls.length).toBe(2);
+    expect(updateManyCalls[0][1].$set.status).toBe('DEAD_LETTER');
+    expect(updateManyCalls[1][0].status).toBe('PROCESSING');
   });
 
   it('hashes Date and array values as ISO strings and sorted-key objects', () => {
@@ -277,10 +279,12 @@ describe('Neo4jOutboxService', () => {
 
     expect(leased).toEqual(events);
     expect(findCalls[0]).toMatchObject({ status: { $in: ['PENDING', 'RETRYING'] } });
-    expect(updateManyCalls).toHaveLength(2);
-    expect(updateManyCalls[0][0]).toMatchObject({ status: 'PROCESSING' });
-    expect(updateManyCalls[1][0]).toEqual({ eventId: { $in: ['evt-1', 'evt-2'] } });
-    expect(updateManyCalls[1][1].$set.status).toBe('PROCESSING');
+    // #1529: dead-letter sweep, retry sweep, then the claim.
+    expect(updateManyCalls).toHaveLength(3);
+    expect(updateManyCalls[0][1].$set.status).toBe('DEAD_LETTER');
+    expect(updateManyCalls[1][0]).toMatchObject({ status: 'PROCESSING' });
+    expect(updateManyCalls[2][0]).toEqual({ eventId: { $in: ['evt-1', 'evt-2'] } });
+    expect(updateManyCalls[2][1].$set.status).toBe('PROCESSING');
   });
 
   it('returns an empty array from leaseNextBatch when there is nothing to lease', async () => {
@@ -295,7 +299,8 @@ describe('Neo4jOutboxService', () => {
     const leased = await service.leaseNextBatch(db);
 
     expect(leased).toEqual([]);
-    expect(updateManyCalls).toHaveLength(1);
+    // #1529: the dead-letter sweep and the retry sweep; no claim.
+    expect(updateManyCalls).toHaveLength(2);
   });
 
   it('marks an event as projected', async () => {
@@ -664,6 +669,7 @@ describe('Neo4jOutboxService', () => {
       if (cond && typeof cond === 'object') {
         if ('$in' in cond) return cond.$in.includes(value);
         if ('$lt' in cond) return value != null && value < cond.$lt;
+        if ('$gte' in cond) return value != null && value >= cond.$gte;
         if ('$lte' in cond) return value != null && value <= cond.$lte;
       }
       return value === cond;
@@ -729,6 +735,65 @@ describe('Neo4jOutboxService', () => {
       expect(leased).toEqual([]);
       expect(doc.status).toBe('RETRYING');
       expect(doc.attempts).toBe(1);
+    });
+
+    // #1529 (RNF019 C5): no lease claims an event whose tries are spent, so a
+    // timeout on the last allowed try dead-letters it.
+    const leaseLastTryThenExpire = async (doc, db, service) => {
+      const leased = await service.leaseNextBatch(db, { batchSize: 5, leaseMs: 1000, maxAttempts: 2 });
+      expect(leased).toHaveLength(1);
+      expect(doc.attempts).toBe(2);
+      doc.updatedAt = new Date(Date.now() - 10 * 1000);
+    };
+
+    it('#1529 a lease timeout on the last allowed try found by rescheduleStaleProcessing dead-letters the event', async () => {
+      const doc = { eventId: 'evt-l', status: 'RETRYING', attempts: 1, nextAttemptAt: null, updatedAt: new Date() };
+      const db = makeFakeDb(doc);
+      const service = new Neo4jOutboxService();
+      await leaseLastTryThenExpire(doc, db, service);
+
+      const moved = await service.rescheduleStaleProcessing(db, { leaseMs: 1000, maxAttempts: 2 });
+
+      expect(moved).toBe(1);
+      expect(doc.status).toBe('DEAD_LETTER');
+      expect(doc.attempts).toBe(2);
+      expect(doc.lastError).toBe('processing_lease_expired');
+      expect(doc.leaseUntil).toBeNull();
+    });
+
+    it('#1529 a lease timeout on the last allowed try swept by leaseNextBatch dead-letters the event', async () => {
+      const doc = { eventId: 'evt-l', status: 'RETRYING', attempts: 1, nextAttemptAt: null, updatedAt: new Date() };
+      const db = makeFakeDb(doc);
+      const service = new Neo4jOutboxService();
+      await leaseLastTryThenExpire(doc, db, service);
+
+      const leased = await service.leaseNextBatch(db, { batchSize: 5, leaseMs: 1000, maxAttempts: 2 });
+
+      expect(leased).toEqual([]);
+      expect(doc.status).toBe('DEAD_LETTER');
+      expect(doc.attempts).toBe(2);
+      expect(doc.lastError).toBe('leased_processing_timeout');
+    });
+
+    it('#1529 a sweep dead-letters a RETRYING event already left with its tries spent', async () => {
+      const doc = { eventId: 'evt-s', status: 'RETRYING', attempts: 2, nextAttemptAt: null, updatedAt: new Date(), lastError: 'processing_lease_expired' };
+      const db = makeFakeDb(doc);
+
+      await new Neo4jOutboxService().rescheduleStaleProcessing(db, { leaseMs: 1000, maxAttempts: 2 });
+
+      expect(doc.status).toBe('DEAD_LETTER');
+    });
+
+    it('#1529 a sweep leaves a fresh lease on its last try alone', async () => {
+      const doc = { eventId: 'evt-f', status: 'RETRYING', attempts: 1, nextAttemptAt: null, updatedAt: new Date() };
+      const db = makeFakeDb(doc);
+      const service = new Neo4jOutboxService();
+      await service.leaseNextBatch(db, { batchSize: 5, leaseMs: 60 * 1000, maxAttempts: 2 });
+
+      await service.rescheduleStaleProcessing(db, { leaseMs: 60 * 1000, maxAttempts: 2 });
+
+      expect(doc.status).toBe('PROCESSING');
+      expect(doc.attempts).toBe(2);
     });
   });
 });

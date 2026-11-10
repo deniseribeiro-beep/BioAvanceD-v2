@@ -226,6 +226,14 @@ class Neo4jOutboxService {
     const now = new Date();
     const staleProcessingBefore = new Date(now.getTime() - Number(options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000));
 
+    // #1529 (RNF019 C5): a lease that timed out on its last allowed try is a dead letter.
+    await this.deadLetterExhausted(collection, {
+      maxAttempts,
+      staleBefore: staleProcessingBefore,
+      now,
+      lastError: 'leased_processing_timeout',
+    });
+
     // #1527 (RNF019 C5): the lease already counted this try; a timeout does not count it again.
     await collection.updateMany(
       {
@@ -236,9 +244,9 @@ class Neo4jOutboxService {
         $set: {
           status: 'RETRYING',
           leaseUntil: null,
+          lastError: 'leased_processing_timeout',
           updatedAt: new Date()
-        },
-        $setOnInsert: { lastError: 'leased_processing_timeout' }
+        }
       }
     );
 
@@ -278,6 +286,14 @@ class Neo4jOutboxService {
     const now = new Date();
     const leaseMs = Number(options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000);
     const staleBefore = new Date(now.getTime() - leaseMs);
+    const maxAttempts = Math.max(1, Number(options.maxAttempts || env.GRAPH_OUTBOX_MAX_ATTEMPTS || 8));
+    // #1529 (RNF019 C5): a lease that timed out on its last allowed try is a dead letter.
+    const deadLettered = await this.deadLetterExhausted(collection, {
+      maxAttempts,
+      staleBefore,
+      now,
+      lastError: 'processing_lease_expired',
+    });
     // #1527 (RNF019 C5): the lease already counted this try; a timeout does not count it again.
     const result = await collection.updateMany(
       {
@@ -293,7 +309,37 @@ class Neo4jOutboxService {
         }
       }
     );
-    return result.modifiedCount || 0;
+    return deadLettered + (result.modifiedCount || 0);
+  }
+
+  // #1529 (RNF019 C5): no lease claims an event whose tries are spent, so one
+  // whose last lease timed out, stale in PROCESSING or already put back in
+  // RETRYING by an earlier sweep, would sit there for good. It goes to
+  // DEAD_LETTER, where requeueDeadLetters can requeue it.
+  async deadLetterExhausted(collection, { maxAttempts, staleBefore, now, lastError }) {
+    const result = await collection.updateMany(
+      {
+        attempts: { $gte: maxAttempts },
+        $or: [
+          { status: 'RETRYING' },
+          { status: 'PROCESSING', updatedAt: { $lte: staleBefore } },
+        ],
+      },
+      {
+        $set: {
+          status: 'DEAD_LETTER',
+          lastError,
+          processedAt: now,
+          updatedAt: now,
+          leaseUntil: null,
+        },
+      }
+    );
+    const count = result?.modifiedCount || 0;
+    if (count) {
+      logger.error('[GRAPH_OUTBOX] DEAD_LETTER: lease expirado na última tentativa', { count, maxAttempts, lastError });
+    }
+    return count;
   }
 
   async markProjected(db, eventId) {
