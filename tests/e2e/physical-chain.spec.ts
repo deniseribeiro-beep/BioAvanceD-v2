@@ -253,6 +253,25 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(rackRead.label).toMatchObject({ targetType: 'storage_rack', targetId: rackId, symbology: 'code_128' });
     expect(await countScanEvents(specimenId)).toBe(3);
 
+    // RF017 AC6/AC8: the scanner is moved, then retired; its history keeps
+    // all four events in order, and a retired scanner is refused.
+    const moved = await device(`/${scannerId}/events`, { eventType: 'moved', locationId: roomId });
+    expect(moved.status(), await moved.text()).toBe(201);
+    const retired = await device(`/${scannerId}/events`, { eventType: 'retired', reason: 'synthetic e2e' });
+    expect(retired.status(), await retired.text()).toBe(201);
+    const fullRead = await request.get(`${apiBaseURL}/api/devices/${scannerId}`, { headers: techA });
+    expect(fullRead.status(), await fullRead.text()).toBe(200);
+    const fullDevice = (await fullRead.json()).data;
+    const fullHistory = fullDevice.history as Array<{ eventType: string; locationId?: string }>;
+    expect(fullHistory.map((e) => e.eventType)).toEqual(['installed', 'qualified', 'moved', 'retired']);
+    expect(fullHistory[2]).toMatchObject({ eventType: 'moved', locationId: roomId });
+    expect(fullDevice.currentLocationId).toBeNull();
+    expect(fullDevice.retiredAt).toBeTruthy();
+    const afterRetire = await post('/scan', techA, scan);
+    expect(afterRetire.status(), await afterRetire.text()).toBe(422);
+    expect((await afterRetire.json()).error).toBe('DEVICE_UNUSABLE');
+    expect(await countScanEvents(specimenId)).toBe(3);
+
     // RF021 AC6: with the approval suspended, the specimen cannot be loaded
     // again; restored, it can.
     const unloaded = await post(`/specimen-assignments/${load.specimenContainerAssignmentId}/unload`, techA);

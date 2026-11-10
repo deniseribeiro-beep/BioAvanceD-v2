@@ -2483,6 +2483,27 @@ test.describe('Session and account lifecycle (RF001 criteria 2 and 4, RNF021, #1
     expect((await status(request, session.token)).status()).toBe(401);
     const login = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username: target.username, password } });
     expect(login.ok()).toBeFalsy();
+
+    // RNF022 criterion 5: the inactivated account's historical events are
+    // kept, pseudonymized: its session history reads back under its stored
+    // pseudonym, never its raw id or username.
+    const stored = await findStoredUser(String(target.userID));
+    expect(stored?.anonId).toMatch(/^USR-[0-9A-F]{8}$/);
+    const historyResponse = await request.get(`${apiBaseURL}/api/logs/sessions?userId=${target.userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(historyResponse.ok(), await historyResponse.text()).toBeTruthy();
+    const sessionHistory = (await historyResponse.json()).data;
+    expect(sessionHistory.sessions.length).toBeGreaterThan(0);
+    for (const s of sessionHistory.sessions) expect(s.user).toBe(stored!.anonId);
+    const adminEnded = sessionHistory.sessions.find((s: { revocationReason: string }) => s.revocationReason === 'admin_action');
+    expect(adminEnded, 'the delete ended a session by admin action').toBeTruthy();
+    expect(adminEnded.revokedBy).toMatch(/^USR-[0-9A-F]{8}$/);
+    expect(adminEnded.revokedBy).not.toBe(stored!.anonId);
+    const rawHistory = JSON.stringify(sessionHistory);
+    expect(rawHistory).not.toContain(String(target.userID));
+    expect(rawHistory).not.toContain(target.username);
+    await closeStoredCredentialsDb();
   });
 
   test('logout ends the session it was sent on (RF001 criterion 4)', async ({ request }) => {

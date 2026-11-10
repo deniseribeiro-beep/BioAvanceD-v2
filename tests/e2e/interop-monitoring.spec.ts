@@ -1952,6 +1952,23 @@ test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend'
         data: { deviceId: sensorId, communicationProfileId: 'https-e2e', credentialReference: `secret-manager:device/${sensorId}` },
       });
       expect(registered.status(), await registered.text()).toBe(201);
+
+      // RF017 AC7: a raw password or secret beside the reference is refused
+      // and stores nothing; only the opaque credentialReference is kept.
+      for (const raw of [{ password: 'synthetic-e2e-password' }, { secret: 'synthetic-e2e-secret' }]) {
+        const refused = await request.post(`${apiBaseURL}/api/device-registrations`, {
+          headers: auth,
+          data: { deviceId: sensorId, communicationProfileId: 'https-e2e', credentialReference: `secret-manager:device/${sensorId}`, ...raw },
+        });
+        expect(refused.status(), await refused.text()).toBe(422);
+        expect((await refused.json()).error).toBe('VALIDATION_ERROR');
+      }
+      const listed = await request.get(`${apiBaseURL}/api/device-registrations?deviceId=${encodeURIComponent(sensorId)}`, { headers: auth });
+      expect(listed.status(), await listed.text()).toBe(200);
+      const registrations = (await listed.json()).data;
+      expect(registrations).toHaveLength(1);
+      expect(registrations[0].credentialReference).toBe(`secret-manager:device/${sensorId}`);
+      for (const field of ['password', 'secret', 'credential', 'token']) expect(registrations[0]).not.toHaveProperty(field);
       const ended = await request.post(`${apiBaseURL}/api/telemetry-datastreams/${stream.telemetryDatastreamId}/end`, {
         headers: auth, data: { end: end.toISOString() },
       });
