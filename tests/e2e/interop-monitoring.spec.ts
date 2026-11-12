@@ -18,6 +18,7 @@ import { publishMqtt } from './helpers/publishMqtt';
 import { realLogin } from './helpers/realAuth';
 import { computeTotp } from './helpers/totp';
 import { clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
+import { clusterTimeNow, notificationWriteOrder, closeNotificationWritesDb } from './helpers/queryNotificationWrites';
 import { createRealParticipant, closeSeedDb as closeSeedParticipantDb } from './helpers/seedParticipant';
 import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
@@ -1424,6 +1425,7 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
   test.afterAll(async () => {
     await closeSeedSensorDb();
     await closeSeedParticipantDb();
+    await closeNotificationWritesDb();
   });
 
   test('a real environmental excursion creates a rule-driven, versioned, event-linked notification within SLA (criteria 1,2,3,6,7)', async ({
@@ -1557,6 +1559,182 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
     ]);
   });
 
+  // #1517: the three tests below each post their own environmental_excursion
+  // rule (the newest becomes the active one), open a fresh excursion and read
+  // its notification once it is delivered. The dispatch is fire-and-forget
+  // and inserts the row as 'dispatching' before any attempt, so a test that
+  // retries would otherwise be read mid-retry.
+  const deliveredExcursionNotification = async (
+    request: import('@playwright/test').APIRequestContext,
+    token: string,
+    sensor: { sensorId: string; deviceId: string }
+  ) => {
+    const telemetryRes = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
+      data: { sensorId: sensor.sensorId, temperature: 30, timestamp: new Date().toISOString() },
+    });
+    expect(telemetryRes.status()).toBe(200);
+
+    await expect
+      .poll(async () => findEnvironmentalExcursion(sensor.deviceId), { timeout: 15_000 })
+      .toBeTruthy();
+    const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+
+    const findNotification = async () => {
+      const res = await request.get(
+        `${apiBaseURL}/api/notifications?eventType=environmental_excursion&limit=50`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok()) return null;
+      const body = await res.json();
+      return (body.data || []).find((n: any) => n.sourceEventId === String(excursion._id)) || null;
+    };
+
+    await expect
+      .poll(async () => (await findNotification())?.status, { timeout: 15_000 })
+      .toBe('delivered');
+    return { excursion, notification: await findNotification() };
+  };
+
+  test('records the attempt as attempted before the e-mail transport is touched, and sends no non-allowlisted reading (RF015 C4, RNF026 C4, done rule)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: ['sensorId'],
+        maxDeliveryMinutes: 2,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+
+    const sensor = await seedSensorWithPolicy(2, 8);
+    const since = await clusterTimeNow();
+    const { notification } = await deliveredExcursionNotification(request, admin.token, sensor);
+
+    expect(notification.deliveredChannel).toBe('email');
+    expect(notification.attempts).toEqual([
+      expect.objectContaining({ channel: 'email', result: 'success', escalation: false }),
+    ]);
+    // temperatureValue, deviceId and equipmentId are in the source payload
+    // but not allowlisted, so none of them is sent.
+    expect(notification.payload).toEqual({ sensorId: sensor.sensorId });
+
+    // The attempt is stored as attempted before the e-mail transport writes
+    // its own ATTEMPTED log, and its result only after the transport's sent log.
+    expect(
+      await notificationWriteOrder(since, String(notification._id), '[BioAvanceD] Alerta: environmental_excursion')
+    ).toEqual(['row-inserted', 'attempt-recorded', 'transport-attempted', 'transport-sent', 'attempt-result', 'delivered']);
+  });
+
+  test("retries a failing channel with the rule's maxAttempts and backoffSeconds, each attempt naming channel, time and result on the originating event, then escalates (RNF026 C2, C3, RF015 C5)", async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: [`e2e-no-holder-${Date.now()}`],
+        sensitiveFieldsAllowlist: ['sensorId'],
+        purpose: 'environmental_monitoring',
+        retry: { maxAttempts: 3, backoffSeconds: 1 },
+        escalation: { enabled: true, afterFailures: 3, channel: 'in_app' },
+        maxDeliveryMinutes: 2,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+    const rule = (await ruleRes.json()).data;
+    expect(rule.retry).toEqual({ maxAttempts: 3, backoffSeconds: 1 });
+    expect(rule.purpose).toBe('environmental_monitoring');
+
+    const sensor = await seedSensorWithPolicy(2, 8);
+    const { excursion, notification } = await deliveredExcursionNotification(request, admin.token, sensor);
+
+    const emailFailure = expect.objectContaining({
+      channel: 'email',
+      result: 'failure',
+      reason: 'no_recipients',
+      escalation: false,
+    });
+    expect(notification.attempts).toEqual([
+      emailFailure,
+      emailFailure,
+      emailFailure,
+      expect.objectContaining({ channel: 'in_app', result: 'success', escalation: true }),
+    ]);
+    expect(notification.escalated).toBe(true);
+    expect(notification.status).toBe('delivered');
+    expect(notification.slaBreached).toBe(false);
+    expect(notification.withinSla).toBe(true);
+    // RF015 C5 - the rule's purpose; an excursion links no consent.
+    expect(notification.purpose).toBe('environmental_monitoring');
+    expect(notification.consentId).toBeNull();
+    // The attempts hang off the originating event.
+    expect(notification.sourceEventType).toBe('EnvironmentalExcursion');
+    expect(notification.sourceEventId).toBe(String(excursion._id));
+
+    const createdAt = new Date(notification.createdAt).getTime();
+    const deliveredAt = new Date(notification.deliveredAt).getTime();
+    const times = notification.attempts.map((a: any) => new Date(a.timestamp).getTime());
+    for (const t of times) {
+      expect(Number.isFinite(t)).toBe(true);
+      expect(t).toBeGreaterThanOrEqual(createdAt);
+      expect(t).toBeLessThanOrEqual(deliveredAt);
+    }
+    // backoffSeconds: 1 sleeps between email attempts (10 ms for timer
+    // versus wall-clock granularity).
+    expect(times[1] - times[0]).toBeGreaterThanOrEqual(990);
+    expect(times[2] - times[1]).toBeGreaterThanOrEqual(990);
+  });
+
+  test('a delivery window that closes before delivery stops retrying, escalates at once and sets slaBreached (RF015 C6)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    // maxDeliveryMinutes 0.01 is a 600 ms window, shorter than one backoff.
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: [`e2e-no-holder-${Date.now()}`],
+        sensitiveFieldsAllowlist: ['sensorId'],
+        retry: { maxAttempts: 5, backoffSeconds: 1 },
+        escalation: { enabled: true, afterFailures: 5, channel: 'in_app' },
+        maxDeliveryMinutes: 0.01,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+
+    const sensor = await seedSensorWithPolicy(2, 8);
+    const { notification } = await deliveredExcursionNotification(request, admin.token, sensor);
+
+    expect(notification.slaBreached).toBe(true);
+    expect(notification.withinSla).toBe(false);
+    expect(notification.escalated).toBe(true);
+    expect(notification.deliveredChannel).toBe('in_app');
+    expect(notification.status).toBe('delivered');
+
+    const emailFailures = notification.attempts.filter(
+      (a: any) => a.channel === 'email' && a.result === 'failure' && a.escalation === false
+    ).length;
+    expect(emailFailures).toBeGreaterThanOrEqual(1);
+    expect(emailFailures).toBeLessThanOrEqual(2);
+    expect(notification.attempts[notification.attempts.length - 1]).toEqual(
+      expect.objectContaining({ channel: 'in_app', result: 'success', escalation: true })
+    );
+    expect(notification.deliveryDurationMs).toBeGreaterThanOrEqual(600);
+  });
+
   // #650 (RF015 follow-up, segurança domain) — the first of the 4 remaining
   // domains named in the issue (segurança/consentimento/qualidade/
   // governança). RF003's real MFA brute-force lockout (auth.service.js's
@@ -1654,6 +1832,11 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
       username,
       failedAttempts: 5,
     });
+    // RNF026 C1 - the brute-force alert is delivered inside the rule's
+    // 2-minute window, itself RNF026's critical-alert bound.
+    expect(notification.withinSla).toBe(true);
+    expect(notification.slaBreached).toBe(false);
+    expect(notification.deliveryDurationMs).toBeLessThan(2 * 60000);
   });
 
   // #650 (RF015 follow-up, consentimento domain) — the 2nd of the 4 domains
@@ -1672,7 +1855,9 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
         eventType: 'consent_revoked',
         channels: ['in_app'],
         recipientRoleCodes: ['administrator'],
-        sensitiveFieldsAllowlist: ['participantId', 'consentId'],
+        // RF015 C4, RNF026 C4: participantId is in the source payload but not
+        // allowlisted, so the notification must not carry it.
+        sensitiveFieldsAllowlist: ['consentId'],
         maxDeliveryMinutes: 2,
       },
     });
@@ -1717,10 +1902,13 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
     expect(notification.deliveredChannel).toBe('in_app');
     expect(notification.sourceEventType).toBe('PatientConsent');
     expect(notification.sourceEventId).toBe(String(consent._id));
-    expect(notification.payload).toEqual({
-      participantId: participant.participantId,
-      consentId: String(consent._id),
-    });
+    // The revocation's source payload carries participantId; the rule drops it.
+    expect(participant.participantId).toBeTruthy();
+    expect(notification.payload).toEqual({ consentId: String(consent._id) });
+    expect(notification.payload).not.toHaveProperty('participantId');
+    // RF015 C5 - the notification names its purpose and its consent link.
+    expect(notification.purpose).toBe('consent_revocation');
+    expect(notification.consentId).toBe(String(consent._id));
   });
 
   // #650 (RF015 follow-up, governança domain) — the 3rd of the 4 domains
