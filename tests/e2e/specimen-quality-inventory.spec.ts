@@ -1859,7 +1859,9 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     const custody = events.find((event) => event.eventType === 'CUSTODY_EVENT_RECORDED');
     expect(custody).toBeTruthy();
     const summary = await seedTelemetrySummary(specimenId);
-    const approval = await seedApprovalDocument();
+    // The owner's ruling on #1524 (RNF018 AC5): SOP documentation evidence is
+    // a governance approval of the specimen's collection.
+    const approval = await seedApprovalDocument(governedCollectionId());
 
     type Ref = { uri: string; hash?: string };
     const valid = (): Record<'traceability' | 'monitoring' | 'documentation', Ref[]> => ({
@@ -1870,7 +1872,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     const preview = async (extra: Record<string, unknown>) => {
       const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
         headers: { Authorization: `Bearer ${admin.token}` },
-        data: { matrixType: 'fluid', sprec: fluidSprec(), specimenId, ...extra },
+        data: { matrixType: 'fluid', sprec: fluidSprec(), specimenId, collectionId: governedCollectionId(), ...extra },
       });
       expect(response.status()).toBe(200);
       return (await response.json()).data;
@@ -1885,6 +1887,11 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     expect(passed.governance_evidence.documentationOk).toBe(true);
     expect(passed.governance_evidence.semanticCompatible).toBe(true);
     expect(passed.governance_evidence.gateResult).toBe('pass');
+
+    // With no collectionId, the approval is no collection's evidence (RNF018 AC5, #1524).
+    const noCollection = await preview({ governanceEvidence: valid(), collectionId: undefined });
+    expect(noCollection.governance_status).toBe(0);
+    expect(noCollection.governance_evidence.documentationOk).toBe(false);
 
     const categories = [
       { category: 'traceability', reason: 'Insufficient traceability', ruleCode: 'INSUFFICIENT_TRACEABILITY', flag: 'traceabilityOk' },
@@ -1931,7 +1938,9 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     const auth = { Authorization: `Bearer ${admin.token}` };
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     await seedActiveConsent(participant.participantId);
-    const approval = await seedApprovalDocument();
+    // The owner's ruling on #1524 (RNF018 AC5): SOP documentation evidence is
+    // a governance approval of the specimen's collection, never another's.
+    const approval = await seedApprovalDocument(governedCollectionId());
     const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
 
     type Ref = { uri: string; hash?: string };
@@ -1975,6 +1984,15 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
       expect(refused.finalGrade).toBe('E');
       expect(refused.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
     }
+
+    // Another collection's approval is not this sample's documentation.
+    const foreign = await seedApprovalDocument(`COL-1524-FOREIGN-${Date.now()}`);
+    const foreignRefused = await register([
+      { uri: `urn:bioavanced:collection-governance-approval:${foreign.approvalId}`, hash: foreign.documentChecksum },
+    ]);
+    expect(foreignRefused.governanceStatus).toBe(0);
+    expect(foreignRefused.finalGrade).toBe('E');
+    expect(foreignRefused.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
   });
 
   test('the JSON sample import certifies each row from its sprec and resolves its governance evidence, storing no grade the row carries (RNF018 AC4, #1537)', async ({
@@ -1984,7 +2002,8 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     const auth = { Authorization: `Bearer ${admin.token}` };
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     await seedActiveConsent(participant.participantId);
-    const approval = await seedApprovalDocument();
+    // Documentation evidence is an approval of the rows' collection (RNF018 AC5, #1524).
+    const approval = await seedApprovalDocument(governedCollectionId());
     const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
 
     const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2128,7 +2147,9 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     const auth = { Authorization: `Bearer ${admin.token}` };
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     await seedActiveConsent(participant.participantId);
-    const approval = await seedApprovalDocument();
+    // The owner's ruling on #1524 (RNF018 AC5): SOP documentation evidence is
+    // a governance approval of the specimen's collection, never another's.
+    const approval = await seedApprovalDocument(governedCollectionId());
     const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
 
     type Ref = { uri: string; hash?: string };

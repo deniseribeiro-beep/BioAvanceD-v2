@@ -1496,6 +1496,7 @@ describe('sample.service', () => {
       // preview does; a reference that does not resolve refuses it.
       describe('governance evidence references (RNF018 AC5, #1524)', () => {
         const APPROVAL_ID = 'APR-1524';
+        const OTHER_APPROVAL_ID = 'APR-1524-OTHER';
         const CHECKSUM = `sha256:${'a'.repeat(64)}`;
         const approvalUri = `urn:bioavanced:collection-governance-approval:${APPROVAL_ID}`;
         const fluidSprec = {
@@ -1515,9 +1516,15 @@ describe('sample.service', () => {
           // keeps makeDb()'s find, which lists the default collection's approval
           db.collections.collectionGovernanceApprovals = {
             ...db.collections.collectionGovernanceApprovals,
-            findOne: vi.fn(async (filter) => (filter.approvalId === APPROVAL_ID
-              ? { approvalId: APPROVAL_ID, documentChecksum: CHECKSUM }
-              : null))
+            findOne: vi.fn(async (filter) => {
+              if (filter.approvalId === APPROVAL_ID) {
+                return { approvalId: APPROVAL_ID, collectionId: DEFAULT_COLLECTION_ID, documentChecksum: CHECKSUM };
+              }
+              if (filter.approvalId === OTHER_APPROVAL_ID) {
+                return { approvalId: OTHER_APPROVAL_ID, collectionId: 'COL-OTHER-1524', documentChecksum: CHECKSUM };
+              }
+              return null;
+            })
           };
           const result = await sampleService.createSample(db, validSampleData({ sprec: fluidSprec, ...extra }));
           const evidence = db.collections.rcsGovernanceEvidenceSnapshots.insertOne.mock.calls[0][0];
@@ -1540,6 +1547,22 @@ describe('sample.service', () => {
           ['a wrong hash', { uri: approvalUri, hash: `sha256:${'b'.repeat(64)}` }],
         ])('refuses certification for a documentation reference with %s', async (_label, reference) => {
           const { result, evidence } = await createWith({ governanceEvidence: { documentation: [reference] } });
+
+          expect(result.governanceStatus).toBe(0);
+          expect(result.finalGrade).toBe('E');
+          expect(result.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+          expect(evidence.documentationOk).toBe(false);
+          expect(evidence.evidenceRefs).toEqual([]);
+        });
+
+        // The owner's ruling on #1524: SOP documentation evidence is the
+        // specimen's collection's governance approval, never another's.
+        it("refuses certification for a documentation reference to another collection's approval", async () => {
+          const { result, evidence } = await createWith({
+            governanceEvidence: {
+              documentation: [{ uri: `urn:bioavanced:collection-governance-approval:${OTHER_APPROVAL_ID}`, hash: CHECKSUM }]
+            }
+          });
 
           expect(result.governanceStatus).toBe(0);
           expect(result.finalGrade).toBe('E');

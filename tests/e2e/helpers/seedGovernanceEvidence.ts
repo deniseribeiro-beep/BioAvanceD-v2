@@ -77,14 +77,18 @@ export async function seedTelemetrySummary(specimenId: string): Promise<SeededTe
   return { telemetryExposureSummaryId, sourceReadingSetHash };
 }
 
-/** A CollectionGovernanceApproval with its document checksum, as V2E-0530 documentation evidence. */
-export async function seedApprovalDocument(): Promise<SeededApprovalDocument> {
+/**
+ * A CollectionGovernanceApproval of collectionId with its document checksum,
+ * as V2E-0530 documentation evidence: a documentation reference resolves only
+ * to an approval of the specimen's collection (RNF018 AC5, #1524).
+ */
+export async function seedApprovalDocument(collectionId: string): Promise<SeededApprovalDocument> {
   const db = await getDb();
   const approvalId = `APPR-1524-${crypto.randomUUID()}`;
   const documentChecksum = sha256(`document:${approvalId}`);
   await db.collection('collectionGovernanceApprovals').insertOne({
     approvalId,
-    collectionId: `COL-1524-${approvalId}`,
+    collectionId,
     authority: 'CEP 1524 e2e',
     status: 'active',
     documentUri: `https://example.org/approvals/${approvalId}.pdf`,

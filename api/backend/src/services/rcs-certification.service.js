@@ -57,7 +57,10 @@ const SEMANTIC_FAILURE_CODES = Object.freeze(['MATRIX_INCOMPATIBLE_CODE', 'SEMAN
 // reference fails. The references are resolved against the stored records
 // before certify() (governance-evidence-resolver.service.js) and read here
 // only from the frozen governanceEvidenceResolution (see
-// docs/decisions/2026-11-09-rcs-governance-evidence-readers.md).
+// docs/decisions/2026-11-09-rcs-governance-evidence-readers.md; a
+// documentation reference, an SOP's included, resolves only to an approval
+// of the specimen's collection, see
+// docs/decisions/2026-11-12-rcs-sop-documentation-evidence.md).
 const EVIDENCE_CATEGORIES = Object.freeze({
   traceability: Object.freeze({ reason: 'Insufficient traceability', ruleCode: 'INSUFFICIENT_TRACEABILITY', flag: 'traceabilityOk' }),
   monitoring: Object.freeze({ reason: 'Missing required monitoring', ruleCode: 'MISSING_REQUIRED_MONITORING', flag: 'monitoringOk' }),
@@ -163,7 +166,9 @@ class RcsCertificationService {
   // evidence rule (RNF018 AC5, #1524): the per-category reason, rule code and
   // flag evaluateGovernance reads, and the URI kinds, hash and URI forms,
   // statuses and cap the resolver applies before certify (see
-  // docs/decisions/2026-11-12-rcs-governance-evidence-rule-set.md). The
+  // docs/decisions/2026-11-12-rcs-governance-evidence-rule-set.md), and
+  // what each category's record must belong to (see
+  // docs/decisions/2026-11-12-rcs-sop-documentation-evidence.md). The
   // version is the seed's own model code, not a SemVer.
   governanceRuleSet() {
     if (!this.ruleSet) {
@@ -180,6 +185,7 @@ class RcsCertificationService {
         evidence_rule: {
           categories: EVIDENCE_CATEGORIES,
           kinds: evidenceRule.EVIDENCE_KINDS,
+          scopes: evidenceRule.EVIDENCE_SCOPES,
           hash_pattern: evidenceRule.EVIDENCE_HASH.source,
           uri_pattern: evidenceRule.EVIDENCE_URI.source,
           statuses: evidenceRule.RESOLUTION_STATUSES,

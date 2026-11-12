@@ -23,6 +23,15 @@ const EVIDENCE_KINDS = Object.freeze({
   documentation: 'collection-governance-approval',
 });
 
+// What a category's record must belong to: the specimen named, or the
+// specimen's collection (see
+// docs/decisions/2026-11-12-rcs-sop-documentation-evidence.md).
+const EVIDENCE_SCOPES = Object.freeze({
+  traceability: 'specimen',
+  monitoring: 'specimen',
+  documentation: 'collection',
+});
+
 const EVIDENCE_CATEGORY_KEYS = Object.freeze(Object.keys(EVIDENCE_KINDS));
 
 module.exports = {
@@ -31,5 +40,6 @@ module.exports = {
   MAX_REFERENCES_PER_CATEGORY,
   RESOLUTION_STATUSES,
   EVIDENCE_KINDS,
+  EVIDENCE_SCOPES,
   EVIDENCE_CATEGORY_KEYS,
 };

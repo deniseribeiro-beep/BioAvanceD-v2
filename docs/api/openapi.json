@@ -11950,7 +11950,7 @@
                   "governanceEvidence": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "RNF018 AC5: governance evidence references, read when the body carries sprec, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A custody-event reference cannot resolve at registration, since the sample does not exist yet. Absent evidence leaves its criterion unread. A governanceEvidenceResolution the body sends is ignored."
+                    "description": "RNF018 AC5: governance evidence references, read when the body carries sprec, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A custody-event reference cannot resolve at registration, since the sample does not exist yet. A documentation reference resolves only to an approval of the sample's collectionId. Absent evidence leaves its criterion unread. A governanceEvidenceResolution the body sends is ignored."
                   }
                 },
                 "additionalProperties": true,
@@ -17841,7 +17841,7 @@
                   "governanceEvidence": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "RNF018 AC5: governance evidence references, read when the body carries sprec, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A custody-event reference cannot resolve at registration, since the sample does not exist yet. Absent evidence leaves its criterion unread. A governanceEvidenceResolution the body sends is ignored."
+                    "description": "RNF018 AC5: governance evidence references, read when the body carries sprec, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A custody-event reference cannot resolve at registration, since the sample does not exist yet. A documentation reference resolves only to an approval of the sample's collectionId. Absent evidence leaves its criterion unread. A governanceEvidenceResolution the body sends is ignored."
                   }
                 },
                 "required": [
@@ -40708,7 +40708,7 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": true,
-                "description": "The sample fields to assess; legacy quality fields are normalized to the canonical ones. Optional governanceEvidence (RNF018 AC5): an object with optional arrays traceability, monitoring and documentation (at most 20 each) of { uri, hash }, where uri is urn:bioavanced:custody-event:<eventId>, urn:bioavanced:telemetry-exposure-summary:<id> or urn:bioavanced:collection-governance-approval:<approvalId> respectively, and hash is sha256:<64 lower-case hex> of the stored record. Optional specimenId names the specimen a custody event or telemetry summary must belong to. Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A governanceEvidenceResolution the client sends is ignored."
+                "description": "The sample fields to assess; legacy quality fields are normalized to the canonical ones. Optional governanceEvidence (RNF018 AC5): an object with optional arrays traceability, monitoring and documentation (at most 20 each) of { uri, hash }, where uri is urn:bioavanced:custody-event:<eventId>, urn:bioavanced:telemetry-exposure-summary:<id> or urn:bioavanced:collection-governance-approval:<approvalId> respectively, and hash is sha256:<64 lower-case hex> of the stored record. Optional specimenId names the specimen a custody event or telemetry summary must belong to. Optional collectionId names the collection a collection-governance-approval reference must belong to: documentation evidence, an SOP's included, is an approval of that collection, and one of another collection, or with no collectionId, is an unresolvable URI. Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A governanceEvidenceResolution the client sends is ignored."
               }
             }
           }
@@ -61126,7 +61126,7 @@
           "governanceEvidence": {
             "type": "object",
             "additionalProperties": true,
-            "description": "RNF018 AC5: governance evidence references, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before the intake certifies the specimen; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule, and the specimen is stored quarantined (QUALITY_GOVERNANCE_FAILURE). A custody-event or telemetry reference cannot resolve at intake, since the specimen does not exist yet. Absent evidence leaves its criterion unread. A governanceEvidenceResolution in the body is refused as a non-canonical field."
+            "description": "RNF018 AC5: governance evidence references, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before the intake certifies the specimen; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule, and the specimen is stored quarantined (QUALITY_GOVERNANCE_FAILURE). A custody-event or telemetry reference cannot resolve at intake, since the specimen does not exist yet. A documentation reference resolves only to an approval of specimen.collectionId. Absent evidence leaves its criterion unread. A governanceEvidenceResolution in the body is refused as a non-canonical field."
           }
         },
         "additionalProperties": true

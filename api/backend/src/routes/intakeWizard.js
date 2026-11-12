@@ -859,10 +859,13 @@ async function handleIntakeWizard(req, res) {
     // /api/samples resolves them; only the resolution reaches the assessment.
     // The specimen does not exist yet, so no specimenId is passed: a
     // custody-event or telemetry reference cannot resolve at intake (fail
-    // closed), whatever specimen.specimenId the body names.
+    // closed), whatever specimen.specimenId the body names. A documentation
+    // reference resolves only to an approval of the named collection, the
+    // same collectionId the specimen persists and createSample gates.
     const governanceEvidenceResolution = await governanceEvidenceResolver.resolveGovernanceEvidence(db, {
       governanceEvidence: data.governanceEvidence,
       specimenId: null,
+      collectionId: normalizeString(data?.specimen?.collectionId) || null,
     });
     const qualidade = resolverQualidadeMetodologica(
       data?.specimen || {},

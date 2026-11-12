@@ -1254,6 +1254,8 @@ function defaultStorageContainersFindOne({ _id }) {
     // reference that does not resolve refuses it and quarantines the specimen.
     describe('governance evidence references (RNF018 AC5, #1524)', () => {
       const APPROVAL_ID = 'APR-1524-INTAKE';
+      const OTHER_APPROVAL_ID = 'APR-1524-INTAKE-OTHER';
+      const COLLECTION_ID = 'COL-1524-INTAKE';
       const CHECKSUM = `sha256:${'a'.repeat(64)}`;
       const approvalUri = `urn:bioavanced:collection-governance-approval:${APPROVAL_ID}`;
       const SPREC = {
@@ -1274,9 +1276,15 @@ function defaultStorageContainersFindOne({ _id }) {
           : baseCollection(name));
         const { samplesCollection, patientsCollection } = setupHappyMocks();
         const approvalsCollection = {
-          findOne: vi.fn(async (filter) => (filter.approvalId === APPROVAL_ID
-            ? { approvalId: APPROVAL_ID, documentChecksum: CHECKSUM }
-            : null)),
+          findOne: vi.fn(async (filter) => {
+            if (filter.approvalId === APPROVAL_ID) {
+              return { approvalId: APPROVAL_ID, collectionId: COLLECTION_ID, documentChecksum: CHECKSUM };
+            }
+            if (filter.approvalId === OTHER_APPROVAL_ID) {
+              return { approvalId: OTHER_APPROVAL_ID, collectionId: 'COL-1524-INTAKE-OTHER', documentChecksum: CHECKSUM };
+            }
+            return null;
+          }),
         };
         const getCollectionImpl = vi.fn(async (_db, key) => {
           if (key === 'samples') return samplesCollection;
@@ -1299,7 +1307,7 @@ function defaultStorageContainersFindOne({ _id }) {
         });
 
         const res = await request(buildApp(router, db)).post('/api/intake-wizard')
-          .send({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, sprec: SPREC }, ...extra });
+          .send({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, sprec: SPREC, collectionId: COLLECTION_ID }, ...extra });
         return { res, certify, createSample };
       }
 
@@ -1330,6 +1338,22 @@ function defaultStorageContainersFindOne({ _id }) {
         const persisted = createSample.mock.calls[0][1];
         expect(persisted.specimenStatus).toBe('quarantined');
         expect(persisted.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
+      });
+
+      // The owner's ruling on #1524: SOP documentation evidence is the
+      // specimen's collection's governance approval, never another's.
+      it("refuses certification and quarantines the specimen for a documentation reference to another collection's approval", async () => {
+        const { res, createSample } = await postIntake({
+          governanceEvidence: {
+            documentation: [{ uri: `urn:bioavanced:collection-governance-approval:${OTHER_APPROVAL_ID}`, hash: CHECKSUM }],
+          },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(0);
+        expect(res.body.qualityAssessment.final_grade).toBe('E');
+        expect(res.body.qualityAssessment.governance_rule_codes).toContain('INSUFFICIENT_DOCUMENTATION');
+        expect(createSample.mock.calls[0][1].specimenStatus).toBe('quarantined');
       });
 
       it('refuses a custody-event reference whatever specimenId the body names, since the specimen does not exist yet', async () => {

@@ -14,11 +14,13 @@ const SPECIMEN = 'SPC-1524-A';
 const OTHER_SPECIMEN = 'SPC-1524-B';
 const SAMPLE_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const OTHER_SAMPLE_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+const COLLECTION = 'COL-1524-A';
 
 const CUSTODY = { eventId: 'evt-1', eventType: 'CUSTODY_EVENT_RECORDED', aggregateType: 'Sample', aggregateId: SAMPLE_ID, payloadHash: hex('1') };
 const OTHER_CUSTODY = { eventId: 'evt-2', eventType: 'CUSTODY_EVENT_RECORDED', aggregateType: 'Sample', aggregateId: OTHER_SAMPLE_ID, payloadHash: hex('2') };
 const SUMMARY = { telemetryExposureSummaryId: 'tes-1', specimenId: SPECIMEN, sourceReadingSetHash: `sha256:${hex('3')}` };
-const APPROVAL = { approvalId: 'apr-1', status: 'active', documentChecksum: hex('A') };
+const APPROVAL = { approvalId: 'apr-1', collectionId: COLLECTION, status: 'active', documentChecksum: hex('A') };
+const OTHER_APPROVAL = { approvalId: 'apr-2', collectionId: 'COL-1524-B', status: 'active', documentChecksum: hex('A') };
 
 const REF = {
   traceability: { uri: 'urn:bioavanced:custody-event:evt-1', hash: `sha256:${hex('1')}` },
@@ -33,7 +35,7 @@ function fakeDb() {
     samples: [{ _id: SAMPLE_ID, specimenId: SPECIMEN }, { _id: OTHER_SAMPLE_ID, specimenId: OTHER_SPECIMEN }],
     [COLLECTION_NAME]: [OTHER_CUSTODY, CUSTODY],
     telemetryExposureSummaries: [SUMMARY],
-    collectionGovernanceApprovals: [APPROVAL],
+    collectionGovernanceApprovals: [APPROVAL, OTHER_APPROVAL],
   };
   const collection = vi.fn((name) => ({
     findOne: vi.fn(async (filter) => (stores[name] || [])
@@ -43,9 +45,10 @@ function fakeDb() {
   return { collection };
 }
 
-const resolveOne = (category, ref, specimenId = SPECIMEN) => resolveGovernanceEvidence(fakeDb(), {
+const resolveOne = (category, ref, specimenId = SPECIMEN, collectionId = COLLECTION) => resolveGovernanceEvidence(fakeDb(), {
   governanceEvidence: { [category]: [ref] },
   specimenId,
+  collectionId,
 });
 
 describe('resolveGovernanceEvidence (RNF018 AC5, #1524)', () => {
@@ -67,6 +70,7 @@ describe('resolveGovernanceEvidence (RNF018 AC5, #1524)', () => {
     const result = await resolveGovernanceEvidence(fakeDb(), {
       governanceEvidence: { traceability: [REF.traceability], monitoring: [REF.monitoring], documentation: [REF.documentation], other: [1] },
       specimenId: SPECIMEN,
+      collectionId: COLLECTION,
     });
     expect(result).toEqual({
       traceability: [{ ...REF.traceability, status: 'resolved' }],
@@ -125,6 +129,16 @@ describe('resolveGovernanceEvidence (RNF018 AC5, #1524)', () => {
   ])('reads hash_mismatch for a %s reference whose stored hash differs', async (category) => {
     const ref = { uri: REF[category].uri, hash: `sha256:${hex('f')}` };
     expect((await resolveOne(category, ref))[category]).toEqual([{ ...ref, status: 'hash_mismatch' }]);
+  });
+
+  it.each([
+    ["another collection's approval", 'urn:bioavanced:collection-governance-approval:apr-2', COLLECTION],
+    ['no collectionId', 'urn:bioavanced:collection-governance-approval:apr-1', null],
+    ['a blank collectionId', 'urn:bioavanced:collection-governance-approval:apr-1', '  '],
+  ])('reads unresolvable_uri for a documentation reference to %s', async (_name, uri, collectionId) => {
+    const ref = { uri, hash: REF.documentation.hash };
+    expect((await resolveOne('documentation', ref, SPECIMEN, collectionId)).documentation)
+      .toEqual([{ ...ref, status: 'unresolvable_uri' }]);
   });
 
   it('reads unresolvable_uri for a reference that is not an object', async () => {

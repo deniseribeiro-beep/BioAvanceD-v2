@@ -16,6 +16,7 @@ router.post('/preview', authenticate, async (req, res) => {
     const resolution = await resolveGovernanceEvidence(req.app.locals.db, {
       governanceEvidence: source.governanceEvidence,
       specimenId: source.specimenId,
+      collectionId: source.collectionId,
     });
     const assessment = qualityDomain.evaluateQuality(
       req.body,

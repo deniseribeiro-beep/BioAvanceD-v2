@@ -322,6 +322,7 @@ describe('ImportService.importSamples (JSON)', () => {
     const governanceEvidence = { documentation: [{ uri: 'urn:doc:1', hash: 'abc' }] };
     const filePath = writeTmpFile('with-evidence.json', JSON.stringify(validSample({
       specimenId: 'SPEC-JSON-6',
+      collectionId: 'COL-JSON-6',
       sprec: { sampleType: 'BLD', primaryContainer: 'SST' },
       governanceEvidence,
       governanceEvidenceResolution: { forged: true },
@@ -332,7 +333,7 @@ describe('ImportService.importSamples (JSON)', () => {
     const result = await importService.importSamples(db, { path: filePath, originalname: 'with-evidence.json' });
 
     expect(result).toEqual({ success: 1, errors: [], total: 1 });
-    expect(governanceEvidenceResolver.resolveGovernanceEvidence).toHaveBeenCalledWith(db, { governanceEvidence, specimenId: 'SPEC-JSON-6' });
+    expect(governanceEvidenceResolver.resolveGovernanceEvidence).toHaveBeenCalledWith(db, { governanceEvidence, specimenId: 'SPEC-JSON-6', collectionId: 'COL-JSON-6' });
     expect(qualityDomain.resolveMethodologicalQuality).toHaveBeenCalledTimes(1);
     expect(qualityDomain.resolveMethodologicalQuality.mock.calls[0][1]).toEqual({ governanceEvidenceResolution: resolution });
   });

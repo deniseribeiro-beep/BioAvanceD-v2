@@ -7,7 +7,11 @@ const { COLLECTION_NAME: OUTBOX_COLLECTION_NAME } = require('./neo4jOutbox.servi
 // certify() runs. The result is frozen in the RCS input
 // (governanceEvidenceResolution), so a recalculation reproduces it; a
 // client never sends it (see
-// docs/decisions/2026-11-09-rcs-governance-evidence-readers.md).
+// docs/decisions/2026-11-09-rcs-governance-evidence-readers.md). A custody
+// event or telemetry summary resolves only for the specimen named, and a
+// documentation reference, an SOP's included, only to a governance approval
+// of the collection named (see
+// docs/decisions/2026-11-12-rcs-sop-documentation-evidence.md).
 
 const {
   EVIDENCE_HASH,
@@ -15,6 +19,7 @@ const {
   MAX_REFERENCES_PER_CATEGORY,
   RESOLUTION_STATUSES,
   EVIDENCE_KINDS,
+  EVIDENCE_SCOPES,
   EVIDENCE_CATEGORY_KEYS,
 } = require('./governance-evidence-rule');
 
@@ -51,9 +56,10 @@ async function findTelemetrySummary(db, context, id) {
   return summary ? { hash: stringOrNull(summary.sourceReadingSetHash) } : null;
 }
 
-async function findGovernanceApproval(db, _context, id) {
+async function findGovernanceApproval(db, context, id) {
   const approval = await (await getCollection(db, 'collectionGovernanceApprovals')).findOne({ approvalId: id });
-  return approval ? { hash: normalizeChecksum(approval.documentChecksum) } : null;
+  if (!approval || !context.collectionId || approval.collectionId !== context.collectionId) return null;
+  return { hash: normalizeChecksum(approval.documentChecksum) };
 }
 
 const FINDERS = Object.freeze({
@@ -81,7 +87,10 @@ async function resolveReference(db, context, category, reference) {
 // { traceability?, monitoring?, documentation? } of [{ uri, hash, status }],
 // only for the categories presented as a non-empty array (or as a value
 // that is not an array, which fails closed); null when none was presented.
-async function resolveGovernanceEvidence(db, { governanceEvidence, specimenId } = {}) {
+// collectionId names the specimen's collection: a documentation reference
+// resolves only to an approval of it, and with no collectionId it reads
+// unresolvable_uri.
+async function resolveGovernanceEvidence(db, { governanceEvidence, specimenId, collectionId } = {}) {
   if (!isPlainObject(governanceEvidence)) return null;
   const presented = EVIDENCE_CATEGORY_KEYS.filter((category) => {
     const value = governanceEvidence[category];
@@ -94,6 +103,7 @@ async function resolveGovernanceEvidence(db, { governanceEvidence, specimenId } 
   let samplePromise = null;
   const context = {
     specimenId: specimen,
+    collectionId: typeof collectionId === 'string' && collectionId.trim() !== '' ? collectionId : null,
     // The sample, looked up once per call and only when a reference needs it.
     sample() {
       if (!samplePromise) {
@@ -127,6 +137,7 @@ module.exports = {
   EVIDENCE_HASH,
   EVIDENCE_URI,
   EVIDENCE_KINDS,
+  EVIDENCE_SCOPES,
   EVIDENCE_CATEGORY_KEYS,
   MAX_REFERENCES_PER_CATEGORY,
   RESOLUTION_STATUSES,

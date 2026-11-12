@@ -14,6 +14,7 @@ async function certifySampleSprec(db, sampleData) {
     const governanceEvidenceResolution = await governanceEvidenceResolver.resolveGovernanceEvidence(db, {
       governanceEvidence: sampleData.governanceEvidence,
       specimenId: sampleData.specimenId,
+      collectionId: sampleData.collectionId,
     });
     const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({
       sprec: sampleData.sprec,

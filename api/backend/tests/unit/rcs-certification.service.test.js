@@ -490,7 +490,7 @@ describe('evaluateGovernanceEvidence', () => {
   it('names the governance evidence rule in its checksum (RNF018 AC5, #1524)', () => {
     expect(rcsService.governanceRuleSet()).toEqual({
       version: 'RCS-GOV-1.0',
-      checksum: 'sha256:e4d8bfe3723714fff01be7cc341e6900ea282bc1c1e665c8df228e660d20c423',
+      checksum: 'sha256:9c534192cae22d608f838d5933dc324cfc87d1bd4cc4c5868592cd0f5e697b99',
     });
   });
 });
@@ -521,7 +521,7 @@ describe('matrixMappingRelease (RF018 AC4, #1320)', () => {
 
   it('leaves the governance rule-set checksum as it was before the release', () => {
     expect(rcsService.governanceRuleSet().checksum)
-      .toBe('sha256:e4d8bfe3723714fff01be7cc341e6900ea282bc1c1e665c8df228e660d20c423');
+      .toBe('sha256:9c534192cae22d608f838d5933dc324cfc87d1bd4cc4c5868592cd0f5e697b99');
   });
 });
 
@@ -568,7 +568,7 @@ describe('sprecMappingRelease (RF018 AC1, #1320)', () => {
 
   it('leaves the governance rule-set and matrix mapping checksums as they were before the release', () => {
     expect(rcsService.governanceRuleSet().checksum)
-      .toBe('sha256:e4d8bfe3723714fff01be7cc341e6900ea282bc1c1e665c8df228e660d20c423');
+      .toBe('sha256:9c534192cae22d608f838d5933dc324cfc87d1bd4cc4c5868592cd0f5e697b99');
     expect(rcsService.matrixMappingRelease().checksum)
       .toBe('sha256:d5749ff8cc4a834c7042b6d283b3634bbb3c1a856c4a15a278d786a7391d904e');
   });

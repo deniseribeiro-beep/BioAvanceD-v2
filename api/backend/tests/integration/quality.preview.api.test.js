@@ -102,7 +102,7 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
       samples: [{ _id: 'mongo-sample-1', specimenId: 'SPC-PREVIEW-1' }],
       [COLLECTION_NAME]: [{ eventId: 'evt-1', eventType: 'CUSTODY_EVENT_RECORDED', aggregateType: 'Sample', aggregateId: 'mongo-sample-1', payloadHash: hex('1') }],
       telemetryExposureSummaries: [{ telemetryExposureSummaryId: 'tes-1', specimenId: 'SPC-PREVIEW-1', sourceReadingSetHash: `sha256:${hex('2')}` }],
-      collectionGovernanceApprovals: [{ approvalId: 'apr-1', documentChecksum: `sha256:${hex('3')}` }],
+      collectionGovernanceApprovals: [{ approvalId: 'apr-1', collectionId: 'COL-PREVIEW-1', documentChecksum: `sha256:${hex('3')}` }],
     };
     const evidence = () => ({
       traceability: [{ uri: 'urn:bioavanced:custody-event:evt-1', hash: `sha256:${hex('1')}` }],
@@ -122,10 +122,10 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
       };
     });
 
-    const preview = (governanceEvidence) => request(app)
+    const preview = (governanceEvidence, collectionId = 'COL-PREVIEW-1') => request(app)
       .post('/api/quality/preview')
       .set('Authorization', `Bearer ${createAuthToken()}`)
-      .send({ sprec: SPRECS, specimenId: 'SPC-PREVIEW-1', governanceEvidence });
+      .send({ sprec: SPRECS, specimenId: 'SPC-PREVIEW-1', collectionId, governanceEvidence });
 
     it('reads the three evidence criteria true when every reference resolves', async () => {
       const response = await preview(evidence());
@@ -162,6 +162,18 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
         'urn:bioavanced:custody-event:evt-1',
         'urn:bioavanced:telemetry-exposure-summary:tes-1',
       ]);
+    });
+
+    // The owner's ruling on #1524: SOP documentation evidence is an approval
+    // of the specimen's collection, so with no collectionId it cannot resolve.
+    it('refuses documentation evidence when the body names no collectionId', async () => {
+      const response = await preview(evidence(), null);
+      expect(response.status).toBe(200);
+      expect(response.body.data.governance_status).toBe(0);
+      expect(response.body.data.governance_rule_codes).toContain('INSUFFICIENT_DOCUMENTATION');
+      expect(response.body.data.governance_evidence).toMatchObject({
+        traceabilityOk: true, monitoringOk: true, documentationOk: false,
+      });
     });
   });
 
