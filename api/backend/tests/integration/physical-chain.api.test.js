@@ -53,7 +53,7 @@ const DOMAIN = [
   'samples', 'collections', 'organizations', 'collectionGovernanceApprovals', 'custodianshipAssignments',
   'containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments',
   'labelIdentifiers', 'scanEvents', 'devices', 'storageLocations', 'legalHolds', 'telemetryDatastreams', 'telemetryExposureSummaries',
-  'storageRacks', 'storagePositions',
+  'storageRacks', 'storagePositions', 'physicalIdentificationValidationProtocols',
 ];
 
 // Users: Coordenador and Técnico in org-A, the same pair in org-B, and an
@@ -441,6 +441,48 @@ describe('label issuing (#1314, RF016 AC4/AC5)', () => {
     const issued = await post('/racks/rack-own/labels', 'coord-a', rackLabel);
     expect(issued.status).toBe(201);
     expect(issued.body.data).toMatchObject({ targetType: 'storage_rack', targetId: 'rack-own', symbology: 'code_128', status: 'active' });
+  });
+});
+
+describe('validation protocol gate (#1514, RF016 AC7)', () => {
+  const protocolBody = (over = {}) => ({
+    protocolVersion: '1.0.0',
+    scope: 'ex_ante_synthetic',
+    evidenceUri: 'object://evidence/protocol.docx',
+    evidenceHash: '6ce782d763976a8ec4a106e6a212d13b2e838a0bd5b19db146418472a7c787f1',
+    approvedSymbologies: ['data_matrix'],
+    fixtureCatalogRefs: ['catalog:vial:synthetic-001'],
+    realSpecimenUse: false,
+    ...over,
+  });
+
+  it('refuses a Técnico registering a protocol', async () => {
+    expect((await post('/validation-protocols', 'tech-a', protocolBody())).status).toBe(403);
+    expect(domain.physicalIdentificationValidationProtocols.docs).toHaveLength(0);
+  });
+
+  it('answers 409 to a run of a draft protocol (RULE-037)', async () => {
+    const draft = await post('/validation-protocols', 'coord-a', protocolBody({ protocolVersion: '1.0.0-draft' }));
+    expect(draft.status).toBe(201);
+    const refused = await post(`/validation-protocols/${draft.body.data.physicalIdentificationValidationProtocolId}/executions`, 'tech-a');
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('PROTOCOL_NOT_EXECUTABLE');
+    expect(refused.body.message).toMatch(/RULE-037/);
+  });
+
+  it('authorizes a run of an approved protocol and audits it', async () => {
+    const approved = await post('/validation-protocols', 'coord-a', protocolBody({ approvalStatus: 'approved_for_execution', approvedAt: '2026-09-12T20:00:00.000Z' }));
+    expect(approved.status).toBe(201);
+    const id = approved.body.data.physicalIdentificationValidationProtocolId;
+    vi.mocked(auditLogger.log).mockClear();
+    const run = await post(`/validation-protocols/${id}/executions`, 'tech-a');
+    expect(run.status).toBe(200);
+    expect(run.body.data).toMatchObject({ physicalIdentificationValidationProtocolId: id, approvalStatus: 'approved_for_execution', realSpecimenUse: false });
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      resourceType: 'PhysicalIdentificationValidationProtocol',
+      resourceId: id,
+      payload: expect.objectContaining({ executionAuthorized: true }),
+    }));
   });
 });
 

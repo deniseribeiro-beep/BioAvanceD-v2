@@ -4,6 +4,7 @@ import { deleteOrganizations } from './helpers/listOrganizations';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   seedCustodyFixture,
+  cleanupValidationProtocols,
   seedEthicsApproval,
   setApprovalStatus,
   countScanEvents,
@@ -27,12 +28,15 @@ import {
 // AC1); and the rack's 8x12 grid is prepared as 96 StoragePosition rows and
 // read back (RF016 AC2, #1513). Two organizations, a Coordenador and a
 // Tecnico in the first, a Tecnico in the second.
+// An ex ante validation protocol runs only once approved_for_execution
+// (RF016 AC7, RULE-037, #1514).
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
 test.describe('Physical chain and custody (#1314, #1316) — real backend', () => {
   const organizationIds: string[] = [];
+  const protocolVersions: string[] = [];
   let fixture: CustodyFixture | null = null;
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const containerId = `CT-CHAIN-${suffix}`;
@@ -60,6 +64,7 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
       [tubeCode, emptyTubeCode, code128Value, qrValue, rackCode], [scannerId, emptyScannerId],
       [roomId, freezerId, `${freezerId}-x`, emptyLocationId],
     ).catch(() => {});
+    await cleanupValidationProtocols(protocolVersions).catch(() => {});
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
     await closeCustodyDb();
   });
@@ -412,6 +417,61 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(read.specimenId).toBeUndefined();
     expect(await containerContent(emptyContainerId)).toEqual({ emptyStatus: 'empty', specimenAssignments: 0 });
     expect(await countSamples()).toBe(samplesBefore);
+  });
+
+  // #1514: a run of the ex ante protocol is authorized only once the stored
+  // protocol is approved_for_execution, on synthetic data (RF016 AC7,
+  // RULE-037). Registering it is topology work, the Coordenador's.
+  test('an ex ante protocol runs only once approved_for_execution (RF016 AC7, RULE-037)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const makeOrg = async (label: string) => {
+      const res = await request.post(`${apiBaseURL}/api/organizations`, {
+        headers: adminAuth,
+        data: { officialName: `#1514 protocol ${label} ${suffix}`, countryCode: 'BR' },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const organizationId = (await res.json()).data.organizationId as string;
+      organizationIds.push(organizationId);
+      return organizationId;
+    };
+    const org = await makeOrg('P');
+    const protoCoord = await registerUser(request, adminAuth, 'protoCoord', 3, 'Coordenador', org);
+    const protoTech = await registerUser(request, adminAuth, 'protoTech', 2, 'Técnico', org);
+    const post = (path: string, headers: Record<string, string>, data: Record<string, unknown> = {}) =>
+      request.post(`${apiBaseURL}/api/physical-chain${path}`, { headers, data });
+
+    const draftVersion = `1.0.0-e2e.draft.${suffix}`;
+    const approvedVersion = `1.0.0-e2e.approved.${suffix}`;
+    protocolVersions.push(draftVersion, approvedVersion);
+    const protocolBody = (over: Record<string, unknown>) => ({
+      scope: 'ex_ante_synthetic',
+      evidenceUri: 'object://evidence/BioAvanceD_Protocolo_Avaliacao_Ex_Ante_Identificacao_Fisica_v1.0.0.docx',
+      evidenceHash: '6ce782d763976a8ec4a106e6a212d13b2e838a0bd5b19db146418472a7c787f1',
+      approvedSymbologies: ['data_matrix'],
+      fixtureCatalogRefs: ['catalog:vial:synthetic-001'],
+      realSpecimenUse: false,
+      ...over,
+    });
+
+    const refused = await post('/validation-protocols', protoTech, protocolBody({ protocolVersion: draftVersion }));
+    expect(refused.status(), await refused.text()).toBe(403);
+
+    const draft = await post('/validation-protocols', protoCoord, protocolBody({ protocolVersion: draftVersion }));
+    expect(draft.status(), await draft.text()).toBe(201);
+    const draftId = (await draft.json()).data.physicalIdentificationValidationProtocolId as string;
+    const draftRun = await post(`/validation-protocols/${draftId}/executions`, protoTech);
+    expect(draftRun.status(), await draftRun.text()).toBe(409);
+    expect((await draftRun.json()).error).toBe('PROTOCOL_NOT_EXECUTABLE');
+
+    const approved = await post('/validation-protocols', protoCoord, protocolBody({
+      protocolVersion: approvedVersion, approvalStatus: 'approved_for_execution', approvedAt: '2026-09-12T20:00:00.000Z',
+    }));
+    expect(approved.status(), await approved.text()).toBe(201);
+    const approvedId = (await approved.json()).data.physicalIdentificationValidationProtocolId as string;
+    const run = await post(`/validation-protocols/${approvedId}/executions`, protoTech);
+    expect(run.status(), await run.text()).toBe(200);
+    expect((await run.json()).data).toMatchObject({ approvalStatus: 'approved_for_execution', realSpecimenUse: false });
   });
 });
 

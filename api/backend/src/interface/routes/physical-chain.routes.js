@@ -13,6 +13,7 @@ const telemetryExposure = require('../../services/telemetryExposure.service');
 const storageLocations = require('../../services/storageLocation.service');
 const storageRacks = require('../../services/storageRack.service');
 const legalHolds = require('../../services/legalHold.service');
+const validationProtocols = require('../../services/physicalIdentificationProtocol.service');
 const { findSampleByAnyId } = require('../../utils/sampleLookup');
 const { deviceUsabilityRefusal } = require('../../services/deviceLifecycle.service');
 
@@ -539,6 +540,54 @@ router.post('/racks/:storageRackId/labels', requirePermission('manageStorageTopo
     });
     await audit(req, 'LabelIdentifier', label.labelIdentifierId, { storageRackId, symbology: label.symbology, identifierOrigin: label.identifierOrigin });
     return res.status(201).json({ success: true, data: label });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+// ==================== VALIDATION PROTOCOL (RF016 AC7, RULE-037) ====================
+
+/**
+ * POST /api/physical-chain/validation-protocols
+ * Body: { physicalIdentificationValidationProtocolId?, protocolVersion,
+ *         scope, evidenceUri, evidenceHash, approvedSymbologies,
+ *         fixtureCatalogRefs, realSpecimenUse, approvalStatus?, approvedAt? }
+ * Registers the ex ante physical identification protocol (#1514). It is a
+ * global record, held by no organization. 201 { success, data }; 409
+ * PROTOCOL_EXISTS (same id or protocolVersion); 422 VALIDATION_ERROR.
+ */
+router.post('/validation-protocols', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const protocol = await validationProtocols.registerProtocol(db, req.body || {});
+    await audit(req, 'PhysicalIdentificationValidationProtocol', protocol.physicalIdentificationValidationProtocolId, {
+      protocolVersion: protocol.protocolVersion,
+      approvalStatus: protocol.approvalStatus,
+    });
+    return res.status(201).json({ success: true, data: protocol });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+/**
+ * POST /api/physical-chain/validation-protocols/:physicalIdentificationValidationProtocolId/executions
+ * Authorizes a run of the stored protocol only when it is
+ * approved_for_execution and, ex ante, uses no real specimen (RF016 AC7,
+ * RULE-037). The authorization is documentary, not a result of the assay,
+ * and nothing is written but its audit entry. 200 { success, data }; 404
+ * PROTOCOL_NOT_FOUND; 409 PROTOCOL_NOT_EXECUTABLE.
+ */
+router.post('/validation-protocols/:physicalIdentificationValidationProtocolId/executions', requirePermission('manageStorageAllocation'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const execution = await validationProtocols.authorizeExecution(db, req.params.physicalIdentificationValidationProtocolId);
+    await audit(req, 'PhysicalIdentificationValidationProtocol', execution.physicalIdentificationValidationProtocolId, {
+      protocolVersion: execution.protocolVersion,
+      approvalStatus: execution.approvalStatus,
+      executionAuthorized: true,
+    });
+    return res.json({ success: true, data: execution });
   } catch (error) {
     return sendError(res, error);
   }

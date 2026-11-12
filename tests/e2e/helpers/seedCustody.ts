@@ -125,6 +125,12 @@ export async function cleanupCustodyFixture(fixture: CustodyFixture, containerId
   ]);
 }
 
+/** #1514: removes the PhysicalIdentificationValidationProtocol rows the spec registered, by version. */
+export async function cleanupValidationProtocols(protocolVersions: string[]): Promise<void> {
+  const db = await getDb();
+  await db.collection('physicalIdentificationValidationProtocols').deleteMany({ protocolVersion: { $in: protocolVersions } });
+}
+
 /** #1392: the TelemetryExposureSummaries stored for a specimen, oldest window first. */
 export async function findExposureSummaries(specimenId: string): Promise<any[]> {
   const db = await getDb();

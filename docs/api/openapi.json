@@ -38993,6 +38993,339 @@
         }
       }
     },
+    "/api/physical-chain/validation-protocols": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Register an ex ante physical identification validation protocol",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF016 AC7. A PhysicalIdentificationValidationProtocol (V2E-0700..0709), a global record held by no organization. approvalStatus is draft when absent, and approvedAt is required once it is approved_for_execution. The 422 is a missing or invalid field (VALIDATION_ERROR); the 409 a protocol with the same id or protocolVersion (PROTOCOL_EXISTS). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "physicalIdentificationValidationProtocolId": {
+                    "type": "string",
+                    "description": "Minted when absent."
+                  },
+                  "protocolVersion": {
+                    "type": "string",
+                    "description": "SemVer."
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "ex_ante_synthetic"
+                    ]
+                  },
+                  "evidenceUri": {
+                    "type": "string"
+                  },
+                  "evidenceHash": {
+                    "type": "string",
+                    "description": "SHA-256, hexadecimal."
+                  },
+                  "approvedSymbologies": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "fixtureCatalogRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "realSpecimenUse": {
+                    "type": "boolean"
+                  },
+                  "approvalStatus": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "approved_for_execution",
+                      "retired"
+                    ],
+                    "description": "draft when absent."
+                  },
+                  "approvedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required when approvalStatus is approved_for_execution."
+                  }
+                },
+                "required": [
+                  "protocolVersion",
+                  "scope",
+                  "evidenceUri",
+                  "evidenceHash",
+                  "approvedSymbologies",
+                  "fixtureCatalogRefs",
+                  "realSpecimenUse"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The protocol is registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "physicalIdentificationValidationProtocolId": {
+                              "type": "string"
+                            },
+                            "protocolVersion": {
+                              "type": "string",
+                              "description": "SemVer."
+                            },
+                            "scope": {
+                              "type": "string",
+                              "enum": [
+                                "ex_ante_synthetic"
+                              ]
+                            },
+                            "evidenceUri": {
+                              "type": "string"
+                            },
+                            "evidenceHash": {
+                              "type": "string",
+                              "description": "SHA-256, hexadecimal."
+                            },
+                            "approvedSymbologies": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "fixtureCatalogRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "realSpecimenUse": {
+                              "type": "boolean"
+                            },
+                            "approvalStatus": {
+                              "type": "string",
+                              "enum": [
+                                "draft",
+                                "approved_for_execution",
+                                "retired"
+                              ]
+                            },
+                            "approvedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "physicalIdentificationValidationProtocolId",
+                            "protocolVersion",
+                            "scope",
+                            "approvalStatus",
+                            "realSpecimenUse"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "A protocol with the same id or protocolVersion exists (PROTOCOL_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid protocol (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/validation-protocols/{physicalIdentificationValidationProtocolId}/executions": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Authorize a run of a validation protocol",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. RF016 AC7, RULE-037. A run is authorized only when the stored protocol is approved_for_execution and, in the ex_ante_synthetic scope, realSpecimenUse is false; otherwise 409 PROTOCOL_NOT_EXECUTABLE. The authorization is documentary, not a result of the assay: nothing is written but its audit entry. The 404 is an unknown protocol (PROTOCOL_NOT_FOUND). The failures are coded: the error is the code and message the reason. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "physicalIdentificationValidationProtocolId",
+            "in": "path",
+            "required": true,
+            "description": "The protocol.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run is authorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "physicalIdentificationValidationProtocolId": {
+                              "type": "string"
+                            },
+                            "protocolVersion": {
+                              "type": "string"
+                            },
+                            "scope": {
+                              "type": "string"
+                            },
+                            "approvalStatus": {
+                              "type": "string",
+                              "enum": [
+                                "approved_for_execution"
+                              ]
+                            },
+                            "realSpecimenUse": {
+                              "type": "boolean"
+                            },
+                            "authorizedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          },
+                          "required": [
+                            "physicalIdentificationValidationProtocolId",
+                            "protocolVersion",
+                            "scope",
+                            "approvalStatus",
+                            "realSpecimenUse",
+                            "authorizedAt"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The protocol is not found (PROTOCOL_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The protocol is not approved_for_execution, or an ex ante one uses a real specimen (PROTOCOL_NOT_EXECUTABLE, RULE-037).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/physical-chain/scan": {
       "post": {
         "tags": [

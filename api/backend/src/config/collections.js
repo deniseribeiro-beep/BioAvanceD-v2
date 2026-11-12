@@ -51,6 +51,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   operationalStateDecisions: env.COLL_OPERATIONAL_STATE_DECISIONS || 'operationalStateDecisions',
   labelIdentifiers: env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
   scanEvents: env.COLL_SCAN_EVENTS || 'scanEvents',
+  physicalIdentificationValidationProtocols: env.COLL_PHYSICAL_IDENTIFICATION_VALIDATION_PROTOCOLS || 'physicalIdentificationValidationProtocols',
   custodianshipAssignments: env.COLL_CUSTODIANSHIP_ASSIGNMENTS || 'custodianshipAssignments',
   shipments: env.COLL_SHIPMENTS || 'shipments',
   devices: env.COLL_DEVICES || 'devices',

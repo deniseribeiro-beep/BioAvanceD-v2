@@ -23,6 +23,8 @@ module.exports = {
     { method: 'POST', path: '/rack-assignments/:rackLocationAssignmentId/remove', permission: 'manageStorageTopology' },
     { method: 'POST', path: '/racks', permission: 'manageStorageTopology' },
     { method: 'GET', path: '/racks/:storageRackId/positions', permission: 'viewStorageTopology' },
+    { method: 'POST', path: '/validation-protocols', permission: 'manageStorageTopology' },
+    { method: 'POST', path: '/validation-protocols/:physicalIdentificationValidationProtocolId/executions', permission: 'manageStorageAllocation' },
     { method: 'POST', path: '/scan', permission: 'manageStorageAllocation' },
   ],
 };

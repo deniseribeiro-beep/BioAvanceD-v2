@@ -248,6 +248,7 @@ module.exports = {
   COLL_OPERATIONAL_STATE_DECISIONS: process.env.COLL_OPERATIONAL_STATE_DECISIONS || 'operationalStateDecisions',
   COLL_LABEL_IDENTIFIERS: process.env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
   COLL_SCAN_EVENTS: process.env.COLL_SCAN_EVENTS || 'scanEvents',
+  COLL_PHYSICAL_IDENTIFICATION_VALIDATION_PROTOCOLS: process.env.COLL_PHYSICAL_IDENTIFICATION_VALIDATION_PROTOCOLS || 'physicalIdentificationValidationProtocols',
   COLL_CUSTODIANSHIP_ASSIGNMENTS: process.env.COLL_CUSTODIANSHIP_ASSIGNMENTS || 'custodianshipAssignments',
   COLL_SHIPMENTS: process.env.COLL_SHIPMENTS || 'shipments',
   COLL_DEVICES: process.env.COLL_DEVICES || 'devices',
