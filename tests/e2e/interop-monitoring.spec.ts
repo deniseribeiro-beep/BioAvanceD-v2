@@ -11,8 +11,10 @@ import {
   findFreezerSample,
   bindSensor,
   unbindSensor,
+  findMqttIngestionAudits,
 } from './helpers/seedSensor';
 import { queryTemperaturePoints, queryFreezerReadingIds } from './helpers/queryInflux';
+import { publishMqtt } from './helpers/publishMqtt';
 import { realLogin } from './helpers/realAuth';
 import { computeTotp } from './helpers/totp';
 import { clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
@@ -1918,6 +1920,66 @@ test.describe('Telemetry reading identity and replay (#1317, RF009) — real bac
       expect(invalid.status(), await invalid.text()).toBe(422);
     } finally {
       await unbindSensor(sensorId);
+    }
+  });
+});
+
+// #1516 (RF009, RNF004 C6): a reading published over MQTT reaches InfluxDB
+// through the real broker and the same reading contract as HTTPS, and HTTPS
+// ingestion stays accepted beside it.
+test.describe('MQTT telemetry ingestion (#1516, RF009, RNF004 C6) — real backend, real broker', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  test('a reading published over MQTT lands in InfluxDB with a reading id, beside HTTPS', async ({ request }) => {
+    const sensorId = `rf009-mqtt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const topic = `bioavanced/telemetry/temperature/${sensorId}`;
+    const timestamp = new Date().toISOString();
+    const message = { sensorId, temperatureValue: 4.5, timestamp, idempotencyKey: `${sensorId}-k1` };
+
+    await bindSensor(sensorId);
+    try {
+      // The backend subscribes asynchronously after it starts, so the message
+      // is retained: it reaches the subscriber whether it subscribed before or
+      // after this publish. Published once, never in a poll loop: two
+      // near-simultaneous sends of one key can each write a point.
+      await publishMqtt(topic, JSON.stringify(message), { retain: true });
+
+      // RF009 C9: one point, at the device's observedAt, carrying a reading id.
+      await expect.poll(async () => (await queryFreezerReadingIds(sensorId)).length, { timeout: 30_000 }).toBeGreaterThan(0);
+      const points = await queryFreezerReadingIds(sensorId);
+      expect(points.map((p) => ({ time: new Date(p.time).toISOString(), id: p.telemetryReadingId })))
+        .toEqual([{ time: timestamp, id: expect.stringMatching(/^[0-9a-f-]{36}$/) }]);
+
+      // The processed audit row is appended only after the point is written,
+      // so it is polled on its own.
+      await expect.poll(
+        async () => (await findMqttIngestionAudits(sensorId)).filter((a) => a.status === 'processed').length,
+        { timeout: 10_000 },
+      ).toBeGreaterThan(0);
+      const audits = (await findMqttIngestionAudits(sensorId)).filter((a) => a.status === 'processed');
+      expect(audits[0]).toMatchObject({ topic, source: 'mqtt', sensorId, temperatureValue: 4.5 });
+
+      // RNF004 C6: HTTPS is accepted beside MQTT, through the same contract into the same store.
+      const admin = await realLogin(request);
+      const https = await request.post(`${apiBaseURL}/api/temperature/reading`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { sensorId, temperatureValue: 5.5, timestamp: new Date().toISOString(), idempotencyKey: `${sensorId}-k2` },
+      });
+      expect(https.status(), await https.text()).toBe(201);
+      const httpsReadingId = (await https.json()).data.telemetryReadingId;
+      const ids = (await queryFreezerReadingIds(sensorId)).map((p) => p.telemetryReadingId);
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+      expect(ids).toContain(httpsReadingId);
+    } finally {
+      try {
+        // Clears the broker's retained copy; the backend ignores an empty payload.
+        await publishMqtt(topic, '', { retain: true });
+      } finally {
+        await unbindSensor(sensorId);
+      }
     }
   });
 });
