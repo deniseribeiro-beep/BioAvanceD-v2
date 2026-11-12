@@ -159,6 +159,53 @@ describe('batch-validation-engine.service#buildSampleRow', () => {
     expect(mapped.locationID).toBeUndefined();
     expect(mapped.sampleType).toBe('Sangue');
   });
+
+  // #1536: parseSampleRow reads the eight SPREC keys, and the header map had
+  // no entry for any, so every batch-imported sample certified on an
+  // all-null SPREC. normalizeHeader folds snake_case and camelCase onto one
+  // key, so both forms must reach the parsed sprec.
+  it('maps every SPREC header, snake_case and camelCase, onto the field parseSampleRow reads (#1536)', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+    const expected = {
+      matrixType: 'fluid',
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    };
+
+    [
+      {
+        sprec_matrix_type: 'fluid',
+        sprec_sample_type: 'BLD',
+        sprec_primary_container: 'SST',
+        sprec_pre_centrifugation: 'A',
+        sprec_centrifugation: 'A',
+        sprec_second_centrifugation: 'A',
+        sprec_post_centrifugation_delay: 'A',
+        sprec_long_term_storage: 'C',
+      },
+      {
+        sprecMatrixType: 'fluid',
+        sprecSampleTypeCode: 'BLD',
+        sprecPrimaryContainer: 'SST',
+        sprecPreCentrifugation: 'A',
+        sprecCentrifugation: 'A',
+        sprecSecondCentrifugation: 'A',
+        sprecPostCentrifugationDelay: 'A',
+        sprecLongTermStorage: 'C',
+      },
+    ].forEach((row) => {
+      const parsed = importLGPDService.parseSampleRow(
+        batchValidationEngine.buildSampleRow({ ...row, sampleType: 'PLASMA' })
+      );
+
+      expect(parsed.sprec, JSON.stringify(row)).toEqual(expected);
+    });
+  });
 });
 
 describe('batch-validation-engine.service', () => {
@@ -518,6 +565,54 @@ describe('batch-validation-engine.service', () => {
     );
     expect(result.classification).not.toBe('INVALID');
     expect(result.persistedIds).toContain('sample-object-id-6');
+  });
+
+  it('hands createSample the file\'s SPREC columns, so the sample certifies on them (#1536)', async () => {
+    const { resolveMethodologicalQuality } = require('../../src/services/quality-domain.service');
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-1536', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+      _id: 'sample-object-id-1536',
+      specimenId: 'BR-2026-001536',
+    });
+
+    await batchValidationEngine.persistSample(
+      db,
+      {
+        participantId: '12345678',
+        sampleType: 'PLASMA',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+        sprec_matrix_type: 'fluid',
+        sprec_sample_type: 'BLD',
+        sprec_primary_container: 'SST',
+        sprec_pre_centrifugation: 'A',
+        sprec_centrifugation: 'A',
+        sprec_second_centrifugation: 'A',
+        sprec_post_centrifugation_delay: 'A',
+        sprec_long_term_storage: 'C',
+      },
+      11
+    );
+
+    const sprec = createSampleSpy.mock.calls[0][1].sprec;
+    expect(sprec).toEqual({
+      matrixType: 'fluid',
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    });
+
+    const quality = resolveMethodologicalQuality({ sprec });
+    expect(quality.final_grade).toBe('A');
+    expect(quality.rcs_score).toBe(100);
+    expect(quality.governance_status).toBe(1);
   });
 
   it('returns INVALID with the thrown error message when createSample rejects', async () => {

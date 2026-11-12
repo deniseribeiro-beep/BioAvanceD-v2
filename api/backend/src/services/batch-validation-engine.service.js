@@ -443,6 +443,21 @@ class BatchValidationEngine {
       qualidade: 'quality',
       barcode: 'barcode',
       codigodebarras: 'barcode',
+      // #1536: parseSampleRow reads these eight SPREC keys, and the map had no
+      // entry for any, so every batch-imported sample certified on an
+      // all-null SPREC. normalizeHeader strips non-alphanumerics, so one key
+      // covers the snake_case and camelCase forms. sprecsampletypecode keeps
+      // its own target so parseSampleRow's sprecSampleType-first priority
+      // holds when a file carries both.
+      sprecmatrixtype: 'sprecMatrixType',
+      sprecsampletype: 'sprecSampleType',
+      sprecsampletypecode: 'sprecSampleTypeCode',
+      sprecprimarycontainer: 'sprecPrimaryContainer',
+      sprecprecentrifugation: 'sprecPreCentrifugation',
+      spreccentrifugation: 'sprecCentrifugation',
+      sprecsecondcentrifugation: 'sprecSecondCentrifugation',
+      sprecpostcentrifugationdelay: 'sprecPostCentrifugationDelay',
+      spreclongtermstorage: 'sprecLongTermStorage',
     };
 
     Object.keys(rawRow).forEach((sourceColumn) => {

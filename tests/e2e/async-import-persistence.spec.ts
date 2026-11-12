@@ -137,6 +137,64 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
     expect(sample!.specimenId).not.toBe(sourceRecordId);
   });
 
+  test('POST /api/import/batch keeps the file\'s SPREC columns, so the sample certifies on them (#1536)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const box = await seedStorageBoxLocation();
+    seededBoxes.push(box);
+
+    const sourceRecordId = `LIMS-1536-${Date.now()}`;
+    const csv = [
+      'specimenId,participantId,sampleType,sampleOrigin,extractionProtocol,quantity,boxId,positionCode,linkedProject,collectionId,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      `${sourceRecordId},${participant.participantId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,5,${box.boxId},${box.positionCode},RF029 async import e2e,${governed!.collectionId},fluid,BLD,SST,A,A,A,A,C`,
+    ].join('\n');
+
+    const upload = await request.post(`${apiBaseURL}/api/import/batch`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: { name: 'amostras-1536.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') },
+      },
+    });
+    expect(upload.status()).toBe(202);
+    const jobId = (await upload.json())?.data?.jobId;
+    expect(jobId).toBeTruthy();
+    createdBatchJobIds.push(String(jobId));
+
+    let status: any = null;
+    await expect
+      .poll(
+        async () => {
+          const res = await request.get(`${apiBaseURL}/api/import/batch/${jobId}`, {
+            headers: { Authorization: `Bearer ${admin.token}` },
+          });
+          status = (await res.json())?.data;
+          return status?.status;
+        },
+        { timeout: 60_000, intervals: [1_000] }
+      )
+      .toMatch(/^(COMPLETED|FAILED)$/);
+
+    expect(status.errors, JSON.stringify(status.errors)).toEqual([]);
+    expect(status.status).toBe('COMPLETED');
+
+    const sample = await db.collection('samples').findOne({ sourceRecordId });
+    expect(sample, 'no sample carries the file\'s specimen id as sourceRecordId').not.toBeNull();
+    // The file's SPREC codes reach the stored sample, and the grade is derived from them.
+    expect(sample!.sprec).toMatchObject({
+      matrixType: 'fluid',
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    });
+    expect(sample!.finalGrade).toBe('A');
+    expect(sample!.rcsScore).toBe(100);
+  });
+
   test('a results import through the async importer tags each result with its job\'s importJobID (#1327)', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
