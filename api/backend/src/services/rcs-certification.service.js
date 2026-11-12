@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const referenceData = require('./rcs-reference-data');
 const { canonicalJson } = require('../models/ConfigurationRelease');
+const evidenceRule = require('./governance-evidence-rule');
 
 const AXES = Object.freeze({
   fluid: Object.freeze([
@@ -158,8 +159,12 @@ class RcsCertificationService {
 
   // RF018 AC7 (#1320): the version and checksum of the rules the gate
   // applies, as canonical JSON over the seeded rules, the catalogs and the
-  // code constants evaluateGovernance reads. The version is the seed's own
-  // model code, not a SemVer.
+  // code constants evaluateGovernance reads. It also covers the governance
+  // evidence rule (RNF018 AC5, #1524): the per-category reason, rule code and
+  // flag evaluateGovernance reads, and the URI kinds, hash and URI forms,
+  // statuses and cap the resolver applies before certify (see
+  // docs/decisions/2026-11-12-rcs-governance-evidence-rule-set.md). The
+  // version is the seed's own model code, not a SemVer.
   governanceRuleSet() {
     if (!this.ruleSet) {
       const rules = {
@@ -172,6 +177,14 @@ class RcsCertificationService {
         unknown_codes: [...UNKNOWN_CODES].sort(),
         other_codes: [...OTHER_CODES].sort(),
         code_pattern: SPREC_CODE_PATTERN.source,
+        evidence_rule: {
+          categories: EVIDENCE_CATEGORIES,
+          kinds: evidenceRule.EVIDENCE_KINDS,
+          hash_pattern: evidenceRule.EVIDENCE_HASH.source,
+          uri_pattern: evidenceRule.EVIDENCE_URI.source,
+          statuses: evidenceRule.RESOLUTION_STATUSES,
+          max_references_per_category: evidenceRule.MAX_REFERENCES_PER_CATEGORY,
+        },
       };
       this.ruleSet = {
         version: this.data.model_code,

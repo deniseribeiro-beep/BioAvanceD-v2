@@ -9,25 +9,14 @@ const { COLLECTION_NAME: OUTBOX_COLLECTION_NAME } = require('./neo4jOutbox.servi
 // client never sends it (see
 // docs/decisions/2026-11-09-rcs-governance-evidence-readers.md).
 
-const EVIDENCE_HASH = /^sha256:[0-9a-f]{64}$/;
-const EVIDENCE_URI = /^urn:bioavanced:([a-z-]+):([A-Za-z0-9._-]+)$/;
-const MAX_REFERENCES_PER_CATEGORY = 20;
-
-const RESOLUTION_STATUSES = Object.freeze({
-  RESOLVED: 'resolved',
-  MISSING_HASH: 'missing_hash',
-  UNRESOLVABLE_URI: 'unresolvable_uri',
-  HASH_MISMATCH: 'hash_mismatch',
-});
-
-// The one URI kind each category accepts.
-const EVIDENCE_KINDS = Object.freeze({
-  traceability: 'custody-event',
-  monitoring: 'telemetry-exposure-summary',
-  documentation: 'collection-governance-approval',
-});
-
-const EVIDENCE_CATEGORY_KEYS = Object.freeze(Object.keys(EVIDENCE_KINDS));
+const {
+  EVIDENCE_HASH,
+  EVIDENCE_URI,
+  MAX_REFERENCES_PER_CATEGORY,
+  RESOLUTION_STATUSES,
+  EVIDENCE_KINDS,
+  EVIDENCE_CATEGORY_KEYS,
+} = require('./governance-evidence-rule');
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date);
