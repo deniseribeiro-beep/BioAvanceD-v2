@@ -11,17 +11,24 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 const PARTICIPANT = '12345678';
 
+// RF004 AC2 (#1538): a biobank collection with an approval in force, so the
+// mount's collection gate admits the specimen.
+const GOVERNED_COLLECTION = { collectionId: 'COL-GOV-1', governanceRegime: 'biobank', governanceContext: { biobankGovernanceContextId: 'BGC-1' } };
+const GOVERNED_APPROVAL = { collectionId: 'COL-GOV-1', approvalId: 'APPR-GOV-1', status: 'active', effectivePeriod: { start: '2020-01-01', end: null }, createdAt: new Date('2020-01-01') };
+
 function specimenDb({
   patients = [{ participantId: PARTICIPANT }],
   consents = [{ participantId: PARTICIPANT, status: 'ACTIVE' }],
   organizations = [{ organizationId: 'org-site-1' }],
   samples = [],
   labelIdentifiers = [],
+  collections = [GOVERNED_COLLECTION],
+  collectionGovernanceApprovals = [GOVERNED_APPROVAL],
 } = {}) {
-  return createFakeDb({ patients, patientConsents: consents, organizations, samples, labelIdentifiers });
+  return createFakeDb({ patients, patientConsents: consents, organizations, samples, labelIdentifiers, collections, collectionGovernanceApprovals });
 }
 
-const SPECIMEN = { specimenId: 'client-1', participantId: PARTICIPANT, collectionSite: 'org-site-1' };
+const SPECIMEN = { specimenId: 'client-1', participantId: PARTICIPANT, collectionSite: 'org-site-1', collectionId: 'COL-GOV-1' };
 
 async function refusal(db, payload) {
   return validateSpecimenReferences(db, payload).then(() => null, (error) => error);
@@ -167,6 +174,39 @@ describe('ingestion/specimenTarget validateSpecimenReferences (RF029, #1318)', (
 
   it('14e. the all-digit barcode 0001234 is no personal data and resolves', async () => {
     await expect(validateSpecimenReferences(specimenDb(), { ...SPECIMEN, barcode: '0001234' })).resolves.toBeUndefined();
+  });
+
+  it('14f. a specimen that names no collection is 409 COLLECTION_REQUIRED (RF004 AC2, ELM-0118, #1538)', async () => {
+    const withoutCollection = { ...SPECIMEN };
+    delete withoutCollection.collectionId;
+
+    const error = await refusal(specimenDb(), withoutCollection);
+
+    expect(error).toMatchObject({ statusCode: 409, violationCode: 'COLLECTION_REQUIRED' });
+  });
+
+  it('14g. an unknown collectionId is 404, with no violationCode (#1538)', async () => {
+    const error = await refusal(specimenDb(), { ...SPECIMEN, collectionId: 'COL-UNKNOWN' });
+
+    expect(error).toMatchObject({ statusCode: 404, message: 'collectionId COL-UNKNOWN não encontrado' });
+    expect(error.violationCode).toBeUndefined();
+  });
+
+  it('14h. a collection with no governance approval in force is 409 COLLECTION_NOT_ADMITTED (RF004 AC2, #1538)', async () => {
+    const error = await refusal(specimenDb({ collectionGovernanceApprovals: [] }), { ...SPECIMEN });
+
+    expect(error).toMatchObject({ statusCode: 409, violationCode: 'COLLECTION_NOT_ADMITTED' });
+  });
+
+  it('14i. a failing collections lookup rejects with its own error, never a 404 or 409 verdict (#1538)', async () => {
+    const db = specimenDb();
+    const outage = new Error('connection reset');
+    vi.spyOn(db.collection('collections'), 'findOne').mockRejectedValue(outage);
+
+    const error = await refusal(db, { ...SPECIMEN });
+
+    expect(error).toBe(outage);
+    expect(error.statusCode).toBeUndefined();
   });
 });
 

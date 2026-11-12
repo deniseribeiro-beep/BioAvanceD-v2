@@ -9,6 +9,7 @@
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { SampleModel } = require('../models/Sample');
 const { GraphProjectionService } = require('../services/graphProjection.service');
+const sampleCollectionGate = require('../services/sample-collection-gate.service');
 const { SPECIMEN_LABEL_NAMESPACE_ID, issueSpecimenLabel } = require('../services/specimenLabel.service');
 const { getCollection } = require('../utils/collectionResolver');
 const { LEGACY_BARCODE_WRITE_REFUSED, sampleBarcodeWindowOpen } = require('../utils/sampleBarcodeWindow');
@@ -120,6 +121,20 @@ async function validateSpecimenReferences(db, payload) {
     if (await getCollection(db, 'labelIdentifiers').findOne(activeLabel)) {
       throw referenceError(409, `barcode ${payload.barcode} já ativo como etiqueta`, 'DUPLICATE_BARCODE');
     }
+  }
+
+  // RF004 AC2, ELM-0118 (#1538): the mount's own collection gate, last. An
+  // unknown collection is a 404; a missing or refused one quarantines under
+  // the gate's code; a failed lookup rethrows, as the other gates do.
+  try {
+    await sampleCollectionGate.assertSampleCollectionAdmits(db, payload);
+  } catch (error) {
+    if (error.statusCode === 404) throw referenceError(404, error.message);
+    if (error.code === sampleCollectionGate.COLLECTION_REQUIRED
+      || error.code === sampleCollectionGate.COLLECTION_NOT_ADMITTED) {
+      throw referenceError(409, error.message, error.code);
+    }
+    throw error;
   }
 }
 

@@ -749,10 +749,10 @@ function calcularQualidade(samplePayloadOrTempo, temperatura) {
 }
 
 // RF004 AC2 (#1497): the wizard names the specimen's collection (ELM-0118) in
-// specimen.collectionId. The shared canonical.v1.specimen schema stays closed
-// to it, since the ingestion Specimen target reads that schema and has no
-// collection gate (#1538); the intake validates the specimen without it, and
-// buildSampleDocumentFromIntake hands it to createSample, which gates it.
+// specimen.collectionId. The shared canonical.v1.specimen schema now admits
+// it, and the ingestion Specimen target gates it (#1538); the intake still
+// validates the specimen without it, and buildSampleDocumentFromIntake hands
+// it to createSample, which gates it.
 function splitIntakeCollectionId(data) {
   const specimen = data?.specimen;
   if (!specimen || typeof specimen !== 'object' || Array.isArray(specimen)

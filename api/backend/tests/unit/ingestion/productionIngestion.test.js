@@ -813,12 +813,17 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     quantity: 5,
     registeredAt: '2026-10-01T09:00:00.000Z',
     collectionSite: 'org-site-1',
+    collectionId: 'COL-GOV-1',
   };
 
+  // RF004 AC2 (#1538): a biobank collection with an approval in force, so the
+  // mount's collection gate admits the specimen.
   function seedSpecimenReferences(db, { consents = [{ participantId: PARTICIPANT, status: 'ACTIVE' }] } = {}) {
     db.collection('patients').docs.push({ participantId: PARTICIPANT });
     db.collection('patientConsents').docs.push(...consents);
     db.collection('organizations').docs.push({ organizationId: 'org-site-1' });
+    db.collection('collections').docs.push({ collectionId: 'COL-GOV-1', governanceRegime: 'biobank', governanceContext: { biobankGovernanceContextId: 'BGC-1' } });
+    db.collection('collectionGovernanceApprovals').docs.push({ collectionId: 'COL-GOV-1', approvalId: 'APPR-GOV-1', status: 'active', effectivePeriod: { start: '2020-01-01', end: null }, createdAt: new Date('2020-01-01') });
   }
 
   function specimenDb(options = {}) {
@@ -912,6 +917,20 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
 
     expect(result.status).toBe('quarantined');
     expect(result.violations).toEqual([expect.objectContaining({ code: 'CONSENT_NOT_ACTIVE', field: null })]);
+    expect(db.collections.samples.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('39b. a Specimen that names no collection quarantines with COLLECTION_REQUIRED and writes nothing to samples (RF004 AC2, ELM-0118, #1538)', async () => {
+    const db = specimenDb();
+    const outbox = fakeOutbox();
+    const { collectionId: _collectionId, ...withoutCollection } = SPECIMEN;
+
+    const result = await ingestSpecimen(db, { outbox, payload: withoutCollection });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([expect.objectContaining({ code: 'COLLECTION_REQUIRED', field: null })]);
     expect(db.collections.samples.docs).toHaveLength(0);
     expect(db.collections.missingDataReasons.docs).toHaveLength(0);
     expect(outbox.appendEvent).not.toHaveBeenCalled();

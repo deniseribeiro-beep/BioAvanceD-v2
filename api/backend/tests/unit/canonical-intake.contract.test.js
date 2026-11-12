@@ -63,18 +63,30 @@ describe('canonical.v1.intake specimen.parentSpecimenIds (dict-02 ELM-0120, #137
   });
 });
 
-describe('canonical.v1.specimen collectionId (ELM-0118, RF004 AC2, #1497)', () => {
-  // The shared specimen schema stays closed to collectionId: the ingestion
-  // Specimen target validates against it and has no collection gate (#1538).
-  // The intake wizard carries collectionId past this schema itself.
-  it('refuses a specimen that names a collection', () => {
+describe('canonical.v1.specimen collectionId (ELM-0118, RF004 AC2, #1538)', () => {
+  // The shared specimen schema admits a non-empty collectionId; the ingestion
+  // Specimen target's collection gate refuses a specimen naming none.
+  it('accepts a specimen that names a collection', () => {
     const { valid, errors } = validate('canonical.v1.specimen', {
       ...baseIntake.specimen,
       collectionId: 'COL-1'
     });
 
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+
+  it.each([
+    ['an empty string', ''],
+    ['a number', 1],
+  ])('refuses %s as collectionId at /collectionId', (_label, collectionId) => {
+    const { valid, errors } = validate('canonical.v1.specimen', {
+      ...baseIntake.specimen,
+      collectionId
+    });
+
     expect(valid).toBe(false);
-    expect(errors.some((error) => error.keyword === 'additionalProperties' && error.params.additionalProperty === 'collectionId')).toBe(true);
+    expect(errors.some((error) => error.instancePath === '/collectionId')).toBe(true);
   });
 });
 

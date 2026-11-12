@@ -61,6 +61,9 @@ function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
     organizations: createMatchingCollection([{ organizationId: 'test-org-default' }, { organizationId: 'org-other' }]),
     patients: createMatchingCollection([{ participantId: CONSENTED_PARTICIPANT }, { participantId: UNCONSENTED_PARTICIPANT }]),
     patientConsents: createMatchingCollection([{ participantId: CONSENTED_PARTICIPANT, status: 'ACTIVE' }]),
+    // RF004 AC2 (#1538): a biobank collection with an approval in force, the Specimen's collectionId.
+    collections: createMatchingCollection([{ collectionId: 'COL-GOV-1', governanceRegime: 'biobank', governanceContext: { biobankGovernanceContextId: 'BGC-1' } }]),
+    collectionGovernanceApprovals: createMatchingCollection([{ collectionId: 'COL-GOV-1', approvalId: 'APPR-GOV-1', status: 'active', effectivePeriod: { start: '2020-01-01', end: null }, createdAt: new Date('2020-01-01') }]),
     consent_templates: createMatchingCollection([{ _id: new ObjectId(TEMPLATE_HEX), title: 'TCLE', active: true, version: 1 }]),
     consentPermissions: createMatchingCollection([]),
     consentDecisionEvents: createMatchingCollection([]),
@@ -105,6 +108,7 @@ const SPECIMEN = {
   quantity: 5,
   registeredAt: '2026-10-01T09:00:00.000Z',
   collectionSite: 'test-org-default',
+  collectionId: 'COL-GOV-1',
 };
 // The clinicalUnitId is the Coordenador's organization too.
 const PARTICIPANT = { participantId: 'client-claimed', sex: 'F', clinicalUnitId: 'test-org-default', consentTemplateId: TEMPLATE_HEX };

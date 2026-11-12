@@ -509,6 +509,8 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
       quantity: 5,
       registeredAt: new Date().toISOString(),
       collectionSite: organizationId,
+      // #1538 (RF004 AC2, ELM-0118): the target runs the mount's collection gate.
+      collectionId: governed!.collectionId,
     };
   }
 
@@ -557,6 +559,21 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
 
     const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
     expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['CONSENT_NOT_ACTIVE']);
+    expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
+  });
+
+  test('#1538 RF004 AC2: a Specimen that names no collection answers 422 INGESTION_QUARANTINED with COLLECTION_REQUIRED and writes no sample', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-specimen-no-collection`;
+    const { collectionId: _collectionId, ...payload } = await seedSpecimenReferences(request);
+
+    const res = await ingest(request, { entityType: 'Specimen', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['COLLECTION_REQUIRED']);
     expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
   });
 
