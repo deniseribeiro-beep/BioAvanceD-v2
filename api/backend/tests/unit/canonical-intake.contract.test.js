@@ -63,6 +63,21 @@ describe('canonical.v1.intake specimen.parentSpecimenIds (dict-02 ELM-0120, #137
   });
 });
 
+describe('canonical.v1.specimen collectionId (ELM-0118, RF004 AC2, #1497)', () => {
+  // The shared specimen schema stays closed to collectionId: the ingestion
+  // Specimen target validates against it and has no collection gate (#1538).
+  // The intake wizard carries collectionId past this schema itself.
+  it('refuses a specimen that names a collection', () => {
+    const { valid, errors } = validate('canonical.v1.specimen', {
+      ...baseIntake.specimen,
+      collectionId: 'COL-1'
+    });
+
+    expect(valid).toBe(false);
+    expect(errors.some((error) => error.keyword === 'additionalProperties' && error.params.additionalProperty === 'collectionId')).toBe(true);
+  });
+});
+
 describe('canonical.v1.intake organizationId (#1376)', () => {
   it('accepts a top-level organizationId string, the organization the intake stamps', () => {
     const { valid, errors } = validate('canonical.v1.intake', { ...baseIntake, organizationId: 'org-a' });

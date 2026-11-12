@@ -8,6 +8,7 @@ import { consentService } from '../../../services/api';
 const {
   buildSubmissionPayload,
   applyIntakeOrganization,
+  applyIntakeCollection,
   createClinicalStepSchema,
   getDictionarySlug,
   mapDictionaryOptions,
@@ -34,6 +35,7 @@ vi.mock('../../../api/client', () => ({
 
 vi.mock('../../../services/api', () => ({
   consentService: { getTemplates: vi.fn() },
+  collectionsService: { getAll: vi.fn().mockResolvedValue({ data: { data: [] }, status: 200 }) },
 }));
 
 describe('ClinicalIntakeWizard createClinicalStepSchema contracts', () => {
@@ -231,6 +233,18 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
 
     expect(payload).not.toHaveProperty('organizationId');
     expect(payload.specimen).not.toHaveProperty('collectionSite');
+  });
+
+  it('RF004 AC2 (#1497): the collection pick goes in specimen.collectionId', () => {
+    const payload = applyIntakeCollection(buildSubmissionPayload({ isHealthyControl: true, patientName: 'Paciente Teste', linkedProject: 'PROJ-1' }), 'COL-1');
+
+    expect(payload.specimen.collectionId).toBe('COL-1');
+  });
+
+  it('RF004 AC2 (#1497): with no collection pick the specimen carries no collectionId', () => {
+    const payload = applyIntakeCollection(buildSubmissionPayload({ isHealthyControl: true, patientName: 'Paciente Teste', linkedProject: 'PROJ-1' }), '');
+
+    expect(payload.specimen).not.toHaveProperty('collectionId');
   });
 });
 

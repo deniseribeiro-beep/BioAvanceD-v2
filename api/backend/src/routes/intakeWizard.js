@@ -475,6 +475,9 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     registeredAt: new Date(registrationDate),
     quantity: normalizeNumber(specimen.quantity, 0),
     unit: normalizeString(specimen.unit) || null,
+    // RF004 AC2 (#1497): the collection the wizard picked (ELM-0118);
+    // createSample checks a given one as it does for POST /api/samples.
+    collectionId: normalizeString(specimen.collectionId) || null,
     specimenStatus,
     linkedProject: normalizeString(specimen.linkedProject) || 'INTAKE_WIZARD',
     parentSpecimenIds: normalizeArray(specimen.parentSpecimenIds).map((parentId) => normalizeString(parentId)).filter(Boolean),
@@ -745,6 +748,24 @@ function calcularQualidade(samplePayloadOrTempo, temperatura) {
   return resolverQualidadeMetodologica(samplePayloadOrTempo);
 }
 
+// RF004 AC2 (#1497): the wizard names the specimen's collection (ELM-0118) in
+// specimen.collectionId. The shared canonical.v1.specimen schema stays closed
+// to it, since the ingestion Specimen target reads that schema and has no
+// collection gate (#1538); the intake validates the specimen without it, and
+// buildSampleDocumentFromIntake hands it to createSample, which gates it.
+function splitIntakeCollectionId(data) {
+  const specimen = data?.specimen;
+  if (!specimen || typeof specimen !== 'object' || Array.isArray(specimen)
+    || !Object.prototype.hasOwnProperty.call(specimen, 'collectionId')) {
+    return { contractData: data, collectionIdInvalid: false };
+  }
+  const { collectionId, ...specimenWithoutCollection } = specimen;
+  return {
+    contractData: { ...data, specimen: specimenWithoutCollection },
+    collectionIdInvalid: typeof collectionId !== 'string',
+  };
+}
+
 async function handleIntakeWizard(req, res) {
   const data = req.body;
 
@@ -783,9 +804,10 @@ async function handleIntakeWizard(req, res) {
       return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations, details: canonicalViolations.map((field) => `${field}: campo não canônico`) });
     }
 
-    const validation = validate('canonical.v1.intake', data);
-    if (!validation.valid) {
-      const fields = [];
+    const { contractData, collectionIdInvalid } = splitIntakeCollectionId(data);
+    const validation = validate('canonical.v1.intake', contractData);
+    if (!validation.valid || collectionIdInvalid) {
+      const fields = collectionIdInvalid ? ['specimen.collectionId'] : [];
       for (const issue of validation.errors || []) {
         const field = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.') || issue.params?.missingProperty || null;
         if (field) fields.push(field);

@@ -14,6 +14,8 @@ vi.mock('../../../api/client', () => ({ apiClient: { get: vi.fn(), post: vi.fn()
 vi.mock('../../../services/api', () => ({
   consentService: { getTemplates: vi.fn() },
   organizationService: { getMine: vi.fn(), getAll: vi.fn() },
+  // RF004 AC2 (#1497): the wizard's collection pick lists one governed collection.
+  collectionsService: { getAll: vi.fn().mockResolvedValue({ data: { success: true, data: [{ collectionId: 'COL-1', collectionName: 'Coleção Governada' }] }, status: 200 }) },
 }));
 vi.mock('../../../utils/sampleMerkleIntegrity', async (importOriginal) => {
   const actual = await importOriginal();
@@ -82,6 +84,7 @@ function fillSample(axes = ['PL1', 'SED', 'A', 'A', 'N', 'N', 'A']) {
   set('wizard-quantity', '5');
   set('wizard-linked-project', 'PROJ-1');
   set('wizard-institution-name', 'Hospital Teste');
+  set('wizard-collection', 'COL-1');
 }
 
 async function toClinical() {

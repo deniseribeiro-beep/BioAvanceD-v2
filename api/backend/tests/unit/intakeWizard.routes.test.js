@@ -336,6 +336,36 @@ describe('intakeWizard routes', () => {
         expect(res.body.fields).toContain('specimen.parentSpecimenIds');
         expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
       });
+
+      // RF004 AC2 (#1497), on the same createSample fixture: the collection
+      // the wizard picked passes the intake contract and reaches createSample,
+      // which runs the collection gate.
+      it('hands the picked specimen.collectionId to createSample and answers 200 (RF004 AC2, #1497)', async () => {
+        const { app, sampleServiceModule } = parentsFixture();
+
+        const res = await request(app).post('/api/intake-wizard').send({
+          ...VALID_PAYLOAD,
+          specimen: { ...VALID_PAYLOAD.specimen, collectionId: 'COL-1' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
+        expect(sampleServiceModule.createSample.mock.calls[0][1].collectionId).toBe('COL-1');
+      });
+
+      it('returns 422 NON_CANONICAL_FIELD for a non-string specimen.collectionId, and creates nothing (#1497)', async () => {
+        const { app, sampleServiceModule } = parentsFixture();
+
+        const res = await request(app).post('/api/intake-wizard').send({
+          ...VALID_PAYLOAD,
+          specimen: { ...VALID_PAYLOAD.specimen, collectionId: 42 },
+        });
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+        expect(res.body.fields).toContain('specimen.collectionId');
+        expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
+      });
     });
 
     // #1355: the intake stamps the caller's organization on the sample and on

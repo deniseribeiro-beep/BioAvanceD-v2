@@ -123,6 +123,33 @@ describe('intakeWizard helpers', () => {
     expect(document.specimenStatus).toBe('available');
   });
 
+  it('buildSampleDocumentFromIntake carries the trimmed specimen.collectionId (RF004 AC2, #1497)', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: { collectionId: ' COL-1 ' },
+    });
+
+    expect(document.collectionId).toBe('COL-1');
+  });
+
+  it('buildSampleDocumentFromIntake gives a null collectionId when the specimen names none (#1497)', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: {},
+    });
+
+    expect(document.collectionId).toBeNull();
+  });
+
+  it('buildSampleDocumentFromIntake gives a null collectionId for a blank specimen.collectionId (#1497)', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: { collectionId: '' },
+    });
+
+    expect(document.collectionId).toBeNull();
+  });
+
   it('buildSampleDocumentFromIntake derives specimenStatus quarantined for any non-available specimenStatus (#415)', () => {
     const document = helpers.buildSampleDocumentFromIntake({
       participant: { patientName: 'Paciente Teste' },

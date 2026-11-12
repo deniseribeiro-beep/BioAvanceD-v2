@@ -21,7 +21,7 @@ import { useSemanticCascade } from '../../../hooks/useSemanticCascade';
 //   placeholder="Buscar CID por código ou descrição..."
 // />
 import intakeService from '../../../api/intake.service';
-import { consentService } from '../../../services/api';
+import { collectionsService, consentService } from '../../../services/api';
 import { LIMITS } from '../../../config/constants/limits.constants';
 import { VALIDATION_MESSAGES, VALIDATION_RULES } from '../../../config/constants/validation.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constants/sprecDictionary';
@@ -1384,9 +1384,19 @@ function applyIntakeOrganization(payload, intakeOrganizationId) {
   return payload;
 }
 
+// RF004 AC2 (#1497): the specimen's collection (ELM-0118 Specimen.collectionId)
+// travels in specimen.collectionId; with no pick the key is left out.
+function applyIntakeCollection(payload, intakeCollectionId) {
+  if (intakeCollectionId) {
+    payload.specimen.collectionId = intakeCollectionId;
+  }
+  return payload;
+}
+
 export const _test = {
   buildSubmissionPayload,
   applyIntakeOrganization,
+  applyIntakeCollection,
   createClinicalStepSchema,
   getDictionarySlug,
   mapDictionaryOptions,
@@ -1427,6 +1437,10 @@ export default function ClinicalIntakeWizard(props) {
   // own is stamped by the backend.
   const organizationChoice = useCreateOrganizationChoice();
   const [intakeOrganizationId, setIntakeOrganizationId] = useState('');
+  // RF004 AC2 (#1497): every specimen names its governed collection.
+  const [collectionOptions, setCollectionOptions] = useState([]);
+  const [collectionOptionsError, setCollectionOptionsError] = useState('');
+  const [intakeCollectionId, setIntakeCollectionId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [consentTemplates, setConsentTemplates] = useState([]);
   const [consentTemplatesLoading, setConsentTemplatesLoading] = useState(false);
@@ -1852,6 +1866,33 @@ export default function ClinicalIntakeWizard(props) {
     };
 
     void loadConsentTemplate();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadCollections = async () => {
+      setCollectionOptionsError('');
+      try {
+        const response = await collectionsService.getAll();
+        if (!active) {
+          return;
+        }
+        setCollectionOptions(extractResponseItems(response));
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setCollectionOptions([]);
+        setCollectionOptionsError(error?.message || t('wizard.errors.loadCollections', 'Não foi possível carregar as coleções.'));
+      }
+    };
+
+    void loadCollections();
 
     return () => {
       active = false;
@@ -2416,6 +2457,12 @@ export default function ClinicalIntakeWizard(props) {
       return;
     }
 
+    if (!intakeCollectionId) {
+      setSubmitError(t('wizard.validation.collection', 'Selecione a coleção da amostra (RF004).'));
+      setActiveStep(1);
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -2424,6 +2471,7 @@ export default function ClinicalIntakeWizard(props) {
         payload.participant.participantId = String(patientMatchInfo.patient.patientID).trim();
       }
       applyIntakeOrganization(payload, intakeOrganizationId);
+      applyIntakeCollection(payload, intakeCollectionId);
       console.log('[DEBUG] Payload pronto:', payload);
 
       let response;
@@ -2788,6 +2836,19 @@ export default function ClinicalIntakeWizard(props) {
                 ))}
               </Select>
             )}
+            <Select
+              id="wizard-collection"
+              data-testid="wizard-collection"
+              label={t('wizard.fields.collection', 'Coleção')}
+              value={intakeCollectionId}
+              onChange={(event) => setIntakeCollectionId(event.target.value)}
+              required
+            >
+              <option value="">{t('wizard.fields.collectionPlaceholder', 'Selecione…')}</option>
+              {collectionOptions.map((option) => (
+                <option key={option.collectionId} value={option.collectionId}>{option.collectionName || option.collectionId}</option>
+              ))}
+            </Select>
             <Input id="linkedProject" name="linkedProject" data-testid="wizard-linked-project" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.linkedProject', 'Projeto vinculado')} value={formData.linkedProject} onChange={handleFieldChange('linkedProject')} required />
             <Input id="parentSpecimenIds" name="parentSpecimenIds" data-testid="wizard-parent-specimen-ids" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.parentSpecimenIds', 'Amostras de origem (specimenIds)')} value={formData.parentSpecimenIds} onChange={handleFieldChange('parentSpecimenIds')} />
             <Input id="institutionName" name="institutionName" data-testid="wizard-institution-name" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.institutionName', 'Nome da Instituição')} value={formData.collectionInstitution} onChange={handleFieldChange('collectionInstitution')} required />
@@ -3623,6 +3684,7 @@ export default function ClinicalIntakeWizard(props) {
           <span data-testid="wizard-step1-ready" hidden aria-hidden="true" />
         )}
         {consentTemplatesError && !/Nenhum TCLE ativo/i.test(String(consentTemplatesError || '')) && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{consentTemplatesError}</div></Card>}
+        {collectionOptionsError && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{collectionOptionsError}</div></Card>}
         {submitError && <Card className="bg-white rounded-2xl shadow-lg border border-red-100"><div className="text-sm font-semibold text-red-600">{submitError}</div></Card>}
         {sampleLabel && (
           <Card className="sample-label-card bg-white rounded-2xl shadow-lg border border-emerald-200">

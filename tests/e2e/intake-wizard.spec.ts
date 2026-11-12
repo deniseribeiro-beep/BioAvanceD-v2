@@ -28,6 +28,12 @@ import {
 import { bindSensor, unbindSensor, closeSeedSensorDb } from './helpers/seedSensor';
 import { generateValidCpf } from './helpers/cpf';
 import { waitForIntakeWizardReady } from './helpers/waitForIntakeWizardReady';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 import { MongoClient, ObjectId } from 'mongodb';
 
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
@@ -77,6 +83,17 @@ test.describe('Intake wizard (/next/intake)', () => {
           success: true,
           data: { scope: 'organization', organizations: [{ organizationId: 'org-e2e-mock', officialName: 'Mock Org' }] },
         }),
+      });
+    });
+
+    // RF004 AC2 (#1497): the wizard lists the collections a specimen may be
+    // registered into on mount. Unfulfilled, the mocked token 401s on the
+    // real backend and the client ends the session, as #1357 says above.
+    await page.route('**/api/collections', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: [{ collectionId: 'COL-E2E-MOCK', collectionName: 'Mock Collection' }] }),
       });
     });
   });
@@ -138,9 +155,17 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
   const seededBoxes: SeededStorageBox[] = [];
+  // RF004 AC2 (#1497): every specimen this describe creates names a governed collection.
+  let governedCollection: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governedCollection = await seedGovernedCollection(`intake-identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governedCollection);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
     await closeNeo4jDriver();
     await closeSeedSensorDb();
@@ -189,6 +214,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
         quality: 'GOOD',
         linkedProject: 'RNF007 AC3 #1503 identity-segregation e2e fixture',
         registeredAt: new Date().toISOString(),
+        collectionId: governedCollection!.collectionId,
         boxId: box.boxId,
         positionCode: box.positionCode,
       },
@@ -408,11 +434,15 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
 
   let mongoClient: MongoClient;
   let seededStorageBox: SeededStorageBox;
+  // RF004 AC2 (#1497): every wizard submission here picks this governed collection.
+  let governedCollection: GovernedCollection | null = null;
 
   test.beforeAll(async () => {
     mongoClient = new MongoClient(mongoUri);
     await mongoClient.connect();
     const db = mongoClient.db(mongoDbName);
+
+    governedCollection = await seedGovernedCollection(`intake-clinical-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
     await seedActiveConsentTemplate(db);
 
@@ -483,6 +513,8 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     if (seededStorageBox) {
       await cleanupStorageBoxLocation(seededStorageBox);
     }
+    await cleanupGovernedCollection(governedCollection);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -524,6 +556,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-quantity').fill('5');
     await page.getByTestId('wizard-linked-project').fill(`RF005-E2E-696-${suffix}`);
     await page.getByTestId('wizard-institution-name').fill('Hospital E2E 696');
+    await page.getByTestId('wizard-collection').selectOption(governedCollection!.collectionId);
     await page.getByTestId('wizard-next-button').click();
 
     // Step 3 — diagnosis search & select (fills ORPHA/OMIM/CID-10 readonly
@@ -872,6 +905,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-organization').selectOption(secondOrg);
     await page.getByTestId('wizard-linked-project').fill(`E2E-1354-${suffix}`);
     await page.getByTestId('wizard-institution-name').fill('Hospital E2E 1354');
+    await page.getByTestId('wizard-collection').selectOption(governedCollection!.collectionId);
     await page.getByTestId('wizard-next-button').click();
 
     await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
@@ -1007,6 +1041,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
         await page.getByTestId('wizard-parent-specimen-ids').fill(parentSpecimenIds);
       }
       await page.getByTestId('wizard-institution-name').fill('Hospital E2E 1371');
+      await page.getByTestId('wizard-collection').selectOption(governedCollection!.collectionId);
       await page.getByTestId('wizard-next-button').click();
 
       await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
