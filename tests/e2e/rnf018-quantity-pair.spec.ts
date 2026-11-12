@@ -11,6 +11,12 @@ import {
 } from './helpers/seedParticipant';
 import { generateValidCpf } from './helpers/cpf';
 import { waitForIntakeWizardReady } from './helpers/waitForIntakeWizardReady';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // RNF018 AC1 (#1525): a quantity rule the UI checks is also enforced by the
 // backend. Each case drives the UI check on the real app, then sends the same
@@ -41,6 +47,18 @@ test.afterAll(async () => {
 });
 
 test.describe('RNF018 AC1: each quantity check the UI makes, the backend makes too (#1525)', () => {
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rnf018-quantity-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
+  test.afterAll(async () => {
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
+  });
+
   test('the intake wizard refuses a quantity at or below zero, and POST /api/intake-wizard refuses the same quantity before writing', async ({ page, request }) => {
     const session = await realLogin(request);
     await seedRealAuth(page, session);
@@ -76,6 +94,7 @@ test.describe('RNF018 AC1: each quantity check the UI makes, the backend makes t
             extractionProtocol: 'TUBE_EDTA',
             quantity,
             linkedProject,
+            collectionId: governed!.collectionId,
           },
           clinical: {},
           biomarkers: [],
@@ -112,6 +131,7 @@ test.describe('RNF018 AC1: each quantity check the UI makes, the backend makes t
         registeredAt: new Date().toISOString(),
         boxId: seededStorageBox.boxId,
         positionCode: seededStorageBox.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());

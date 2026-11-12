@@ -14,6 +14,13 @@ import {
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  assignGovernedCustody,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real-backend proof for #1149: PUT /api/security/permissions wrote a
 // `security_permissions` store no authorization path reads, answered
@@ -297,10 +304,18 @@ test.describe('RNF008 AC2: stable codes with localized labels — real backend',
 test.describe('RNF008 AC3: an AccessPolicy organization scope refuses an out-of-scope requester — real backend', () => {
   const organizationIds: string[] = [];
   const seededStorageBoxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rnf008-scope-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async ({ request }) => {
     await Promise.all(seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -329,6 +344,7 @@ test.describe('RNF008 AC3: an AccessPolicy organization scope refuses an out-of-
         ...validSampleFields(),
         boxId,
         positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());
@@ -358,6 +374,8 @@ test.describe('RNF008 AC3: an AccessPolicy organization scope refuses an out-of-
     expect(sampleDoc.status()).toBe(200);
     const specimenId = (await sampleDoc.json()).data.specimenId;
     expect(specimenId).toBeTruthy();
+    // RF021 AC6: evaluateCompatible needs the specimen under a custody in force.
+    await assignGovernedCustody(request, apiBaseURL!, { Authorization: `Bearer ${token}` }, governed!, specimenId, organizationId);
 
     const create = await request.post(`${apiBaseURL}/api/access-requests`, {
       headers: { Authorization: `Bearer ${token}` },

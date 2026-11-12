@@ -7,6 +7,12 @@ import {
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Homologation Fase B: prove the SPA renders API/Mongo fields (not just
 // that a page loads). Screenshots alone do not cover this contract.
@@ -28,9 +34,17 @@ test.describe('UI ↔ API/Mongo field binding (homologacao runtime)', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via e2e-gate / test:e2e:docker');
 
   const seededBoxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection the sample enters.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`ui-mongo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed).catch(() => {});
+    await closeGovernedCollectionDb().catch(() => {});
     await closeSeedDb().catch(() => {});
   });
 
@@ -53,6 +67,7 @@ test.describe('UI ↔ API/Mongo field binding (homologacao runtime)', () => {
         ...validSampleFields(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());

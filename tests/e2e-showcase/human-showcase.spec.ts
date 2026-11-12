@@ -8,6 +8,13 @@ import { seedSensorWithPolicy, findTemperatureIncident, removeSeededSensor, clos
 import { queryTemperaturePoints } from '../e2e/helpers/queryInflux';
 import { completeFirstLoginMfa } from '../e2e/helpers/completeFirstLoginMfa';
 import { computeTotp } from '../e2e/helpers/totp';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  assignGovernedCustody,
+  type GovernedCollection,
+} from '../e2e/helpers/seedGovernedCollection';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -160,7 +167,16 @@ test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
 // seedStorageBoxLocation() fixture gap (#598) -- the equipment sub-domain
 // alone is what's demoed for RF017.
 test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w3-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
   test.afterAll(async () => {
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -301,6 +317,7 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
           registeredAt: new Date().toISOString(),
           boxId,
           positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       expect([201, 202]).toContain(sampleCreate.status());
@@ -365,7 +382,16 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
 });
 
 test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w4-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
   test.afterAll(async () => {
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -421,6 +447,7 @@ test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
           registeredAt: new Date().toISOString(),
           boxId: seededStorageBox.boxId,
           positionCode: seededStorageBox.positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       expect([201, 202]).toContain(createSample.status());
@@ -944,9 +971,17 @@ test.describe('Human-paced e2e showcase reel — W6 collection governance', () =
 // release. The study, protocol, DUO concept and consent are seeded.
 test.describe('Human-paced e2e showcase reel — RF024 access requests', () => {
   const boxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-rf024-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -986,10 +1021,13 @@ test.describe('Human-paced e2e showcase reel — RF024 access requests', () => {
         registeredAt: new Date().toISOString(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(sample.status());
     const specimenId = (await sample.json()).data.specimenId as string;
+    // Off camera (RF021 AC6): the specimen in custody under the collection's approval, so it can be released.
+    await assignGovernedCustody(request, apiBaseURL!, headers, governed!, specimenId, organizationId);
 
     try {
       // 1. The researcher's request, registered by the operator.
@@ -1045,9 +1083,17 @@ test.describe('Human-paced e2e showcase reel — RF024 access requests', () => {
 // AccessPolicy (#663) has no UI either and is not shown.
 test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
   const boxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w6-revoke-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -1117,10 +1163,13 @@ test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
           registeredAt: new Date().toISOString(),
           boxId: box.boxId,
           positionCode: box.positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       expect([201, 202], await sample.text()).toContain(sample.status());
       const specimenId = (await sample.json()).data.specimenId as string;
+      // Off camera (RF021 AC6): the specimen in custody, so the revoked purpose is the only refusal.
+      await assignGovernedCustody(request, apiBaseURL!, headers, governed!, specimenId, organizationId);
 
       // 1. A request for the health purpose, registered by the operator.
       await page.goto('/access-requests');
@@ -1330,9 +1379,17 @@ function sampleMerkleRoot(sample: Record<string, any>): string {
 
 test.describe('Human-paced e2e showcase reel — W8 storage and specimen state', () => {
   const boxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w8-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -1383,6 +1440,7 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
         registeredAt: new Date().toISOString(),
         boxId: boxA.boxId,
         positionCode: boxA.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(sample.status());
@@ -1503,9 +1561,17 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
 // which other cases cover.
 test.describe('Human-paced e2e showcase reel — login and sample inventory', () => {
   const boxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-inventory-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -1549,6 +1615,7 @@ test.describe('Human-paced e2e showcase reel — login and sample inventory', ()
           registeredAt: new Date().toISOString(),
           boxId: box.boxId,
           positionCode: box.positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       if ([201, 202].includes(res.status())) specimenIds.push((await res.json()).data.specimenId as string);

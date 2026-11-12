@@ -10,6 +10,12 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { bindSensor, unbindSensor, closeSeedSensorDb } from './helpers/seedSensor';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // The happy path of the two async importers, against the real stack: a valid
 // row goes through the queue and the worker and is persisted.
@@ -42,6 +48,8 @@ const seededBoxes: SeededStorageBox[] = [];
 const createdImportJobIds: string[] = [];
 const createdBatchJobIds: string[] = [];
 const boundSensorIds: string[] = [];
+// #1497 (RF004 AC2): every specimen these importers create enters a governed collection.
+let governed: GovernedCollection | null = null;
 
 test.describe('Async importers persist a valid row (RF029) -- real backend', () => {
   // API -> BullMQ -> worker -> Mongo; async-import-quarantine.spec.ts gives
@@ -52,6 +60,7 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
     client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
     await client.connect();
     db = client.db(mongoDbName);
+    governed = await seedGovernedCollection(`async-import-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   });
 
   test.afterAll(async () => {
@@ -73,6 +82,8 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
       await unbindSensor(sensorId);
     }
     await closeSeedSensorDb();
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
   });
 
   test('POST /api/import/batch persists a valid sample row, keeping the file\'s id in sourceRecordId (#1335)', async ({ request }) => {
@@ -84,8 +95,8 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
 
     const sourceRecordId = `LIMS-1335-${Date.now()}`;
     const csv = [
-      'specimenId,participantId,sampleType,sampleOrigin,extractionProtocol,quantity,boxId,positionCode,linkedProject',
-      `${sourceRecordId},${participant.participantId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,5,${box.boxId},${box.positionCode},RF029 async import e2e`,
+      'specimenId,participantId,sampleType,sampleOrigin,extractionProtocol,quantity,boxId,positionCode,linkedProject,collectionId',
+      `${sourceRecordId},${participant.participantId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,5,${box.boxId},${box.positionCode},RF029 async import e2e,${governed!.collectionId}`,
     ].join('\n');
 
     const upload = await request.post(`${apiBaseURL}/api/import/batch`, {
@@ -146,6 +157,7 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
         registeredAt: new Date().toISOString(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());

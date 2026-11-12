@@ -8,6 +8,12 @@ import {
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real-backend proof for #647: SampleFilesSection.tsx (RF007's file-upload
 // UI) existed but was never imported/mounted anywhere in the app --
@@ -33,6 +39,12 @@ function validSampleFields() {
 }
 
 let seededStorageBox: SeededStorageBox | null = null;
+// #1497 (RF004 AC2): the collection createRealSample's specimen enters.
+let governed: GovernedCollection | null = null;
+
+test.beforeAll(async () => {
+  governed = await seedGovernedCollection(`rf007-files-ui-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+});
 
 async function createRealSample(request: any, token: string): Promise<string> {
   const participant = await createRealParticipant(request, apiBaseURL!, token);
@@ -46,6 +58,7 @@ async function createRealSample(request: any, token: string): Promise<string> {
       ...validSampleFields(),
       boxId,
       positionCode,
+      collectionId: governed!.collectionId,
     },
   });
   expect([201, 202]).toContain(create.status());
@@ -59,6 +72,8 @@ test.afterAll(async () => {
   if (seededStorageBox) {
     await cleanupStorageBoxLocation(seededStorageBox).catch(() => {});
   }
+  await cleanupGovernedCollection(governed);
+  await closeGovernedCollectionDb();
   await closeSeedDb();
 });
 

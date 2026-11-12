@@ -40,6 +40,12 @@ import {
 } from './helpers/queryOutbox';
 import { countAllPoints } from './helpers/queryInflux';
 import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
+import {
   countEssentialReferenceDocs,
   essentialReferenceImportRuns,
   countFoundationDataRuns,
@@ -166,8 +172,15 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
   // Sample keyed by the consent id and no real sample was ever governed.
   // Both orders are covered: consent first, then sample, and the reverse.
   const seededBoxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rf023-pipeline-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
   test.afterAll(async () => {
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
   });
 
   async function signConsent(request: any, token: string, participant: { participantId: string; consentTemplateId: string }) {
@@ -202,6 +215,7 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
         registeredAt: new Date().toISOString(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());
@@ -338,6 +352,7 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
         registeredAt: new Date().toISOString(),
         boxId: homeBox.boxId,
         positionCode: homeBox.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());

@@ -21,6 +21,12 @@ import {
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
+import {
   sampleMongoId,
   sampleOutboxEvents,
   expectedPayloadHash,
@@ -115,6 +121,12 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
   // specimens whose physical-chain rows the afterAll removes.
   const organizationIds: string[] = [];
   const chainSpecimenIds: string[] = [];
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`storage-lifecycle-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async ({ request }) => {
     await cleanupSpecimenChains(chainSpecimenIds, seededStorageBoxes).catch(() => {});
@@ -123,6 +135,8 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     );
     await removeSpecimenLabels(seededLabelCodes).catch(() => {});
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeOutboxDb();
     await closeSeedDb();
     await closeChainDb();
@@ -176,6 +190,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
         ...validSampleFields(),
         boxId: boxA.boxId,
         positionCode: boxA.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());
@@ -392,6 +407,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       barcode,
       boxId: box.boxId,
       positionCode: box.positionCode,
+      collectionId: governed!.collectionId,
     });
 
     // The barcode pre-check reads only samples.barcode, so it passes; the
@@ -452,6 +468,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
         ...validSampleFields(),
         boxId: occupiedBox.boxId,
         positionCode: occupiedBox.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create1.status());
@@ -464,6 +481,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
         ...validSampleFields(),
         boxId: freeBox.boxId,
         positionCode: freeBox.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create2.status());
@@ -518,6 +536,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
         ...validSampleFields(),
         boxId: homeBox.boxId,
         positionCode: homeBox.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());

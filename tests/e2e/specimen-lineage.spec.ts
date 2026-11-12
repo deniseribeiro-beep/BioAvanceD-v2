@@ -12,6 +12,12 @@ import { seedSensorOnFreezer, removeSensorOnFreezer, closeSeedSensorDb, type See
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { waitForDerivedFrom, readSampleStatus, removeSampleNodes, countSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 import { sampleOutboxEvents, waitForOutboxEventsProjected, closeOutboxDb } from './helpers/queryOutbox';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -41,6 +47,12 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
   const seededBoxes: SeededStorageBox[] = [];
   const seededSensors: SeededFreezerSensor[] = [];
   const createdSamples: Array<{ mongoId: string; specimenId: string }> = [];
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`lineage-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     const mongoIds = createdSamples.map((sample) => sample.mongoId);
@@ -73,6 +85,8 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
     await removeSampleNodes(mongoIds);
     await Promise.all(seededSensors.map((sensor) => removeSensorOnFreezer(sensor).catch(() => {})));
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedSensorDb();
     await closeSeedDb();
     await closeNeo4jDriver();
@@ -99,6 +113,7 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
         registeredAt: new Date().toISOString(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
         ...extra,
       },
     });

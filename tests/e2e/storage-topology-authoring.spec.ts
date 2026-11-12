@@ -9,6 +9,12 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { removeSensorRegistration, closeSeedSensorDb } from './helpers/seedSensor';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real-backend proof for #1124: a storage topology can be built on a running
 // stack through requests alone. Before POST /api/storage/topology/*, no
@@ -39,6 +45,12 @@ test.describe('Storage topology authoring through the API (#1124) — real backe
   const sensorIds: string[] = [];
   // #1282: the organizations the tests create, deleted after the trees under them.
   const organizationIds: string[] = [];
+  // #1497 (RF004 AC2): the collection the sample enters.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rf006-topology-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async ({ request }) => {
     await Promise.all(authored.map((t) => cleanupStorageBoxLocation(t).catch(() => {})));
@@ -49,7 +61,8 @@ test.describe('Storage topology authoring through the API (#1124) — real backe
       sensorIds.map((id, i) => removeSensorRegistration(id, authored[i]?.freezerId ?? '000000000000000000000000').catch(() => {}))
     );
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
-    await Promise.all([closeSeedDb(), closeSeedSensorDb()]);
+    await cleanupGovernedCollection(governed);
+    await Promise.all([closeSeedDb(), closeSeedSensorDb(), closeGovernedCollectionDb()]);
   });
 
   test('an API-authored FREEZER -> SHELF -> RACK -> box accepts a sample, and a second FREEZER for the same equipment is refused', async ({ request }) => {
@@ -117,7 +130,7 @@ test.describe('Storage topology authoring through the API (#1124) — real backe
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
       headers: auth,
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId: box._id, positionCode: 'A1' },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId: box._id, positionCode: 'A1', collectionId: governed!.collectionId },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
   });

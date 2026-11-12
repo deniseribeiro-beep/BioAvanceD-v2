@@ -33,6 +33,12 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { deleteOrganizations } from './helpers/listOrganizations';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 import { waitForEthicalConsentStatus, readConsentProjection, closeNeo4jDriver } from './helpers/queryNeo4j';
 
 // RF029 (#1318): POST /api/ingestion/records against the real backend, its
@@ -51,6 +57,8 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
   let auth: { Authorization: string };
   // CFG-004: the configuration release every outcome must name.
   let inForce: string;
+  // #1497 (RF004 AC2): the collection the Assay cases' specimens enter.
+  let governed: GovernedCollection | null = null;
 
   test.beforeAll(async ({ request }) => {
     admin = await realLogin(request);
@@ -88,6 +96,7 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(typeof config.configurationReleaseId).toBe('string');
     expect(config.configurationReleaseId).not.toBe('');
     inForce = config.configurationReleaseId;
+    governed = await seedGovernedCollection(`rf029-ingest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   });
 
   // #1318: what the Assay cases seed for their references.
@@ -104,6 +113,8 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     // Before the organizations their clinicalUnitId names.
     await deleteIngestedParticipants(participantIdsToDelete);
     await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
     await closeIngestionDb();
     await closeNeo4jDriver();
@@ -397,6 +408,7 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
         registeredAt: new Date().toISOString(),
         boxId,
         positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);

@@ -25,6 +25,13 @@ import {
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { deleteOrganizations } from './helpers/listOrganizations';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  assignGovernedCustody,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -46,6 +53,12 @@ function validSampleFields() {
 }
 
 const seededStorageBoxes: SeededStorageBox[] = [];
+// #1497 (RF004 AC2): the collection a specimen enters when its case names none.
+let governed: GovernedCollection | null = null;
+
+test.beforeAll(async () => {
+  governed = await seedGovernedCollection(`rf007-rf024-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+});
 
 // RF007 AC3 (#1477): the DataFile retention policies a case creates, removed in afterAll.
 const createdRetentionPolicyIds: string[] = [];
@@ -76,6 +89,7 @@ async function createRealSample(request: any, token: string, extra: Record<strin
       ...validSampleFields(),
       boxId,
       positionCode,
+      collectionId: governed!.collectionId,
       ...extra,
     },
   });
@@ -88,6 +102,8 @@ test.afterAll(async () => {
     seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
   );
   await deleteRetentionPolicies(createdRetentionPolicyIds).catch(() => {});
+  await cleanupGovernedCollection(governed);
+  await closeGovernedCollectionDb();
   await closeSeedDb();
 });
 
@@ -725,6 +741,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       expect(custody.status(), await custody.text()).toBe(201);
     } else if (!specimenId) {
       sampleID = await createRealSample(request, token);
+      // RF021 AC6: the governed collection's specimen is released only under a custody in force.
+      await assignGovernedCustody(request, apiBaseURL!, { Authorization: `Bearer ${token}` }, governed!, sampleID, organizationId);
     }
     if (!specimenId) {
       const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
@@ -1532,7 +1550,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(release.status(), await release.text()).toBe(200);
     const allowed = await evaluate();
     expect(allowed.overallCompatible).toBe(true);
-    expect(allowed.consentCompatibility[0]).toMatchObject({ governanceValid: null, governanceReasons: [], compatible: true });
+    // #1497: the specimen's collection and custody hold, so governance is valid rather than absent.
+    expect(allowed.consentCompatibility[0]).toMatchObject({ governanceValid: true, governanceReasons: [], compatible: true });
   });
 
   test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {
@@ -2062,6 +2081,7 @@ test.describe('Reports (RF008) — real backend', () => {
         ...validSampleFields(),
         boxId,
         positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());

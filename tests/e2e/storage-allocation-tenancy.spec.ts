@@ -10,6 +10,12 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { removeSensorRegistration, closeSeedSensorDb } from './helpers/seedSensor';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real-backend proof for #1211: the storage allocation mutations are bounded
 // by the caller's organization. Before it, a Tecnico of one organization
@@ -42,6 +48,12 @@ test.describe('Storage allocation is bounded by the caller organization (#1211) 
   const sensorIds: string[] = [];
   // #1282: the organizations the tests create, deleted after the trees under them.
   const organizationIds: string[] = [];
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rf006-tenancy-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async ({ request }) => {
     await Promise.all(authored.map((t) => cleanupStorageBoxLocation(t).catch(() => {})));
@@ -49,7 +61,8 @@ test.describe('Storage allocation is bounded by the caller organization (#1211) 
       sensorIds.map((id, i) => removeSensorRegistration(id, authored[i]?.freezerId ?? '000000000000000000000000').catch(() => {}))
     );
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
-    await Promise.all([closeSeedDb(), closeSeedSensorDb()]);
+    await cleanupGovernedCollection(governed);
+    await Promise.all([closeSeedDb(), closeSeedSensorDb(), closeGovernedCollectionDb()]);
   });
 
   async function buildTree(request: APIRequestContext, auth: Record<string, string>, organizationId: string, label: string) {
@@ -129,7 +142,7 @@ test.describe('Storage allocation is bounded by the caller organization (#1211) 
     const createSample = async (collectionSite: string, positionCode: string) => {
       const res = await request.post(`${apiBaseURL}/api/samples`, {
         headers: adminAuth,
-        data: { participantId: participant.participantId, ...validSampleFields(), collectionSite, boxId: ownTree.boxId, positionCode },
+        data: { participantId: participant.participantId, ...validSampleFields(), collectionSite, boxId: ownTree.boxId, positionCode, collectionId: governed!.collectionId },
       });
       expect([201, 202], await res.text()).toContain(res.status());
       const id = (await res.json()).data.specimenId as string;

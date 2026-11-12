@@ -8,6 +8,12 @@ import {
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // #1463: real-backend proof of RNF007 AC4 for caller-supplied codes.
 // A sample barcode (the label's encodedValue) sent by the caller is refused
@@ -54,6 +60,18 @@ test.afterAll(async () => {
 });
 
 test.describe('RNF007 AC4 caller-supplied codes carry no personal data — real backend', () => {
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rnf007-code-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
+  test.afterAll(async () => {
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
+  });
+
   test('refuses a sample barcode holding a CPF, an e-mail or the participant name with BARCODE_PERSONAL_DATA (RNF007 AC4)', async ({
     request,
   }) => {
@@ -66,7 +84,7 @@ test.describe('RNF007 AC4 caller-supplied codes carry no personal data — real 
     for (const barcode of barcodes) {
       const create = await request.post(`${apiBaseURL}/api/samples`, {
         headers: { Authorization: `Bearer ${admin.token}` },
-        data: { participantId, ...validSampleFields(), barcode, boxId, positionCode },
+        data: { participantId, ...validSampleFields(), barcode, boxId, positionCode, collectionId: governed!.collectionId },
       });
       const text = await create.text();
       expect(create.status(), text).toBe(422);
@@ -91,7 +109,7 @@ test.describe('RNF007 AC4 caller-supplied codes carry no personal data — real 
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { participantId, ...validSampleFields(), barcode, boxId, positionCode },
+      data: { participantId, ...validSampleFields(), barcode, boxId, positionCode, collectionId: governed!.collectionId },
     });
     expect([201, 202], await create.text()).toContain(create.status());
 
@@ -109,7 +127,7 @@ test.describe('RNF007 AC4 caller-supplied codes carry no personal data — real 
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId, ...validSampleFields(), boxId, positionCode, collectionId: governed!.collectionId },
     });
     expect([201, 202], await create.text()).toContain(create.status());
     const { specimenId } = (await create.json()).data;

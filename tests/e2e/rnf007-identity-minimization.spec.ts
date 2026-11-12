@@ -9,6 +9,12 @@ import {
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // #1459: real-backend proof of identity segregation and minimization.
 // RNF007 AC2 -- only an authorized caller resolves a participant's civil
@@ -66,6 +72,12 @@ function validSampleFields() {
 }
 
 const seededStorageBoxes: SeededStorageBox[] = [];
+// #1497 (RF004 AC2): the collection createSampleForNewParticipant's specimens enter.
+let governed: GovernedCollection | null = null;
+
+test.beforeAll(async () => {
+  governed = await seedGovernedCollection(`rnf007-identity-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+});
 
 async function createSampleForNewParticipant(
   request: any,
@@ -83,6 +95,7 @@ async function createSampleForNewParticipant(
       ...validSampleFields(),
       boxId,
       positionCode,
+      collectionId: governed!.collectionId,
     },
   });
   expect([201, 202]).toContain(create.status());
@@ -97,6 +110,8 @@ test.afterAll(async () => {
     await client.close();
     client = null;
   }
+  await cleanupGovernedCollection(governed);
+  await closeGovernedCollectionDb();
   await closeSeedDb();
 });
 
