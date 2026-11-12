@@ -20,5 +20,5 @@ RNF008 AC3 asks access control to consider the organization, biobank, collection
 
 ## Not decided here
 
-- **The biobank scope.** No Collection-to-Biobank link is stored (`2026-10-23-network-biobank-structures.md` leaves it out). The dictionary's only path is through a ResearchResource (P1X-0013..0035), joined by ResearchResourceCollection (P1X-0142..0146) and ResearchResourceBiobank (P1X-0147..0151), and none of them is stored. A `biobankId` fact would always be `null` and would block in-scope requests too, so none is added; RNF008 AC3's biobank scope stays open on #1496.
+- **The biobank scope** is decided in `2026-11-11-access-policy-biobank-scope.md`.
 - **A multi-valued scope field** on AccessPolicy, which waits for a release that gives one.

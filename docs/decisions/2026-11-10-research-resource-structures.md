@@ -19,7 +19,7 @@ RNF008 AC3 asks an AccessPolicy to scope by biobank. Nothing stored which bioban
 
 ## Not decided here
 
-- **How an AccessPolicy reads the biobank fact** from these links (RNF008 AC3's scoping itself).
+- **How an AccessPolicy reads the biobank fact** from these links (RNF008 AC3's scoping itself) is decided in `2026-11-11-access-policy-biobank-scope.md`.
 - **What happens to the links** when a ResearchResource, Collection or Biobank is deleted.
 - **A MongoDB unique index** on `researchResourceId` or `associationId`.
 - **The MIABIS export and the Neo4j projection** of these entities. The three mounts are documented in `docs/api/openapi.json` and listed in its `x-covered-mounts` (RNF006 C2).

@@ -66,6 +66,8 @@ function createFakeDb({
   governedCollections = [],
   collectionGovernanceApprovals = [],
   custodianshipAssignments = [],
+  researchResourceCollections = [],
+  researchResourceBiobanks = [],
 } = {}) {
   const collections = {
     accessRequests: createFakeCollection(),
@@ -84,6 +86,8 @@ function createFakeDb({
     collections: createFakeCollection(governedCollections),
     collectionGovernanceApprovals: createFakeCollection(collectionGovernanceApprovals),
     custodianshipAssignments: createFakeCollection(custodianshipAssignments),
+    researchResourceCollections: createFakeCollection(researchResourceCollections),
+    researchResourceBiobanks: createFakeCollection(researchResourceBiobanks),
   };
   return {
     collections,
@@ -201,6 +205,8 @@ describe('accessRequest.service', () => {
           studyId: null,
           protocolId: null,
           collectionId: null,
+          biobankId: null,
+          biobankIds: [],
           consentValid: true,
           consentAuthorizationDecisionId: expect.any(String),
           consentAuthorizationResult: 'permit',
@@ -548,6 +554,51 @@ describe('accessRequest.service', () => {
       expect(evaluated.consentCompatibility.map((entry) => [entry.itemType, entry.studyId, entry.protocolId, entry.collectionId])).toEqual([
         ['specimen', 'study-1', 'protocol-1', 'COL-1'],
         ['file', 'study-2', 'protocol-2', 'COL-2'],
+      ]);
+    });
+
+    // RNF008 AC3 (#1496): the AccessPolicy biobankId condition reads them.
+    it('records the biobanks each item\'s collection belongs to, through ResearchResource links in force', async () => {
+      const fileId = new ObjectId();
+      const db = createFakeDb({
+        sampleFiles: [{ _id: fileId, specimenId: 'SPEC-2' }],
+        samples: [
+          { specimenId: 'SPEC-1', participantId: 'participant-1', collectionId: 'COL-1' },
+          { specimenId: 'SPEC-2', participantId: 'participant-1', collectionId: 'COL-2' },
+          { specimenId: 'SPEC-3', participantId: 'participant-1', collectionId: 'COL-3' },
+        ],
+        consents: [{ participantId: 'participant-1', status: 'ACTIVE' }],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+        researchResourceCollections: [
+          { associationId: 'rrc-1', researchResourceId: 'RR-1', collectionId: 'COL-1' },
+          { associationId: 'rrc-2', researchResourceId: 'RR-2', collectionId: 'COL-2' },
+          { associationId: 'rrc-3', researchResourceId: 'RR-3', collectionId: 'COL-3', effectivePeriod: { start: '2999-01-01T00:00:00Z', end: null } },
+        ],
+        researchResourceBiobanks: [
+          { associationId: 'rrb-1', researchResourceId: 'RR-1', biobankId: 'BB-1' },
+          { associationId: 'rrb-old', researchResourceId: 'RR-1', biobankId: 'BB-OLD', effectivePeriod: { start: '2020-01-01T00:00:00Z', end: '2021-01-01T00:00:00Z' } },
+          { associationId: 'rrb-2', researchResourceId: 'RR-2', biobankId: 'BB-2' },
+          { associationId: 'rrb-3', researchResourceId: 'RR-2', biobankId: 'BB-1' },
+          { associationId: 'rrb-4', researchResourceId: 'RR-3', biobankId: 'BB-3' },
+        ],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({
+          requestedItems: [
+            { itemType: 'specimen', itemId: 'SPEC-1' },
+            { itemType: 'file', itemId: fileId.toString() },
+            { itemType: 'specimen', itemId: 'SPEC-3' },
+          ],
+        })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.consentCompatibility.map((entry) => [entry.itemType, entry.biobankId, entry.biobankIds])).toEqual([
+        ['specimen', 'BB-1', ['BB-1']],
+        ['file', null, ['BB-1', 'BB-2']],
+        ['specimen', null, []],
       ]);
     });
 

@@ -26,6 +26,7 @@ const CONDITION_FACTS = {
   studyId: null,
   protocolId: null,
   collectionId: null,
+  biobankId: null,
   requestedPurpose: null,
   duoCode: null,
 };
@@ -179,9 +180,19 @@ function policiesInForce(policies, now = new Date()) {
 }
 
 // RNF008 AC3 (#1496): the facts each requested item resolves to (its
-// specimen's study, protocol and collection), recorded on its
-// consentCompatibility entry.
-const ITEM_FACTS = ['studyId', 'protocolId', 'collectionId'];
+// specimen's study, protocol and collection, and the biobank that collection
+// belongs to), recorded on its consentCompatibility entry.
+const ITEM_FACTS = ['studyId', 'protocolId', 'collectionId', 'biobankId'];
+
+/**
+ * RNF008 AC3 (#1496): whether one item matches one item fact of a deny or
+ * review_required. An item whose collection belongs to several biobanks
+ * matches each of them (biobankIds), and no request declares a biobank.
+ */
+function itemMatches(entry, fact, value, accessRequest) {
+  if (fact === 'biobankId') return entry.biobankId === value || (entry.biobankIds || []).includes(value);
+  return entry[fact] === value || (fact !== 'collectionId' && accessRequest[fact] === value);
+}
 
 function conditionHolds(condition, facts) {
   return Object.entries(condition).every(([fact, value]) => facts[fact] === value);
@@ -201,8 +212,7 @@ function restrictiveConditionHolds(condition, facts, accessRequest, entries) {
   const itemPairs = pairs.filter(([fact]) => ITEM_FACTS.includes(fact));
   if (!pairs.filter(([fact]) => !ITEM_FACTS.includes(fact)).every(([fact, value]) => facts[fact] === value)) return false;
   if (itemPairs.length === 0) return true;
-  return entries.some((entry) => itemPairs.every(([fact, value]) => entry[fact] === value
-    || (fact !== 'collectionId' && accessRequest[fact] === value)));
+  return entries.some((entry) => itemPairs.every(([fact, value]) => itemMatches(entry, fact, value, accessRequest)));
 }
 
 /**
@@ -244,6 +254,7 @@ function accessRequestFacts(accessRequest, consentCompatibility) {
     studyId: agreedItemValue(entries, 'studyId', accessRequest.studyId || null),
     protocolId: agreedItemValue(entries, 'protocolId', accessRequest.protocolId || null),
     collectionId: singleItemValue(entries, 'collectionId'),
+    biobankId: singleItemValue(entries, 'biobankId'),
     requestedPurpose: accessRequest.requestedPurpose || null,
     duoCode: accessRequest.duoCode || null,
   };

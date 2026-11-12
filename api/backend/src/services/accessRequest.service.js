@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const AccessRequestModel = require('../models/AccessRequest');
 const { evaluatePolicies } = require('../models/AccessPolicy');
+const { associationInForce } = require('../models/researchResourceAssociation');
 const ConsentAuthorizationDecisionModel = require('../models/ConsentAuthorizationDecision');
 const { SampleModel } = require('../models/Sample');
 const { getCollection } = require('../utils/collectionResolver');
@@ -104,6 +105,29 @@ function withQuarantineRefusal(sample, governance) {
   return [...(governance || []), `Espécime ${sample.specimenId} em quarentena (RF019)`];
 }
 
+/**
+ * RNF008 AC3 (#1496): the biobanks a collection belongs to, sorted, through
+ * Collection <- ResearchResourceCollection -> ResearchResource <-
+ * ResearchResourceBiobank -> Biobank, each link counted only while in force
+ * (associationInForce). [] for no collection or no link in force.
+ */
+async function collectionBiobankIds(db, collectionId, now) {
+  if (!collectionId) return [];
+  // Neither link collection has a CANONICAL_COLLECTIONS entry; each is read
+  // by name with a static filter key, as institutionalReferenceValidator does.
+  const resourceLinks = await db.collection('researchResourceCollections').find({ collectionId: String(collectionId) }).toArray();
+  const biobankIds = new Set();
+  for (const resourceLink of resourceLinks) {
+    if (!associationInForce(resourceLink, now) || !resourceLink.researchResourceId) continue;
+    const biobankLinks = await db.collection('researchResourceBiobanks')
+      .find({ researchResourceId: String(resourceLink.researchResourceId) }).toArray();
+    for (const biobankLink of biobankLinks) {
+      if (associationInForce(biobankLink, now) && biobankLink.biobankId) biobankIds.add(String(biobankLink.biobankId));
+    }
+  }
+  return [...biobankIds].sort();
+}
+
 function unprocessable(message) {
   const error = new Error(message);
   error.statusCode = 422;
@@ -195,7 +219,8 @@ class AccessRequestService {
    * RNF008 AC3 (#1496): cada entrada registra o estudo, o protocolo e a
    * coleção da amostra do seu item (studyId, protocolId, collectionId; null
    * para dataset ou item não resolvido), lidos pelas condições de mesmo nome
-   * da AccessPolicy.
+   * da AccessPolicy, e os biobancos da coleção (biobankIds, pelos vínculos
+   * ResearchResource vigentes; biobankId só quando há exatamente um).
    *
    * #661: 'file' items (SampleFile) always carry the specimenId they were
    * uploaded against, so they resolve to a real participant the same way a
@@ -289,6 +314,7 @@ class AccessRequestService {
       let studyId = null;
       let protocolId = null;
       let collectionId = null;
+      let biobankIds = [];
       let consentValid = null;
       let decision = null;
       let governance = null;
@@ -299,6 +325,7 @@ class AccessRequestService {
         studyId = sample?.studyId || null;
         protocolId = sample?.protocolId || null;
         collectionId = sample?.collectionId || null;
+        biobankIds = await collectionBiobankIds(db, collectionId, governanceNow);
         ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
         governance = withQuarantineRefusal(sample, await governanceRefusals(db, sample, governanceNow));
       } else if (item.itemType === 'file') {
@@ -310,6 +337,7 @@ class AccessRequestService {
         studyId = sample?.studyId || null;
         protocolId = sample?.protocolId || null;
         collectionId = sample?.collectionId || null;
+        biobankIds = await collectionBiobankIds(db, collectionId, governanceNow);
         ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
         governance = withQuarantineRefusal(sample, await governanceRefusals(db, sample, governanceNow));
       }
@@ -327,6 +355,8 @@ class AccessRequestService {
         studyId,
         protocolId,
         collectionId,
+        biobankId: biobankIds.length === 1 ? biobankIds[0] : null,
+        biobankIds,
         consentValid,
         consentAuthorizationDecisionId: decision?.consentAuthorizationDecisionId || null,
         consentAuthorizationResult: decision?.result || null,

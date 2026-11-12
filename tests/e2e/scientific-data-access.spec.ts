@@ -1127,6 +1127,111 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     ]);
   });
 
+  // RNF008 AC3 (#1496): an AccessPolicy scopes by biobank through its
+  // biobankId condition, read off the item's collection through the
+  // ResearchResource links. A permit on another biobank does not permit the
+  // request, one on the item's biobank does, and a deny on it refuses it.
+  test('an AccessPolicy conditioned on another biobank does not permit the request, and a deny on the item\'s biobank refuses it (RNF008 AC3, #1496)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const studyId = `rnf008-bb-study-${Date.now()}`;
+    await seedStudy(studyId);
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, collection: true });
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const biobankId = `rnf008-biobank-${stamp}`;
+    const biobank = await request.post(`${apiBaseURL}/api/biobanks`, {
+      headers: auth,
+      data: {
+        biobankId,
+        biobankName: `Biobanco RNF008 ${stamp}`,
+        biobankDescription: 'Biobanco do teste de escopo RNF008',
+        legalEntityId: accessRequest.organizationId,
+        biobankStatus: 'active',
+        countryCode: 'BR',
+        contactInformation: { email: 'contato@example.org' },
+      },
+    });
+    expect(biobank.status(), await biobank.text()).toBe(201);
+    const resource = await request.post(`${apiBaseURL}/api/research-resources`, {
+      headers: auth,
+      data: {
+        name: `Recurso RNF008 ${stamp}`,
+        contactInformation: [{ email: 'contato@example.org' }],
+        sexCategories: ['female'],
+        sampleTypes: [{ coding: [{ code: 'blood' }] }],
+      },
+    });
+    expect(resource.status(), await resource.text()).toBe(201);
+    const researchResourceId = (await resource.json()).data.researchResourceId as string;
+    const collectionLink = await request.post(`${apiBaseURL}/api/research-resource-collections`, {
+      headers: auth,
+      data: { researchResourceId, collectionId: accessRequest.collectionId },
+    });
+    expect(collectionLink.status(), await collectionLink.text()).toBe(201);
+    const biobankLink = await request.post(`${apiBaseURL}/api/research-resource-biobanks`, {
+      headers: auth,
+      data: { researchResourceId, biobankId },
+    });
+    expect(biobankLink.status(), await biobankLink.text()).toBe(201);
+
+    const createPolicy = async (
+      policyName: string,
+      decisionEffect: 'permit' | 'deny',
+      conditions: Record<string, string>[]
+    ): Promise<string> => {
+      const created = await request.post(`${apiBaseURL}/api/access-policies`, {
+        headers: auth,
+        data: {
+          policyName,
+          policyVersion: '1.0.0',
+          applicableEntityTypes: ['AccessRequest'],
+          decisionEffect,
+          ruleExpression: 'all-conditions',
+          effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+          roleCodes: ['researcher'],
+          organizationScopeIds: [accessRequest.organizationId],
+          resourceScopes: ['Specimen'],
+          conditions,
+          decisionReasonsRequired: true,
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      return (await created.json()).data.accessPolicyId as string;
+    };
+    const evaluate = async (): Promise<any> => {
+      const evaluated = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, { headers: auth });
+      expect(evaluated.status(), await evaluated.text()).toBe(200);
+      return (await evaluated.json()).data;
+    };
+
+    const otherName = `RNF008 e2e outro biobanco ${stamp}`;
+    await createPolicy(otherName, 'permit', [{ consent: 'compatible', biobankId: `${biobankId}-other` }]);
+    const outside = await evaluate();
+    // The item's biobank, read through its collection's ResearchResource.
+    expect(outside.consentCompatibility[0]).toMatchObject({ biobankId, biobankIds: [biobankId] });
+    expect(outside.policyDecision.effect).toBe('review_required');
+    expect(outside.policyDecision.appliedPolicies).toEqual([]);
+    expect(outside.policyDecision.reasons).toEqual(expect.arrayContaining([`${otherName} 1.0.0: condições não atendidas`]));
+
+    const inScopeId = await createPolicy(`RNF008 e2e no biobanco ${stamp}`, 'permit', [{ consent: 'compatible', biobankId }]);
+    const inside = await evaluate();
+    expect(inside.policyDecision.effect).toBe('permit');
+    expect(inside.policyDecision.appliedPolicies).toEqual([
+      { accessPolicyId: inScopeId, policyVersion: '1.0.0', decisionEffect: 'permit', decisionReasonsRequired: true },
+    ]);
+
+    const denyId = await createPolicy(`RNF008 e2e embargo do biobanco ${stamp}`, 'deny', [{ biobankId }]);
+    const refused = await evaluate();
+    expect(refused.policyDecision.effect).toBe('deny');
+    expect(refused.policyDecision.appliedPolicies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ accessPolicyId: denyId, decisionEffect: 'deny' })])
+    );
+  });
+
   // #1347 (RF010 AC3/AC7): a term's permissions name governed purposes (DUO
   // codes), so a consent revoked for one purpose is judged on the requested
   // purpose: the revoked one is denied, rather than sent to review.
