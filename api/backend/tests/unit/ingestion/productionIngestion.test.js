@@ -415,6 +415,21 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(resultOf(docs[0], 'uniqueness').value).toBe(1);
   });
 
+  it('a configured clock drift limit reaches the timeliness of the assessment', async () => {
+    // #1520, RNF025 AC6: a retrievedAt 3 minutes ahead is beyond a 1-minute
+    // limit and within a 10-minute one.
+    const timelinessUnder = async (clockDriftLimitMinutes) => {
+      const db = seededDb({ config: { _id: 'main', configurationReleaseId: 'cfg-release-7', telemetry: { clockDriftLimitMinutes } } });
+      await ingest(db, { provenance: { ...provenance(), retrievedAt: new Date(Date.now() + 3 * 60 * 1000).toISOString() } });
+      const docs = db.collections.dataQualityAssessments.docs;
+      expect(docs).toHaveLength(1);
+      return resultOf(docs[0], 'timeliness').value;
+    };
+
+    expect(await timelinessUnder(1)).toBe(0);
+    expect(await timelinessUnder(10)).toBe(1);
+  });
+
   it('18. a quarantined Dataset without license leaves one failed assessment scoped to its quarantine record, with completeness 3/4', async () => {
     const db = seededDb();
     const { license, ...withoutLicense } = DATASET;

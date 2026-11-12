@@ -2501,3 +2501,71 @@ test.describe('Telemetry clock drift and implausible values (#1515, RF009 AC7, R
     }
   });
 });
+
+// #1520 (RNF025 AC6): the clock-drift limit is the security configuration's
+// telemetry.clockDriftLimitMinutes, so lowering it through a
+// ConfigurationRelease turns a reading behind by less than the default
+// 5 minutes into drift. Changing it ends no session, and it is restored.
+test.describe('Telemetry clock drift limit (#1520, RNF025 AC6) — real backend', () => {
+  // The limit goes back to the catalog default of 5 minutes here, not in
+  // the test: a timed-out test has already disposed its `request`, and a
+  // value read inside the test could be one a failed attempt left behind,
+  // which a retry would then "restore". A fresh context logs in on its own.
+  test.afterAll(async ({ playwright }) => {
+    const context = await playwright.request.newContext();
+    try {
+      const admin = await realLogin(context);
+      const restore = await context.put(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { telemetry: { clockDriftLimitMinutes: 5 } },
+      });
+      expect(restore.ok(), await restore.text()).toBeTruthy();
+    } finally {
+      await context.dispose();
+      await closeSeedSensorDb();
+    }
+  });
+
+  test('the clock drift limit is a configuration release: lowering it turns a reading into drift', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const sensorId = `rnf025-drift-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let sent = 0;
+    // A reading 3 minutes behind now, with a fresh idempotencyKey per send.
+    const sendThreeMinutesBehind = () =>
+      request.post(`${apiBaseURL}/api/temperature/reading`, {
+        headers: auth,
+        data: {
+          sensorId,
+          temperatureValue: 4.5,
+          timestamp: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+          idempotencyKey: `${sensorId}-k${(sent += 1)}`,
+        },
+      });
+    const setLimit = (clockDriftLimitMinutes: number) =>
+      request.put(`${apiBaseURL}/api/security/config`, { headers: auth, data: { telemetry: { clockDriftLimitMinutes } } });
+
+    await bindSensor(sensorId);
+    try {
+      const atDefault = await setLimit(5);
+      expect(atDefault.ok(), await atDefault.text()).toBeTruthy();
+      const defaultReleaseId: string = (await atDefault.json()).data.configurationReleaseId;
+      expect(defaultReleaseId).toBeTruthy();
+      const synced = await sendThreeMinutesBehind();
+      expect(synced.status(), await synced.text()).toBe(201);
+      expect((await synced.json()).data.clockStatus).toBe('synchronized');
+
+      const lowered = await setLimit(1);
+      expect(lowered.ok(), await lowered.text()).toBeTruthy();
+      const loweredReleaseId: string = (await lowered.json()).data.configurationReleaseId;
+      expect(loweredReleaseId).toBeTruthy();
+      expect(loweredReleaseId).not.toBe(defaultReleaseId);
+      const drifted = await sendThreeMinutesBehind();
+      expect(drifted.status(), await drifted.text()).toBe(201);
+      expect((await drifted.json()).data.clockStatus).toBe('drift');
+    } finally {
+      await unbindSensor(sensorId);
+    }
+  });
+});

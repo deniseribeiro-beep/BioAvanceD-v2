@@ -17,8 +17,12 @@ const { createHash, randomUUID } = require('crypto');
  *   readings a device sent with the same timestamp and value, and nothing
  *   tells those apart from a replay.
  * - clockStatus: `[inference]` the dictionary names only `synchronized`.
- *   `synchronized` when observedAt is within CLOCK_SKEW_TOLERANCE_MS of
- *   receipt, `drift` beyond it (either side), `unknown` with no device time.
+ *   `synchronized` when observedAt is within the configured limit
+ *   (`telemetry.clockDriftLimitMinutes`, RNF025 AC6, #1520;
+ *   CLOCK_SKEW_TOLERANCE_MS by default) of receipt, `drift` beyond it
+ *   (either side), `unknown` with no device time. readingIdentityOf stamps
+ *   it at the default limit, and screenReading re-derives it at the
+ *   configured one.
  *
  * persistedAt (V2E-0550) is the confirmation of the authoritative InfluxDB
  * write, so the write path stamps it once that write returns.
@@ -45,7 +49,9 @@ const TelemetryValidationIssueModel = require('../models/TelemetryValidationIssu
 const logger = require('../utils/logger');
 const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
 
-const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+const { DEFAULT_CLOCK_DRIFT_LIMIT_MS, resolveClockDriftLimitMs } = require('./clockDriftLimit');
+
+const CLOCK_SKEW_TOLERANCE_MS = DEFAULT_CLOCK_DRIFT_LIMIT_MS;
 // RF009 AC7: a temperature outside this range, in Celsius, is not a
 // physically possible reading of a storage environment. The floor is
 // absolute zero. The ceiling is `[inference]`: no repo constant or profile
@@ -84,9 +90,9 @@ function validationError(message) {
   return Object.assign(new Error(message), { statusCode: 422, auditReason: 'invalid_payload' });
 }
 
-function clockStatusOf(deviceTime, receivedAt) {
+function clockStatusOf(deviceTime, receivedAt, limitMs = CLOCK_SKEW_TOLERANCE_MS) {
   if (!deviceTime) return 'unknown';
-  return Math.abs(receivedAt.getTime() - deviceTime.getTime()) <= CLOCK_SKEW_TOLERANCE_MS ? 'synchronized' : 'drift';
+  return Math.abs(receivedAt.getTime() - deviceTime.getTime()) <= limitMs ? 'synchronized' : 'drift';
 }
 
 /**
@@ -258,14 +264,14 @@ function clientContractFieldsOf(payload) {
  *   a gap the missing-reading monitoring sees.
  * A payload without a value is left to the path's own required-field check.
  */
-function validationIssuesOf(identity, payload = {}) {
+function validationIssuesOf(identity, payload = {}, { clockDriftLimitMs = CLOCK_SKEW_TOLERANCE_MS } = {}) {
   const issues = [];
   if (identity?.clockStatus === 'drift') {
     issues.push({
       issueCode: 'clock_drift',
       severity: 'error',
       fieldPath: 'observedAt',
-      details: `observedAt ${identity.observedAt.toISOString()} difere de receivedAt ${identity.receivedAt.toISOString()} além da tolerância de ${CLOCK_SKEW_TOLERANCE_MS / 60000} minutos`,
+      details: `observedAt ${identity.observedAt.toISOString()} difere de receivedAt ${identity.receivedAt.toISOString()} além da tolerância de ${clockDriftLimitMs / 60000} minutos`,
       disposition: 'quarantined',
     });
   }
@@ -410,7 +416,15 @@ async function screenReading(db, identity, payload = {}) {
   const binding = await readingBindingOf(storeOf, identity, payload);
   identity.datastreamId = binding.datastreamId;
   identity.storageLocationId = binding.storageLocationId;
-  const drafts = [...validationIssuesOf(identity, payload), ...binding.drafts];
+  // RNF025 AC6 (#1520): the clock status at the configured drift limit.
+  // A reading with no device time stays `unknown` and reads no
+  // configuration. storeOf, not db, so a lazy db still resolves once.
+  let clockDriftLimitMs = CLOCK_SKEW_TOLERANCE_MS;
+  if (identity.clockStatus !== 'unknown') {
+    clockDriftLimitMs = await resolveClockDriftLimitMs(storeOf);
+    identity.clockStatus = clockStatusOf(identity.observedAt, identity.receivedAt, clockDriftLimitMs);
+  }
+  const drafts = [...validationIssuesOf(identity, payload, { clockDriftLimitMs }), ...binding.drafts];
   if (!drafts.length) return [];
 
   const rejected = drafts.filter((draft) => draft.disposition === 'rejected');

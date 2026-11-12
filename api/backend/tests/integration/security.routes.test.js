@@ -227,7 +227,7 @@ describe('Security routes', () => {
     handler(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.payload.data.catalogVersion).toBe('1.0.0');
+    expect(res.payload.data.catalogVersion).toBe('1.1.0');
     expect(res.payload.data.settings.find(({ path }) => path === 'session.timeoutMinutes'))
       .toEqual(expect.objectContaining({ type: 'number', scope: 'environment', allowedValues: { kind: 'range', min: 5, max: 480 }, default: 30 }));
   });

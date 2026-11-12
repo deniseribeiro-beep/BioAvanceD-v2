@@ -40,7 +40,7 @@ function settingsOf(config) {
   return settings;
 }
 
-// The eight policy groups. updateConfig merges only these, one level deep
+// The nine policy groups. updateConfig merges only these, one level deep
 // (#904), so any other top-level key a caller sends is never stored.
 const CONFIG_GROUPS = [
   'authentication',
@@ -50,7 +50,8 @@ const CONFIG_GROUPS = [
   'logging',
   'privacy',
   'enhancedSecurity',
-  'lgpd'
+  'lgpd',
+  'telemetry'
 ];
 
 // The read model's own top-level fields. SecurityPage echoes them back on
@@ -396,6 +397,9 @@ class SecurityService {
         requireConsent: true,
         consentExpirationDays: 365
       },
+
+      // RNF025 AC6 (#1520): the clock-drift limit both telemetry screening and the ingestion timeliness metric read.
+      telemetry: { clockDriftLimitMinutes: 5 },
       
       // #953: dict-02 P1X-0321/0322/0323 declare these as FLAT top-level fields
       // of SecurityConfiguration. The code had invented a `metadata` group that
@@ -596,7 +600,7 @@ class SecurityService {
       }
 
       // #953: flat, per dict-02 P1X-0321/0322/0323. Note these are assigned
-      // AFTER the knownGroups loop above, which copies only the eight group
+      // AFTER the knownGroups loop above, which copies only the nine group
       // objects -- so a caller-supplied configVersion/lastUpdatedAt/lastUpdatedBy
       // in newConfig is still ignored, exactly as the `...currentConfig.metadata`
       // spread used to guarantee. The protection survives the flattening, but for
@@ -993,6 +997,15 @@ class SecurityService {
     if (config.logging) {
       if (typeof config.logging.level === 'string' && !['info', 'warning', 'error', 'critical'].includes(config.logging.level)) {
         semantic.push('level deve ser: info, warning, error ou critical');
+      }
+    }
+
+    // RNF025 AC6 (#1520): the catalog's range of the clock-drift limit.
+    if (config.telemetry) {
+      const limit = config.telemetry.clockDriftLimitMinutes;
+      if (limit !== undefined && limit !== null
+        && !(Number.isInteger(limit) && limit >= 1 && limit <= 1440)) {
+        semantic.push('clockDriftLimitMinutes deve ser um inteiro entre 1 e 1440');
       }
     }
 

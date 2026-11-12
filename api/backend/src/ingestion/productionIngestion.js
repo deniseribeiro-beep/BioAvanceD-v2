@@ -15,6 +15,7 @@ const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
 const { DICTIONARY_VERSION } = require('../reference-data/canonical-dictionary/v2');
 const LabelIdentifierModel = require('../models/LabelIdentifier');
 const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
+const { resolveClockDriftLimitMs } = require('../services/clockDriftLimit');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const { ingestRecord } = require('./ingestionGateway');
 const { resolveIngestionTarget, resolveOtherStoreEntityType } = require('./ingestionTargets');
@@ -200,6 +201,8 @@ async function ingestAndPersist({
 
   const canonicalModelReleaseId = await assertCanonicalReleaseActive(db);
   const configurationReleaseId = await activeConfigurationReleaseId(db);
+  // RNF025 AC6 (#1520): the clock-drift limit the timeliness metric reads.
+  const clockDriftLimitMs = await resolveClockDriftLimitMs(db);
   const releases = { canonicalModelReleaseId, configurationReleaseId };
 
   try {
@@ -209,7 +212,7 @@ async function ingestAndPersist({
     if (otherStore) {
       throw ingestionError(422, 'INGESTION_STORE_UNSUPPORTED', `${entityType} ${STORE_PHRASES[otherStore.store]}, não suportado pela ingestão; registre ${otherStore.record} por ${otherStore.route}`);
     }
-    return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope });
+    return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, clockDriftLimitMs, resolveOrganizationScope });
   } catch (error) {
     // CFG-004: a refusal after the releases were read still names them.
     if (error && typeof error === 'object') {
@@ -220,7 +223,7 @@ async function ingestAndPersist({
   }
 }
 
-async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope }) {
+async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, clockDriftLimitMs, resolveOrganizationScope }) {
   // Before the replay, so an out-of-scope caller learns nothing of a key.
   await assertInOrganizationScope(target, payload, resolveOrganizationScope);
   assertStoredHere(target, entityType, payload);
@@ -268,6 +271,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
       scopeId: `IngestionQuarantineRecord/${ingestionQuarantineRecordId}`,
       releases,
       actorId,
+      clockDriftLimitMs,
     });
     await insertDataQualityAssessment(db, assessment);
     return {
@@ -334,6 +338,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
     scopeId: `${entityType}/${entityId}`,
     releases,
     actorId,
+    clockDriftLimitMs,
   });
   const dataQualityAssessmentId = assessment.dataQualityAssessmentId;
 
