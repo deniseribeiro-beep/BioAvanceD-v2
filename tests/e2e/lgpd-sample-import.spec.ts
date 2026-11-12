@@ -4,6 +4,12 @@ import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { deleteOrganizations } from './helpers/listOrganizations';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
 import { findLgpdQuarantineBatch, findLgpdQuarantinedRows, closeFhirImportDb, seedForeignImportBatch, removeForeignImportBatch } from './helpers/queryFhirImport';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -26,7 +32,21 @@ const SAMPLE_TYPE = 'PLASMA';
 const SAMPLE_ORIGIN = 'VENOUS_BLOOD';
 const EXTRACTION_PROTOCOL = 'TUBE_EDTA';
 
-const CSV_HEADER = 'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject';
+const CSV_HEADER = 'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,collectionId';
+
+// #1538 (RF004 AC2, ELM-0118 Specimen.collectionId 1..1): the governed
+// collection every row of both describes enters; a row naming none is
+// refused like any other invalid row.
+let governed: GovernedCollection | null = null;
+
+test.beforeAll(async () => {
+  governed = await seedGovernedCollection(`lgpd-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+});
+
+test.afterAll(async () => {
+  await cleanupGovernedCollection(governed);
+  await closeGovernedCollectionDb();
+});
 
 function csvBuffer(rows: string[]): Buffer {
   return Buffer.from([CSV_HEADER, ...rows].join('\n'), 'utf8');
@@ -58,7 +78,7 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
 
     const response = await importSamples(request, admin.token, [
-      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
     ]);
 
     expect(response.status()).toBe(200);
@@ -120,7 +140,7 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     // merely permissive — without it, a lookup that accepted anything
     // would pass the test above just as happily as a correct one.
     const response = await importSamples(request, admin.token, [
-      `${participant.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      `${participant.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
     ]);
 
     expect(response.status()).toBe(200);
@@ -157,8 +177,8 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     // uniform (every row rejected), so a mixed file is what distinguishes
     // "this row is bad" from "the lookup is broken for everything."
     const response = await importSamples(request, admin.token, [
-      `${good.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
-      `${bad.participantId},${SAMPLE_TYPE},NOT_A_REAL_ORIGIN,${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      `${good.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
+      `${bad.participantId},${SAMPLE_TYPE},NOT_A_REAL_ORIGIN,${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
     ]);
 
     expect(response.status()).toBe(200);
@@ -189,8 +209,8 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     const bad = await createRealParticipant(request, apiBaseURL!, admin.token);
 
     const response = await importSamples(request, admin.token, [
-      `${good.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
-      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      `${good.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
+      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
     ]);
 
     expect(response.status()).toBe(200);
@@ -240,7 +260,7 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
 
     const response = await importSamples(request, admin.token, [
-      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
     ]);
 
     expect(response.status()).toBe(200);
@@ -250,6 +270,43 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     // Nothing was rejected, so there is nothing to review -- an empty batch
     // would be noise in whatever queue eventually consumes these.
     expect(body.data.stagingBatchId).toBeNull();
+  });
+
+  // #1538 (RF004 AC2, ELM-0118): the import runs the collection gate
+  // createSample runs, so a row naming no collection is refused, kept in
+  // quarantine (RNF011 AC#4) and stores nothing.
+  test('#1538 RF004 AC2: a row that names no collection is rejected and quarantined, and stores no sample', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await importSamples(request, admin.token, [
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,`,
+    ]);
+
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+
+    expect(body.data).toMatchObject({ total: 1, success: 0, errors: 1 });
+    expect(JSON.stringify(body.data.errorsDetails[0].errors)).toMatch(/collectionId é obrigatório/);
+
+    const batchId = body.data.stagingBatchId;
+    expect(batchId, 'a rejected row must report where it was quarantined').toBeTruthy();
+    const batch = await findLgpdQuarantineBatch(String(batchId));
+    expect(batch, `no import_batches document for ${batchId}`).toBeTruthy();
+    expect(batch).toMatchObject({ type: 'LGPD_SAMPLE_CSV', source: 'LGPD', status: 'QUARANTINED' });
+    const quarantined = await findLgpdQuarantinedRows(String(batchId));
+    expect(quarantined).toHaveLength(1);
+    expect(quarantined[0]).toMatchObject({ status: 'ERROR', rowNumber: 2 });
+    expect(JSON.stringify(quarantined[0].errors)).toMatch(/collectionId é obrigatório/);
+
+    const list = await request.get(
+      `${apiBaseURL}/api/samples?participantId=${encodeURIComponent(participant.participantId)}&limit=200`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(list.status()).toBe(200);
+    const listBody = await list.json();
+    const samples = (listBody?.data?.samples ?? listBody?.data ?? []) as Array<Record<string, unknown>>;
+    expect(samples, 'a row refused by the collection gate must store no sample').toHaveLength(0);
   });
 
   // #997: the sync import path's blank-row count had NO test anywhere.
@@ -262,8 +319,8 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
   // csvBuffer joins with '\n', so ONE appended '' is only a trailing
   // newline, which produces no parser row and is correctly not counted;
   // TWO would work today but only via newline arithmetic that any future
-  // change to csvBuffer would silently break. Seven empty cells matching
-  // CSV_HEADER's seven columns fail readCSV's `hasData` check directly,
+  // change to csvBuffer would silently break. Eight empty cells matching
+  // CSV_HEADER's eight columns fail readCSV's `hasData` check directly,
   // which is the mechanism actually under test.
   //
   // Placed as its own test rather than folded into one above: errorsDetails
@@ -276,8 +333,8 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
 
     const response = await importSamples(request, admin.token, [
-      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
-      ','.repeat(6),
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
+      ','.repeat(7),
     ]);
 
     expect(response.status()).toBe(200);
@@ -312,8 +369,8 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     const bad = await createRealParticipant(request, apiBaseURL!, admin.token);
 
     const response = await importSamples(request, admin.token, [
-      `${good.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
-      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import`,
+      `${good.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
+      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e import,${governed!.collectionId}`,
     ]);
     expect(response.status()).toBe(200);
     const batchId = String((await response.json()).data.stagingBatchId);
@@ -353,7 +410,7 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     const bad = await createRealParticipant(request, apiBaseURL!, admin.token);
 
     const response = await importSamples(request, admin.token, [
-      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e resubmit`,
+      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e resubmit,${governed!.collectionId}`,
     ]);
     expect(response.status()).toBe(200);
     const batchId = String((await response.json()).data.stagingBatchId);
@@ -508,7 +565,7 @@ test.describe('LGPD sample import by an organization-scoped user (#1353)', () =>
 
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     const response = await importSamples(request, coordinator.token, [
-      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,#1353 scoped import`,
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,#1353 scoped import,${governed!.collectionId}`,
     ]);
     expect(response.status(), await response.text()).toBe(200);
     const body = await response.json();

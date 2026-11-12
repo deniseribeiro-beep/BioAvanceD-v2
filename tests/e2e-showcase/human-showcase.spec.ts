@@ -573,11 +573,13 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
 
   let client: MongoClient | null = null;
   let db: Db;
+  let governed: GovernedCollection | null = null;
 
   test.beforeAll(async () => {
     client = new MongoClient(mongoUri);
     await client.connect();
     db = client.db(mongoDbName);
+    governed = await seedGovernedCollection(`showcase-w5-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   });
 
   test.afterAll(async () => {
@@ -586,6 +588,8 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       client = null;
     }
     await closeSeedDb();
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
   });
 
   test('RF010 a participant with no account opens the emailed invitation and consents', async ({ page }) => {
@@ -721,10 +725,10 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       // the third row's sampleType is not, which is what gets it rejected.
       // Same mixed-file shape as lgpd-sample-import.spec.ts's #787 block.
       const csv = [
-        'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject',
-        `${firstId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase)`,
-        `${secondId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,3,GOOD,Coorte Wave 5 (showcase)`,
-        `${badId},TIPO_QUE_NAO_EXISTE,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase)`,
+        'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,collectionId',
+        `${firstId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase),${governed!.collectionId}`,
+        `${secondId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,3,GOOD,Coorte Wave 5 (showcase),${governed!.collectionId}`,
+        `${badId},TIPO_QUE_NAO_EXISTE,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase),${governed!.collectionId}`,
       ].join('\n');
 
       // 2. The LGPD import surface (#808) -- the only importer that

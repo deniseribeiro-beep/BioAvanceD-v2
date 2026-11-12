@@ -29,6 +29,7 @@ const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const sampleCollectionGate = require('./sample-collection-gate.service');
 const { insertSampleWithProjection } = require('./graphProjection.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
@@ -1793,6 +1794,11 @@ class ImportLGPDService {
         }
       }
 
+      // RF004 AC2 (#1538): the collection gate createSample runs. Checked
+      // before the participant match, so a refused row writes nothing; the
+      // outer catch reports it and the row is quarantined (RNF011 AC4).
+      await sampleCollectionGate.assertSampleCollectionAdmits(db, sampleData);
+
       const matchedPatient = await participantIdentityService.matchOrUpsertParticipant(db, {
         participantId: sampleData.participantId,
         patientName: sampleData.patientName,
@@ -2365,6 +2371,12 @@ class ImportLGPDService {
       collectionSite: row.collectionSite !== undefined && row.collectionSite !== null && String(row.collectionSite).trim() !== ''
         ? String(row.collectionSite).trim()
         : null,
+      // ELM-0118 (#1538), Specimen.collectionId. Set only when the row names
+      // one, so a caller that sets its own collectionId sees no null key.
+      // Only the canonical header is read, as for collectionSite.
+      ...(row.collectionId !== undefined && row.collectionId !== null && String(row.collectionId).trim() !== ''
+        ? { collectionId: String(row.collectionId).trim() }
+        : {}),
       patientName: row.patientName?.trim() || row.nomePaciente?.trim() || row.nome?.trim() || null,
       patientBirthDate: this.parseBirthDate(row.birthDate || row.dataNascimento || row.patientBirthDate),
       patientEmail: row.email ? String(row.email).trim().toLowerCase() : null,

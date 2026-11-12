@@ -35,6 +35,14 @@ const qualityDomain = require('../../src/services/quality-domain.service');
 const DrugService = require('../../src/services/DrugService');
 const { createMatchingCollection } = require('../factories/filter.factory');
 const env = require('../../src/config/env');
+const sampleCollectionGate = require('../../src/services/sample-collection-gate.service');
+
+// RF004 AC2 (#1538): every row runs the collection gate createSample runs.
+// Stubbed here so the cases about other rules need no governed collection;
+// the cases that prove the gate restore it (mockRestore) and run it for real.
+beforeEach(() => {
+  vi.spyOn(sampleCollectionGate, 'assertSampleCollectionAdmits').mockResolvedValue(null);
+});
 
 const MATCHED_PATIENT = {
   patient: { _id: 'patient-obj-1', participantId: '12345678', patientName: 'Maria Silva' },
@@ -1181,6 +1189,30 @@ describe('ImportLGPDService.importSamples', () => {
       expect(result.errors).toHaveLength(1);
       expect(result.stagingBatchId).toBeNull();
     });
+
+    it('#1538 RF004 AC2: rejects and stages a row that names no collection, storing no sample', async () => {
+      sampleCollectionGate.assertSampleCollectionAdmits.mockRestore();
+      vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      expect(result.success).toBe(0);
+      expect(result.errors).toHaveLength(1);
+      expect(JSON.stringify(result.errors[0].errors)).toMatch(/collectionId é obrigatório/);
+      expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+
+      expect(importBatchesCollection.insertOne).toHaveBeenCalledTimes(1);
+      expect(importStagingRecordsCollection.insertMany).toHaveBeenCalledTimes(1);
+      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
+      expect(staged).toHaveLength(1);
+      expect(staged[0]).toMatchObject({
+        batchId: importBatchesCollection.insertOne.mock.calls[0][0]._id,
+        rowNumber: 2,
+        status: 'ERROR',
+      });
+      expect(JSON.stringify(staged[0].errors)).toMatch(/collectionId é obrigatório/);
+      expect(result.stagingBatchId).toBe(importBatchesCollection.insertOne.mock.calls[0][0]._id);
+    });
   });
 });
 
@@ -1303,6 +1335,26 @@ describe('ImportLGPDService.processSampleRow (#817)', () => {
     expect(outcome.data).toEqual({ participantId: '12345678' });
     expect(outcome.sampleId).toBeUndefined();
     expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1538 RF004 AC2: rejects a row that names no collection before any participant write', async () => {
+    sampleCollectionGate.assertSampleCollectionAdmits.mockRestore();
+
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.errors[0]).toMatch(/collectionId é obrigatório/);
+    expect(patientIdentityService.matchOrUpsertParticipant).not.toHaveBeenCalled();
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1538 RF004 AC2: a row naming a collection reaches the gate with the trimmed collectionId COL-1', async () => {
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, collectionId: ' COL-1 ' }, rowContext());
+
+    expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
+    expect(sampleCollectionGate.assertSampleCollectionAdmits).toHaveBeenCalledTimes(1);
+    expect(sampleCollectionGate.assertSampleCollectionAdmits.mock.calls[0][0]).toBe(db);
+    expect(sampleCollectionGate.assertSampleCollectionAdmits.mock.calls[0][1].collectionId).toBe('COL-1');
   });
 
   it('flags a duplicate barcode as a duplicate rejection', async () => {
