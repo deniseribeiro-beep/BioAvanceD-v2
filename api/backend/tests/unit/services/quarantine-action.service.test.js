@@ -62,8 +62,31 @@ function createFakeCollection() {
   };
 }
 
+// #1505 (RF019 AC6): the outbox's two collections, recording each append's
+// event and options.
+function createFakeOutbox() {
+  const outbox = {
+    appended: [],
+    calls: [],
+    async createIndex() { return 'ok'; },
+    async updateOne(filter, update, options) {
+      outbox.calls.push(options);
+      outbox.appended.push(update.$setOnInsert);
+      return { upsertedCount: 1 };
+    },
+  };
+  const versions = {
+    calls: [],
+    async findOneAndUpdate(filter, update, options) {
+      versions.calls.push(options);
+      return { version: 1 };
+    },
+  };
+  return { graph_projection_outbox: outbox, graph_projection_outbox_aggregate_versions: versions };
+}
+
 function createFakeDb() {
-  const collections = { quarantineActions: createFakeCollection() };
+  const collections = { quarantineActions: createFakeCollection(), ...createFakeOutbox() };
   return {
     collections,
     collection(name) {
@@ -98,6 +121,50 @@ describe('quarantine-action.service', () => {
       expect(forSpec1).toHaveLength(1);
       expect(forSpec2).toHaveLength(1);
       expect(forSpec1[0].quarantineActionId).toBe(forSpec2[0].quarantineActionId);
+    });
+  });
+
+  describe('recordAction outbox event (#1505, RF019 AC6)', () => {
+    it('appends one QUARANTINE_APPLIED event keyed by the action, with its specimens, rule and actor and no other field', async () => {
+      const db = createFakeDb();
+      const stored = await recordAction(db, { specimenIds: ['SPEC-1'], reasonCodes: ['CONSENT_REVOKED'], authorizedBy: 'user-1' });
+
+      const events = db.collections.graph_projection_outbox.appended;
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        eventType: 'QUARANTINE_APPLIED',
+        aggregateType: 'QuarantineAction',
+        aggregateId: stored.quarantineActionId,
+        sourceService: 'quarantine-action',
+        payload: {
+          quarantineActionId: stored.quarantineActionId,
+          specimenIds: ['SPEC-1'],
+          reasonCodes: ['CONSENT_REVOKED'],
+          actionStatus: 'active',
+          authorizedBy: 'user-1',
+        },
+      });
+      expect(events[0].payload.startedAt).toBeInstanceOf(Date);
+      expect(Object.keys(events[0].payload).sort()).toEqual(
+        ['actionStatus', 'authorizedBy', 'quarantineActionId', 'reasonCodes', 'specimenIds', 'startedAt']
+      );
+    });
+
+    it('appends the event in the session the caller passes', async () => {
+      const db = createFakeDb();
+      const fakeSession = { id: 'txn-session' };
+      await recordAction(db, { specimenIds: ['SPEC-1'] }, fakeSession);
+
+      expect(db.collections.graph_projection_outbox.calls[0]).toEqual({ upsert: true, session: fakeSession });
+      expect(db.collections.graph_projection_outbox_aggregate_versions.calls[0]).toMatchObject({ session: fakeSession });
+    });
+
+    it('appends no event when the action insert fails', async () => {
+      const db = createFakeDb();
+      db.collections.quarantineActions.insertOne = async () => { throw new Error('insert failed'); };
+
+      await expect(recordAction(db, { specimenIds: ['SPEC-1'] })).rejects.toThrow('insert failed');
+      expect(db.collections.graph_projection_outbox.appended).toHaveLength(0);
     });
   });
 

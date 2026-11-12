@@ -1545,6 +1545,24 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     });
     expect(releaseEvents[0].payload.releasedAt).toBeTruthy();
 
+    // #1505 (RF019 AC6): the quarantine itself appended one QUARANTINE_APPLIED
+    // event in the action's insert, ahead of the release on the action's own
+    // version counter. No status is asserted: the projector has no handler
+    // for it yet.
+    const applyEvents = (await quarantineActionOutboxEvents(String(action.quarantineActionId)))
+      .filter((event) => event.eventType === 'QUARANTINE_APPLIED');
+    expect(applyEvents).toHaveLength(1);
+    expect(applyEvents[0].sourceService).toBe('quarantine-action');
+    expect(applyEvents[0].payload).toMatchObject({
+      quarantineActionId: action.quarantineActionId,
+      specimenIds: [sampleID],
+      reasonCodes: ['nonconformance'],
+      actionStatus: 'active',
+      authorizedBy: null,
+    });
+    expect(applyEvents[0].payload.startedAt).toBeTruthy();
+    expect(applyEvents[0].aggregateVersion).toBeLessThan(releaseEvents[0].aggregateVersion);
+
     const afterRelease = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
     expect((await afterRelease.json()).data.quantityStatus).toBe('full');
   });

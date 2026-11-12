@@ -11,7 +11,7 @@ import {
 import { seedSensorOnFreezer, removeSensorOnFreezer, closeSeedSensorDb, type SeededFreezerSensor } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { waitForDerivedFrom, readSampleStatus, removeSampleNodes, countSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
-import { sampleOutboxEvents, closeOutboxDb } from './helpers/queryOutbox';
+import { sampleOutboxEvents, waitForOutboxEventsProjected, closeOutboxDb } from './helpers/queryOutbox';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -200,6 +200,25 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
       .poll(async () => readSampleStatus(derivative.mongoId), { timeout: 15_000 })
       .toBe('COMPROMISED');
     expect(await readSampleStatus(control.mongoId)).not.toBe('COMPROMISED');
+
+    // #1505 (RF023 AC8, RF019 AC1/AC4): the breach reached the graph through
+    // one durable SPECIMEN_COMPROMISED outbox row per cycle, on the root
+    // sample only: its cause (the freezer's sensor) and instant (the start of
+    // the excursion), and no temperature reading.
+    const compromiseEvents = (await sampleOutboxEvents(parent.mongoId))
+      .filter((event) => event.eventType === 'SPECIMEN_COMPROMISED');
+    expect(compromiseEvents.length).toBeGreaterThanOrEqual(1);
+    for (const event of compromiseEvents) {
+      expect(event.sourceService).toBe('telemetry-monitor');
+      expect(Object.keys(event.payload).sort()).toEqual(['breachedSince', 'freezerKey', 'specimenId']);
+      expect(event.payload.specimenId).toBe(parent.mongoId);
+      expect(event.payload.freezerKey).toBe(sensor.sensorId);
+      expect(Number.isNaN(Date.parse(String(event.payload.breachedSince)))).toBe(false);
+    }
+    await waitForOutboxEventsProjected(compromiseEvents.map((event) => String(event.eventId)));
+    const derivativeCompromise = (await sampleOutboxEvents(derivative.mongoId))
+      .filter((event) => event.eventType === 'SPECIMEN_COMPROMISED');
+    expect(derivativeCompromise).toHaveLength(0);
   });
 
   // #1502 (RF023 AC6, RNF016 C2, RNF019 C6 C7): the reconciliation runs

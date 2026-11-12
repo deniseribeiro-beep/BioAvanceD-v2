@@ -16,6 +16,6 @@ Decided from the dictionary row for QuarantineAction and RF019 AC6 ("Auditar a d
 
 ## Not decided here
 
-- **An outbox event when a quarantine is applied** (`recordAction`'s callers).
+- **An outbox event when a quarantine is applied** is decided in `2026-11-12-quarantine-apply-outbox-event.md`.
 - **The other release paths that call `releaseActiveAction`**: consent re-activation, the compliance graph, the intake wizard and FHIR import.
 - **A Neo4j projection handler for the event.** The projector has no handler for `QUARANTINE_RELEASED` yet and skips it.

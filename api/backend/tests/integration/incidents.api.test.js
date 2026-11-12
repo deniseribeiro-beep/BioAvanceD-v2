@@ -405,3 +405,11 @@ describe('Incidents API integration', () => {
     expect(update.status).not.toBe('AVAILABLE');
   });
 });
+
+// #1505 (RF019 AC6): recordAction appends a QUARANTINE_APPLIED outbox event;
+// this file's fake db has no outbox, and the event's contract is pinned in
+// quarantine-action.service.test.js.
+beforeEach(() => {
+  const { GraphProjectionService } = require('../../src/services/graphProjection.service');
+  vi.spyOn(GraphProjectionService.prototype, 'appendQuarantineApplyEvent').mockResolvedValue(null);
+});

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -558,4 +558,12 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.patientMatch).toEqual({ patientID: '123' });
     expect(res.body.label).toEqual({ text: 'label-1' });
   });
+});
+
+// #1505 (RF019 AC6): recordAction appends a QUARANTINE_APPLIED outbox event;
+// this file's fake db has no outbox, and the event's contract is pinned in
+// quarantine-action.service.test.js.
+beforeEach(() => {
+  const { GraphProjectionService } = require('../../src/services/graphProjection.service');
+  vi.spyOn(GraphProjectionService.prototype, 'appendQuarantineApplyEvent').mockResolvedValue(null);
 });
