@@ -2676,6 +2676,19 @@ describe('sample.routes', () => {
       expect(res.body).toEqual({ success: false, error: 'RCS_DERIVED_WRITE_REFUSED', message: 'x', fields: ['rcsScore'], details: ['x'] });
     });
 
+    // RF018 AC10 (#1537): a refused change to the certified SPREC answers 422 with its field.
+    it('answers 422 SPREC_WRITE_REFUSED when the service refuses a SPREC change', async () => {
+      const refusal = Object.assign(new Error('x'), { statusCode: 422, code: 'SPREC_WRITE_REFUSED', fields: ['sprec'], details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ sprec: { longTermStorage: 'A' } });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({ success: false, error: 'SPREC_WRITE_REFUSED', message: 'x', fields: ['sprec'], details: ['x'] });
+    });
+
     // RNF018 AC1 (#1525): a refused quantity answers 422 with its fields.
     it('answers 422 INVALID_QUANTITY when the service refuses a negative quantity', async () => {
       const refusal = Object.assign(new Error('x'), { statusCode: 422, code: 'INVALID_QUANTITY', fields: ['currentQuantity'], details: ['x'] });

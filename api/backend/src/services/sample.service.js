@@ -13,10 +13,10 @@ const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const crypto = require('crypto');
+const { isDeepStrictEqual } = require('util');
 const { withMongoTransaction, withTransactionWhereSupported, isTransientTransactionError } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
-const qualityDomain = require('./quality-domain.service');
-const governanceEvidenceResolver = require('./governance-evidence-resolver.service');
+const sampleCertification = require('./sample-certification.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
 const legalHoldService = require('./legalHold.service');
@@ -75,6 +75,16 @@ function createRcsDerivedWriteRefusal(fields) {
   error.code = 'RCS_DERIVED_WRITE_REFUSED';
   error.fields = fields;
   error.details = details;
+  return error;
+}
+
+// RF018 AC10 (#1537): the SPREC is the certified input; an edit refuses a change to it.
+function createSprecWriteRefusal() {
+  const message = 'sprec é a entrada certificada da avaliação RCS e não é alterado por uma edição';
+  const error = createSampleValidationError(message, 422);
+  error.code = 'SPREC_WRITE_REFUSED';
+  error.fields = ['sprec'];
+  error.details = [message];
   return error;
 }
 
@@ -507,32 +517,8 @@ class SampleService {
       // #492: live registration didn't compute RCS server-side at all —
       // mirrors import.service.js's CSV/XLSX branch (#383), which is the
       // only other place `sprec` -> RCS-GOV field mapping already exists.
-      if (sampleData.sprec && typeof sampleData.sprec === 'object' && Object.keys(sampleData.sprec).length > 0) {
-        // RNF018 AC5 (#1524): the body's governanceEvidence references are
-        // resolved against the stored records before certification, as the
-        // preview resolves them; only the resolution reaches the assessment.
-        const governanceEvidenceResolution = await governanceEvidenceResolver.resolveGovernanceEvidence(db, {
-          governanceEvidence: sampleData.governanceEvidence,
-          specimenId: sampleData.specimenId,
-        });
-        const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({
-          sprec: sampleData.sprec,
-          // RF018 AC2 (#1320): the use context reaches the assessment only when sent.
-          ...(sampleData.qualificationContext !== undefined ? { qualificationContext: sampleData.qualificationContext } : {}),
-        }, ...(governanceEvidenceResolution ? [{ governanceEvidenceResolution }] : []));
-        sampleData.modelVersion = canonicalQualityAssessment.model_version;
-        sampleData.matrixType = canonicalQualityAssessment.matrix_type;
-        sampleData.governanceStatus = canonicalQualityAssessment.governance_status;
-        sampleData.governanceFailureReasons = canonicalQualityAssessment.governance_failure_reasons || [];
-        sampleData.governanceRuleCodes = canonicalQualityAssessment.governance_rule_codes || [];
-        sampleData.rcsScore = canonicalQualityAssessment.rcs_score;
-        sampleData.scoreBasedGrade = canonicalQualityAssessment.score_based_grade;
-        sampleData.finalGrade = canonicalQualityAssessment.final_grade || '';
-        sampleData.gradeRoute = canonicalQualityAssessment.grade_route;
-        sampleData.axisPenalties = canonicalQualityAssessment.axis_penalties || [];
-        sampleData.calculationTrace = canonicalQualityAssessment.calculation_trace || {};
-        sampleData.rcsEvaluation = canonicalQualityAssessment;
-      }
+      // RNF018 AC4 (#1537): the certification is shared with the JSON import.
+      await sampleCertification.certifySampleSprec(db, sampleData);
 
       const sample = SampleModel.create(sampleData);
       // #1192: the tenancy key comes only from the caller's server-built
@@ -1031,6 +1017,11 @@ class SampleService {
       if (rcsDerivedFields.length > 0) {
         throw createRcsDerivedWriteRefusal(rcsDerivedFields);
       }
+      // RF018 AC10 (#1537): the SPREC is a certified input; an edit does not change it.
+      if (Object.prototype.hasOwnProperty.call(updateData, 'sprec')
+        && !isDeepStrictEqual(updateData.sprec ?? null, existing.sprec ?? null)) {
+        throw createSprecWriteRefusal();
+      }
       // RNF018 AC1 (#1525): a negative or non-numeric quantity is refused.
       const invalidQuantityFields = findInvalidQuantityFields(updateData);
       if (invalidQuantityFields.length > 0) {
@@ -1097,7 +1088,8 @@ class SampleService {
         'withdrawnAt', 'receivedAt', 'quantity', 'unit', 'quality',
         // RCS_DERIVED_FIELDS are refused above (RNF018 AC4).
         'externalQualityAssessment', 'locationID', 'linkedProject',
-        'collectionSite', 'sprec', 'merkleRoot',
+        // sprec is refused above when it changes (RF018 AC10, #1537).
+        'collectionSite', 'merkleRoot',
         'sealedSpecimenPreanalyticsId', 'consentTemplateId', 'clinicalData',
         'pharmacologyData', 'consentStatus', 'quarantineReason',
         'importBatchId', 'importedAt', 'importedBy',

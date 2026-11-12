@@ -24,6 +24,7 @@ const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const sampleCertification = require('./sample-certification.service');
 const { insertSampleWithProjection } = require('./graphProjection.service');
 const { issueSpecimenLabel } = require('./specimenLabel.service');
 const { withoutLegacyBarcode } = require('../utils/sampleBarcodeWindow');
@@ -597,6 +598,9 @@ class ImportService {
           try {
             // Normalize legacy quality fields to canonical names (non-destructive)
             const sampleData = qualityCompatibility.normalizeSample(sampleDataRaw || {});
+            // RNF018 AC4 (#1537): the row's own RCS result and evidence
+            // resolution are never stored; only certification sets them.
+            for (const field of [...SampleModule.RCS_DERIVED_FIELDS, 'governanceEvidenceResolution']) delete sampleData[field];
             if (!sampleData.specimenId) {
               sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
             }
@@ -610,6 +614,9 @@ class ImportService {
               continue;
             }
 
+            // RNF018 AC4 (#1537): a row with a SPREC is certified as createSample
+            // certifies it, its governanceEvidence resolved first (RNF018 AC5).
+            await sampleCertification.certifySampleSprec(db, sampleData);
             const sample = SampleModel.create(sampleData);
             // #1376, #1192: the tenancy key comes from the caller's scope,
             // never from the row (SampleModel.create nulls a row's own). A

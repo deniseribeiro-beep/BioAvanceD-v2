@@ -1911,6 +1911,121 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     }
   });
 
+  test('the JSON sample import certifies each row from its sprec and resolves its governance evidence, storing no grade the row carries (RNF018 AC4, #1537)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const approval = await seedApprovalDocument();
+    const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const acceptedId = `IMP-1537-OK-${stamp}`;
+    const refusedId = `IMP-1537-NOHASH-${stamp}`;
+    // Each row forges the grade its evidence would not earn; certification
+    // decides both from the sprec and the resolved references alone.
+    const rows = [
+      {
+        specimenId: acceptedId,
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        sprec: fluidSprec(),
+        governanceEvidence: { documentation: [{ uri: approvalUri, hash: approval.documentChecksum }] },
+        rcsEvaluation: { final_grade: 'E', governance_status: 0, rcs_score: 1 },
+        finalGrade: 'E',
+        governanceStatus: 0,
+      },
+      {
+        specimenId: refusedId,
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        sprec: fluidSprec(),
+        governanceEvidence: { documentation: [{ uri: approvalUri }] },
+        rcsEvaluation: { final_grade: 'A', governance_status: 1 },
+        finalGrade: 'A',
+        governanceStatus: 1,
+      },
+    ];
+
+    const upload = await request.post(`${apiBaseURL}/api/import/upload`, {
+      headers: auth,
+      multipart: {
+        dataType: 'samples',
+        file: { name: 'amostras-1537.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(rows), 'utf8') },
+      },
+    });
+    expect(upload.status()).toBe(200);
+    const uploadData = (await upload.json()).data;
+    expect(uploadData.errors).toEqual([]);
+    expect(uploadData.success).toBe(2);
+
+    const assessmentOf = async (specimenId: string) => {
+      const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+      expect(assessments.status()).toBe(200);
+      const recorded = (await assessments.json()).data;
+      expect(recorded).toHaveLength(1);
+      return recorded[0];
+    };
+
+    const accepted = await assessmentOf(acceptedId);
+    expect(accepted.governanceStatus).toBe(1);
+    expect(accepted.finalGrade).toBe('A');
+
+    const refused = await assessmentOf(refusedId);
+    expect(refused.governanceStatus).toBe(0);
+    expect(refused.finalGrade).toBe('E');
+    expect(refused.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+  });
+
+  test('a sample edit refuses a SPREC change and keeps the certified SPREC and its one RcsAssessment (RF018 AC10, #1537)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: auth,
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        quantity: 10,
+        boxId: seededStorageBox.boxId,
+        positionCode: seededStorageBox.positionCode,
+        sprec: fluidSprec(),
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId: string = (await create.json()).data.specimenId;
+
+    const changed = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { sprec: fluidSprec({ longTermStorage: 'A' }) },
+    });
+    expect(changed.status()).toBe(422);
+    const changedBody = await changed.json();
+    expect(changedBody.error).toBe('SPREC_WRITE_REFUSED');
+    expect(changedBody.fields).toEqual(['sprec']);
+
+    const after = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers: auth });
+    expect(after.status()).toBe(200);
+    expect((await after.json()).data.sprec.longTermStorage).toBe('C');
+
+    const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+    expect(assessments.status()).toBe(200);
+    expect((await assessments.json()).data).toHaveLength(1);
+
+    const repeated = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { sprec: fluidSprec(), linkedProject: 'RF018 AC10 e2e edit project' },
+    });
+    expect(repeated.status()).toBe(200);
+  });
+
   test('an intake resolves its governance evidence references, and refuses certification and quarantines the specimen for a missing hash or an unresolvable URI (RNF018 AC5, #1524)', async ({
     request,
   }) => {

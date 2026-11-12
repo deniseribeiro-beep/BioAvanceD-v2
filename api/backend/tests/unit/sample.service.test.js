@@ -2329,6 +2329,42 @@ describe('sample.service', () => {
       }
     });
 
+    it('refuses an edit that changes sprec and persists nothing (RF018 AC10, #1537)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({
+        _id: 'sample-1',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available',
+        sprec: { sampleType: 'BLD', primaryContainer: 'SST', longTermStorage: 'C' }
+      });
+
+      await expect(sampleService.updateSample(db, 'sample-1', {
+        sprec: { sampleType: 'BLD', primaryContainer: 'SST', longTermStorage: 'A' }
+      })).rejects.toMatchObject({ statusCode: 422, code: 'SPREC_WRITE_REFUSED', fields: ['sprec'] });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('accepts an edit that repeats the stored sprec without rewriting it (#1537)', async () => {
+      const db = makeDb();
+      const sprec = { sampleType: 'BLD', primaryContainer: 'SST', longTermStorage: 'C' };
+      db.collections.samples.findOne.mockResolvedValue({
+        _id: 'sample-1',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available',
+        sprec
+      });
+
+      await expect(sampleService.updateSample(db, 'sample-1', { sprec: { ...sprec }, linkedProject: 'Projeto 1537' })).resolves.toBeTruthy();
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      expect(updateArg.$set.linkedProject).toBe('Projeto 1537');
+      expect(updateArg.$set).not.toHaveProperty('sprec');
+    });
+
     it('refuses a negative or non-numeric quantity and persists nothing (RNF018 AC1, #1525)', async () => {
       const writes = [
         { currentQuantity: -1 },

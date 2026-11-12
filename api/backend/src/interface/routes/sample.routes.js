@@ -1270,6 +1270,8 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     }
     // RNF018 AC4: a write to the RCS result answers 422.
     if (error.code === 'RCS_DERIVED_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'RCS_DERIVED_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
+    // RF018 AC10 (#1537): an edit that changes the certified SPREC answers 422.
+    if (error.code === 'SPREC_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'SPREC_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
     // RNF018 AC1 (#1525): a negative or non-numeric quantity answers 422.
     if (error.code === 'INVALID_QUANTITY') return res.status(422).json({ success: false, error: 'INVALID_QUANTITY', message: error.message, fields: error.fields, details: error.details });
     // RF006 AC4 (#1531): an edit of a ledgered quantity answers 422.
