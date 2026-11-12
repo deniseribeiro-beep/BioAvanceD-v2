@@ -1997,6 +1997,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
         specimenId: acceptedId,
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         sprec: fluidSprec(),
         governanceEvidence: { documentation: [{ uri: approvalUri, hash: approval.documentChecksum }] },
         rcsEvaluation: { final_grade: 'E', governance_status: 0, rcs_score: 1 },
@@ -2007,6 +2008,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
         specimenId: refusedId,
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         sprec: fluidSprec(),
         governanceEvidence: { documentation: [{ uri: approvalUri }] },
         rcsEvaluation: { final_grade: 'A', governance_status: 1 },
@@ -2043,6 +2045,32 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     expect(refused.governanceStatus).toBe(0);
     expect(refused.finalGrade).toBe('E');
     expect(refused.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+  });
+
+  test('the JSON sample import refuses a row that names no collection and stores no sample (RF004 AC2, ELM-0118, #1538)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const specimenId = `IMP-1538-NOCOL-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const rows = [{ specimenId, participantId: participant.participantId, ...validSampleFields() }];
+
+    const upload = await request.post(`${apiBaseURL}/api/import/upload`, {
+      headers: auth,
+      multipart: {
+        dataType: 'samples',
+        file: { name: 'amostras-1538.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(rows), 'utf8') },
+      },
+    });
+    expect(upload.status()).toBe(200);
+    const uploadData = (await upload.json()).data;
+    expect(uploadData.success).toBe(0);
+    expect(uploadData.errors[0].error).toMatch(/collectionId é obrigatório/);
+
+    const stored = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers: auth });
+    expect(stored.status()).toBe(404);
   });
 
   test('a sample edit refuses a SPREC change and keeps the certified SPREC and its one RcsAssessment (RF018 AC10, #1537)', async ({

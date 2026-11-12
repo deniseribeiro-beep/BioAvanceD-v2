@@ -25,6 +25,7 @@ const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const sampleCertification = require('./sample-certification.service');
+const sampleCollectionGate = require('./sample-collection-gate.service');
 const { insertSampleWithProjection } = require('./graphProjection.service');
 const { issueSpecimenLabel } = require('./specimenLabel.service');
 const { withoutLegacyBarcode } = require('../utils/sampleBarcodeWindow');
@@ -616,6 +617,8 @@ class ImportService {
 
             // RNF018 AC4 (#1537): a row with a SPREC is certified as createSample
             // certifies it, its governanceEvidence resolved first (RNF018 AC5).
+            // RF004 AC2 (#1538): the row enters only a collection that admits it.
+            await sampleCollectionGate.assertSampleCollectionAdmits(db, sampleData);
             await sampleCertification.certifySampleSprec(db, sampleData);
             const sample = SampleModel.create(sampleData);
             // #1376, #1192: the tenancy key comes from the caller's scope,
@@ -733,6 +736,8 @@ class ImportService {
               continue;
             }
 
+            // RF004 AC2 (#1538): the row enters only a collection that admits it.
+            await sampleCollectionGate.assertSampleCollectionAdmits(db, sampleData);
             const sample = SampleModel.create(sampleData);
             // #1376, #1192: the tenancy key comes from the caller's scope,
             // never from the row (SampleModel.create nulls a row's own). A
@@ -967,6 +972,8 @@ class ImportService {
     const linkedProjectRaw = this.getRowValue(row, ['linkedProject', 'projeto']);
     const tcleRaw = this.getRowValue(row, ['consentTemplateId']);
     const merkleRaw = this.getRowValue(row, ['merkleRoot']);
+    // RF004 AC2, ELM-0118 (#1538): the row's collection, read by the collection gate.
+    const collectionIdRaw = this.getRowValue(row, ['collectionId']);
 
     const sprec = {
       matrixType: normalizeString(this.getRowValue(row, ['sprec_matrix_type', 'sprecMatrixType'])),
@@ -1005,6 +1012,7 @@ class ImportService {
       sampleOrigin: normalizeString(sampleOriginRaw),
       extractionProtocol: normalizeString(extractionRaw),
       barcode: normalizeString(barcodeRaw),
+      collectionId: normalizeString(collectionIdRaw),
       registeredAt: toDate(registrationRaw, 'registeredAt') || new Date(),
       quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
       quality: normalizeString(qualityRaw),

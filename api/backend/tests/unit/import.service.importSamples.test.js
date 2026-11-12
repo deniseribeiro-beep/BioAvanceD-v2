@@ -9,6 +9,7 @@ const importService = require2('../../src/services/import.service');
 const SampleGraphValidator = require2('../../src/services/SampleGraphValidator');
 const qualityDomain = require2('../../src/services/quality-domain.service');
 const governanceEvidenceResolver = require2('../../src/services/governance-evidence-resolver.service');
+const sampleCollectionGate = require2('../../src/services/sample-collection-gate.service');
 const { createMatchingCollection } = require2('../factories/filter.factory');
 const env = require2('../../src/config/env');
 
@@ -131,6 +132,12 @@ const validSample = (overrides = {}) => ({
   linkedProject: 'Projeto QA',
   registeredAt: '2026-01-01',
   ...overrides,
+});
+
+// RF004 AC2 (#1538): every row passes the collection gate; the cases below
+// that are about other rules admit it, and the gate's own cases restore it.
+beforeEach(() => {
+  vi.spyOn(sampleCollectionGate, 'assertSampleCollectionAdmits').mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -560,6 +567,57 @@ describe('ImportService.importSamples (CSV)', () => {
 
     await expect(importService.importSamples(makeDb(collection), { path: missingPath, originalname: 'missing.csv' }))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// RF004 AC2, ELM-0118 (Specimen.collectionId 1..1 Core, #1538): an imported
+// row enters only a collection the gate createSample runs admits.
+describe('ImportService.importSamples runs the collection gate (#1538)', () => {
+  const CSV_HEADER = 'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt,collectionId';
+
+  it('refuses a JSON row that names no collection and inserts nothing', async () => {
+    sampleCollectionGate.assertSampleCollectionAdmits.mockRestore();
+    const filePath = writeTmpFile('no-collection.json', JSON.stringify(validSample()));
+    const collection = makeSamplesCollection();
+    const insertOne = vi.spyOn(collection, 'insertOne');
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'no-collection.json' });
+
+    expect(result.success).toBe(0);
+    expect(result.total).toBe(1);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 1, error: expect.stringMatching(/collectionId é obrigatório/) }),
+    ]);
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses a CSV row whose collectionId cell is empty and inserts nothing', async () => {
+    sampleCollectionGate.assertSampleCollectionAdmits.mockRestore();
+    const filePath = writeTmpFile('no-collection.csv', `${CSV_HEADER}\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01,\n`);
+    const collection = makeSamplesCollection();
+    const insertOne = vi.spyOn(collection, 'insertOne');
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'no-collection.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.total).toBe(1);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 1, error: expect.stringMatching(/collectionId é obrigatório/) }),
+    ]);
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  it("hands the gate a CSV row's trimmed collectionId", async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    const filePath = writeTmpFile('collection.csv', `${CSV_HEADER}\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01, COL-1 \n`);
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'collection.csv' });
+
+    expect(result.success).toBe(1);
+    expect(sampleCollectionGate.assertSampleCollectionAdmits).toHaveBeenCalledTimes(1);
+    const [, sampleData] = sampleCollectionGate.assertSampleCollectionAdmits.mock.calls[0];
+    expect(sampleData.collectionId).toBe('COL-1');
   });
 });
 
