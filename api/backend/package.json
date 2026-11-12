@@ -153,7 +153,7 @@
     "ioredis": "5.8.2",
     "jsonwebtoken": "9.0.2",
     "mongodb": "6.21.0",
-    "mongoose": "9.2.1",
+    "mongoose": "9.11.4",
     "mqtt": "5.15.0",
     "multer": "^2.2.0",
     "neo4j-driver": "6.0.1",
