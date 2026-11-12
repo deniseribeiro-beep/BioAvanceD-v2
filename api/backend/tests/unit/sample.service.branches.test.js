@@ -451,7 +451,8 @@ describe('sample.service branch arms (#1337)', () => {
       await sampleService.updateSample(db, 'SP-1', { initialQuantity: 20 });
 
       const [, update] = db.collection('samples').updateOne.mock.calls[0];
-      expect(update.$set).toMatchObject({ initialQuantity: 20, quantityStatus: 'partial' });
+      // RF006 AC4 (#1531): before any movement the correction re-derives the balance.
+      expect(update.$set).toMatchObject({ initialQuantity: 20, currentQuantity: 20, quantityStatus: 'full' });
     });
 
     it('records no status change for a stored status that folds to empty when the edit sends none', async () => {

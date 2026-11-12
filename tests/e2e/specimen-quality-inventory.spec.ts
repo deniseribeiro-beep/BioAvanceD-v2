@@ -1065,6 +1065,24 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(head.newQuantity).toBe(afterTotalBody.currentQuantity);
     expect(afterTotalBody.currentQuantity).toBe(0);
 
+    // RF006 AC4 (#1531): an edit cannot move a ledgered quantity; the balance and version stay as the ledger left them.
+    for (const data of [{ currentQuantity: 5 }, { totalWithdrawn: 0 }, { totalReturned: 1 }, { initialQuantity: 50 }]) {
+      const edit = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data,
+      });
+      expect(edit.status(), JSON.stringify(data)).toBe(422);
+      const editBody = await edit.json();
+      expect(editBody.error).toBe('QUANTITY_LEDGER_WRITE_REFUSED');
+      expect(editBody.fields).toEqual(Object.keys(data));
+    }
+    const afterEdits = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const afterEditsBody = (await afterEdits.json()).data;
+    expect(afterEditsBody.currentQuantity).toBe(0);
+    expect(afterEditsBody.quantityLedgerVersion).toBe(2);
+
     // RF006 AC7 (#1315): withdrawals change no status, so they record no decision.
     const beforeClose = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
       headers: { Authorization: `Bearer ${admin.token}` },

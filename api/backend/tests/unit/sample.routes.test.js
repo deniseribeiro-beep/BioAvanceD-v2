@@ -2689,6 +2689,19 @@ describe('sample.routes', () => {
       expect(res.body).toEqual({ success: false, error: 'INVALID_QUANTITY', message: 'x', fields: ['currentQuantity'], details: ['x'] });
     });
 
+    // RF006 AC4 (#1531): an edit of a ledgered quantity answers 422 with its fields.
+    it('answers 422 QUANTITY_LEDGER_WRITE_REFUSED when the service refuses an edit of a ledgered quantity', async () => {
+      const refusal = Object.assign(new Error('x'), { statusCode: 422, code: 'QUANTITY_LEDGER_WRITE_REFUSED', fields: ['currentQuantity'], details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ currentQuantity: 9 });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({ success: false, error: 'QUANTITY_LEDGER_WRITE_REFUSED', message: 'x', fields: ['currentQuantity'], details: ['x'] });
+    });
+
     // #1378 (ELM-0116): a barcode write refused after the migration window answers 422 with its code.
     it('answers 422 LEGACY_BARCODE_WRITE_REFUSED when the service refuses a barcode write', async () => {
       const refusal = Object.assign(new Error('Sample.barcode (ELM-0116) não é mais gravado'), { statusCode: 422, code: 'LEGACY_BARCODE_WRITE_REFUSED' });

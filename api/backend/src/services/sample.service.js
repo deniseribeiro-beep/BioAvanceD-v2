@@ -89,6 +89,64 @@ function findInvalidQuantityFields(updateData) {
     return !(typeof value === 'number' && Number.isFinite(value) && value >= 0);
   });
 }
+// RF006 AC4 (#1531): currentQuantity, totalWithdrawn and totalReturned move
+// only through a ledgered withdrawal or return. initialQuantity (ELM-0138)
+// and quantity are registration values, editable until the first movement.
+const LEDGER_QUANTITY_FIELDS = ['currentQuantity', 'totalWithdrawn', 'totalReturned'];
+const REGISTRATION_QUANTITY_FIELDS = ['initialQuantity', 'quantity'];
+function storedLedgerQuantity(existing, field) {
+  if (field === 'currentQuantity') return existing.currentQuantity ?? existing.quantity ?? null;
+  return existing[field] ?? 0;
+}
+function hasLedgerMovement(existing) {
+  return !((existing.quantityLedgerVersion ?? 0) === 0
+    && (existing.totalWithdrawn ?? 0) === 0
+    && (existing.totalReturned ?? 0) === 0);
+}
+function findLedgerQuantityWrites(updateData, existing) {
+  const named = (field) => Object.prototype.hasOwnProperty.call(updateData, field);
+  const ledger = LEDGER_QUANTITY_FIELDS.filter((field) => named(field)
+    && updateData[field] !== storedLedgerQuantity(existing, field));
+  const registration = hasLedgerMovement(existing)
+    ? REGISTRATION_QUANTITY_FIELDS.filter((field) => named(field) && updateData[field] !== (existing[field] ?? null))
+    : [];
+  return [...ledger, ...registration];
+}
+// RF006 AC4 (#1531): before the first movement, a registration correction
+// re-derives the balance as Sample.create does (currentQuantity from
+// initialQuantity, else quantity), so an unmoved specimen stays full.
+// Returns undefined when nothing re-derives it, and when the stored balance
+// already differs from its base (a pre-ledger specimen consumed with no
+// recorded movement keeps its balance).
+function rederivedCurrentQuantity(updateData, existing) {
+  if (hasLedgerMovement(existing)) return undefined;
+  const base = existing.initialQuantity ?? existing.quantity ?? null;
+  if ((existing.currentQuantity ?? existing.quantity ?? null) !== base) return undefined;
+  const changed = (field) => Object.prototype.hasOwnProperty.call(updateData, field)
+    && updateData[field] !== (existing[field] ?? null);
+  if (changed('initialQuantity')) {
+    if (typeof updateData.initialQuantity === 'number') return updateData.initialQuantity;
+    // A cleared initialQuantity leaves quantity as the base, as Sample.create does.
+    const quantityBase = Object.prototype.hasOwnProperty.call(updateData, 'quantity')
+      ? updateData.quantity
+      : existing.quantity;
+    return quantityBase ?? undefined;
+  }
+  // quantity is the base only when no initialQuantity is stored or sent.
+  if ((existing.initialQuantity ?? null) === null && (updateData.initialQuantity ?? null) === null
+    && changed('quantity')) return updateData.quantity;
+  return undefined;
+}
+function createLedgerQuantityWriteRefusal(fields) {
+  const details = fields.map((field) => (LEDGER_QUANTITY_FIELDS.includes(field)
+    ? `${field} é derivado do ledger de movimentações e só muda por retirada ou devolução`
+    : `${field} não pode mudar depois da primeira movimentação do ledger`));
+  const error = createSampleValidationError(details.join(', '), 422);
+  error.code = 'QUANTITY_LEDGER_WRITE_REFUSED';
+  error.fields = fields;
+  error.details = details;
+  return error;
+}
 function createInvalidQuantityRefusal(fields) {
   const details = fields.map((field) => `${field} deve ser um número maior ou igual a zero`);
   const error = createSampleValidationError(details.join(', '), 422);
@@ -942,9 +1000,12 @@ class SampleService {
         return null;
       }
 
-      const nextAvailable = updateData.currentQuantity !== undefined
-        ? updateData.currentQuantity
-        : existing.currentQuantity ?? existing.quantity;
+      const rederivedCurrent = rederivedCurrentQuantity(updateData, existing);
+      const nextAvailable = rederivedCurrent !== undefined
+        ? rederivedCurrent
+        : updateData.currentQuantity !== undefined
+          ? updateData.currentQuantity
+          : existing.currentQuantity ?? existing.quantity;
       const nextOriginal = updateData.initialQuantity !== undefined
         ? updateData.initialQuantity
         : existing.initialQuantity ?? existing.quantity;
@@ -966,6 +1027,11 @@ class SampleService {
       const invalidQuantityFields = findInvalidQuantityFields(updateData);
       if (invalidQuantityFields.length > 0) {
         throw createInvalidQuantityRefusal(invalidQuantityFields);
+      }
+      // RF006 AC4 (#1531): an edit does not move a ledgered quantity.
+      const ledgerQuantityWrites = findLedgerQuantityWrites(updateData, existing);
+      if (ledgerQuantityWrites.length > 0) {
+        throw createLedgerQuantityWriteRefusal(ledgerQuantityWrites);
       }
       // #1378 (ELM-0116): after the migration window, barcode is not written.
       assertLegacyBarcodeWritable(updateData);
@@ -1015,6 +1081,8 @@ class SampleService {
       // parentSpecimenIds (ELM-0120, #1368) is set at creation, where its
       // LINEAGE_REGISTERED is appended, and is deliberately not updatable.
       // quantityLedgerVersion (RF006 AC4) is excluded on purpose: server-owned like the status fields.
+      // currentQuantity, totalWithdrawn and totalReturned are excluded too: only
+      // a withdrawal or return writes them (RF006 AC4, #1531).
       const ALLOWED_UPDATE_FIELDS = [
         'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
         'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
@@ -1024,8 +1092,8 @@ class SampleService {
         'collectionSite', 'sprec', 'merkleRoot',
         'sealedSpecimenPreanalyticsId', 'consentTemplateId', 'clinicalData',
         'pharmacologyData', 'consentStatus', 'quarantineReason',
-        'importBatchId', 'importedAt', 'importedBy', 'currentQuantity',
-        'initialQuantity', 'totalWithdrawn', 'totalReturned',
+        'importBatchId', 'importedAt', 'importedBy',
+        'initialQuantity',
         'accessionNumber', 'orderNumber', 'processingStatus',
         'protocolApplied', 'specimenCollection', 'studyId', 'protocolId',
         'collectionId', 'linkedFiles', 'qrCode', 'storageLocation',
@@ -1043,6 +1111,7 @@ class SampleService {
       // it and records its provenance.
       const payload = {
         ...restUpdateData,
+        ...(rederivedCurrent !== undefined ? { currentQuantity: rederivedCurrent } : {}),
         ...(requestedStatus ? { specimenStatus } : {}),
         quantityStatus,
         updatedAt: new Date()

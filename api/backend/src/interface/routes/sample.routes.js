@@ -1272,6 +1272,8 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     if (error.code === 'RCS_DERIVED_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'RCS_DERIVED_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
     // RNF018 AC1 (#1525): a negative or non-numeric quantity answers 422.
     if (error.code === 'INVALID_QUANTITY') return res.status(422).json({ success: false, error: 'INVALID_QUANTITY', message: error.message, fields: error.fields, details: error.details });
+    // RF006 AC4 (#1531): an edit of a ledgered quantity answers 422.
+    if (error.code === 'QUANTITY_LEDGER_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'QUANTITY_LEDGER_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
     // #1378 (ELM-0116): a barcode write after the migration window answers 422.
     if (error.code === 'LEGACY_BARCODE_WRITE_REFUSED') {
       return res.status(422).json({

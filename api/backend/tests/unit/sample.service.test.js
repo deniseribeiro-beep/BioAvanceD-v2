@@ -2050,19 +2050,20 @@ describe('sample.service', () => {
       };
       db.collections.samples.findOne
         .mockResolvedValueOnce(existing) // initial lookup
-        .mockResolvedValueOnce({ ...existing, currentQuantity: 4 }); // post-update re-fetch
+        .mockResolvedValueOnce({ ...existing, initialQuantity: 25, currentQuantity: 25 }); // post-update re-fetch
 
-      const result = await sampleService.updateSample(db, 'sample-1', { currentQuantity: 4 });
+      const result = await sampleService.updateSample(db, 'sample-1', { initialQuantity: 25 });
 
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
       // The legacy lifecycleStatus/availabilityStatus dual-write was removed
-      // in #408; quantity moves quantityStatus, never specimenStatus.
-      expect(updateArg.$set.quantityStatus).toBe('partial');
+      // in #408; quantity moves quantityStatus, never specimenStatus. Before
+      // any movement the correction re-derives the balance (#1531): full.
+      expect(updateArg.$set.quantityStatus).toBe('full');
       expect(updateArg.$set.specimenStatus).toBeUndefined();
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
-      expect(result.currentQuantity).toBe(4);
+      expect(result.initialQuantity).toBe(25);
     });
 
     it('appends an OperationalStateDecision when an edit changes specimenStatus, and none for a quantity edit or no change (RF006 AC7, #1315)', async () => {
@@ -2070,7 +2071,7 @@ describe('sample.service', () => {
       const existing = { _id: 'sample-1', specimenId: 'SPC-U', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' };
       db.collections.samples.findOne.mockResolvedValue(existing);
 
-      await sampleService.updateSample(db, 'SPC-U', { currentQuantity: 4 });
+      await sampleService.updateSample(db, 'SPC-U', { initialQuantity: 20 });
       expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
 
       await sampleService.updateSample(db, 'SPC-U', { specimenStatus: 'reserved' });
@@ -2262,13 +2263,111 @@ describe('sample.service', () => {
       }
     });
 
-    it('writes a currentQuantity of zero, the lowest the edit allows (RNF018 AC1, #1525)', async () => {
+    it('writes an initialQuantity of zero, the lowest the edit allows (RNF018 AC1, #1525)', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-1', quantity: 10, initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' });
 
-      await sampleService.updateSample(db, 'sample-1', { currentQuantity: 0 });
+      await sampleService.updateSample(db, 'sample-1', { initialQuantity: 0 });
 
-      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.currentQuantity).toBe(0);
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.initialQuantity).toBe(0);
+    });
+
+    // RF006 AC4 (#1531): a ledgered quantity moves only by a withdrawal or return.
+    const ledgered = { _id: 'sample-1', specimenId: 'SPC-L', quantity: 10, initialQuantity: 10, currentQuantity: 4, totalWithdrawn: 6, totalReturned: 0, quantityLedgerVersion: 2, specimenStatus: 'available' };
+    const unmoved = { _id: 'sample-1', specimenId: 'SPC-N', quantity: 10, initialQuantity: 10, currentQuantity: 10, totalWithdrawn: 0, totalReturned: 0, quantityLedgerVersion: 0, specimenStatus: 'available' };
+    it.each([
+      ['currentQuantity after a movement', ledgered, { currentQuantity: 9 }],
+      ['totalWithdrawn after a movement', ledgered, { totalWithdrawn: 0 }],
+      ['totalReturned after a movement', ledgered, { totalReturned: 3 }],
+      ['initialQuantity after a movement', ledgered, { initialQuantity: 50 }],
+      ['quantity after a movement', ledgered, { quantity: 50 }],
+      ['initialQuantity on a pre-version specimen with a withdrawal', { ...ledgered, quantityLedgerVersion: undefined }, { initialQuantity: 50 }],
+      ['currentQuantity before any movement', unmoved, { currentQuantity: 4 }],
+      ['totalWithdrawn before any movement', unmoved, { totalWithdrawn: 6 }],
+      ['every ledgered field at once', ledgered, { currentQuantity: 9, totalWithdrawn: 1, totalReturned: 1 }],
+    ])('refuses an edit of %s with QUANTITY_LEDGER_WRITE_REFUSED and writes nothing (RF006 AC4, #1531)', async (_label, stored, write) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(stored);
+
+      await expect(sampleService.updateSample(db, 'sample-1', write)).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'QUANTITY_LEDGER_WRITE_REFUSED',
+        fields: Object.keys(write)
+      });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('writes an edit that echoes the stored ledgered quantities, leaving them out of the write (RF006 AC4, #1531)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(ledgered);
+
+      await sampleService.updateSample(db, 'sample-1', { currentQuantity: 4, totalWithdrawn: 6, totalReturned: 0, linkedProject: 'P-1531' });
+
+      const [, update] = db.collections.samples.updateOne.mock.calls[0];
+      expect(update.$set.linkedProject).toBe('P-1531');
+      expect(update.$set).not.toHaveProperty('currentQuantity');
+      expect(update.$set).not.toHaveProperty('totalWithdrawn');
+      expect(update.$set).not.toHaveProperty('totalReturned');
+    });
+
+    it('writes a quantity correction before any movement (RF006 AC4, #1531)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(unmoved);
+
+      await sampleService.updateSample(db, 'sample-1', { quantity: 12, initialQuantity: 12 });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set).toMatchObject({ quantity: 12, initialQuantity: 12 });
+    });
+
+    it.each([
+      ['initialQuantity', { initialQuantity: 12 }],
+      ['quantity', { quantity: 12 }, { initialQuantity: undefined }],
+      ['quantity (initialQuantity sent as null)', { quantity: 12, initialQuantity: null }, { initialQuantity: undefined }],
+    ])('re-derives currentQuantity from a %s correction before any movement, so the specimen stays full (RF006 AC4, #1531)', async (_label, write, storedOverride = {}) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ ...unmoved, ...storedOverride });
+
+      await sampleService.updateSample(db, 'sample-1', write);
+
+      const { $set } = db.collections.samples.updateOne.mock.calls[0][1];
+      expect($set.currentQuantity).toBe(12);
+      expect($set.quantityStatus).toBe('full');
+    });
+
+    it('keeps the balance on a quantity-only correction when a stored initialQuantity is the base (RF006 AC4, #1531)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ ...unmoved, initialQuantity: 20, quantity: 10, currentQuantity: 20 });
+
+      await sampleService.updateSample(db, 'sample-1', { quantity: 12 });
+
+      const { $set } = db.collections.samples.updateOne.mock.calls[0][1];
+      expect($set).not.toHaveProperty('currentQuantity');
+      expect($set.quantityStatus).toBe('full');
+    });
+
+    it.each([
+      ['the stored quantity', { initialQuantity: null }, 10],
+      ['the sent quantity', { quantity: 12, initialQuantity: null }, 12],
+    ])('re-derives currentQuantity from %s when an edit clears a stored initialQuantity before any movement (RF006 AC4, #1531)', async (_label, write, expected) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ ...unmoved, initialQuantity: 20, quantity: 10, currentQuantity: 20 });
+
+      await sampleService.updateSample(db, 'sample-1', write);
+
+      const { $set } = db.collections.samples.updateOne.mock.calls[0][1];
+      expect($set.currentQuantity).toBe(expected);
+      expect($set.quantityStatus).toBe('full');
+    });
+
+    it('keeps the balance of a pre-ledger specimen consumed with no recorded movement on an initialQuantity correction (RF006 AC4, #1531)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-P', quantity: 10, initialQuantity: 10, currentQuantity: 4, specimenStatus: 'available' });
+
+      await sampleService.updateSample(db, 'sample-1', { initialQuantity: 12 });
+
+      const { $set } = db.collections.samples.updateOne.mock.calls[0][1];
+      expect($set).not.toHaveProperty('currentQuantity');
+      expect($set.quantityStatus).toBe('partial');
     });
 
     it('returns null when updateOne matches nothing', async () => {
