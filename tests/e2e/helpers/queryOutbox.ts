@@ -151,6 +151,18 @@ export async function projectionCheckpoint(partitionKey: string) {
 }
 
 /**
+ * #1519 (RNF016 C2): drops the projector's checkpoint for one partition
+ * (`<aggregateType>:<aggregateId>`), so a requeue of its events replays them
+ * all: the projector state a rebuild from the outbox starts from.
+ */
+export async function deleteProjectionCheckpoint(partitionKey: string): Promise<void> {
+  const db = await getDb();
+  await db
+    .collection<{ _id: string }>('graph_projection_checkpoints')
+    .deleteOne({ _id: 'neo4j-canonical-projection:' + partitionKey });
+}
+
+/**
  * #1500 (RF023 AC6, RNF019 C3): puts applied events back in the queue, the
  * at-least-once re-delivery a consumer must absorb. The same reset the
  * dead-letter requeue applies, plus projectedAt so the re-delivery shows.

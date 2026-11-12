@@ -26,10 +26,13 @@ import {
   readConsentProjection,
   readStoredAtEdges,
   waitForStoredAtEdge,
+  removeSampleNodes,
 } from './helpers/queryNeo4j';
 import {
   consentOutboxEvents,
   projectionCheckpoint,
+  deleteProjectionCheckpoint,
+  sampleOutboxEvents,
   requeueOutboxEvents,
   waitForOutboxEventsProjected,
   insertPoisonOutboxEvent,
@@ -393,6 +396,116 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     expect(edgeB.validTo).toBeNull();
     expect(edgeB.transactionTime).not.toBeNull();
     expect(edgeB.sampleId).toBe(edgeA.sampleId);
+  });
+
+  // #1519 (RNF025 C5, RNF016 C1 C2): the graph is rebuilt from the MongoDB
+  // outbox alone. The sample's node and edges and the projector's checkpoint
+  // are dropped, the sample's outbox events are requeued, and the projector
+  // replays them: each STORED_AT edge comes back with the validTime its
+  // Mongo outbox event holds, while its transactionTime moves to the rebuild.
+  test('a sample\'s graph rebuilt from its MongoDB outbox alone keeps each STORED_AT validTime and takes a new transactionTime (RNF025 C5, RNF016 C1 C2)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const homeBox = await seedStorageBoxLocation();
+    seededBoxes.push(homeBox);
+    const boxA = await seedStorageBoxLocation();
+    seededBoxes.push(boxA);
+    const boxB = await seedStorageBoxLocation();
+    seededBoxes.push(boxB);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'RNF016 #1519 outbox rebuild e2e fixture',
+        registeredAt: new Date().toISOString(),
+        boxId: homeBox.boxId,
+        positionCode: homeBox.positionCode,
+        collectionId: governed!.collectionId,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId;
+    expect(specimenId).toBeTruthy();
+
+    async function placeInto(boxId: string) {
+      const release = await request.delete(`${apiBaseURL}/api/storage/release/${specimenId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(release.status()).toBe(200);
+      const assign = await request.post(`${apiBaseURL}/api/storage/allocate/auto`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { sampleId: specimenId, boxId },
+      });
+      expect(assign.status()).toBe(201);
+      expect((await assign.json()).success).toBe(true);
+    }
+
+    await placeInto(boxA.boxId);
+    await waitForStoredAtEdge(boxA.boxId);
+    await placeInto(boxB.boxId);
+    await waitForStoredAtEdge(boxB.boxId);
+    await expect
+      .poll(async () => (await readStoredAtEdges(boxA.boxId))[0]?.validTo ?? null, { timeout: 15_000 })
+      .not.toBeNull();
+
+    const [edgeA] = await readStoredAtEdges(boxA.boxId);
+    const sampleId = edgeA.sampleId!;
+    expect(sampleId).toBeTruthy();
+    const events = await sampleOutboxEvents(sampleId);
+    const eventIds = events.map((event) => String(event.eventId));
+    await waitForOutboxEventsProjected(eventIds);
+    const boxIds = [homeBox.boxId, boxA.boxId, boxB.boxId];
+    const before = await Promise.all(boxIds.map((boxId) => readStoredAtEdges(boxId)));
+    expect(before[1]).toHaveLength(1);
+    expect(before[2]).toHaveLength(1);
+
+    // RNF016 C1: each edge was written by its MongoDB outbox event, and its
+    // validFrom is the time that event holds.
+    for (const index of [1, 2]) {
+      const placed = events.filter(
+        (event) => event.eventType === 'STORAGE_POSITION_ASSIGNED' && event.payload?.boxId === boxIds[index]
+      );
+      expect(placed).toHaveLength(1);
+      expect(before[index][0].eventId).toBe(String(placed[0].eventId));
+      expect(Date.parse(before[index][0].validFrom!)).toBe(new Date(placed[0].occurredAt).getTime());
+    }
+
+    // RNF016 C2: drop the graph and the projector state, replay the outbox.
+    await removeSampleNodes([sampleId]);
+    expect(await readStoredAtEdges(boxA.boxId)).toHaveLength(0);
+    expect(await readStoredAtEdges(boxB.boxId)).toHaveLength(0);
+    await deleteProjectionCheckpoint('Sample:' + sampleId);
+    await requeueOutboxEvents(eventIds);
+    await waitForOutboxEventsProjected(eventIds, { timeoutMs: 30_000 });
+
+    const after = await Promise.all(boxIds.map((boxId) => readStoredAtEdges(boxId)));
+    for (let index = 0; index < boxIds.length; index += 1) {
+      expect(after[index]).toHaveLength(before[index].length);
+      for (let edge = 0; edge < before[index].length; edge += 1) {
+        // RNF025 C5: validTime is the placement's own and survives the
+        // rebuild; transactionTime is when the graph recorded it.
+        expect(after[index][edge].validFrom).toBe(before[index][edge].validFrom);
+        expect(after[index][edge].validTo).toBe(before[index][edge].validTo);
+        expect(after[index][edge].eventId).toBe(before[index][edge].eventId);
+        expect(after[index][edge].transactionTime).not.toBeNull();
+        expect(Date.parse(after[index][edge].transactionTime!)).toBeGreaterThan(
+          Date.parse(before[index][edge].transactionTime!)
+        );
+      }
+    }
+    expect(after[2][0].validTo).toBeNull();
+
+    // The rebuild appended nothing: the outbox it read is the one it left.
+    expect((await sampleOutboxEvents(sampleId)).map((event) => String(event.eventId))).toEqual(eventIds);
+    const checkpoint = await projectionCheckpoint('Sample:' + sampleId);
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint!.lastAggregateVersion).toBe(events[events.length - 1].aggregateVersion);
   });
 });
 

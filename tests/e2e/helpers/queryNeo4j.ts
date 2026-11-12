@@ -108,6 +108,8 @@ export interface StoredAtEdge {
   validFrom: string | null;
   validTo: string | null;
   transactionTime: string | null;
+  /** #1519 (RNF016 C1): the outbox event that last wrote the edge. */
+  eventId: string | null;
 }
 
 /** #1500 (RF023 AC5): every Sample-[:STORED_AT]->StoragePosition edge into `boxId`. */
@@ -117,7 +119,7 @@ export async function readStoredAtEdges(boxId: string): Promise<StoredAtEdge[]> 
     const result = await session.run(
       'MATCH (s:Sample)-[r:STORED_AT]->(p:StoragePosition {boxId: $boxId}) ' +
         'RETURN s.id AS sampleId, p.position AS position, toString(r.validFrom) AS validFrom, ' +
-        'toString(r.validTo) AS validTo, toString(r.transactionTime) AS transactionTime',
+        'toString(r.validTo) AS validTo, toString(r.transactionTime) AS transactionTime, r.eventId AS eventId',
       { boxId }
     );
     return result.records.map((record) => ({
@@ -126,6 +128,7 @@ export async function readStoredAtEdges(boxId: string): Promise<StoredAtEdge[]> 
       validFrom: record.get('validFrom') ?? null,
       validTo: record.get('validTo') ?? null,
       transactionTime: record.get('transactionTime') ?? null,
+      eventId: record.get('eventId') ?? null,
     }));
   } finally {
     await session.close();
