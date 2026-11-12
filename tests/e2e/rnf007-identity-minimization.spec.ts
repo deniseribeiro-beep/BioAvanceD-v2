@@ -162,7 +162,7 @@ test.describe('RNF007 / RNF022 identity segregation and minimization — real ba
     expect(refusedText).not.toContain(NAME_MARKER);
   });
 
-  test('system-generated labels and print jobs carry only opaque codes, never civil identity (RNF007 AC4, RNF022 AC6)', async ({
+  test('system-generated labels and print jobs carry only opaque codes, never civil identity (RNF007 AC4, RNF022 AC6, RF016 AC8)', async ({
     request,
   }) => {
     const admin = await realLogin(request);

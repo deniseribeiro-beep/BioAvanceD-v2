@@ -123,6 +123,60 @@ test.describe('protocol version/approvalStatus round-trip (#326)', () => {
   });
 });
 
+// #1535 (RF021 AC1): the backend generates studyId and protocolId when the
+// caller sends none, and versions a protocol by its required protocolVersion
+// (a single controlled version string, not a supersession chain: #589).
+test.describe('study and protocol identifiers and protocol version (RF021 AC1)', () => {
+  test('generates studyId and protocolId, requires a protocolVersion and records a revised one', async ({ request }) => {
+    const admin = await realLogin(request);
+    const headers = { Authorization: `Bearer ${admin.token}` };
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const study = await request.post(`${apiBaseURL}/api/studies`, {
+      headers,
+      data: { studyTitle: `e2e RF021 AC1 study ${run}`, ethicsApprovalId: [`CAAE-e2e-rf021-ac1-${run}`] },
+    });
+    expect(study.status(), await study.text()).toBe(201);
+    const studyId = (await study.json()).data.studyId as string;
+    expect(studyId).toMatch(uuid);
+    const fetchedStudy = await request.get(`${apiBaseURL}/api/studies/${studyId}`, { headers });
+    expect(fetchedStudy.status(), await fetchedStudy.text()).toBe(200);
+    expect((await fetchedStudy.json()).data.studyId).toBe(studyId);
+
+    const protocolFields = {
+      protocolName: `e2e RF021 AC1 protocol ${run}`,
+      protocolType: 'processing',
+      documentUri: 'object://protocols/e2e-rf021-ac1-v1.0.pdf',
+      effectivePeriod: { start: '2026-01-01' },
+    };
+    const unversioned = await request.post(`${apiBaseURL}/api/protocols`, { headers, data: protocolFields });
+    expect(unversioned.status(), await unversioned.text()).toBe(422);
+
+    const protocol = await request.post(`${apiBaseURL}/api/protocols`, { headers, data: { ...protocolFields, protocolVersion: '1.0' } });
+    expect(protocol.status(), await protocol.text()).toBe(201);
+    const protocolId = (await protocol.json()).data.protocolId as string;
+    expect(protocolId).toMatch(uuid);
+    expect(protocolId).not.toBe(studyId);
+
+    const revised = await request.put(`${apiBaseURL}/api/protocols/${protocolId}`, {
+      headers,
+      data: { protocolVersion: '1.1', documentUri: 'object://protocols/e2e-rf021-ac1-v1.1.pdf' },
+    });
+    expect(revised.status(), await revised.text()).toBe(200);
+    const blanked = await request.put(`${apiBaseURL}/api/protocols/${protocolId}`, { headers, data: { protocolVersion: '  ' } });
+    expect(blanked.status(), await blanked.text()).toBe(422);
+
+    const fetched = await request.get(`${apiBaseURL}/api/protocols/${protocolId}`, { headers });
+    expect(fetched.status(), await fetched.text()).toBe(200);
+    expect((await fetched.json()).data).toMatchObject({
+      protocolId,
+      protocolVersion: '1.1',
+      documentUri: 'object://protocols/e2e-rf021-ac1-v1.1.pdf',
+    });
+  });
+});
+
 // #325 (RF020, narrowed — see issue comment: full MIABIS-institutional
 // scope split out to #576 since organization.routes.js has no PUT/DELETE
 // and Collection is Fase-1-only). Covers create + list via

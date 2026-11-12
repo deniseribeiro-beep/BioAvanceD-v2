@@ -1235,7 +1235,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
   // #1347 (RF010 AC3/AC7): a term's permissions name governed purposes (DUO
   // codes), so a consent revoked for one purpose is judged on the requested
   // purpose: the revoked one is denied, rather than sent to review.
-  test('a consent revoked for the requested DUO purpose denies the request\'s item (RF010 AC7)', async ({ request }) => {
+  test('a consent revoked for the requested DUO purpose denies the request\'s item and keeps the consent\'s history (RF010 AC7, RNF022 C2)', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -1290,6 +1290,17 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       consentAuthorizationResult: 'deny',
       consentAuthorizationReasons: [expect.stringContaining(healthCode)],
     });
+
+    // RNF022 C2: the revocation refuses the use from now on and erases no
+    // history: the acceptance and the revocation both stay readable, and the
+    // revocation retains prior use rather than promising its elimination.
+    const historyRes = await request.get(`${apiBaseURL}/api/e-consent/consents/${consentDocId}/history`, { headers: auth });
+    expect(historyRes.status(), await historyRes.text()).toBe(200);
+    const history = (await historyRes.json()).data;
+    expect(history.currentStateDerived).toBe('partially_revoked');
+    expect(history.decisionEvents.map((event: { decision: string }) => event.decision)).toEqual(['accepted', 'revoked']);
+    expect(history.revocations).toHaveLength(1);
+    expect(history.revocations[0]).toMatchObject({ scope: ['health-1347'], priorUseDisposition: 'retain_history' });
   });
 
   // #1492 (RF010 AC7): beside permit and deny, the third result. A consent

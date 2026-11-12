@@ -2851,7 +2851,7 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
     expect((await stored.json()).data.actionStatus).toBe('cancelled');
   });
 
-  test('an execution a legal hold refuses is stored blocked, and re-approved after the release it executes (RF006 AC5, RF026 AC4 AC6, RNF022 AC4; #1509)', async ({ request }) => {
+  test('an execution a legal hold refuses is stored blocked, and re-approved after the release it executes (RF006 AC5, RF026 AC4 AC6, RNF022 C3, C4; #1509)', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const retentionPolicyId = await createRetentionPolicy(request, admin, { reviewRequired: true });
