@@ -1440,6 +1440,92 @@ describe('sample.service', () => {
         expect(inserted.targetAnalyte).toBe(qualificationContext.targetAnalyte);
       });
 
+      // RNF018 AC5 (#1524): the create resolves the body's governanceEvidence
+      // references against the stored records before certification, as the
+      // preview does; a reference that does not resolve refuses it.
+      describe('governance evidence references (RNF018 AC5, #1524)', () => {
+        const APPROVAL_ID = 'APR-1524';
+        const CHECKSUM = `sha256:${'a'.repeat(64)}`;
+        const approvalUri = `urn:bioavanced:collection-governance-approval:${APPROVAL_ID}`;
+        const fluidSprec = {
+          matrixType: 'fluid', sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+          secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C'
+        };
+        const fakeCollection = () => ({
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'ignored' }),
+          deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
+        });
+        const createWith = async (extra) => {
+          const db = makeDb();
+          mockOperationalStorage(db);
+          db.collections.rcsAssessments = fakeCollection();
+          db.collections.rcsInputSnapshots = fakeCollection();
+          db.collections.rcsGovernanceEvidenceSnapshots = fakeCollection();
+          db.collections.collectionGovernanceApprovals = {
+            ...makeCollection('collectionGovernanceApprovals'),
+            findOne: vi.fn(async (filter) => (filter.approvalId === APPROVAL_ID
+              ? { approvalId: APPROVAL_ID, documentChecksum: CHECKSUM }
+              : null))
+          };
+          const result = await sampleService.createSample(db, validSampleData({ sprec: fluidSprec, ...extra }));
+          const evidence = db.collections.rcsGovernanceEvidenceSnapshots.insertOne.mock.calls[0][0];
+          return { result, evidence };
+        };
+
+        it('reads documentation true and keeps the reference when it resolves', async () => {
+          const { result, evidence } = await createWith({
+            governanceEvidence: { documentation: [{ uri: approvalUri, hash: CHECKSUM }] }
+          });
+
+          expect(result.governanceStatus).toBe(1);
+          expect(evidence.documentationOk).toBe(true);
+          expect(evidence.evidenceRefs).toEqual([approvalUri]);
+        });
+
+        it.each([
+          ['a missing hash', { uri: approvalUri }],
+          ['an unresolvable URI', { uri: 'urn:bioavanced:collection-governance-approval:no-such-1524', hash: CHECKSUM }],
+          ['a wrong hash', { uri: approvalUri, hash: `sha256:${'b'.repeat(64)}` }],
+        ])('refuses certification for a documentation reference with %s', async (_label, reference) => {
+          const { result, evidence } = await createWith({ governanceEvidence: { documentation: [reference] } });
+
+          expect(result.governanceStatus).toBe(0);
+          expect(result.finalGrade).toBe('E');
+          expect(result.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+          expect(evidence.documentationOk).toBe(false);
+          expect(evidence.evidenceRefs).toEqual([]);
+        });
+
+        it('refuses a custody-event reference, since the sample being created has no custody event yet', async () => {
+          const { result, evidence } = await createWith({
+            governanceEvidence: { traceability: [{ uri: 'urn:bioavanced:custody-event:evt-1', hash: CHECKSUM }] }
+          });
+
+          expect(result.governanceStatus).toBe(0);
+          expect(result.governanceRuleCodes).toContain('INSUFFICIENT_TRACEABILITY');
+          expect(evidence.traceabilityOk).toBe(false);
+        });
+
+        it('never reads a governanceEvidenceResolution the body sends', async () => {
+          const { result, evidence } = await createWith({
+            governanceEvidenceResolution: { documentation: [{ uri: approvalUri, hash: CHECKSUM, status: 'resolved' }] }
+          });
+
+          expect(result.governanceStatus).toBe(1);
+          expect(evidence.documentationOk).toBeNull();
+          expect(evidence.evidenceRefs).toEqual([]);
+        });
+
+        it('leaves the criteria unread when no evidence is presented', async () => {
+          const { result, evidence } = await createWith({});
+
+          expect(result.governanceStatus).toBe(1);
+          expect(evidence.traceabilityOk).toBeNull();
+          expect(evidence.monitoringOk).toBeNull();
+          expect(evidence.documentationOk).toBeNull();
+        });
+      });
+
       it('does not fail sample creation when recording the RcsAssessment snapshot rejects', async () => {
         const db = makeDb();
         mockOperationalStorage(db);

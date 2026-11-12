@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const { withMongoTransaction, withTransactionWhereSupported, isTransientTransactionError } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const qualityDomain = require('./quality-domain.service');
+const governanceEvidenceResolver = require('./governance-evidence-resolver.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
 const legalHoldService = require('./legalHold.service');
@@ -507,11 +508,18 @@ class SampleService {
       // mirrors import.service.js's CSV/XLSX branch (#383), which is the
       // only other place `sprec` -> RCS-GOV field mapping already exists.
       if (sampleData.sprec && typeof sampleData.sprec === 'object' && Object.keys(sampleData.sprec).length > 0) {
+        // RNF018 AC5 (#1524): the body's governanceEvidence references are
+        // resolved against the stored records before certification, as the
+        // preview resolves them; only the resolution reaches the assessment.
+        const governanceEvidenceResolution = await governanceEvidenceResolver.resolveGovernanceEvidence(db, {
+          governanceEvidence: sampleData.governanceEvidence,
+          specimenId: sampleData.specimenId,
+        });
         const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({
           sprec: sampleData.sprec,
           // RF018 AC2 (#1320): the use context reaches the assessment only when sent.
           ...(sampleData.qualificationContext !== undefined ? { qualificationContext: sampleData.qualificationContext } : {}),
-        });
+        }, ...(governanceEvidenceResolution ? [{ governanceEvidenceResolution }] : []));
         sampleData.modelVersion = canonicalQualityAssessment.model_version;
         sampleData.matrixType = canonicalQualityAssessment.matrix_type;
         sampleData.governanceStatus = canonicalQualityAssessment.governance_status;

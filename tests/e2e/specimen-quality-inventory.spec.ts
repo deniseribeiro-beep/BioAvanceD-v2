@@ -1764,6 +1764,58 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     expect(forged.governance_evidence.documentationOk).toBeNull();
   });
 
+  test('a sample registration resolves its governance evidence references, and refuses certification for a missing hash or an unresolvable URI (RNF018 AC5, #1524)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const approval = await seedApprovalDocument();
+    const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
+
+    type Ref = { uri: string; hash?: string };
+    // Registers a sample through POST /api/samples with the documentation
+    // references given, and returns the RcsAssessment its create recorded.
+    const register = async (documentation: Ref[]) => {
+      const seededStorageBox = await seedStorageBoxLocation();
+      seededStorageBoxes.push(seededStorageBox);
+      const { boxId, positionCode } = seededStorageBox;
+      const create = await request.post(`${apiBaseURL}/api/samples`, {
+        headers: auth,
+        data: {
+          participantId: participant.participantId,
+          ...validSampleFields(),
+          quantity: 10,
+          boxId,
+          positionCode,
+          sprec: fluidSprec(),
+          governanceEvidence: { documentation },
+        },
+      });
+      expect([201, 202]).toContain(create.status());
+      const specimenId: string = (await create.json()).data.specimenId;
+      const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+      expect(assessments.status()).toBe(200);
+      const rows = (await assessments.json()).data;
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+
+    const accepted = await register([{ uri: approvalUri, hash: approval.documentChecksum }]);
+    expect(accepted.governanceStatus).toBe(1);
+    expect(accepted.finalGrade).toBe('A');
+
+    const missingHash: Ref[] = [{ uri: approvalUri }];
+    const unresolvable: Ref[] = [{ uri: 'urn:bioavanced:collection-governance-approval:no-such-record-1524', hash: approval.documentChecksum }];
+    for (const documentation of [missingHash, unresolvable]) {
+      const refused = await register(documentation);
+      expect(refused.governanceStatus).toBe(0);
+      expect(refused.finalGrade).toBe('E');
+      expect(refused.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+    }
+  });
+
   test('the backend enforces auth independently of the frontend — no token is rejected on its own merits', async ({ request }) => {
     const sprec = fluidSprec();
 

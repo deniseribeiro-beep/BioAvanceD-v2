@@ -11946,6 +11946,11 @@
                   "qualificationContext": {
                     "type": "object",
                     "description": "The use context checked by RF018 AC2."
+                  },
+                  "governanceEvidence": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "RNF018 AC5: governance evidence references, read when the body carries sprec, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A custody-event reference cannot resolve at registration, since the sample does not exist yet. Absent evidence leaves its criterion unread. A governanceEvidenceResolution the body sends is ignored."
                   }
                 },
                 "additionalProperties": true,
@@ -17832,6 +17837,11 @@
                     "type": "object",
                     "additionalProperties": true,
                     "description": "The use context checked by RF018 AC2: all five fields or none."
+                  },
+                  "governanceEvidence": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "RNF018 AC5: governance evidence references, read when the body carries sprec, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A custody-event reference cannot resolve at registration, since the sample does not exist yet. Absent evidence leaves its criterion unread. A governanceEvidenceResolution the body sends is ignored."
                   }
                 },
                 "required": [

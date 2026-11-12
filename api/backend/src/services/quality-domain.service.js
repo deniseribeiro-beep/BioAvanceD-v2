@@ -77,8 +77,10 @@ function evaluateQuality(payload = {}, { governanceEvidenceResolution } = {}) {
   };
 }
 
-function resolveMethodologicalQuality(samplePayload = {}) {
-  return evaluateQuality(samplePayload);
+// RNF018 AC5 (#1524): options carries only the server-resolved
+// governanceEvidenceResolution, as evaluateQuality takes it.
+function resolveMethodologicalQuality(samplePayload = {}, options = {}) {
+  return evaluateQuality(samplePayload, options);
 }
 
 function calculateMethodologyQualityFromSprec(sprec = {}, context = {}) {
