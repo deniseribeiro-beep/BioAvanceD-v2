@@ -14,6 +14,22 @@ const GetSampleStorageLocationUseCase = require('../../core/use-cases/GetSampleS
 
 const router = express.Router();
 
+// The QuarantineAction statuses that still hold a specimen, as the release
+// reads them (quarantine-release.service.js).
+const OPEN_ACTION_STATUSES = ['active', 'pending_review'];
+
+// #1510: an intake quarantined for its consent whose quality assessment also
+// failed records both codes, so a consent signed later
+// (consentQuarantine.service.js releases only an action whose every code is
+// a consent code) does not release a specimen whose quality still fails.
+function intakeReasonCodes(governanceStatus, body = {}) {
+  const codes = [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE'];
+  const quality = body?.qualityAssessment;
+  const qualityFailed = Boolean(quality) && (quality.governance_status !== 1 || quality.final_grade === 'E');
+  if (qualityFailed && !codes.includes('QUALITY_GOVERNANCE_FAILURE')) codes.push('QUALITY_GOVERNANCE_FAILURE');
+  return codes;
+}
+
 function normalizeString(value) {
   return String(value || '').trim();
 }
@@ -156,10 +172,19 @@ async function enforcePersistedGovernanceStatus(req, body) {
 
   if (existingSample?._id) {
     let action = null;
-    if (specimenStatus === 'quarantined' && !wasQuarantined) {
+    // RF019 AC1/AC4 (#1510): the intake's own create already stores the
+    // specimen quarantined (a governance failure, a pending consent), so a
+    // stored quarantine that no open QuarantineAction covers is this
+    // intake's, and records its action. One an open action covers records
+    // none, so no source's action is duplicated.
+    const openAction = wasQuarantined
+      ? (await quarantineActionService.getActionsForSpecimen(db, existingSample))
+        .find((candidate) => OPEN_ACTION_STATUSES.includes(candidate.actionStatus))
+      : null;
+    if (specimenStatus === 'quarantined' && (!wasQuarantined || !openAction)) {
       action = await quarantineActionService.recordAction(db, {
         specimenIds: [quarantineActionService.canonicalSpecimenId(existingSample)],
-        reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE'],
+        reasonCodes: intakeReasonCodes(governanceStatus, body),
       });
       await quarantineActionService.auditDecision(db, { decision: 'applied', action, req });
     } else if (specimenStatus !== 'quarantined' && wasQuarantined) {

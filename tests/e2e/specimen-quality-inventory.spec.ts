@@ -1548,6 +1548,83 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     const afterRelease = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
     expect((await afterRelease.json()).data.quantityStatus).toBe('full');
   });
+
+  // RF019 AC1, AC4 (#1510): an intake whose quality governance fails stores
+  // the specimen quarantined, and the intake route records the action.
+  test('a quality governance failure at intake quarantines the specimen with a route-created QuarantineAction, keeps quantityStatus, and its evidenced release closes it (RF019 AC1, AC2, AC4)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    // The intake's automatic placement needs a usable box.
+    seededStorageBoxes.push(await seedStorageBoxLocation());
+
+    const intake = await request.post(`${apiBaseURL}/api/intake-wizard`, {
+      headers: auth,
+      // No SPREC: the missing critical metadata is the governance failure
+      // (governance_status 0, final grade E).
+      data: {
+        participant: { participantId: participant.participantId },
+        consent: { consentTemplateId: participant.consentTemplateId },
+        specimen: {
+          specimenId: 'placeholder',
+          participantId: participant.participantId,
+          sampleType: 'PLASMA',
+          sampleOrigin: 'VENOUS_BLOOD',
+          extractionProtocol: 'TUBE_EDTA',
+          quantity: 5,
+          linkedProject: 'RF019 e2e governance failure',
+        },
+        clinical: {},
+        biomarkers: [],
+      },
+    });
+    expect(intake.status(), await intake.text()).toBe(200);
+    const body = await intake.json();
+    expect(body.consent.active).toBe(true);
+    expect(body.qualityAssessment.governance_status).toBe(0);
+    expect(body.qualityAssessment.final_grade).toBe('E');
+    expect(body.sample.specimenStatus).toBe('quarantined');
+    expect(body.sample.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
+    const sampleID = String(body.sample.specimenId);
+
+    const actionsRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/quarantine-actions`, { headers: auth });
+    expect(actionsRes.status()).toBe(200);
+    const actions = (await actionsRes.json()).data;
+    expect(actions).toHaveLength(1);
+    const [action] = actions;
+    expect(action.specimenIds).toEqual([sampleID]);
+    expect(action.reasonCodes).toEqual(['QUALITY_GOVERNANCE_FAILURE']);
+    expect(action.actionStatus).toBe('active');
+    expect(action.startedAt).toBeTruthy();
+    expect(action.releasedAt).toBeNull();
+
+    const sampleRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
+    expect(sampleRes.status()).toBe(200);
+    const quarantined = (await sampleRes.json()).data;
+    expect(quarantined.specimenStatus).toBe('quarantined');
+    expect(quarantined.quantityStatus).toBe('full');
+
+    const release = await request.post(`${apiBaseURL}/api/samples/${sampleID}/quarantine/release`, {
+      headers: auth,
+      data: { evidenceIds: ['file-rf019-governance-review'], reason: 'RF019 e2e: governance failure reviewed' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
+    expect((await release.json()).data.releasedActions[0].quarantineActionId).toBe(action.quarantineActionId);
+
+    const afterRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/quarantine-actions`, { headers: auth });
+    expect(afterRes.status()).toBe(200);
+    const closed = ((await afterRes.json()).data as Array<Record<string, unknown>>)
+      .find((candidate) => candidate.quarantineActionId === action.quarantineActionId);
+    expect(closed).toBeDefined();
+    expect(closed!.actionStatus).toBe('released');
+    expect(closed!.authorizedBy).toBe(String(admin.user._id));
+
+    const afterRelease = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
+    expect((await afterRelease.json()).data.quantityStatus).toBe('full');
+  });
   // #1219: every QuarantineAction writer recorded the sample's Mongo _id, and
   // this read queried the canonical specimenId, so it could not return a
   // single real action. New actions carry the specimenId. The read matches

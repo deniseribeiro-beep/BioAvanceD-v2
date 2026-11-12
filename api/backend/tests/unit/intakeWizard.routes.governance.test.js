@@ -267,7 +267,10 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
   it('persists QUARANTINE status when sample already quarantined, without recording a duplicate QuarantineAction', async () => {
     const existingSample = { _id: 'sample-4', specimenId: 'spec-4', specimenStatus: 'quarantined' };
     const samplesCollection = buildSamplesCollection({ existingSample });
-    const quarantineActionsCollection = buildQuarantineActionsCollection();
+    // #1510: an open action already covers it, so none is added.
+    const quarantineActionsCollection = buildQuarantineActionsCollection({
+      activeAction: { quarantineActionId: 'qa-open', specimenIds: ['spec-4'], reasonCodes: ['nonconformance'], actionStatus: 'active' },
+    });
     const decisionsCollection = buildDecisionsCollection();
     const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection, decisionsCollection });
     const router = loadRouter({ getCollectionImpl });
@@ -285,6 +288,73 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
     // #1315: no change, no decision.
     expect(decisionsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('records and audits the QuarantineAction of a specimen the intake stored quarantined, when no open action covers it (RF019 AC1, AC4; #1510)', async () => {
+    const auditLog = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const existingSample = { _id: 'sample-5', specimenId: 'spec-5', specimenStatus: 'quarantined' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection();
+    const decisionsCollection = buildDecisionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection, decisionsCollection });
+    const router = loadRouter({ getCollectionImpl });
+    const app = buildApp(router, {});
+
+    const res = await request(app).post('/api/intake-wizard').send({
+      success: true,
+      sample: { specimenId: 'spec-5', specimenStatus: 'quarantined', quarantineReason: 'QUALITY_GOVERNANCE_FAILURE' },
+      consent: { active: true },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sample.status).toBe('QUARANTINE');
+    expect(quarantineActionsCollection.insertOne).toHaveBeenCalledTimes(1);
+    const recorded = quarantineActionsCollection.insertOne.mock.calls[0][0];
+    expect(recorded).toMatchObject({ specimenIds: ['spec-5'], reasonCodes: ['QUALITY_GOVERNANCE_FAILURE'], actionStatus: 'active' });
+    expect(auditLog).toHaveBeenCalledTimes(1);
+    expect(auditLog.mock.calls[0][0]).toMatchObject({ action: 'QUARANTINE_APPLIED', resourceId: recorded.quarantineActionId });
+    // The stored status is unchanged, so no decision is recorded.
+    expect(decisionsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('records no QuarantineAction for a stored quarantine a pending_review action still covers (#1510)', async () => {
+    const existingSample = { _id: 'sample-6', specimenId: 'spec-6', specimenStatus: 'quarantined' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection({
+      activeAction: { quarantineActionId: 'qa-review', specimenIds: ['spec-6'], reasonCodes: ['COLD_CHAIN_INCIDENT'], actionStatus: 'pending_review' },
+    });
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
+    const router = loadRouter({ getCollectionImpl });
+    const app = buildApp(router, {});
+
+    const res = await request(app).post('/api/intake-wizard').send({
+      success: true,
+      sample: { specimenId: 'spec-6', specimenStatus: 'quarantined' },
+      consent: { active: true },
+    });
+
+    expect(res.status).toBe(200);
+    expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('records the quality failure beside a pending consent, so signing the consent alone does not release the specimen (#1510)', async () => {
+    const existingSample = { _id: 'sample-7', specimenId: 'spec-7', specimenStatus: 'quarantined' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
+    const router = loadRouter({ getCollectionImpl });
+    const app = buildApp(router, {});
+
+    const res = await request(app).post('/api/intake-wizard').send({
+      success: true,
+      sample: { specimenId: 'spec-7', specimenStatus: 'quarantined', quarantineReason: 'CONSENT_PENDING' },
+      consent: { active: false },
+      qualityAssessment: { governance_status: 0, final_grade: 'E' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(quarantineActionsCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(quarantineActionsCollection.insertOne.mock.calls[0][0].reasonCodes).toEqual(['CONSENT_PENDING', 'QUALITY_GOVERNANCE_FAILURE']);
   });
 
   it('releases and audits the active QuarantineAction, attributed to the authenticated user, when a previously quarantined sample resolves to AVAILABLE', async () => {
