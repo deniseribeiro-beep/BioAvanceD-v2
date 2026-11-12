@@ -249,6 +249,54 @@ describe('accessRequest.service', () => {
       });
     });
 
+    // RF019 AC3 (#1510): a quarantined specimen is not released for use, and
+    // the reason joins governanceReasons, which the policy decision names.
+    describe('a quarantined specimen (RF019 AC3, #1510)', () => {
+      it('denies a quarantined specimen item, naming the quarantine, and allows it once available', async () => {
+        const { db, created } = await seedAndCreate({}, {
+          samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1', specimenStatus: 'quarantined' }],
+        });
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.overallCompatible).toBe(false);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({
+          consentValid: true, governanceValid: false, governanceReasons: ['Espécime SPEC-1 em quarentena (RF019)'], compatible: false,
+        });
+        expect(evaluated.policyDecision.effect).toBe('deny');
+        expect(evaluated.policyDecision.reasons).toEqual(expect.arrayContaining(['Espécime SPEC-1 em quarentena (RF019)']));
+
+        db.collection('samples').docs[0].specimenStatus = 'available';
+        const released = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(released.overallCompatible).toBe(true);
+        expect(released.consentCompatibility[0]).toMatchObject({ governanceValid: null, governanceReasons: [], compatible: true });
+      });
+
+      it('denies a file item whose specimen is quarantined', async () => {
+        const fileId = new ObjectId();
+        const { db, created } = await seedAndCreate({ requestedItems: [{ itemType: 'file', itemId: fileId.toString() }] }, {
+          sampleFiles: [{ _id: fileId, specimenId: 'SPEC-1' }],
+          samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1', specimenStatus: 'quarantined' }],
+        });
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.overallCompatible).toBe(false);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({
+          itemType: 'file', governanceValid: false, governanceReasons: ['Espécime SPEC-1 em quarentena (RF019)'], compatible: false,
+        });
+      });
+
+      it('adds the quarantine to the reasons of a specimen whose collection governance holds', async () => {
+        const { db, created } = await seedAndCreate({}, {
+          samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1', collectionId: 'COL-1', specimenStatus: 'quarantined' }],
+          governedCollections: [{ collectionId: 'COL-1', governanceRegime: 'biobank', governanceContext: { biobankGovernanceContextId: 'ctx-1' } }],
+          collectionGovernanceApprovals: [{ approvalId: 'APPR-1', collectionId: 'COL-1', status: 'active', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }],
+          custodianshipAssignments: [{ specimenId: 'SPEC-1', assignmentStatus: 'active', authorizationId: 'APPR-1', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }],
+        });
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({
+          governanceValid: false, governanceReasons: ['Espécime SPEC-1 em quarentena (RF019)'], compatible: false,
+        });
+      });
+    });
+
     // RF010 AC7: the consent in force answers for the requested use, and
     // the answer is recorded as its own ConsentAuthorizationDecision.
     it('records a permit ConsentAuthorizationDecision for the consent in force', async () => {

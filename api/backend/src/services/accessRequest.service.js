@@ -96,6 +96,14 @@ async function governanceRefusals(db, sample, now) {
   return reasons;
 }
 
+// RF019 AC3 (#1510): a quarantined specimen is not released for use. Its
+// reason joins the governance reasons, so the item is incompatible and the
+// policy decision denies, naming it. Read from the specimen the item resolves to.
+function withQuarantineRefusal(sample, governance) {
+  if (!sample || SampleModel.resolveSpecimenStatus(sample) !== 'quarantined') return governance;
+  return [...(governance || []), `Espécime ${sample.specimenId} em quarentena (RF019)`];
+}
+
 function unprocessable(message) {
   const error = new Error(message);
   error.statusCode = 422;
@@ -106,11 +114,12 @@ function unprocessable(message) {
  * RF024 AC4: the version of evaluateCompatibility's own rules: active consent
  * per participant-linked item, an active DUO concept when a duoCode is
  * given, an active Study and, for a specimen in a collection, the collection's
- * regime, its approval in force and the specimen's custody (#1495). Bump it whenever those rules change, so a
+ * regime, its approval in force and the specimen's custody (#1495), and
+ * no quarantined specimen (RF019 AC3, #1510). Bump it whenever those rules change, so a
  * stored decision names the rules it stood on. The AccessPolicy versions a
  * decision applied are recorded beside it, in appliedPolicies.
  */
-const ACCESS_COMPATIBILITY_POLICY_VERSION = 'rf024-compatibility/1.1.0';
+const ACCESS_COMPATIBILITY_POLICY_VERSION = 'rf024-compatibility/1.2.0';
 
 /**
  * RF024 AC4, CFG-004 ("Toda execução ou decisão registra
@@ -291,7 +300,7 @@ class AccessRequestService {
         protocolId = sample?.protocolId || null;
         collectionId = sample?.collectionId || null;
         ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
-        governance = await governanceRefusals(db, sample, governanceNow);
+        governance = withQuarantineRefusal(sample, await governanceRefusals(db, sample, governanceNow));
       } else if (item.itemType === 'file') {
         const file = ObjectId.isValid(item.itemId)
           ? await sampleFiles.findOne({ _id: new ObjectId(item.itemId) })
@@ -302,7 +311,7 @@ class AccessRequestService {
         protocolId = sample?.protocolId || null;
         collectionId = sample?.collectionId || null;
         ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
-        governance = await governanceRefusals(db, sample, governanceNow);
+        governance = withQuarantineRefusal(sample, await governanceRefusals(db, sample, governanceNow));
       }
       // 'dataset' items: intentionally left untouched — participantId/
       // consentValid stay null (non-blocking), per #661's de-identified-

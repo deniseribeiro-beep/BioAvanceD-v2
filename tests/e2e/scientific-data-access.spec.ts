@@ -1372,6 +1372,53 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expectDenied(await evaluate(), /sem regime de governança/);
   });
 
+  test('a quarantined specimen is denied for use, naming the quarantine, and is compatible again after its evidenced release (RF019 AC3, #1510)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const studyId = `rf1510-study-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    await seedStudy(studyId);
+
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId });
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+    const specimenId = accessRequest.requestedItems[0].itemId;
+
+    const evaluate = async (): Promise<any> => {
+      const res = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, { headers: auth });
+      expect(res.status(), await res.text()).toBe(200);
+      return (await res.json()).data;
+    };
+
+    // Quarantined after a compatible evaluation: the use is refused, naming why.
+    const quarantine = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { specimenStatus: 'quarantined', quarantineReason: 'RF019 e2e: use block' },
+    });
+    expect(quarantine.status(), await quarantine.text()).toBe(200);
+    const quarantineReason = `Espécime ${specimenId} em quarentena (RF019)`;
+    const denied = await evaluate();
+    expect(denied.overallCompatible).toBe(false);
+    expect(denied.consentCompatibility[0]).toMatchObject({
+      consentValid: true,
+      governanceValid: false,
+      governanceReasons: [quarantineReason],
+      compatible: false,
+    });
+    expect(denied.policyDecision.effect).toBe('deny');
+    expect(denied.policyDecision.reasons).toEqual(expect.arrayContaining([quarantineReason]));
+
+    // RF019 AC5: the evidenced release returns the specimen to use.
+    const release = await request.post(`${apiBaseURL}/api/samples/${specimenId}/quarantine/release`, {
+      headers: auth,
+      data: { evidenceIds: ['file-rf1510-review'], reason: 'RF019 e2e: cleared before use' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
+    const allowed = await evaluate();
+    expect(allowed.overallCompatible).toBe(true);
+    expect(allowed.consentCompatibility[0]).toMatchObject({ governanceValid: null, governanceReasons: [], compatible: true });
+  });
+
   test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {
     const admin = await realLogin(request);
     const studyId = `rf024-study-${Date.now()}`;
