@@ -15,6 +15,8 @@ const qualityDomainPath = require.resolve('../../src/services/quality-domain.ser
 const sampleServicePath = require.resolve('../../src/services/sample.service');
 const storageServicePath = require.resolve('../../src/services/storageService');
 const rcsAssessmentServicePath = require.resolve('../../src/services/rcs-assessment.service');
+// RNF018 AC5 (#1524): re-required after the getCollection mock, which it destructures.
+const governanceEvidenceResolverPath = require.resolve('../../src/services/governance-evidence-resolver.service');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
 const allPaths = [
@@ -27,6 +29,7 @@ const allPaths = [
   sampleServicePath,
   storageServicePath,
   rcsAssessmentServicePath,
+  governanceEvidenceResolverPath,
   routePath,
 ];
 
@@ -1213,6 +1216,120 @@ function defaultStorageContainersFindOne({ _id }) {
 
       expect(res.status).toBe(409);
       expect(res.body.success).toBe(false);
+    });
+
+    // RNF018 AC5 (#1524): the intake resolves the body's governanceEvidence
+    // references against the stored records before certification, as POST
+    // /api/samples does, with the real resolver and certification; a
+    // reference that does not resolve refuses it and quarantines the specimen.
+    describe('governance evidence references (RNF018 AC5, #1524)', () => {
+      const APPROVAL_ID = 'APR-1524-INTAKE';
+      const CHECKSUM = `sha256:${'a'.repeat(64)}`;
+      const approvalUri = `urn:bioavanced:collection-governance-approval:${APPROVAL_ID}`;
+      const SPREC = {
+        code: 'BLD-SST-A-A-A-A-C', version: '1.0', matrixType: 'fluid', sampleType: 'BLD', primaryContainer: 'SST',
+        preCentrifugation: 'A', centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C'
+      };
+
+      async function postIntake(extra = {}) {
+        const { db, consentsCollection } = buildHappyPathDb({
+          consentsFindOneQueue: [{ _id: 'consent-1', participantId: '12345678', signedAt: new Date() }],
+        });
+        // A custody event the outbox holds for any sample, so only the
+        // missing specimenId keeps a custody reference from resolving.
+        const { COLLECTION_NAME: OUTBOX } = require('../../src/services/neo4jOutbox.service');
+        const baseCollection = db.collection;
+        db.collection = (name) => (name === OUTBOX
+          ? { findOne: vi.fn(async () => ({ eventId: 'evt-1', payloadHash: 'a'.repeat(64) })) }
+          : baseCollection(name));
+        const { samplesCollection, patientsCollection } = setupHappyMocks();
+        const approvalsCollection = {
+          findOne: vi.fn(async (filter) => (filter.approvalId === APPROVAL_ID
+            ? { approvalId: APPROVAL_ID, documentChecksum: CHECKSUM }
+            : null)),
+        };
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          if (key === 'collectionGovernanceApprovals') return approvalsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+        // The real certification, read at call time from the module loadRoute loads.
+        const certify = vi.fn((payload, ...rest) => require(qualityDomainPath).evaluateQuality(payload, ...rest));
+        const { router } = loadRoute({ getCollectionImpl, resolveMethodologicalQuality: certify });
+
+        const sampleServiceModule = require(sampleServicePath);
+        const createSample = vi.spyOn(sampleServiceModule, 'createSample')
+          .mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const res = await request(buildApp(router, db)).post('/api/intake-wizard')
+          .send({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, sprec: SPREC }, ...extra });
+        return { res, certify, createSample };
+      }
+
+      it('certifies with a resolved documentation reference and hands the references to createSample', async () => {
+        const governanceEvidence = { documentation: [{ uri: approvalUri, hash: CHECKSUM }] };
+        const { res, certify, createSample } = await postIntake({ governanceEvidence });
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(1);
+        expect(res.body.qualityAssessment.final_grade).toBe('A');
+        expect(certify.mock.calls[0][1].governanceEvidenceResolution.documentation[0].status).toBe('resolved');
+        const persisted = createSample.mock.calls[0][1];
+        expect(persisted.governanceEvidence).toEqual(governanceEvidence);
+        expect(persisted.specimenStatus).toBe('available');
+      });
+
+      it.each([
+        ['a missing hash', { uri: approvalUri }],
+        ['an unresolvable URI', { uri: 'urn:bioavanced:collection-governance-approval:no-such-1524', hash: CHECKSUM }],
+        ['a wrong hash', { uri: approvalUri, hash: `sha256:${'b'.repeat(64)}` }],
+      ])('refuses certification and quarantines the specimen for a documentation reference with %s', async (_label, reference) => {
+        const { res, createSample } = await postIntake({ governanceEvidence: { documentation: [reference] } });
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(0);
+        expect(res.body.qualityAssessment.final_grade).toBe('E');
+        expect(res.body.qualityAssessment.governance_rule_codes).toContain('INSUFFICIENT_DOCUMENTATION');
+        const persisted = createSample.mock.calls[0][1];
+        expect(persisted.specimenStatus).toBe('quarantined');
+        expect(persisted.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
+      });
+
+      it('refuses a custody-event reference whatever specimenId the body names, since the specimen does not exist yet', async () => {
+        const { res } = await postIntake({
+          governanceEvidence: { traceability: [{ uri: 'urn:bioavanced:custody-event:evt-1', hash: CHECKSUM }] },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(0);
+        expect(res.body.qualityAssessment.governance_rule_codes).toContain('INSUFFICIENT_TRACEABILITY');
+      });
+
+      it('certifies with one argument and hands no references to createSample when none is presented', async () => {
+        const { res, certify, createSample } = await postIntake();
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(1);
+        expect(certify.mock.calls[0]).toHaveLength(1);
+        expect(createSample.mock.calls[0][1]).not.toHaveProperty('governanceEvidence');
+      });
+
+      it('refuses a body that sends its own governanceEvidenceResolution with 422 NON_CANONICAL_FIELD', async () => {
+        const { res, createSample } = await postIntake({
+          governanceEvidenceResolution: { documentation: [{ uri: approvalUri, hash: CHECKSUM, status: 'resolved' }] },
+        });
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+        expect(createSample).not.toHaveBeenCalled();
+      });
     });
   });
 

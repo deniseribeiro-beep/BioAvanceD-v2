@@ -8,6 +8,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
 const sampleService = require('../services/sample.service');
+const governanceEvidenceResolver = require('../services/governance-evidence-resolver.service');
 const rcsAssessmentService = require('../services/rcs-assessment.service');
 const encounterService = require('../services/encounter.service');
 const conditionService = require('../services/condition.service');
@@ -831,7 +832,20 @@ async function handleIntakeWizard(req, res) {
     const matchOutcome = await resolveMatchedPatient(db, data, { organizationId, organizationScope: req.organizationScope });
     const consentDecision = await resolveConsentDecision(db, matchOutcome.patient);
     const automaticLocation = await resolveAutomaticLocation(db);
-    const qualidade = resolverQualidadeMetodologica(data?.specimen || {});
+    // RNF018 AC5 (#1524): the body's governanceEvidence references are
+    // resolved against the stored records before certification, as POST
+    // /api/samples resolves them; only the resolution reaches the assessment.
+    // The specimen does not exist yet, so no specimenId is passed: a
+    // custody-event or telemetry reference cannot resolve at intake (fail
+    // closed), whatever specimen.specimenId the body names.
+    const governanceEvidenceResolution = await governanceEvidenceResolver.resolveGovernanceEvidence(db, {
+      governanceEvidence: data.governanceEvidence,
+      specimenId: null,
+    });
+    const qualidade = resolverQualidadeMetodologica(
+      data?.specimen || {},
+      ...(governanceEvidenceResolution ? [{ governanceEvidenceResolution }] : [])
+    );
 
     auditLogger.init(db);
     await auditLogger.log({
@@ -883,6 +897,11 @@ async function handleIntakeWizard(req, res) {
       sampleToPersist.sprec = qualidade.sprec;
     }
     sampleToPersist.merkleRoot = generateSampleHash(sampleToPersist);
+    // RNF018 AC5 (#1524): createSample certifies the sprec again, so it gets
+    // the same references to resolve; SampleModel.create does not store them.
+    if (data.governanceEvidence !== undefined) {
+      sampleToPersist.governanceEvidence = data.governanceEvidence;
+    }
     // #474: sampleService.createSample now allocates boxId/positionCode
     // atomically via AllocateSampleUseCase as part of the create call
     // itself (occupancyGrid write, StorageAssignment, audit/lineage trail)

@@ -521,6 +521,10 @@ const intakeSchema = {
       properties: { participantId: false, responses: false, supersedesConsentId: false }
     },
     specimen: { $ref: 'canonical.v1.specimen' },
+    // RNF018 AC5 (#1524): the governance evidence references the intake
+    // resolves before certification, in the shape POST /api/quality/preview
+    // takes; the resolver judges each entry and fails a malformed one closed.
+    governanceEvidence: { type: 'object' },
     // The organization the intake stamps as Sample.organizationId (#1376).
     organizationId: { type: 'string', minLength: 1 },
     diagnosis: {

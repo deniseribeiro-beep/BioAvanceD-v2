@@ -1893,6 +1893,74 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     }
   });
 
+  test('an intake resolves its governance evidence references, and refuses certification and quarantines the specimen for a missing hash or an unresolvable URI (RNF018 AC5, #1524)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const approval = await seedApprovalDocument();
+    const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
+
+    type Ref = { uri: string; hash?: string };
+    // Registers a specimen through POST /api/intake-wizard with the
+    // documentation references given; returns the intake's body and the
+    // RcsAssessments its create and the intake recorded.
+    const intake = async (documentation: Ref[]) => {
+      // The intake's automatic placement needs a usable box.
+      seededStorageBoxes.push(await seedStorageBoxLocation());
+      const response = await request.post(`${apiBaseURL}/api/intake-wizard`, {
+        headers: auth,
+        data: {
+          participant: { participantId: participant.participantId },
+          consent: { consentTemplateId: participant.consentTemplateId },
+          specimen: {
+            specimenId: 'placeholder',
+            participantId: participant.participantId,
+            sampleType: 'PLASMA',
+            sampleOrigin: 'VENOUS_BLOOD',
+            extractionProtocol: 'TUBE_EDTA',
+            quantity: 5,
+            linkedProject: 'RNF018 e2e intake governance evidence',
+            sprec: { code: 'BLD-SST-A-A-A-A-C', version: '1.0', ...fluidSprec() },
+          },
+          clinical: {},
+          biomarkers: [],
+          governanceEvidence: { documentation },
+        },
+      });
+      expect(response.status(), await response.text()).toBe(200);
+      const body = await response.json();
+      const specimenId = String(body.sample.specimenId);
+      const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+      expect(assessments.status()).toBe(200);
+      const rows: Array<Record<string, unknown>> = (await assessments.json()).data;
+      expect(rows.length).toBeGreaterThan(0);
+      return { body, rows };
+    };
+
+    const accepted = await intake([{ uri: approvalUri, hash: approval.documentChecksum }]);
+    expect(accepted.body.qualityAssessment.governance_status).toBe(1);
+    expect(accepted.body.qualityAssessment.final_grade).toBe('A');
+    for (const row of accepted.rows) expect(row.governanceStatus).toBe(1);
+
+    const missingHash: Ref[] = [{ uri: approvalUri }];
+    const unresolvable: Ref[] = [{ uri: 'urn:bioavanced:collection-governance-approval:no-such-record-1524', hash: approval.documentChecksum }];
+    for (const documentation of [missingHash, unresolvable]) {
+      const refused = await intake(documentation);
+      expect(refused.body.qualityAssessment.governance_status).toBe(0);
+      expect(refused.body.qualityAssessment.final_grade).toBe('E');
+      expect(refused.body.qualityAssessment.governance_rule_codes).toContain('INSUFFICIENT_DOCUMENTATION');
+      expect(refused.body.sample.specimenStatus).toBe('quarantined');
+      expect(refused.body.sample.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
+      for (const row of refused.rows) {
+        expect(row.governanceStatus).toBe(0);
+        expect(row.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+      }
+    }
+  });
+
   test('the backend enforces auth independently of the frontend — no token is rejected on its own merits', async ({ request }) => {
     const sprec = fluidSprec();
 

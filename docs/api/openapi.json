@@ -61121,6 +61121,11 @@
           "organizationId": {
             "type": "string",
             "description": "The organization the intake is stamped with, picked by the rule POST /api/samples uses: a single-organization caller's own, a multi-organization caller's pick among its own, or a global caller's pick of any existing organization or none."
+          },
+          "governanceEvidence": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "RNF018 AC5: governance evidence references, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before the intake certifies the specimen; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule, and the specimen is stored quarantined (QUALITY_GOVERNANCE_FAILURE). A custody-event or telemetry reference cannot resolve at intake, since the specimen does not exist yet. Absent evidence leaves its criterion unread. A governanceEvidenceResolution in the body is refused as a non-canonical field."
           }
         },
         "additionalProperties": true

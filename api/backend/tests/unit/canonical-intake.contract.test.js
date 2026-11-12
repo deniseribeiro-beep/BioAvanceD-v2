@@ -143,3 +143,32 @@ describe('canonical.v1.intake consent (#1318)', () => {
     expect(valid).toBe(true);
   });
 });
+
+describe('canonical.v1.intake governanceEvidence (RNF018 AC5, #1524)', () => {
+  it('accepts a top-level governanceEvidence object', () => {
+    const { valid, errors } = validate('canonical.v1.intake', {
+      ...baseIntake,
+      governanceEvidence: { documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:A1', hash: `sha256:${'a'.repeat(64)}` }] }
+    });
+
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+
+  it.each([
+    ['an array', []],
+    ['a string', 'urn:bioavanced:collection-governance-approval:A1'],
+    ['null', null]
+  ])('rejects a governanceEvidence that is %s', (_label, governanceEvidence) => {
+    const { valid, errors } = validate('canonical.v1.intake', { ...baseIntake, governanceEvidence });
+
+    expect(valid).toBe(false);
+    expect(errors.some((error) => error.instancePath === '/governanceEvidence')).toBe(true);
+  });
+
+  it('rejects a top-level governanceEvidenceResolution', () => {
+    const { valid } = validate('canonical.v1.intake', { ...baseIntake, governanceEvidenceResolution: {} });
+
+    expect(valid).toBe(false);
+  });
+});
