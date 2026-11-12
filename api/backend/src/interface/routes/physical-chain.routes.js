@@ -300,7 +300,10 @@ router.post('/specimen-assignments/:specimenContainerAssignmentId/unload', requi
  * Body: { storagePositionId, placedAt?, removedAt?, sourceEventId? }
  * The container is in scope through the specimen it holds (RULE-030). An
  * empty, unplaced one is placed by the holder of the target position's rack
- * location.
+ * location. The scope checks run before the placement, so a caller out of
+ * scope gets its 403 first.
+ * 422 POSITION_NOT_IN_GRID when storagePositionId is not one of its rack's
+ * StoragePosition rows (POST /racks), a rack never prepared included (#1532).
  */
 router.post('/containers/:containerId/position', requirePermission('manageStorageAllocation'), requireOrganizationScope, async (req, res) => {
   try {
@@ -313,7 +316,7 @@ router.post('/containers/:containerId/position', requirePermission('manageStorag
       await scope.assertContainerInScope(db, containerId, req.organizationScope);
     }
     const sourceEventId = sourceEventIdOf(req);
-    const assignment = await physicalChain.placeContainer(db, { ...(req.body || {}), containerId: req.params.containerId, sourceEventId });
+    const assignment = await physicalChain.placeContainer(db, { ...(req.body || {}), containerId: req.params.containerId, sourceEventId }, { requirePreparedPosition: true });
     await audit(req, 'ContainerPositionAssignment', assignment.containerPositionAssignmentId, { sourceEventId, containerId: assignment.containerId, storagePositionId: assignment.storagePositionId });
     return res.status(201).json({ success: true, data: assignment });
   } catch (error) {

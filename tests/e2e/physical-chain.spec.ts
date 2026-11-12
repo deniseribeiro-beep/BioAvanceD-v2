@@ -26,7 +26,8 @@ import {
 // (RF017 AC4); code_128 and qr_code labels resolve and a rack's linear code
 // is not a container, issued through the rack label route (RF016 AC5); an empty tube creates no Specimen (RF016
 // AC1); and the rack's 8x12 grid is prepared as 96 StoragePosition rows and
-// read back (RF016 AC2, #1513). Two organizations, a Coordenador and a
+// read back (RF016 AC2, #1513); a position outside that grid is refused
+// (#1532). Two organizations, a Coordenador and a
 // Tecnico in the first, a Tecnico in the second.
 // An ex ante validation protocol runs only once approved_for_execution
 // (RF016 AC7, RULE-037, #1514).
@@ -132,12 +133,9 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(loaded.status(), await loaded.text()).toBe(201);
     const load = (await loaded.json()).data;
 
-    // RF017 AC2/AC3 and RULE-035: the container takes a position, and the
-    // rack a StorageLocation of the custodian's organization (RF017 AC1:
-    // a freezer inside a room). Another organization does not see it.
-    const placed = await post(`/containers/${containerId}/position`, techA, { storagePositionId: `${rackId}:A01` });
-    expect(placed.status(), await placed.text()).toBe(201);
-    const placedAt = (await placed.json()).data.placedAt as string;
+    // RULE-035: the rack takes a StorageLocation of the custodian's
+    // organization (RF017 AC1: a freezer inside a room). Another organization
+    // does not see it.
     const room =await post('/locations', coordA, { storageLocationId: roomId, locationType: 'room', name: 'Sala criogenica', code: `R-${suffix}`, organizationId: orgA });
     expect(room.status(), await room.text()).toBe(201);
     const foreignLocation = await post('/locations', coordA, { storageLocationId: `${freezerId}-x`, locationType: 'freezer', name: 'Freezer B', code: `FZB-${suffix}`, organizationId: orgB });
@@ -177,6 +175,22 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(cells[0].positionCode).toBe('A01');
     expect(cells[95].positionCode).toBe('H12');
     expect((await get(`/racks/${rackId}/positions`, techB)).status()).toBe(403);
+
+    // RF016 AC2 (#1532): a position outside the prepared grid, or on a rack
+    // never prepared, is refused and named; nothing is placed.
+    for (const storagePositionId of [`${rackId}:Z99`, `${rackId}-unprepared:A01`]) {
+      const outside = await post(`/containers/${containerId}/position`, techA, { storagePositionId });
+      expect(outside.status(), await outside.text()).toBe(422);
+      const refusal = await outside.json();
+      expect(refusal.error).toBe('POSITION_NOT_IN_GRID');
+      expect(refusal.message).toContain(storagePositionId);
+    }
+
+    // RF017 AC2/AC3: once the grid is prepared, the container takes one of
+    // its positions.
+    const placed = await post(`/containers/${containerId}/position`, techA, { storagePositionId: `${rackId}:A01` });
+    expect(placed.status(), await placed.text()).toBe(201);
+    const placedAt = (await placed.json()).data.placedAt as string;
 
     // RF016 AC3: the chain resolves link by link, for the custodian only.
     const location = await get(`/specimens/${specimenId}/location`, techA);
@@ -381,6 +395,8 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(location.status(), await location.text()).toBe(201);
     const located = await post(`/racks/${emptyRackId}/location`, coordA, { storageLocationId: emptyLocationId });
     expect(located.status(), await located.text()).toBe(201);
+    const grid = await post('/racks', coordA, { storageRackId: emptyRackId, storageLocationId: emptyLocationId });
+    expect(grid.status(), await grid.text()).toBe(201);
     const created = await post('/containers', coordA, { containerId: emptyContainerId, containerType: 'cryovial' });
     expect(created.status(), await created.text()).toBe(201);
 

@@ -97,7 +97,13 @@ const custody = (over = {}) => ({ specimenId: 'SPC-1', custodianOrganizationId: 
 
 const locationBody = (over = {}) => ({ storageLocationId: 'loc-1', locationType: 'freezer', name: 'Freezer 1', code: 'FZ-1', organizationId: 'org-A', ...over });
 
+async function prepareCell(storagePositionId) {
+  const [storageRackId, positionCode] = storagePositionId.split(':');
+  await domain.storagePositions.insertOne({ storagePositionId, storageRackId, positionCode });
+}
+
 async function withCustodyAndContainer() {
+  await prepareCell('rack-96-001:A01');
   expect((await post('/custody', 'coord-a', custody())).status).toBe(201);
   expect((await post('/containers', 'coord-a', { containerId: 'CT-1', containerType: 'cryovial' })).status).toBe(201);
 }
@@ -209,6 +215,18 @@ describe('physical-chain routes (#1314, RF016 AC3/AC6, RF017 AC3/AC4)', () => {
     expect(location.status).toBe(200);
     expect(location.body.data).toMatchObject({ containerId: 'CT-1', storagePositionId: 'rack-96-001:A01', storageRackId: 'rack-96-001', storageLocationId: 'loc-1' });
     expect((await get('/specimens/SPC-1/location', 'tech-b')).status).toBe(403);
+  });
+
+  it("#1532 (RF016 AC2): refuses a position that is not one of its rack's prepared cells, naming it, and writes no row", async () => {
+    await withCustodyAndContainer();
+    expect((await post('/containers/CT-1/specimens', 'tech-a', { specimenId: 'SPC-1' })).status).toBe(201);
+    for (const storagePositionId of ['rack-96-001:Z99', 'rack-never:A01']) {
+      const res = await post('/containers/CT-1/position', 'tech-a', { storagePositionId });
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({ error: 'POSITION_NOT_IN_GRID', details: [expect.stringContaining(storagePositionId)] });
+    }
+    expect(domain.containerPositionAssignments.docs).toEqual([]);
+    expect((await post('/containers/CT-1/position', 'tech-a', { storagePositionId: 'rack-96-001:A01' })).status).toBe(201);
   });
 
   it('closes each link only for its holder', async () => {
@@ -494,6 +512,7 @@ describe('an empty container and a load by any id (#1314)', () => {
 
   // An empty tube placed by a global caller in a rack at org-A's location.
   async function emptyTubeInRackAt(organizationId) {
+    await prepareCell('rack-7:A01');
     expect((await post('/locations', 'admin', locationBody({ storageLocationId: `loc-${organizationId}`, code: `FZ-${organizationId}`, organizationId }))).status).toBe(201);
     expect((await post('/racks/rack-7/location', 'admin', { storageLocationId: `loc-${organizationId}` })).status).toBe(201);
     expect((await post('/containers', 'admin', { containerId: 'CT-E', containerType: 'cryovial' })).status).toBe(201);

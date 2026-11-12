@@ -185,9 +185,20 @@ async function unloadSpecimen(db, specimenContainerAssignmentId, unloadedAt, { s
   }, { session });
 }
 
+// A position is one of its rack's prepared grid rows (POST /racks writes
+// them), matched by its exact id: `A1` and `a01` are not `A01`.
+async function assertPreparedPosition(db, storagePositionId, session) {
+  const row = await (await getCollection(db, 'storagePositions')).findOne({ storagePositionId }, sessionOptions(session));
+  if (!row) {
+    throw new PhysicalChainError(`Posição ${storagePositionId} não pertence à grade preparada do seu rack`, 'POSITION_NOT_IN_GRID', 422);
+  }
+}
+
 // RF017 AC2, RULE-030: a container takes a position; neither may hold
-// another over the same interval.
-async function placeContainer(db, data, { session: callerSession } = {}) {
+// another over the same interval. requirePreparedPosition refuses a position
+// that is not one of its rack's StoragePosition rows (RF016 AC2, #1532); the
+// legacy box bridge does not pass it, since a box has no such rows.
+async function placeContainer(db, data, { session: callerSession, requirePreparedPosition = false } = {}) {
   if (!callerSession) await ensurePhysicalChainIndexes(db);
   let candidate;
   try {
@@ -197,6 +208,7 @@ async function placeContainer(db, data, { session: callerSession } = {}) {
   }
   return inSession(db, callerSession, async (session) => {
     await findContainer(db, candidate.containerId, session);
+    if (requirePreparedPosition) await assertPreparedPosition(db, candidate.storagePositionId, session);
     const assignments = await getCollection(db, 'containerPositionAssignments');
     const existing = await assignments.find({
       $or: [{ containerId: candidate.containerId }, { storagePositionId: candidate.storagePositionId }],

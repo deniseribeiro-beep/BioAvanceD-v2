@@ -169,6 +169,34 @@ describe('physicalChain.service (#1314, RF016 AC1/AC3, RF017 AC2-AC4)', () => {
     expect(moved.storagePositionId).toBe('rack-96-001:A01');
   });
 
+  it("#1532 (RF016 AC2): with requirePreparedPosition, places only at one of the rack's prepared StoragePosition rows", async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    db.collection('storagePositions').docs.push({ storagePositionId: 'rack-96-001:A01', storageRackId: 'rack-96-001', positionCode: 'A01' });
+    const options = { requirePreparedPosition: true };
+
+    const outside = service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-96-001:Z99', placedAt: T(1) }, options);
+    await expectRefusal(outside, 'POSITION_NOT_IN_GRID', 422);
+    await expect(outside).rejects.toThrow('rack-96-001:Z99');
+    await expectRefusal(
+      service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-never:A01', placedAt: T(1) }, options),
+      'POSITION_NOT_IN_GRID', 422,
+    );
+    expect(db.collections.containerPositionAssignments.docs).toEqual([]);
+
+    await expect(
+      service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-96-001:A01', placedAt: T(1) }, options),
+    ).resolves.toMatchObject({ containerId: 'CT-1', storagePositionId: 'rack-96-001:A01', assignmentStatus: 'active' });
+  });
+
+  it('#1532: without requirePreparedPosition (the legacy box path) a position needs no prepared row', async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    await expect(
+      service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'box-1:A01', placedAt: T(1) }),
+    ).resolves.toMatchObject({ storagePositionId: 'box-1:A01' });
+  });
+
   it('records a historical interval given its end as closed, so the key can still take its open assignment', async () => {
     const db = createFakeDb();
     await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
