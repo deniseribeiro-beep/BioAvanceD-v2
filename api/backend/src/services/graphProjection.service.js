@@ -184,6 +184,31 @@ class GraphProjectionService {
     }, options);
   }
 
+  // #1510 (RF019 AC6): "Auditar a decisão e emitir outbox quando houver
+  // projeção permitida". QuarantineAction has a derived Neo4j projection via
+  // the transactional outbox (dict-ENTIDADES.md); an explicit release appends
+  // this event in the action's write. The payload carries ids, rule codes and
+  // the actor, no civil field.
+  async appendQuarantineReleaseEvent(db, payload, options = {}) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'QUARANTINE_RELEASED',
+      aggregateType: 'QuarantineAction',
+      aggregateId: String(payload.quarantineActionId || ''),
+      payload: {
+        quarantineActionId: payload.quarantineActionId ? String(payload.quarantineActionId) : null,
+        specimenIds: (payload.specimenIds || []).map(String),
+        reasonCodes: payload.reasonCodes || [],
+        actionStatus: payload.actionStatus || 'released',
+        releasedAt: payload.releasedAt || null,
+        authorizedBy: payload.authorizedBy ? String(payload.authorizedBy) : null,
+        evidenceIds: payload.evidenceIds || [],
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 1,
+    }, options);
+  }
+
   // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
   // exclusivamente pelo outbox" — appended by referenceRelease.service.js's
   // promoteRelease on the same write that inserts a TerminologyConcept, same

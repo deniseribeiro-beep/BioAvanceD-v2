@@ -18,7 +18,7 @@ import {
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { deleteOrganizations } from './helpers/listOrganizations';
-import { sampleMongoId, sampleOutboxEvents, closeOutboxDb } from './helpers/queryOutbox';
+import { sampleMongoId, sampleOutboxEvents, quarantineActionOutboxEvents, closeOutboxDb } from './helpers/queryOutbox';
 import {
   seedTelemetrySummary,
   seedApprovalDocument,
@@ -1328,6 +1328,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     );
     await cleanupQuarantineActions(seededQuarantineActionIds).catch(() => {});
     await closeSeedDb();
+    await closeOutboxDb();
   });
 
   async function seedQuarantinableSample(request: import('@playwright/test').APIRequestContext, admin: { token: string }) {
@@ -1527,6 +1528,22 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect(closed!.actionStatus).toBe('released');
     expect(closed!.releasedAt).toBeTruthy();
     expect(closed!.authorizedBy).toBe(String(admin.user._id));
+
+    // #1510 (RF019 AC6): the release appended one QUARANTINE_RELEASED outbox
+    // event. No status is asserted: the projector has no handler for it yet.
+    const releaseEvents = (await quarantineActionOutboxEvents(String(action.quarantineActionId)))
+      .filter((event) => event.eventType === 'QUARANTINE_RELEASED');
+    expect(releaseEvents).toHaveLength(1);
+    expect(releaseEvents[0].sourceService).toBe('quarantine-release');
+    expect(releaseEvents[0].payload).toMatchObject({
+      quarantineActionId: action.quarantineActionId,
+      specimenIds: [sampleID],
+      reasonCodes: ['nonconformance'],
+      actionStatus: 'released',
+      authorizedBy: String(admin.user._id),
+      evidenceIds: ['file-rf019-nc-review'],
+    });
+    expect(releaseEvents[0].payload.releasedAt).toBeTruthy();
 
     const afterRelease = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
     expect((await afterRelease.json()).data.quantityStatus).toBe('full');

@@ -205,6 +205,45 @@ describe('graphProjection.service', () => {
     });
   });
 
+  describe('appendQuarantineReleaseEvent (#1510)', () => {
+    it('emits QUARANTINE_RELEASED keyed by the action, with its specimens, rule, actor and evidence, inside the caller session', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'session-q' };
+      const releasedAt = new Date('2026-11-12T10:00:00Z');
+
+      await service.appendQuarantineReleaseEvent({}, {
+        quarantineActionId: 'qa-1',
+        specimenIds: ['SPC-1', 2],
+        reasonCodes: ['nonconformance'],
+        actionStatus: 'released',
+        releasedAt,
+        authorizedBy: 'coord-1',
+        evidenceIds: ['file-1'],
+        sourceService: 'quarantine-release',
+      }, { session });
+
+      const [, event, options] = outbox.appendEvent.mock.calls[0];
+      expect(event).toMatchObject({
+        eventType: 'QUARANTINE_RELEASED',
+        aggregateType: 'QuarantineAction',
+        aggregateId: 'qa-1',
+        sourceService: 'quarantine-release',
+        schemaVersion: 1,
+      });
+      expect(event.payload).toEqual({
+        quarantineActionId: 'qa-1',
+        specimenIds: ['SPC-1', '2'],
+        reasonCodes: ['nonconformance'],
+        actionStatus: 'released',
+        releasedAt,
+        authorizedBy: 'coord-1',
+        evidenceIds: ['file-1'],
+      });
+      expect(options).toEqual({ session });
+    });
+  });
+
   describe('appendLineageEvent', () => {
     it('uses specimenId for aggregateId and payload when present', async () => {
       const outbox = createFakeOutbox();

@@ -132,6 +132,16 @@ export async function consentOutboxEvents(consentId: string) {
     .toArray();
 }
 
+/** #1510 (RF019 AC6): a quarantine action's outbox events, in aggregateVersion order. */
+export async function quarantineActionOutboxEvents(quarantineActionId: string) {
+  const db = await getDb();
+  return db
+    .collection('graph_projection_outbox')
+    .find({ aggregateType: 'QuarantineAction', aggregateId: quarantineActionId })
+    .sort({ aggregateVersion: 1 })
+    .toArray();
+}
+
 /** #1500: the Neo4j projector's checkpoint for one partition (`<aggregateType>:<aggregateId>`). */
 export async function projectionCheckpoint(partitionKey: string) {
   const db = await getDb();
