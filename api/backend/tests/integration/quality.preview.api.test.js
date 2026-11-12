@@ -132,7 +132,7 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
       expect(response.status).toBe(200);
       expect(response.body.data).toMatchObject({ governance_status: 1, final_grade: 'A', grade_route: 'Score-based certification' });
       expect(response.body.data.governance_evidence).toMatchObject({
-        traceabilityOk: true, monitoringOk: true, documentationOk: true, semanticCompatible: null, gateResult: null,
+        traceabilityOk: true, monitoringOk: true, documentationOk: true, semanticCompatible: true, gateResult: 'pass',
       });
       // RNF018 AC5 (#1524), V2E-0532: the URIs of the resolved references.
       expect(response.body.data.governance_evidence.evidenceRefs).toEqual([

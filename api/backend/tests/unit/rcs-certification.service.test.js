@@ -269,7 +269,7 @@ describe('evaluateGovernanceEvidence', () => {
     traceabilityOk: 'nenhuma referência de identificação, custódia ou linhagem foi apresentada (V2E-0528)',
     monitoringOk: 'nenhuma referência de monitoramento ou telemetria foi apresentada (V2E-0529)',
     documentationOk: 'nenhum registro, SOP ou evidência documental foi apresentado (V2E-0530)',
-    semanticCompatible: 'eventos não são lidos por este cálculo (V2E-0531)',
+    semanticCompatible: 'matriz, códigos e contexto de todos os eixos não resolvidos, ou nenhum evento de custódia resolvido (V2E-0531)',
   };
   const flags = (overrides = {}) => ({
     metadataComplete: true, terminologyValid: true, traceabilityOk: null,
@@ -297,16 +297,24 @@ describe('evaluateGovernanceEvidence', () => {
     ['trace', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, traceabilityBroken: true }, flags({ traceabilityOk: false }), 'fail'],
     ['mon', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, monitoringRequired: true }, flags({ monitoringOk: false }), 'fail'],
     ['evidenceResolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, governanceEvidenceResolution: resolvedAll },
+      flags({ traceabilityOk: true, monitoringOk: true, documentationOk: true, semanticCompatible: true }), 'pass'],
+    ['evidenceResolvedMissingWf', { matrix_type: 'fluid', sprec: F, governanceEvidenceResolution: resolvedAll },
       flags({ traceabilityOk: true, monitoringOk: true, documentationOk: true }), null],
+    ['evidenceResolvedNoCustody', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
+      governanceEvidenceResolution: { monitoring: resolvedAll.monitoring, documentation: resolvedAll.documentation } },
+    flags({ monitoringOk: true, documentationOk: true }), null],
+    ['evidenceResolvedIncompat', { matrix_type: 'fluid', sprec: { ...F, longTermStorage: 'Q9' }, secondCentrifugationRequired: false,
+      governanceEvidenceResolution: resolvedAll },
+    flags({ traceabilityOk: true, monitoringOk: true, documentationOk: true, semanticCompatible: false }), 'fail'],
     ['traceabilityUnresolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
       governanceEvidenceResolution: { ...resolvedAll, traceability: [entry('custody-event'), entry('custody-event', 'hash_mismatch')] } },
     flags({ traceabilityOk: false, monitoringOk: true, documentationOk: true }), 'fail'],
     ['monitoringUnresolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
       governanceEvidenceResolution: { ...resolvedAll, monitoring: [entry('telemetry-exposure-summary', 'missing_hash')] } },
-    flags({ traceabilityOk: true, monitoringOk: false, documentationOk: true }), 'fail'],
+    flags({ traceabilityOk: true, monitoringOk: false, documentationOk: true, semanticCompatible: true }), 'fail'],
     ['documentationUnresolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
       governanceEvidenceResolution: { ...resolvedAll, documentation: [entry('collection-governance-approval', 'unresolvable_uri')] } },
-    flags({ traceabilityOk: true, monitoringOk: true, documentationOk: false }), 'fail'],
+    flags({ traceabilityOk: true, monitoringOk: true, documentationOk: false, semanticCompatible: true }), 'fail'],
     ['traceBrokenResolved', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, traceabilityBroken: true,
       governanceEvidenceResolution: resolvedAll }, flags({ traceabilityOk: false, monitoringOk: true, documentationOk: true }), 'fail'],
     ['evidenceEmptyCategory', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false,
@@ -329,6 +337,9 @@ describe('evaluateGovernanceEvidence', () => {
     if (gateResult === 'fail') {
       expect(before.governance_status).toBe(0);
       expect(evidence.failureReasons).toEqual(before.governance_failure_reasons);
+    } else if (gateResult === 'pass') {
+      expect(before.governance_status).toBe(1);
+      expect(evidence.failureReasons).toEqual([]);
     } else {
       expect(evidence.failureReasons).toEqual([]);
       expect(evidence.unresolvedReasons.gateResult).toBe('nem todos os seis critérios têm evidência; nenhum falhou');
@@ -361,7 +372,9 @@ describe('evaluateGovernanceEvidence', () => {
       expect(withEvidence).toEqual(without);
       const evidence = rcsService.evaluateGovernanceEvidence(rcsService.readInput({ ...base, governanceEvidenceResolution: resolvedAll }));
       expect([evidence.traceabilityOk, evidence.monitoringOk, evidence.documentationOk]).toEqual([true, true, true]);
-      expect(Object.keys(evidence.unresolvedReasons).sort()).toEqual(['gateResult', 'semanticCompatible']);
+      expect(evidence.semanticCompatible).toBe(true);
+      expect(evidence.gateResult).toBe('pass');
+      expect(evidence.unresolvedReasons).toEqual({});
     });
 
     it.each([

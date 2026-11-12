@@ -1706,6 +1706,8 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     expect(passed.governance_evidence.traceabilityOk).toBe(true);
     expect(passed.governance_evidence.monitoringOk).toBe(true);
     expect(passed.governance_evidence.documentationOk).toBe(true);
+    expect(passed.governance_evidence.semanticCompatible).toBe(true);
+    expect(passed.governance_evidence.gateResult).toBe('pass');
 
     const categories = [
       { category: 'traceability', reason: 'Insufficient traceability', ruleCode: 'INSUFFICIENT_TRACEABILITY', flag: 'traceabilityOk' },

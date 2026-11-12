@@ -69,7 +69,7 @@ const UNRESOLVED_REASONS = Object.freeze({
   traceabilityOk: 'nenhuma referência de identificação, custódia ou linhagem foi apresentada (V2E-0528)',
   monitoringOk: 'nenhuma referência de monitoramento ou telemetria foi apresentada (V2E-0529)',
   documentationOk: 'nenhum registro, SOP ou evidência documental foi apresentado (V2E-0530)',
-  semanticCompatible: 'eventos não são lidos por este cálculo (V2E-0531)',
+  semanticCompatible: 'matriz, códigos e contexto de todos os eixos não resolvidos, ou nenhum evento de custódia resolvido (V2E-0531)',
   gateResult: 'nem todos os seis critérios têm evidência; nenhum falhou',
 });
 
@@ -227,28 +227,46 @@ class RcsCertificationService {
     if (failed(TERMINOLOGY_FAILURE_CODES)) terminologyValid = false;
     else if (matrixType && AXES[matrixType]) terminologyValid = true;
 
+    const metadataComplete = !codes.has('MISSING_CRITICAL_METADATA');
+    const traceabilityOk = evidenceFlag('traceability');
+    // RNF018 AC5 (#1524), V2E-0531: true only where the gate checked every
+    // code against its matrix catalog (metadata complete, terminology
+    // valid), every axis of the matrix resolved its code and context, and
+    // the custody events presented resolved (see
+    // docs/decisions/2026-11-12-rcs-semantic-compatible.md).
+    let semanticCompatible = falseOrNull(failed(SEMANTIC_FAILURE_CODES)
+      || result.governance_rule_codes.includes('SEMANTIC_INCOMPATIBILITY'));
+    if (semanticCompatible === null && metadataComplete && terminologyValid === true && traceabilityOk === true) {
+      const { axes } = this.evaluateAxisResults(samplePayload);
+      if (axes.length > 0 && axes.every((axis) => axis.resolutionStatus === 'resolved')) semanticCompatible = true;
+    }
+
     const flags = {
-      metadataComplete: !codes.has('MISSING_CRITICAL_METADATA'),
+      metadataComplete,
       terminologyValid,
-      traceabilityOk: evidenceFlag('traceability'),
+      traceabilityOk,
       monitoringOk: evidenceFlag('monitoring'),
       documentationOk: evidenceFlag('documentation'),
-      semanticCompatible: falseOrNull(failed(SEMANTIC_FAILURE_CODES)
-        || result.governance_rule_codes.includes('SEMANTIC_INCOMPATIBILITY')),
+      semanticCompatible,
     };
     const unresolvedReasons = {};
     for (const [flag, value] of Object.entries(flags)) {
       if (value === null) unresolvedReasons[flag] = UNRESOLVED_REASONS[flag];
     }
-    // eq:governance_product: one failed criterion fails the gate. With none
-    // failed and some unread, the aggregate stays unresolved, never pass.
+    // eq:governance_product: one failed criterion fails the gate, all six
+    // true pass it. With none failed and some unread, the aggregate stays
+    // unresolved.
     const gateFailed = Object.values(flags).includes(false);
-    if (!gateFailed) unresolvedReasons.gateResult = UNRESOLVED_REASONS.gateResult;
+    const gatePassed = Object.values(flags).every((value) => value === true);
+    let gateResult = null;
+    if (gateFailed) gateResult = 'fail';
+    else if (gatePassed) gateResult = 'pass';
+    else unresolvedReasons.gateResult = UNRESOLVED_REASONS.gateResult;
     const ruleSet = this.governanceRuleSet();
     return {
       ...flags,
       unresolvedReasons,
-      gateResult: gateFailed ? 'fail' : null,
+      gateResult,
       failureReasons: gateFailed ? [...result.governance_failure_reasons] : [],
       evidenceRefs,
       validationRuleSetVersion: ruleSet.version,
@@ -315,10 +333,9 @@ class RcsCertificationService {
     if (result.governance_status === 1 && scoreRoutes.includes(result.grade_route)
       && typeof result.score_based_grade === 'string' && result.score_based_grade !== '') {
       // INFERENCE, not a citation: V2E-0543's example reads "governance gate
-      // passed", but the gate reads traceability, monitoring and
-      // documentation evidence only where references are presented (#1524),
-      // never semantic events, and evaluateGovernanceEvidence leaves its
-      // aggregate unresolved, never pass; so only no failure was found.
+      // passed", but a pass is read by evaluateGovernanceEvidence from the
+      // resolved evidence references (#1524), and a certify() result
+      // carries no evidence; so from it only no failure can be said.
       return ['no governance failure found', `score threshold ${result.score_based_grade}`];
     }
     if (result.governance_status === 0 && result.grade_route === 'Governance failure') {

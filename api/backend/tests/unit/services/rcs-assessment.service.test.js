@@ -303,6 +303,31 @@ describe('rcs-assessment.service', () => {
       expect(evidence.evidenceRefs).toEqual(['urn:bioavanced:collection-governance-approval:1']);
     });
 
+    // RNF018 AC5 (#1524), V2E-0531: with every axis resolved and one
+    // resolved reference per category, all six criteria read true and the
+    // evidence row records a passed gate.
+    it('writes a pass evidence row when all six criteria are true', async () => {
+      const db = createFakeDb();
+      const hash = `sha256:${'0'.repeat(64)}`;
+      const { documentationSufficient: _failing, ...base } = certified().rcs_input;
+      const rcsInput = rcsCertificationService.readInput({
+        ...base,
+        governanceEvidenceResolution: {
+          traceability: [{ uri: 'urn:bioavanced:custody-event:1', hash, status: 'resolved' }],
+          monitoring: [{ uri: 'urn:bioavanced:telemetry-exposure-summary:1', hash, status: 'resolved' }],
+          documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:1', hash, status: 'resolved' }],
+        },
+      });
+      await recordAssessment(db, 'SPEC-1', { ...rcsCertificationService.certify(rcsInput), rcs_input: rcsInput });
+
+      const [evidence] = db.collections.rcsGovernanceEvidenceSnapshots.docs;
+      expect(evidence).toMatchObject({
+        metadataComplete: true, terminologyValid: true, traceabilityOk: true, monitoringOk: true,
+        documentationOk: true, semanticCompatible: true, gateResult: 'pass',
+        failureReasons: [], unresolvedReasons: {},
+      });
+    });
+
     it('keeps the score, grade, route, governance status, penalties and trace of the result', async () => {
       const db = createFakeDb();
       const result = certified();
