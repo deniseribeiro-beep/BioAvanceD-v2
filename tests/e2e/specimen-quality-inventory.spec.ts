@@ -25,6 +25,12 @@ import {
   cleanupGovernanceEvidence,
   closeGovernanceEvidenceDb,
 } from './helpers/seedGovernanceEvidence';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -50,6 +56,25 @@ function validSampleFields() {
     registeredAt: new Date().toISOString(),
   };
 }
+
+// #1497 (RF004 AC2, ELM-0118 Specimen.collectionId 1..1): the governed
+// collection every specimen this file registers enters, unless a test names
+// its own collection.
+let governed: GovernedCollection | null = null;
+
+function governedCollectionId(): string {
+  if (!governed) throw new Error('governed collection not seeded');
+  return governed.collectionId;
+}
+
+test.beforeAll(async () => {
+  governed = await seedGovernedCollection(`sqi-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+});
+
+test.afterAll(async () => {
+  await cleanupGovernedCollection(governed);
+  await closeGovernedCollectionDb();
+});
 
 test.describe('Specimen registration (RF004) — real backend, negative paths', () => {
   // Full RF004 happy path (specimenId generation/uniqueness, SPREC recording,
@@ -80,6 +105,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
       data: {
         participantId: '99999999', // well-formed (8 digits), never seeded
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
       },
@@ -96,6 +122,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
       data: {
         participantId: 'not-an-id',
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
       },
     });
 
@@ -108,7 +135,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: fields,
+      data: { ...fields, collectionId: governedCollectionId() },
     });
 
     expect(response.status()).toBe(422);
@@ -124,6 +151,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
       data: {
         participantId: '99999999',
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         sampleType: 'NOT_A_REAL_TYPE',
         sampleOrigin: 'NOT_A_REAL_ORIGIN',
         extractionProtocol: 'NOT_A_REAL_PROTOCOL',
@@ -144,6 +172,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
       data: {
         participantId: '99999999',
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
       },
     });
 
@@ -180,6 +209,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
         data: {
           participantId: participant.participantId,
           ...validSampleFields(),
+          collectionId: governedCollectionId(),
           boxId,
           positionCode,
         },
@@ -235,6 +265,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         sprec,
@@ -269,6 +300,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
       },
@@ -315,8 +347,9 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
 });
 
 test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection linkage (#295)', () => {
-  // studyId/protocolId/collectionId are optional ("quando aplicável"), but
-  // once supplied each must resolve to a real, already-cadastrado document
+  // studyId/protocolId are optional ("quando aplicável") and collectionId is
+  // required (RF004 AC2, ELM-0118), but once supplied each must resolve to
+  // a real, already-cadastrado document
   // — not arbitrary client-supplied text. No CRUD API exists yet for any of
   // the three, so the referent is seeded directly against Mongo (same
   // pattern as seedStorageBoxLocation).
@@ -446,6 +479,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         studyId: 'does-not-exist',
@@ -469,6 +503,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         protocolId: 'does-not-exist',
@@ -501,6 +536,28 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     expect(response.status()).toBe(404);
     const body = await response.json();
     expect(body.message).toMatch(/collectionId/);
+  });
+
+  test('rejects a create that names no collection (RF004 AC2, ELM-0118)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+
+    const response = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId,
+        positionCode,
+      },
+    });
+
+    expect(response.status()).toBe(422);
+    const body = await response.json();
+    expect(body.message).toMatch(/collectionId é obrigatório/);
   });
 
   test('accepts and persists a create whose study/protocol/collection references all resolve', async ({ request }) => {
@@ -843,6 +900,7 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         studyId,
@@ -868,6 +926,7 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         protocolId,
@@ -895,6 +954,7 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         studyId,
@@ -939,6 +999,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         quantity: 10,
         boxId,
         positionCode,
@@ -1251,6 +1312,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         quantity: 10,
         boxId: seededStorageBox.boxId,
         positionCode: seededStorageBox.positionCode,
@@ -1343,6 +1405,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         quantity: 10,
         boxId,
         positionCode,
@@ -1594,6 +1657,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
           extractionProtocol: 'TUBE_EDTA',
           quantity: 5,
           linkedProject: 'RF019 e2e governance failure',
+          collectionId: governedCollectionId(),
         },
         clinical: {},
         biomarkers: [],
@@ -1781,6 +1845,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         quantity: 10,
         boxId,
         positionCode,
@@ -1881,6 +1946,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
         data: {
           participantId: participant.participantId,
           ...validSampleFields(),
+          collectionId: governedCollectionId(),
           quantity: 10,
           boxId,
           positionCode,
@@ -1993,6 +2059,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         quantity: 10,
         boxId: seededStorageBox.boxId,
         positionCode: seededStorageBox.positionCode,
@@ -2056,6 +2123,7 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
             extractionProtocol: 'TUBE_EDTA',
             quantity: 5,
             linkedProject: 'RNF018 e2e intake governance evidence',
+            collectionId: governedCollectionId(),
             sprec: { code: 'BLD-SST-A-A-A-A-C', version: '1.0', ...fluidSprec() },
           },
           clinical: {},
@@ -2129,7 +2197,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${token}` },
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: governedCollectionId() },
     });
     expect([201, 202]).toContain(create.status());
     const body = (await create.json()).data;
@@ -2247,7 +2315,7 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: governedCollectionId() },
     });
     expect([201, 202]).toContain(create.status());
     const sampleID = (await create.json()).data.specimenId;
@@ -2344,6 +2412,7 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId: origin.boxId,
         positionCode: origin.positionCode,
       },
@@ -2458,7 +2527,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     const { boxId, positionCode } = seededStorageBox;
     const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: governedCollectionId() },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
     // #1216/#1219: an assay references the specimen by the canonical
@@ -2537,7 +2606,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     const { boxId, positionCode } = seededStorageBox;
     const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: governedCollectionId() },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
     // #1216/#1219: an assay references the specimen by the canonical
@@ -2601,6 +2670,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: {
         participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId: derivativeBox.boxId,
         positionCode: derivativeBox.positionCode,
         parentSpecimenIds: [specimenId],

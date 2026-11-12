@@ -17820,7 +17820,7 @@
                   },
                   "collectionId": {
                     "type": "string",
-                    "description": "An existing collection."
+                    "description": "An existing collection whose governance regime admits registration (RF004 AC2); required."
                   },
                   "barcode": {
                     "type": "string"
@@ -17854,7 +17854,8 @@
                   "linkedProject",
                   "boxId",
                   "positionCode",
-                  "registeredAt"
+                  "registeredAt",
+                  "collectionId"
                 ],
                 "additionalProperties": true
               }

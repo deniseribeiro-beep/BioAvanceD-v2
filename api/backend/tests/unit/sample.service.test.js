@@ -125,8 +125,35 @@ function makeSession() {
   return session;
 }
 
+// RF004 AC2, ELM-0118: createSample refuses a specimen with no collectionId,
+// so validSampleData() names this biobank collection, governed and with an
+// approval in force, which every makeDb() resolves.
+const DEFAULT_COLLECTION_ID = 'COL-BIOBANK-1';
+const DEFAULT_COLLECTION = {
+  collectionId: DEFAULT_COLLECTION_ID,
+  governanceRegime: 'biobank',
+  governanceContext: { biobankGovernanceContextId: 'BGC-1' },
+};
+const DEFAULT_APPROVAL = {
+  approvalId: 'APR-BGC-1',
+  collectionId: DEFAULT_COLLECTION_ID,
+  status: 'active',
+  effectivePeriod: { start: '2020-01-01', end: null },
+};
+
+function makeGovernedCollections() {
+  const collections = makeCollection('collections');
+  collections.findOne.mockImplementation(async (filter = {}) =>
+    (filter.collectionId === DEFAULT_COLLECTION_ID ? DEFAULT_COLLECTION : null));
+  const approvals = makeCollection('collectionGovernanceApprovals');
+  approvals.find.mockImplementation((filter = {}) =>
+    makeCursor(filter.collectionId === DEFAULT_COLLECTION_ID ? [DEFAULT_APPROVAL] : []));
+  return { collections, collectionGovernanceApprovals: approvals };
+}
+
 function makeDb(overrides = {}) {
   const collections = {
+    ...makeGovernedCollections(),
     samples: makeCollection('samples'),
     sample_movements: makeCollection('sample_movements'),
     // #779: generateUniqueBarcode seeds a per-year counter then advances it
@@ -166,6 +193,7 @@ function validSampleData(overrides = {}) {
     specimenId: 555001,
     boxId: BOX_ID.toString(),
     positionCode: 'A1',
+    collectionId: DEFAULT_COLLECTION_ID,
     registeredAt: new Date('2024-01-01'),
     ...overrides
   };
@@ -563,6 +591,29 @@ describe('sample.service', () => {
       db.collections.collectionGovernanceApprovals.find.mockReturnValue(makeCursor(approvals));
       return db;
     }
+
+    it('rejects with 422 a create that names no collection (RF004 AC2, ELM-0118)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      const { collectionId, ...withoutCollection } = validSampleData();
+
+      await expect(
+        sampleService.createSample(db, withoutCollection)
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/collectionId é obrigatório/) });
+      expect(db.collections.collections.findOne).not.toHaveBeenCalled();
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects with 422 a create whose collectionId is blank (RF004 AC2, ELM-0118)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionId: '   ' }))
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/collectionId é obrigatório/) });
+      expect(db.collections.collections.findOne).not.toHaveBeenCalled();
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
 
     it('rejects with 422 a collection with a regime and no governance context', async () => {
       const db = governedDb({ collectionId: 'COL-1', governanceRegime: 'biorepository' }, []);
@@ -1461,8 +1512,9 @@ describe('sample.service', () => {
           db.collections.rcsAssessments = fakeCollection();
           db.collections.rcsInputSnapshots = fakeCollection();
           db.collections.rcsGovernanceEvidenceSnapshots = fakeCollection();
+          // keeps makeDb()'s find, which lists the default collection's approval
           db.collections.collectionGovernanceApprovals = {
-            ...makeCollection('collectionGovernanceApprovals'),
+            ...db.collections.collectionGovernanceApprovals,
             findOne: vi.fn(async (filter) => (filter.approvalId === APPROVAL_ID
               ? { approvalId: APPROVAL_ID, documentChecksum: CHECKSUM }
               : null))

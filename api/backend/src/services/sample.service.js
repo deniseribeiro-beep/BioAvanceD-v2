@@ -372,6 +372,13 @@ class SampleService {
         }
       }
 
+      // RF004 AC2, ELM-0118 (collectionId, 1..1 Core): every specimen enters
+      // a collection whose governance regime admits it, so a create naming
+      // none is refused before the collection gate runs.
+      if (sampleData.collectionId === undefined || sampleData.collectionId === null || String(sampleData.collectionId).trim() === '') {
+        throw createSampleValidationError('collectionId é obrigatório: a amostra precisa de uma coleção com regime de governança (RF004 AC2, ELM-0118)', 422);
+      }
+
       if (sampleData.collectionId !== undefined && sampleData.collectionId !== null && sampleData.collectionId !== '') {
         const collectionDoc = await db.collection('collections').findOne({ collectionId: String(sampleData.collectionId) });
         if (!collectionDoc) {
