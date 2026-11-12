@@ -334,6 +334,80 @@ describe('batch-validation-engine.service', () => {
     expect(sampleData.collectionSite).toBe('org-a');
   });
 
+  // RNF018 AC5 (#1524): a JSON row's governanceEvidence references reach
+  // createSample, which resolves them before it certifies; a row's own
+  // governanceEvidenceResolution never does.
+  it("passes a JSON row's governanceEvidence to createSample, which resolves it (RNF018 AC5, #1524)", async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-ev', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-ev' });
+    const governanceEvidence = {
+      documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:appr-1', hash: 'sha256:' + 'a'.repeat(64) }],
+    };
+
+    await batchValidationEngine.persistSample(
+      db,
+      { patientID: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', quantity: '1', governanceEvidence },
+      2
+    );
+
+    expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    expect(createSampleSpy.mock.calls[0][1].governanceEvidence).toEqual({
+      documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:appr-1', hash: 'sha256:' + 'a'.repeat(64) }],
+    });
+  });
+
+  it('passes no governanceEvidence key for a row that presents none (RNF018 AC5, #1524)', async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-ev', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-ev' });
+
+    await batchValidationEngine.persistSample(
+      db,
+      { patientID: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', quantity: '1' },
+      2
+    );
+
+    expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    expect(Object.prototype.hasOwnProperty.call(createSampleSpy.mock.calls[0][1], 'governanceEvidence')).toBe(false);
+  });
+
+  it('never passes a governanceEvidenceResolution the row sends (RNF018 AC5, #1524)', async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-ev', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-ev' });
+
+    await batchValidationEngine.persistSample(
+      db,
+      {
+        patientID: '12345678',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+        governanceEvidence: {
+          documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:appr-1', hash: 'sha256:' + 'a'.repeat(64) }],
+        },
+        governanceEvidenceResolution: {
+          documentation: [{
+            uri: 'urn:bioavanced:collection-governance-approval:appr-1',
+            hash: 'sha256:' + 'a'.repeat(64),
+            status: 'resolved',
+          }],
+        },
+      },
+      2
+    );
+
+    expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    expect(Object.prototype.hasOwnProperty.call(createSampleSpy.mock.calls[0][1], 'governanceEvidenceResolution')).toBe(false);
+  });
+
   // #1376 box 4: the participant's organization is its own decision, so the
   // participant a sample row creates gets none from the upload.
   it('creates the participant with no organizationId while the sample carries it (#1376)', async () => {

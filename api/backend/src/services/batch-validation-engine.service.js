@@ -844,6 +844,13 @@ class BatchValidationEngine {
     // participant created below gets none from it.
     const { organizationId = null, ...rowContext } = context;
     const sampleData = importLGPDService.parseSampleRow(this.buildSampleRow(rawRow));
+    // RNF018 AC5 (#1524): a JSON row's governanceEvidence references reach
+    // createSample, which resolves them against the stored records before it
+    // certifies, as POST /api/samples does. buildSampleRow maps no such
+    // column, so a CSV or XLSX row presents none and its criteria stay null.
+    if (rawRow && Object.prototype.hasOwnProperty.call(rawRow, 'governanceEvidence')) {
+      sampleData.governanceEvidence = rawRow.governanceEvidence;
+    }
     sampleData.participantId = sampleData.participantId ? String(sampleData.participantId).trim() : null;
     sampleData.sampleType = sampleData.sampleType ? String(sampleData.sampleType).trim() : null;
     sampleData.sampleOrigin = sampleData.sampleOrigin ? String(sampleData.sampleOrigin).trim() : null;
