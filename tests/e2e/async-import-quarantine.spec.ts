@@ -1,6 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { MongoClient, Db, ObjectId } from 'mongodb';
 import { realLogin } from './helpers/realAuth';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // #813 (RNF011 AC#4 / RF029 AC#6): proof against the real stack that the
 // importer an operator can actually reach now quarantines its rejected rows.
@@ -54,15 +60,18 @@ const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
 // Sample-shaped headers so detectDataType resolves 'samples'. Every row is
 // deliberately invalid: this spec is about what happens to rejected rows, and
 // a row that succeeds would need the whole storage hierarchy seeded.
-const BAD_SAMPLES_CSV = [
-  'participantId,sampleType,sampleOrigin,extractionProtocol,barcode',
-  '81300001,,Coleta,DNA,E2E-813-A',
-  '81300002,,Coleta,DNA,E2E-813-B',
+// #1497 (RF004 AC2): each row names a governed collection, so a row is
+// rejected for its own invalid value and never for a missing collection.
+const badSamplesCsv = (collectionId: string) => [
+  'participantId,sampleType,sampleOrigin,extractionProtocol,barcode,collectionId',
+  `81300001,,Coleta,DNA,E2E-813-A,${collectionId}`,
+  `81300002,,Coleta,DNA,E2E-813-B,${collectionId}`,
 ].join('\n');
 
 let client: MongoClient | null = null;
 let db: Db;
 const createdBatchIds: ObjectId[] = [];
+let governed: GovernedCollection | null = null;
 
 test.describe('RF029 AC#6 / RNF011 AC#4 -- the async importer quarantines rejected rows', () => {
   // #828: the poll below budgets 60s, but Playwright's default test timeout is
@@ -81,9 +90,13 @@ test.describe('RF029 AC#6 / RNF011 AC#4 -- the async importer quarantines reject
     client = new MongoClient(mongoUri);
     await client.connect();
     db = client.db(mongoDbName);
+    governed = await seedGovernedCollection(`813-${Date.now()}`);
   });
 
   test.afterAll(async () => {
+    await cleanupGovernedCollection(governed);
+    governed = null;
+    await closeGovernedCollectionDb();
     if (!client) return;
     for (const batchId of createdBatchIds) {
       await db.collection('import_staging_records').deleteMany({ batchId });
@@ -102,7 +115,7 @@ test.describe('RF029 AC#6 / RNF011 AC#4 -- the async importer quarantines reject
         file: {
           name: 'amostras-813.csv',
           mimeType: 'text/csv',
-          buffer: Buffer.from(BAD_SAMPLES_CSV, 'utf8'),
+          buffer: Buffer.from(badSamplesCsv(governed!.collectionId), 'utf8'),
         },
       },
     });

@@ -615,6 +615,49 @@ describe('batch-validation-engine.service', () => {
     expect(quality.governance_status).toBe(1);
   });
 
+  // #1497 (RF004 AC2, ELM-0118): a row's collection column reaches
+  // createSample, which checks it; a row without one leaves the key unset.
+  describe('collectionId column (#1497)', () => {
+    const persistWith = async (extraColumns) => {
+      const db = createDb({
+        patientID: '12345678',
+        patient: { _id: 'patient-object-id-1497', participantId: '12345678' },
+      });
+      const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+        _id: 'sample-object-id-1497',
+        specimenId: 'BR-2026-001497',
+      });
+      await batchValidationEngine.persistSample(
+        db,
+        {
+          participantId: '12345678',
+          sampleType: 'PLASMA',
+          sampleOrigin: 'Coleta',
+          quantity: '1',
+          ...extraColumns,
+        },
+        12
+      );
+      expect(createSampleSpy).toHaveBeenCalledTimes(1);
+      return createSampleSpy.mock.calls[0][1];
+    };
+
+    it("hands createSample a collectionId header's value trimmed", async () => {
+      const sampleData = await persistWith({ collectionId: ' COL-1 ' });
+      expect(sampleData.collectionId).toBe('COL-1');
+    });
+
+    it('hands createSample a Coleção header as collectionId', async () => {
+      const sampleData = await persistWith({ 'Coleção': 'COL-2' });
+      expect(sampleData.collectionId).toBe('COL-2');
+    });
+
+    it('leaves collectionId unset when the row has no collection column', async () => {
+      const sampleData = await persistWith({});
+      expect(sampleData).not.toHaveProperty('collectionId');
+    });
+  });
+
   it('returns INVALID with the thrown error message when createSample rejects', async () => {
     const db = createDb({
       patientID: '12345678',

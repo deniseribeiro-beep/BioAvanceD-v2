@@ -458,6 +458,10 @@ class BatchValidationEngine {
       sprecsecondcentrifugation: 'sprecSecondCentrifugation',
       sprecpostcentrifugationdelay: 'sprecPostCentrifugationDelay',
       spreclongtermstorage: 'sprecLongTermStorage',
+      // #1497 (RF004 AC2, ELM-0118 Specimen.collectionId 1..1): the specimen's
+      // biobank collection. normalizeHeader reads "Coleção" as colecao.
+      collectionid: 'collectionId',
+      colecao: 'collectionId',
     };
 
     Object.keys(rawRow).forEach((sourceColumn) => {
@@ -858,7 +862,17 @@ class BatchValidationEngine {
     // #1376, #1192: the uploader's organization stamps the sample only; the
     // participant created below gets none from it.
     const { organizationId = null, ...rowContext } = context;
-    const sampleData = importLGPDService.parseSampleRow(this.buildSampleRow(rawRow));
+    const mappedRow = this.buildSampleRow(rawRow);
+    const sampleData = importLGPDService.parseSampleRow(mappedRow);
+    // #1497 (RF004 AC2): parseSampleRow returns no collectionId, so the mapped
+    // column is carried here, where createSample's gates check it. A missing
+    // or blank value leaves the key unset and createSample decides.
+    const mappedCollectionId = mappedRow.collectionId === null || mappedRow.collectionId === undefined
+      ? ''
+      : String(mappedRow.collectionId).trim();
+    if (mappedCollectionId) {
+      sampleData.collectionId = mappedCollectionId;
+    }
     // RNF018 AC5 (#1524): a JSON row's governanceEvidence references reach
     // createSample, which resolves them against the stored records before it
     // certifies, as POST /api/samples does. buildSampleRow maps no such
