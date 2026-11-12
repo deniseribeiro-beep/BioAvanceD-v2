@@ -31,6 +31,8 @@ import {
   removeFhirImportFixtures,
   closeFhirImportDb,
 } from './helpers/queryFhirImport';
+import { queryTelemetryReadingPoints } from './helpers/queryInflux';
+import { findTelemetryIngestionEvent, findTelemetryValidationIssues, closeIngestionDb } from './helpers/queryIngestion';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -2398,6 +2400,102 @@ test.describe('GET /api/temperature/:id reads InfluxDB (#1391, RF009 AC1) — re
 
       const missing = await request.get(`${apiBaseURL}/api/temperature/${crypto.randomUUID()}`, { headers: auth });
       expect(missing.status(), await missing.text()).toBe(404);
+    } finally {
+      await unbindSensor(sensorId);
+    }
+  });
+});
+
+// #1515 (RF009 AC7, RNF004 C4, RNF025 C6): a reading whose device time is
+// beyond the default clock tolerance (5 minutes) is stored with clockStatus
+// drift and quarantined by a clock_drift TelemetryValidationIssue, with its
+// real value; an implausible temperature is refused 422 and nothing is stored.
+test.describe('Telemetry clock drift and implausible values (#1515, RF009 AC7, RNF004 C4, RNF025 C6) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+    await closeIngestionDb();
+  });
+
+  test('a reading whose device time is beyond the tolerance is stored with clockStatus drift and quarantined by a clock_drift issue, never zero-filled', async ({ request }) => {
+    const sensorId = `rf009-drift-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Six times the 5-minute default tolerance; the bound datastream opens
+    // 24 h back, so the binding check still passes.
+    const timestamp = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+    await bindSensor(sensorId);
+    try {
+      const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId, temperature: -70, timestamp },
+      });
+      expect(reading.status(), await reading.text()).toBe(200);
+      const body = await reading.json();
+      expect(body).toMatchObject({ success: true, accepted: true, clockStatus: 'drift' });
+      expect(body.persistedAt).toBeTruthy();
+      const { telemetryReadingId } = body;
+
+      const event = await findTelemetryIngestionEvent({ telemetryReadingId });
+      expect(event).toMatchObject({ validationStatus: 'quarantined' });
+      expect(event.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(event.issueIds).toHaveLength(1);
+
+      const issues = await findTelemetryValidationIssues(event.telemetryIngestionEventId);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ issueCode: 'clock_drift', severity: 'error', fieldPath: 'observedAt', disposition: 'quarantined' });
+      expect(issues[0].telemetryValidationIssueId).toBe(event.issueIds[0]);
+
+      // One point, at the device time, with the real value: no zero fill.
+      await expect
+        .poll(async () => (await queryTelemetryReadingPoints(sensorId, 60)).map((point) => ({
+          time: new Date(point.time).toISOString(),
+          value: point.value,
+          telemetryReadingId: point.telemetryReadingId,
+          clockStatus: point.clockStatus,
+        })), { timeout: 15_000 })
+        .toEqual([{ time: timestamp, value: -70, telemetryReadingId, clockStatus: 'drift' }]);
+    } finally {
+      await unbindSensor(sensorId);
+    }
+  });
+
+  test('an implausible temperature is refused 422 with a rejected invalid_value issue and nothing stored, and a plausible one is screened clean', async ({ request }) => {
+    const sensorId = `rf009-implausible-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    await bindSensor(sensorId);
+    try {
+      const refused = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId, temperature: 500, timestamp: new Date().toISOString(), sourceEventId: `${sensorId}-implausible` },
+      });
+      expect(refused.status(), await refused.text()).toBe(422);
+      const refusedBody = await refused.json();
+      expect(refusedBody.success).toBe(false);
+      expect(refusedBody.error).toMatch(/fisicamente plausível/);
+
+      const rejectedEvent = await findTelemetryIngestionEvent({ sourceEventId: `${sensorId}-implausible` });
+      expect(rejectedEvent).toMatchObject({ validationStatus: 'rejected', telemetryReadingId: null });
+      const rejectedIssues = await findTelemetryValidationIssues(rejectedEvent.telemetryIngestionEventId);
+      expect(rejectedIssues).toHaveLength(1);
+      expect(rejectedIssues[0]).toMatchObject({ issueCode: 'invalid_value', fieldPath: 'temperature', disposition: 'rejected' });
+
+      // Control: a plausible, synchronized reading writes no ingestion event.
+      const accepted = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId, temperature: -80, timestamp: new Date().toISOString(), sourceEventId: `${sensorId}-plausible` },
+      });
+      expect(accepted.status(), await accepted.text()).toBe(200);
+      const acceptedBody = await accepted.json();
+      expect(acceptedBody.clockStatus).toBe('synchronized');
+      expect(await findTelemetryIngestionEvent({ sourceEventId: `${sensorId}-plausible` })).toBeNull();
+
+      // Only the plausible point is in InfluxDB: none carries 500 or 0.
+      await expect
+        .poll(async () => (await queryTelemetryReadingPoints(sensorId, 10)).map((point) => ({
+          value: point.value,
+          telemetryReadingId: point.telemetryReadingId,
+          clockStatus: point.clockStatus,
+        })), { timeout: 15_000 })
+        .toEqual([{ value: -80, telemetryReadingId: acceptedBody.telemetryReadingId, clockStatus: 'synchronized' }]);
     } finally {
       await unbindSensor(sensorId);
     }

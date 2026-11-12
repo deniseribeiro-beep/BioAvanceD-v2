@@ -91,3 +91,24 @@ export async function countAllPoints(): Promise<number> {
   const rows = await queryApi.collectRows<{ _value: number }>(flux);
   return rows.length ? Number(rows[0]._value) : 0;
 }
+
+/** #1515: every point POST /api/iot/telemetry wrote for `sensorId`, one row per point, with its value, id and clockStatus tag. */
+export async function queryTelemetryReadingPoints(
+  sensorId: string,
+  lookbackMinutes = 10
+): Promise<{ time: string; value: number; telemetryReadingId: string; clockStatus: string | null }[]> {
+  const queryApi = getClient().getQueryApi(org);
+  const flux = `from(bucket: "${bucket}")
+    |> range(start: -${lookbackMinutes}m)
+    |> filter(fn: (r) => r._measurement == "temperature")
+    |> filter(fn: (r) => r.sensorId == "${sensorId}")
+    |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")`;
+
+  const rows = await queryApi.collectRows<{ _time: string; value: number; telemetryReadingId: string; clockStatus?: string }>(flux);
+  return rows.map((row) => ({
+    time: row._time,
+    value: row.value,
+    telemetryReadingId: row.telemetryReadingId,
+    clockStatus: row.clockStatus ?? null,
+  }));
+}
