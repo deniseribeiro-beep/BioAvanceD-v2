@@ -2735,7 +2735,7 @@ export default function ClinicalIntakeWizard(props) {
             />
             <div className="w-full">
               <div className="mb-1.5 flex items-center gap-2">
-                <label className="block text-sm font-semibold text-gray-700">{sprecAxis4Label}</label>
+                <label htmlFor="sprecAxis4" className="block text-sm font-semibold text-gray-700">{sprecAxis4Label}</label>
                 {shouldShowProtocolAlert && (
                   <span
                     title={t('wizard.alert.protocolRisk', 'Atenção: Forças acima de 10.000g podem causar lise celular e impactar a qualidade de analitos sensíveis')}
@@ -2752,6 +2752,7 @@ export default function ClinicalIntakeWizard(props) {
                 data-testid="wizard-sprec-axis-4"
                 className={`w-full rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500 ${formData.preAnalyticalUnknown ? 'bg-gray-100' : ''}`}
                 label=""
+                aria-label={sprecAxis4Label}
                 value={formData.sprecCentrifugation}
                 onChange={handleFieldChange('sprecCentrifugation')}
                 disabled={formData.preAnalyticalUnknown}
@@ -2794,10 +2795,10 @@ export default function ClinicalIntakeWizard(props) {
               required
               options={[{ value: '', label: t('wizard.placeholders.selectSprecLongTermStorage', 'Select long-term storage') }, ...sprecLongTermStorageOptions]}
             />
-            <div className="wizard-span-2 md:col-span-2 flex items-center gap-2 text-sm font-semibold text-gray-700 mb-1.5">
+            <label className="wizard-span-2 md:col-span-2 flex items-center gap-2 text-sm font-semibold text-gray-700 mb-1.5">
               <input data-testid="wizard-processing-unknown" type="checkbox" checked={Boolean(formData.preAnalyticalUnknown)} onChange={handleFieldChange('preAnalyticalUnknown')} />
               {t('wizard.labels.processingUnknown', 'Processing information unknown')}
-            </div>
+            </label>
             {formData.preAnalyticalUnknown && (
               <div className="wizard-span-2 md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                 {t('wizard.labels.processingUnknownHelp', 'In unknown-processing safety mode, SPREC axes 3, 4, 5 and 6 are automatically forced to code X.')}
@@ -2818,7 +2819,7 @@ export default function ClinicalIntakeWizard(props) {
             <div className="w-full">
               <label htmlFor="wizard-quantity" className="mb-1.5 block text-sm font-semibold text-gray-700">{t('common.quantity', 'Quantidade')}</label>
               <div className="flex items-center gap-2">
-                <Input id="wizard-quantity" data-testid="wizard-quantity" className="w-full rounded-lg px-3 py-2" type="number" value={formData.quantity} onChange={handleFieldChange('quantity')} error={step2Attempted ? getFieldError(sampleValidation, 'quantity') : ''} required />
+                <Input id="wizard-quantity" data-testid="wizard-quantity" aria-label={t('common.quantity', 'Quantidade')} className="w-full rounded-lg px-3 py-2" type="number" value={formData.quantity} onChange={handleFieldChange('quantity')} error={step2Attempted ? getFieldError(sampleValidation, 'quantity') : ''} required />
                 <span className="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-700">{quantityUnit}</span>
               </div>
             </div>
