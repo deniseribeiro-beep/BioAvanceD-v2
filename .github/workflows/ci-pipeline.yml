@@ -321,7 +321,7 @@ jobs:
         run: npm --prefix frontend audit --audit-level=critical
 
       - name: Audit backend dependencies
-        run: npm --prefix api/backend audit --audit-level=critical
+        run: npm --prefix api/backend audit --audit-level=high
 
   # #284: no job ran Playwright; this one runs the in-container e2e gate the
   # way it runs locally, on push/PR to main and to the integration branch
