@@ -39,6 +39,8 @@ Where they surface: `GET /api/compliance/alerts` (`compliance.routes.js`, Admini
 | `QUEUE_FAILED` | warning | A queue's failed-job count rose since the last run. |
 | `OUTBOX_DEAD_LETTER` | critical | The graph-projection outbox holds a `DEAD_LETTER` row. |
 | `BACKUP_RPO` | critical | The newest successful backup is older than the policy's `rpoHours` (see [backup-restore-runbook.md](../operations/backup-restore-runbook.md), section 7). |
+| `RESOURCE_MEMORY` | warning | The backend process uses more than `ALERT_MEMORY_RATIO` (default 0.9) of its memory limit. |
+| `RESOURCE_DISK` | critical | The backend's root filesystem is fuller than `ALERT_DISK_RATIO` (default 0.9). |
 
 Where they surface: `GET /api/monitoring/alerts` (`monitoring.routes.js`, Administrador only), the last evaluation and the active episodes.
 
@@ -54,7 +56,7 @@ Where they surface: `GET /api/incidents` (permission `viewTemperature`).
 |---|---|---|---|
 | Security alert, severity `high` or `critical` | The one address in `ALERT_EMAIL_TO`. | `createEmailHandler` (`securityAlerts.service.js`), registered by `init` only when `ALERT_EMAIL_TO` is set, sends through `NotificationService.sendEmail` with `notificationType: 'SECURITY_ALERT'`. Every alert is also written to the log (`[ALERTS]`, the handler `initializeSecuritySystem` registers). | `ALERT_EMAIL_TO`; `EMAIL_FROM`; `RESEND_API_KEY`, or `SMTP_HOST` and `SMTP_PORT` for SMTP. With `ALERT_EMAIL_TO` empty, as `.env.production.example` ships it, no alert is e-mailed. |
 | Security alert, severity `low` or `medium` | Nobody. | Stored and logged only. | None. |
-| Platform alert episode, when opened | Whoever a NotificationRule for the event type `platform_alert` names. | `notificationDispatchService.dispatchNotification` (`platformAlert.service.js`), fire-and-forget; the opening is also logged at error level (`[PLATFORM_ALERT]`). With no such rule, nobody. | `PLATFORM_ALERT_CRON`, `ALERT_HTTP_ERROR_RATE`, `ALERT_HTTP_P95_MS`, `ALERT_QUEUE_BACKLOG`. |
+| Platform alert episode, when opened | Whoever a NotificationRule for the event type `platform_alert` names. | `notificationDispatchService.dispatchNotification` (`platformAlert.service.js`), fire-and-forget; the opening is also logged at error level (`[PLATFORM_ALERT]`). With no such rule, nobody. | `PLATFORM_ALERT_CRON`, `ALERT_HTTP_ERROR_RATE`, `ALERT_HTTP_P95_MS`, `ALERT_QUEUE_BACKLOG`, `ALERT_MEMORY_RATIO`, `ALERT_DISK_RATIO`. |
 | Cold-chain incident, when opened and at each escalation | Every active user holding the Tecnico, Coordenador or Administrador role (`NOTIFIABLE_ROLE_CODES`, `incident.controller.js`; the same list in `iot.controller.js`) with an e-mail address. | `sendIncidentAlertEmail` (`sendIncidentAlertEmail.js`), through Resend only, one message per recipient. | `RESEND_API_KEY` (without it nothing is sent and a warning is logged); `EMAIL_FROM`. |
 
 ## 3. Response

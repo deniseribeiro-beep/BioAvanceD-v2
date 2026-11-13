@@ -154,12 +154,14 @@ The messages of a failed backup and of a failed restore test are in [backup-rest
 | `QUEUE_FAILED` | the queue name | warning | the `failed` count rose since the previous run | 0 |
 | `OUTBOX_DEAD_LETTER` | `graph_projection_outbox` | critical | any outbox row is `DEAD_LETTER` (section 3.2) | 0 |
 | `BACKUP_RPO` | `backup` | critical | the newest successful backup is older than the policy's `rpoHours`, or runs exist and none succeeded ([backup-restore-runbook.md](backup-restore-runbook.md), section 7) | `rpoHours` |
+| `RESOURCE_MEMORY` | `backend` | warning | the backend process RSS over its memory limit (the container limit when one is set, else the host total) is above the threshold; `unknown` when it cannot be read | `ALERT_MEMORY_RATIO`, default 0.9 |
+| `RESOURCE_DISK` | `backend` | critical | the fraction of the backend's root filesystem not available to it is above the threshold; `unknown` when it cannot be read | `ALERT_DISK_RATIO`, default 0.9 |
 
 Other lines from the check:
 
 | Shows | Cause | Check |
 |---|---|---|
-| `[PLATFORM_ALERT] ALERT_HTTP_ERROR_RATE inválido, usando o padrão 0.05` (and the same for the other two) | the variable is not a number in range (rate in (0, 1], p95 above 0, backlog 0 or more) | the variable's value; the default is in force |
+| `[PLATFORM_ALERT] ALERT_HTTP_ERROR_RATE inválido, usando o padrão 0.05` (and the same for the other four) | the variable is not a number in range (rate in (0, 1], p95 above 0, backlog 0 or more, memory and disk ratio in (0, 1]) | the variable's value; the default is in force |
 | `[PLATFORM_ALERT] verificação anterior ainda em andamento, execução ignorada` | a run started while the previous one was pending | a slow MongoDB; the cron task is also `noOverlap` |
 | `[PLATFORM_ALERT] contagem de DEAD_LETTER indisponível`, `[PLATFORM_ALERT] leitura do RPO de backup indisponível` | the read failed or passed 2 s; that rule is `unknown` | MongoDB |
 | `[PLATFORM_ALERT] falha ao gravar o episódio <key>:` | the `platformAlerts` write failed | MongoDB |

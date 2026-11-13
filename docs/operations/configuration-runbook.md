@@ -88,7 +88,7 @@ Nothing moves between the layers: no env variable is a configuration-release key
 | Backup | `BACKUP_DIR`, `RESTORE_SCRATCH_DIR`, `BACKUP_CRON`, `BACKUP_RETENTION_DAYS`, `RESTORE_TEST_CRON`, `BACKUP_OFFSITE_S3_*` | no | see [backup-restore-runbook.md](backup-restore-runbook.md) | `BACKUP_DIR` set, the rest commented | `env.js` |
 | Schedules | `TZ` | no | America/Sao_Paulo for the cron schedules, when `TZ` is unset | commented | `scheduler.service.js`, `TelemetryMonitor.js` |
 | Schedules | `RETENTION_SWEEP_CRON`, `TEMP_MONITOR_CRON`, `TEMP_STALE_MINUTES`, `PLATFORM_ALERT_CRON` | no | the scheduler's own, shown commented in the example | commented | `env.js`, `scheduler.service.js` |
-| Alerts | `ALERT_HTTP_ERROR_RATE`, `ALERT_HTTP_P95_MS`, `ALERT_QUEUE_BACKLOG` | no | shown commented in the example | commented | `env.js` |
+| Alerts | `ALERT_HTTP_ERROR_RATE`, `ALERT_HTTP_P95_MS`, `ALERT_QUEUE_BACKLOG`, `ALERT_MEMORY_RATIO`, `ALERT_DISK_RATIO` | no | shown commented in the example | commented | `env.js` |
 | Alerts | `ALERT_EMAIL_TO`, `RESEND_API_KEY`, `EMAIL_FROM` | no | none | blank | `env.js` |
 | Telemetry | `TELEMETRY_BINDING_MODE` | no | `enforce` | `enforce` | `env.js` |
 | Telemetry | `TELEMETRY_MONITOR_CRON`, `TELEMETRY_CRITICAL_TEMP`, `TELEMETRY_CRITICAL_DURATION_HOURS`, `TELEMETRY_LOOKBACK_HOURS`, `TELEMETRY_TRIGGER_COOLDOWN_MINUTES`, `TELEMETRY_MIN_TEMP_ALERT`, `TELEMETRY_MAX_TEMP_ALERT` | no | none | cron commented | `env.js` |

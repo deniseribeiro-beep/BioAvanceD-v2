@@ -2339,12 +2339,14 @@
                                       "QUEUE_BACKLOG",
                                       "QUEUE_FAILED",
                                       "OUTBOX_DEAD_LETTER",
-                                      "BACKUP_RPO"
+                                      "BACKUP_RPO",
+                                      "RESOURCE_MEMORY",
+                                      "RESOURCE_DISK"
                                     ]
                                   },
                                   "subject": {
                                     "type": "string",
-                                    "description": "http, a queue name, graph_projection_outbox, or backup."
+                                    "description": "http, a queue name, graph_projection_outbox, backup, or backend."
                                   },
                                   "severity": {
                                     "type": "string",

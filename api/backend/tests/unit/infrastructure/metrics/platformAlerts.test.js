@@ -6,7 +6,7 @@ const { ALERT_CODES, windowOf, evaluateAlerts } = require('../../../../src/infra
 
 // RNF015 C2 (#1323): the platform alert rules, pure over their readings.
 
-const THRESHOLDS = { httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100 };
+const THRESHOLDS = { httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100, memoryRatio: 0.9, diskRatio: 0.9 };
 const BUCKET_KEYS = ['5', '10', '25', '50', '100', '250', '500', '1000', '2500', '5000', '10000', '+Inf'];
 
 function buckets(fill = {}) {
@@ -196,9 +196,51 @@ describe('platformAlerts - BACKUP_RPO', () => {
   });
 });
 
+// RNF015 C2 (#1468): the backend's memory and disk in use against their ratios.
+describe('platformAlerts - RESOURCE_MEMORY', () => {
+  it('fires above the threshold, the value rounded to 4 decimals', () => {
+    expect(rowOf(evaluate({ resources: { memory: 0.912345, disk: 0.1 } }), ALERT_CODES.RESOURCE_MEMORY, 'backend'))
+      .toMatchObject({ key: 'RESOURCE_MEMORY:backend', severity: 'warning', state: 'firing', value: 0.9123, threshold: 0.9 });
+  });
+
+  it('is ok at the threshold', () => {
+    expect(rowOf(evaluate({ resources: { memory: 0.9, disk: 0.1 } }), ALERT_CODES.RESOURCE_MEMORY, 'backend'))
+      .toMatchObject({ state: 'ok', value: 0.9, threshold: 0.9 });
+  });
+
+  it('is unknown when the reading is null', () => {
+    expect(rowOf(evaluate({ resources: { memory: null, disk: 0.1 } }), ALERT_CODES.RESOURCE_MEMORY, 'backend'))
+      .toMatchObject({ state: 'unknown', value: null, threshold: 0.9 });
+  });
+});
+
+describe('platformAlerts - RESOURCE_DISK', () => {
+  it('fires above the threshold', () => {
+    expect(rowOf(evaluate({ resources: { memory: 0.1, disk: 0.95 } }), ALERT_CODES.RESOURCE_DISK, 'backend'))
+      .toMatchObject({ key: 'RESOURCE_DISK:backend', severity: 'critical', state: 'firing', value: 0.95, threshold: 0.9 });
+  });
+
+  it('is ok at the threshold', () => {
+    expect(rowOf(evaluate({ resources: { memory: 0.1, disk: 0.9 } }), ALERT_CODES.RESOURCE_DISK, 'backend'))
+      .toMatchObject({ state: 'ok', value: 0.9, threshold: 0.9 });
+  });
+
+  it('is unknown when the reading is null', () => {
+    expect(rowOf(evaluate({ resources: { memory: 0.1, disk: null } }), ALERT_CODES.RESOURCE_DISK, 'backend'))
+      .toMatchObject({ state: 'unknown', value: null, threshold: 0.9 });
+  });
+
+  it('gives both resource rows unknown with no resources reading', () => {
+    const rows = evaluate();
+    expect(rowOf(rows, ALERT_CODES.RESOURCE_MEMORY, 'backend')).toMatchObject({ state: 'unknown', value: null });
+    expect(rowOf(rows, ALERT_CODES.RESOURCE_DISK, 'backend')).toMatchObject({ state: 'unknown', value: null });
+  });
+});
+
 describe('platformAlerts - row shape', () => {
   it('carries only the fixed vocabulary', () => {
-    const rows = evaluate({ queues: [upQueue('import-queue')] });
+    const rows = evaluate({ queues: [upQueue('import-queue')], resources: { memory: 0.5, disk: 0.5 } });
+    expect(rows.map((row) => row.code)).toEqual(expect.arrayContaining([ALERT_CODES.RESOURCE_MEMORY, ALERT_CODES.RESOURCE_DISK]));
     for (const row of rows) {
       expect(Object.keys(row).sort()).toEqual(['code', 'key', 'severity', 'state', 'subject', 'threshold', 'value']);
     }

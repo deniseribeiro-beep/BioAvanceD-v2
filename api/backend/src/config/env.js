@@ -185,6 +185,9 @@ module.exports = {
   ALERT_HTTP_ERROR_RATE: process.env.ALERT_HTTP_ERROR_RATE,
   ALERT_HTTP_P95_MS: process.env.ALERT_HTTP_P95_MS,
   ALERT_QUEUE_BACKLOG: process.env.ALERT_QUEUE_BACKLOG,
+  // RNF015 C2 (#1468): fraction 0-1 of memory and disk in use.
+  ALERT_MEMORY_RATIO: process.env.ALERT_MEMORY_RATIO,
+  ALERT_DISK_RATIO: process.env.ALERT_DISK_RATIO,
 
   // Notification
   ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,

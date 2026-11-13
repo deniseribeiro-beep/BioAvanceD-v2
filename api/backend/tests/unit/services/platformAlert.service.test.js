@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 const logger = require('../../../src/utils/logger');
 const notificationDispatchService = require('../../../src/services/notificationDispatch.service');
 const platformAlert = require('../../../src/services/platformAlert.service');
+const resourceUsage = require('../../../src/infrastructure/metrics/resourceUsage');
 
 // RNF015 C2 (#1323): the platform alert check opens one episode per firing
 // key, notifies once, resolves on ok and leaves an unknown key untouched.
@@ -74,6 +75,8 @@ beforeEach(() => {
   vi.spyOn(logger, 'warn').mockImplementation(() => {});
   vi.spyOn(logger, 'error').mockImplementation(() => {});
   dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+  // The host's own reading must not open an episode in these cases.
+  vi.spyOn(resourceUsage, 'readResourceUsage').mockResolvedValue({ memory: 0.1, disk: 0.1 });
 });
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -271,18 +274,38 @@ describe('platformAlert.service - getAlertState', () => {
   });
 });
 
+// RNF015 C2 (#1468): a memory reading over ALERT_MEMORY_RATIO opens an episode.
+describe('platformAlert.service - resources', () => {
+  it('opens a RESOURCE_MEMORY episode from an injected reading and none for disk', async () => {
+    const db = makeDb({ deadLetter: 0 });
+
+    await platformAlert.runPlatformAlertCheck(db, {
+      snapshot: httpSnapshot(0, 0),
+      readQueues: noQueues,
+      readResources: async () => ({ memory: 0.95, disk: 0.1 }),
+    });
+
+    expect(db.rows).toHaveLength(1);
+    expect(db.rows[0]).toMatchObject({
+      alertKey: 'RESOURCE_MEMORY:backend', code: 'RESOURCE_MEMORY', subject: 'backend', severity: 'warning',
+      status: 'active', value: 0.95, threshold: 0.9,
+    });
+    expect(db.rows.some((row) => row.alertKey === 'RESOURCE_DISK:backend')).toBe(false);
+  });
+});
+
 describe('platformAlert.service - thresholdsFrom', () => {
   it('reads the env keys and falls back on a non-finite or negative value', () => {
-    expect(platformAlert.thresholdsFrom({})).toEqual({ httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100 });
+    expect(platformAlert.thresholdsFrom({})).toEqual({ httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100, memoryRatio: 0.9, diskRatio: 0.9 });
     expect(platformAlert.thresholdsFrom({ ALERT_HTTP_ERROR_RATE: '0.1', ALERT_HTTP_P95_MS: '1000', ALERT_QUEUE_BACKLOG: '5' }))
-      .toEqual({ httpErrorRate: 0.1, httpP95Ms: 1000, queueBacklog: 5 });
+      .toEqual({ httpErrorRate: 0.1, httpP95Ms: 1000, queueBacklog: 5, memoryRatio: 0.9, diskRatio: 0.9 });
     expect(platformAlert.thresholdsFrom({ ALERT_HTTP_ERROR_RATE: 'abc', ALERT_HTTP_P95_MS: '-1', ALERT_QUEUE_BACKLOG: 'Infinity' }))
-      .toEqual({ httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100 });
+      .toEqual({ httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100, memoryRatio: 0.9, diskRatio: 0.9 });
   });
 
   it('treats a whitespace-only value as unset', () => {
     expect(platformAlert.thresholdsFrom({ ALERT_HTTP_ERROR_RATE: ' ', ALERT_HTTP_P95_MS: '  ', ALERT_QUEUE_BACKLOG: '\t' }))
-      .toEqual({ httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100 });
+      .toEqual({ httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100, memoryRatio: 0.9, diskRatio: 0.9 });
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
@@ -293,5 +316,17 @@ describe('platformAlert.service - thresholdsFrom', () => {
     expect(platformAlert.thresholdsFrom({ ALERT_HTTP_ERROR_RATE: '1', ALERT_QUEUE_BACKLOG: '0' }))
       .toMatchObject({ httpErrorRate: 1, queueBacklog: 0 });
     expect(logger.warn).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads ALERT_MEMORY_RATIO and ALERT_DISK_RATIO', () => {
+    expect(platformAlert.thresholdsFrom({ ALERT_MEMORY_RATIO: '0.8', ALERT_DISK_RATIO: '1' }))
+      .toMatchObject({ memoryRatio: 0.8, diskRatio: 1 });
+  });
+
+  it('refuses a memory or disk ratio of 0, 2, abc or blank to the 0.9 default', () => {
+    for (const raw of ['0', '2', 'abc', ' ']) {
+      expect(platformAlert.thresholdsFrom({ ALERT_MEMORY_RATIO: raw }).memoryRatio, raw).toBe(0.9);
+      expect(platformAlert.thresholdsFrom({ ALERT_DISK_RATIO: raw }).diskRatio, raw).toBe(0.9);
+    }
   });
 });
