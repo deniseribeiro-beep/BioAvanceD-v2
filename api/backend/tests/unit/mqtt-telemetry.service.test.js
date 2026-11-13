@@ -260,7 +260,7 @@ describe('mqtt-telemetry.service', () => {
       expect(processSpy).toHaveBeenCalledWith(db, expect.objectContaining({
         sensorId: 'S1',
         temperatureValue: 4.5
-      }));
+      }), { strippedFields: [] });
       expect(auditSpy).toHaveBeenCalledWith(db, expect.objectContaining({
         status: 'processed',
         reason: null,
@@ -294,7 +294,23 @@ describe('mqtt-telemetry.service', () => {
       const payload = { sensorId: 'S1', temperatureValue: 4.5, idempotencyKey: 'k-1', deviceMessageId: 'm-1', sequenceNumber: 7 };
       await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify(payload), 'utf8'), false);
 
-      expect(processSpy).toHaveBeenCalledWith(db, expect.objectContaining({ idempotencyKey: 'k-1', deviceMessageId: 'm-1', sequenceNumber: 7 }));
+      expect(processSpy).toHaveBeenCalledWith(db, expect.objectContaining({ idempotencyKey: 'k-1', deviceMessageId: 'm-1', sequenceNumber: 7 }), { strippedFields: [] });
+    });
+
+    // RF009 AC8, RNF004 C7 (#1540): a field handleMessage does not read is
+    // stripped, and only its name goes on to the reading's screening.
+    it('strips a field outside the MQTT reading fields and passes its name on, never its value', async () => {
+      vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue('id');
+      vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
+
+      const payload = { sensorId: 'S1', temperatureValue: 4.5, sourceEventId: 'e-1', patientName: 'Maria da Silva', cpf: '12345678909' };
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify(payload), 'utf8'), false);
+
+      const [, temperatureData, options] = processSpy.mock.calls[0];
+      expect(options).toEqual({ strippedFields: ['cpf', 'patientName'] });
+      expect(temperatureData).toMatchObject({ sensorId: 'S1', temperatureValue: 4.5, sourceEventId: 'e-1' });
+      expect(JSON.stringify(temperatureData)).not.toContain('Maria');
     });
 
     // A contract field the reading contract refuses is dropped, so the

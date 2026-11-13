@@ -181,7 +181,7 @@ class IoTStreamingService {
   /**
    * Processa dados de temperatura (chamado pelo worker)
    */
-  async processTemperatureData(db, temperatureData) {
+  async processTemperatureData(db, temperatureData, { strippedFields = [] } = {}) {
     try {
       // #1317 (RF009 AC1-AC3): the same reading contract as the temperature
       // route. The fields the server adds are not part of the received
@@ -201,7 +201,7 @@ class IoTStreamingService {
       }
       // RF009 AC7: a drift or an implausible value is recorded as a
       // TelemetryValidationIssue; an implausible value throws a 422 here.
-      await screenReading(db, identity, received);
+      await screenReading(db, identity, received, { strippedFields });
       const reading = { ...temperatureData, ...identity, timestamp: identity.observedAt };
       reading.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(reading);
 

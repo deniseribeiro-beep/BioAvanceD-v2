@@ -476,6 +476,36 @@ describe('iot.controller', () => {
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
 
+  // RF009 AC8, RNF004 C7 (#1540): a body field outside the reading contract
+  // is stripped before the reading is hashed or stored; the reading is
+  // accepted and flagged by a personal_data_stripped issue, never refused.
+  it('accepts a reading that carries personal data, strips it and flags the reading', async () => {
+    const { createHash } = require('crypto');
+    const { canonicalJson } = require('../../src/services/telemetryReadingContract');
+    const base = await connectMongoDBMock();
+    const events = [];
+    const issues = [];
+    connectMongoDBMock.mockResolvedValue({
+      collection: (name) => {
+        if (name === 'telemetryIngestionEvents') return { insertOne: async (doc) => { events.push(doc); return {}; } };
+        if (name === 'telemetryValidationIssues') return { insertMany: async (docs) => { issues.push(...docs); return {}; } };
+        return base.collection(name);
+      },
+    });
+    const req = { body: { sensorId: 'sensor-2', temperature: 5, patientName: 'Maria da Silva', cpf: '12345678909' } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const identity = saveTelemetryPointMock.mock.calls[0][3];
+    expect(identity.payloadHash).toBe(createHash('sha256').update(canonicalJson({ sensorId: 'sensor-2', temperature: 5 })).digest('hex'));
+    expect(issues.filter((issue) => issue.issueCode === 'personal_data_stripped'))
+      .toEqual([expect.objectContaining({ fieldPath: 'cpf,patientName', disposition: 'quarantined' })]);
+    expect(events).toEqual([expect.objectContaining({ validationStatus: 'quarantined', telemetryReadingId: res.body.telemetryReadingId })]);
+    expect(JSON.stringify([events, issues, saveTelemetryPointMock.mock.calls])).not.toContain('Maria');
+  }, 15000);
+
   it('usa notificationEmail como fallback quando alertEmail não está presente', async () => {
     sensorMetadataLeanMock.mockResolvedValueOnce({
       sensorId: 'sensor-2',

@@ -13,7 +13,7 @@ require('../models/TemperaturePolicy.schema');
 // throws "Schema hasn't been registered for model \"Device\"" otherwise.
 require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
-const { readingIdentityOf, screenReading } = require('../services/telemetryReadingContract');
+const { readingIdentityOf, screenReading, splitContractFields, IOT_API_READING_FIELDS } = require('../services/telemetryReadingContract');
 const { getDatastream } = require('../services/telemetryBinding.service');
 const { datastreamEquipmentIdsBySensor } = require('../services/sensorDatastream.service');
 const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
@@ -296,9 +296,14 @@ async function ingestTelemetry(req, res) {
     // refusing a reading (the Axis E decision on the audit below), so an
     // InfluxDB outage never silences an excursion. A timestamp that is not a
     // date is a 422.
+    // RF009 AC8, RNF004 C7 (#1540): fields outside the reading contract may
+    // carry personal data. They are stripped here, before the reading is
+    // hashed, screened or stored, and the reading is kept and flagged by a
+    // personal_data_stripped issue, never refused.
+    const { reading: contractBody, strippedFields } = splitContractFields(req.body || {}, IOT_API_READING_FIELDS);
     let identity;
     try {
-      identity = readingIdentityOf(req.body || {}, new Date(), { ingestionService: 'iot-api' });
+      identity = readingIdentityOf(contractBody, new Date(), { ingestionService: 'iot-api' });
     } catch (error) {
       res.locals.auditReason = error.auditReason || 'invalid_payload';
       return res.status(error.statusCode || 422).json({ success: false, error: error.message });
@@ -334,7 +339,7 @@ async function ingestTelemetry(req, res) {
     try {
       // RF009 AC7: a drift or an implausible value is recorded as a
       // TelemetryValidationIssue; an implausible value is a 422 here.
-      await screenReading(connectMongoDB, identity, req.body || {});
+      await screenReading(connectMongoDB, identity, contractBody, { strippedFields });
     } catch (error) {
       res.locals.auditReason = error.auditReason || 'invalid_payload';
       return res.status(error.statusCode || 422).json({ success: false, error: error.message });

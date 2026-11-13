@@ -249,6 +249,52 @@ function clientContractFieldsOf(payload) {
   return fields;
 }
 
+// RF009 AC8, RNF004 C7 (#1540): the top-level fields POST /api/iot/telemetry
+// reads into a reading (readingIdentityOf, validationIssuesOf and the
+// route's own sensorId and temperature), and organizationId, V2E-0561.
+const IOT_API_READING_FIELDS = [
+  'sensorId', 'sensorID', 'temperature', 'temperatureValue', 'temperatureUnit', 'timestamp',
+  ...CLIENT_TEXT_FIELDS, 'sequenceNumber', 'organizationId',
+];
+// A field name the issue may list. Any other name is counted, never written.
+const LISTABLE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+/**
+ * RF009 AC8, RNF004 C7 (#1540): splits a received payload into the reading
+ * (its contract fields) and the names of the other top-level fields, sorted.
+ * Those fields may carry personal data, so they are stripped before the
+ * reading is hashed, screened or stored; an absent or null one is not
+ * counted. A payload that is not a plain object has no fields.
+ */
+function splitContractFields(payload, contractFields) {
+  const reading = {};
+  const strippedFields = [];
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { reading, strippedFields };
+  const allowed = new Set(contractFields);
+  for (const [field, value] of Object.entries(payload)) {
+    if (allowed.has(field)) reading[field] = value;
+    else if (value !== undefined && value !== null) strippedFields.push(field);
+  }
+  return { reading, strippedFields: strippedFields.sort() };
+}
+
+// RF009 AC8 (#1540): the issue that flags a reading whose non-contract
+// fields were stripped. The reading is kept (quarantined, as a clock drift
+// is), since cold-chain availability wins over refusing it.
+function personalDataDraftsOf(strippedFields = []) {
+  if (!strippedFields.length) return [];
+  const listed = strippedFields.filter((field) => LISTABLE_FIELD_NAME.test(field));
+  const unlisted = strippedFields.length - listed.length;
+  const names = [...listed, ...(unlisted ? [`${unlisted} campo(s) de nome não listável`] : [])].join(', ');
+  return [{
+    issueCode: 'personal_data_stripped',
+    severity: 'error',
+    fieldPath: listed.length ? listed.join(',') : null,
+    details: `Campos fora do contrato da leitura descartados sem armazenamento, por poderem conter dados pessoais: ${names} (RF009 AC8, RNF004 C7)`,
+    disposition: 'quarantined',
+  }];
+}
+
 /**
  * RF009 AC7 (#1317): the TelemetryValidationIssues a reading carries, as
  * drafts without their ingestion event.
@@ -404,7 +450,7 @@ async function readingBindingOf(storeOf, identity, payload = {}) {
  * quarantined one returns its issues and goes on to be stored. A failed
  * issue write is logged and does not change the reading's fate.
  */
-async function screenReading(db, identity, payload = {}) {
+async function screenReading(db, identity, payload = {}, { strippedFields = [] } = {}) {
   // `db` may be a function resolving it, so a path that opens its
   // connection lazily opens it once, here.
   let store;
@@ -424,7 +470,7 @@ async function screenReading(db, identity, payload = {}) {
     clockDriftLimitMs = await resolveClockDriftLimitMs(storeOf);
     identity.clockStatus = clockStatusOf(identity.observedAt, identity.receivedAt, clockDriftLimitMs);
   }
-  const drafts = [...validationIssuesOf(identity, payload, { clockDriftLimitMs }), ...binding.drafts];
+  const drafts = [...validationIssuesOf(identity, payload, { clockDriftLimitMs }), ...binding.drafts, ...personalDataDraftsOf(strippedFields)];
   if (!drafts.length) return [];
 
   const rejected = drafts.filter((draft) => draft.disposition === 'rejected');
@@ -466,6 +512,8 @@ module.exports = {
   findClientReplay,
   recordClientReplay,
   clientContractFieldsOf,
+  splitContractFields,
+  IOT_API_READING_FIELDS,
   validationIssuesOf,
   screenReading,
   canonicalJson,

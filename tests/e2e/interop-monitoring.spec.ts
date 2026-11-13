@@ -33,6 +33,8 @@ import {
 } from './helpers/queryFhirImport';
 import { queryTelemetryReadingPoints } from './helpers/queryInflux';
 import { findTelemetryIngestionEvent, findTelemetryValidationIssues, closeIngestionDb } from './helpers/queryIngestion';
+import { countTelemetryReadingNodes } from './helpers/queryNeo4j';
+import { generateValidCpf } from './helpers/cpf';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -2566,6 +2568,106 @@ test.describe('Telemetry clock drift limit (#1520, RNF025 AC6) — real backend'
       expect((await drifted.json()).data.clockStatus).toBe('drift');
     } finally {
       await unbindSensor(sensorId);
+    }
+  });
+});
+
+// #1540 (RF009 AC8, RNF004 C7): a reading that carries fields outside the
+// reading contract is stored with those fields stripped and flagged by a
+// quarantined personal_data_stripped TelemetryValidationIssue, never refused.
+// No stripped value reaches MongoDB, InfluxDB or Neo4j.
+test.describe('Telemetry personal data stripped and flagged (#1540, RF009 AC8, RNF004 C7) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+    await closeIngestionDb();
+    await closeNeo4jDriver();
+  });
+
+  test('POST /api/iot/telemetry stores a reading carrying personal data with the fields stripped and the reading flagged', async ({ request }) => {
+    const sensorId = `rf009-pii-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const patientName = `Paciente Sintetico ${sensorId}`;
+    const cpf = generateValidCpf();
+
+    await bindSensor(sensorId);
+    try {
+      const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId, temperature: -75, timestamp: new Date().toISOString(), sourceEventId: `${sensorId}-pii`, patientName, cpf },
+      });
+      expect(reading.status(), await reading.text()).toBe(200);
+      const body = await reading.json();
+      expect(body).toMatchObject({ success: true, accepted: true, clockStatus: 'synchronized' });
+      const { telemetryReadingId } = body;
+
+      const event = await findTelemetryIngestionEvent({ sourceEventId: `${sensorId}-pii` });
+      expect(event).toMatchObject({ protocol: 'https', validationStatus: 'quarantined', telemetryReadingId });
+      const issues = await findTelemetryValidationIssues(event.telemetryIngestionEventId);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ issueCode: 'personal_data_stripped', fieldPath: 'cpf,patientName', disposition: 'quarantined' });
+      expect(JSON.stringify([event, issues])).not.toContain(patientName);
+      expect(JSON.stringify([event, issues])).not.toContain(cpf);
+
+      // The reading itself is stored: one point, the real value, its id.
+      await expect
+        .poll(async () => (await queryTelemetryReadingPoints(sensorId, 10)).map((point) => ({
+          value: point.value,
+          telemetryReadingId: point.telemetryReadingId,
+        })), { timeout: 15_000 })
+        .toEqual([{ value: -75, telemetryReadingId }]);
+
+      // RF009 AC8: no raw reading is projected into Neo4j.
+      expect(await countTelemetryReadingNodes(String(telemetryReadingId), sensorId)).toBe(0);
+
+      // Control: the same reading without the extra fields writes no ingestion event.
+      const clean = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId, temperature: -76, timestamp: new Date().toISOString(), sourceEventId: `${sensorId}-clean` },
+      });
+      expect(clean.status(), await clean.text()).toBe(200);
+      expect(await findTelemetryIngestionEvent({ sourceEventId: `${sensorId}-clean` })).toBeNull();
+    } finally {
+      await unbindSensor(sensorId);
+    }
+  });
+
+  test('an MQTT reading carrying personal data is stored with the fields stripped and the reading flagged', async () => {
+    const sensorId = `rf009-pii-mqtt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const topic = `bioavanced/telemetry/temperature/${sensorId}`;
+    const patientName = `Paciente Sintetico ${sensorId}`;
+    const cpf = generateValidCpf();
+    const message = {
+      sensorId, temperatureValue: 4.5, timestamp: new Date().toISOString(), sourceEventId: `${sensorId}-pii`, idempotencyKey: `${sensorId}-k1`, patientName, cpf,
+    };
+
+    await bindSensor(sensorId);
+    try {
+      // Retained, as the #1516 MQTT test publishes, and published once.
+      await publishMqtt(topic, JSON.stringify(message), { retain: true });
+
+      await expect.poll(async () => findTelemetryIngestionEvent({ sourceEventId: `${sensorId}-pii` }), { timeout: 30_000 }).not.toBeNull();
+      const event = await findTelemetryIngestionEvent({ sourceEventId: `${sensorId}-pii` });
+      expect(event).toMatchObject({ protocol: 'mqtt', validationStatus: 'quarantined' });
+      const issues = await findTelemetryValidationIssues(event.telemetryIngestionEventId);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ issueCode: 'personal_data_stripped', fieldPath: 'cpf,patientName', disposition: 'quarantined' });
+
+      // The reading is stored under the flagged event's reading id.
+      await expect.poll(async () => (await queryFreezerReadingIds(sensorId)).map((p) => p.telemetryReadingId), { timeout: 30_000 })
+        .toEqual([event.telemetryReadingId]);
+
+      await expect.poll(
+        async () => (await findMqttIngestionAudits(sensorId)).filter((a) => a.status === 'processed').length,
+        { timeout: 10_000 },
+      ).toBeGreaterThan(0);
+      const stored = JSON.stringify([event, issues, await findMqttIngestionAudits(sensorId)]);
+      expect(stored).not.toContain(patientName);
+      expect(stored).not.toContain(cpf);
+    } finally {
+      try {
+        await publishMqtt(topic, '', { retain: true });
+      } finally {
+        await unbindSensor(sensorId);
+      }
     }
   });
 });

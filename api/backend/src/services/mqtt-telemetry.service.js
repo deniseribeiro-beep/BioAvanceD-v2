@@ -4,7 +4,17 @@ const logger = require('../utils/logger');
 const iotStreamingService = require('./iot-streaming.service');
 const mqttSignatureService = require('./mqtt-signature.service');
 const mqttIngestionAuditService = require('./mqtt-ingestion-audit.service');
-const { clientContractFieldsOf } = require('./telemetryReadingContract');
+const { clientContractFieldsOf, splitContractFields } = require('./telemetryReadingContract');
+
+// RF009 AC8, RNF004 C7 (#1540): every top-level field handleMessage reads,
+// and organizationId (V2E-0561). Any other field is stripped and flags the
+// reading with a personal_data_stripped issue.
+const MQTT_READING_FIELDS = [
+  'sensorId', 'sensorID', 'deviceId', 'temperatureValue', 'temperature', 'value', 'temperatureUnit', 'timestamp',
+  'readingStatus', 'sensorStatus', 'signalQuality', 'batteryLevel', 'locationId', 'locationID', 'facility', 'zone',
+  'signature', 'hmac', 'payloadSignature',
+  'idempotencyKey', 'sourceEventId', 'deviceMessageId', 'traceId', 'sequenceNumber', 'organizationId',
+];
 
 class MqttTelemetryService {
   constructor() {
@@ -189,7 +199,8 @@ class MqttTelemetryService {
         return;
       }
 
-      const insertedId = await iotStreamingService.processTemperatureData(db, temperatureData);
+      const { strippedFields } = splitContractFields(payload, MQTT_READING_FIELDS);
+      const insertedId = await iotStreamingService.processTemperatureData(db, temperatureData, { strippedFields });
 
       await mqttIngestionAuditService.append(db, {
         topic,
