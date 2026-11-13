@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DASHBOARD_CARDS, dashboardRole, needsReportCount } from './dashboardCards';
+import { DASHBOARD_CARDS, dashboardRole, needsReportCount, showsCard } from './dashboardCards';
 
 // RF002 AC1-AC4 (Requisitos v4.0.0): each role's dashboard cards.
 describe('dashboardRole', () => {
@@ -32,8 +32,10 @@ describe('DASHBOARD_CARDS', () => {
     expect(DASHBOARD_CARDS.coordinator).not.toContain('security');
   });
 
-  it('AC3: the Administrador adds security, users, audit and settings', () => {
-    expect(DASHBOARD_CARDS.administrator).toEqual(expect.arrayContaining(['security', 'users', 'audit', 'settings', ...DASHBOARD_CARDS.coordinator]));
+  it('AC3: the Administrador adds users and audit; security and settings live in the account menu', () => {
+    expect(DASHBOARD_CARDS.administrator).toEqual(expect.arrayContaining(['users', 'audit', ...DASHBOARD_CARDS.coordinator]));
+    expect(DASHBOARD_CARDS.administrator).not.toContain('security');
+    expect(DASHBOARD_CARDS.administrator).not.toContain('settings');
   });
 
   it('AC4: the Usuário Externo sees only the authorized reports', () => {
@@ -45,5 +47,9 @@ describe('DASHBOARD_CARDS', () => {
     expect(needsReportCount('coordinator')).toBe(true);
     expect(needsReportCount('external')).toBe(true);
     expect(needsReportCount(null)).toBe(false);
+    expect(showsCard('technician', 'storage')).toBe(true);
+    expect(showsCard('technician', 'users')).toBe(false);
+    expect(showsCard('administrator', 'audit')).toBe(true);
+    expect(showsCard(null, 'storage')).toBe(false);
   });
 });

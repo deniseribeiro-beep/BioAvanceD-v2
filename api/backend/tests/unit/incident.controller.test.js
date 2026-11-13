@@ -372,6 +372,23 @@ describe('incident.controller.getIncidents', () => {
     expect(res.json.mock.calls[0][0].incidents.map((incident) => incident._id)).toEqual(['mid', 'oldest']);
   });
 
+  it('counts only unresolved incidents when excludeResolved is set', async () => {
+    tempCollection.find.mockReturnValue(buildFindChain([{ _id: 'open-1' }]));
+    tempCollection.countDocuments.mockResolvedValue(12);
+
+    const res = buildRes();
+    await incidentController.getIncidents({ query: { limit: '3', excludeResolved: 'true' } }, res);
+
+    expect(tempCollection.find).toHaveBeenCalledWith({ status: { $ne: 'resolved' } });
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      incidents: [{ _id: 'open-1' }],
+      total: 12,
+      limit: 3,
+      skip: 0,
+    });
+  });
+
   it('honors explicit limit/skip query params, coercing to numbers', async () => {
     const chain = buildFindChain([]);
     tempCollection.find.mockReturnValue(chain);

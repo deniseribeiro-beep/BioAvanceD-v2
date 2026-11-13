@@ -6,7 +6,8 @@ import type { TemperatureReading } from '../hooks/useTemperatureReadings';
 
 export const DASHBOARD_CHART_SENSORS = 3;
 export const DASHBOARD_CHART_POINTS = 20;
-export const DASHBOARD_ALERT_LIMIT = 10;
+export const DASHBOARD_CHART_WINDOW_MS = 30 * 60 * 1000;
+export const DASHBOARD_ALERT_LIMIT = 3;
 
 export type TemperaturePoint = { time: number; celsius: number };
 
@@ -25,7 +26,9 @@ export type TemperatureChart = {
 /**
  * The chart's series from readings that arrive newest first: the first
  * sensors to appear, each with its newest reading and its latest points
- * oldest to newest, and a y domain widened to fit any excursion.
+ * oldest to newest, and a y domain around the plotted points.
+ * A sensor whose newest point is more than half an hour behind the latest
+ * reading is left out, so an old extreme does not flatten the live line.
  */
 export function buildTemperatureSeries(readings: TemperatureReading[]): TemperatureChart {
   const bySensor = new Map<string, { latest: TemperatureReading; points: TemperaturePoint[] }>();
@@ -49,7 +52,15 @@ export function buildTemperatureSeries(readings: TemperatureReading[]): Temperat
     latest: entry.latest,
     points: entry.points.reverse(),
   }));
-  const plotted = series.flatMap((item) => item.points);
+  const newest = series.reduce((latest, item) => Math.max(latest, item.points[item.points.length - 1]?.time ?? 0), 0);
+  const live = series
+    .map((item) => ({
+      ...item,
+      points: item.points.filter((point) => newest - point.time <= DASHBOARD_CHART_WINDOW_MS),
+    }))
+    .filter((item) => item.points.length > 0);
+  const drawn = live.length > 0 ? live : series;
+  const plotted = drawn.flatMap((item) => item.points);
   if (plotted.length === 0) {
     return { series: [], domain: { min: -90, max: -50 }, timeRange: null };
   }
@@ -59,8 +70,8 @@ export function buildTemperatureSeries(readings: TemperatureReading[]): Temperat
   const lowest = Math.min(...celsius);
   const highest = Math.max(...celsius);
   return {
-    series,
-    domain: { min: Math.min(-90, Math.floor(lowest) - 2), max: Math.max(-50, Math.ceil(highest) + 2) },
+    series: drawn,
+    domain: { min: Math.floor(lowest) - 2, max: Math.ceil(highest) + 2 },
     timeRange: { start: Math.min(...times), end: Math.max(...times) },
   };
 }

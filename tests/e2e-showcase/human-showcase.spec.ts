@@ -293,10 +293,11 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
       // Not a row-text assertion: this shared test DB accumulates equipment
       // fixtures across every session (500+ rows as of this writing), so a
       // freshly-created row can land many pages deep in the unsorted,
-      // 10-per-page table. The form panel closing on success (it stays open
-      // on error, see EquipmentForm's onSave catch block) is the reliable
-      // signal instead.
-      await expect(page.getByTestId('equipment-form-panel')).not.toBeVisible();
+      // 10-per-page table. The form page returning to the equipment list on
+      // success (it stays open on error, see EquipmentFormPage's onSave catch
+      // block) is the reliable signal instead.
+      await page.waitForURL(/\/facility-management\?tab=equipment$/);
+      await expect(page.getByTestId('equipment-form-page')).toHaveCount(0);
       await beat(page, LARGE);
 
       // 4. Real sample labeling through the real UI. (RF016, #655/#646)
@@ -544,18 +545,17 @@ test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
 //    Until it was built, the URL every bulk invitation emails pointed at the
 //    JWT page behind ProtectedRoute -- a participant with no account hit a
 //    login wall. Proven real-backend by consent-token-page.spec.ts, whose
-//    selectors and seeding shape this segment reuses verbatim.
-//  - RNF011 AC#4 / RF029 AC#6's LGPD import surface (`/import/lgpd`, #808)
-//    and its quarantine review screen (`/import/quarantine`, #794 item 2).
-//    The requirement is "invalid imports are staged or quarantined, without
-//    silent correction"; this is the first reel where a human can watch a
-//    rejected row survive its own import.
-//
-// The import API half is proven by lgpd-sample-import.spec.ts (#759/#787),
-// which is where the MIABIS ids and the mixed-file CSV shape below come from
-// -- the page is a thin surface over that already-green path. The page itself
-// had only mocked component coverage (ImportLGPDPage.test.tsx), so this
-// segment is the first time it is driven against a real backend at all.
+//    selectors and seeding shape this segment reuses verbatim. Since #1542
+//    the accepted link stays the participant's panel, and the segment ends
+//    on that panel.
+//  - RNF011 AC#4 / RF029 AC#6's batch import. Since #1542 `/import/lgpd`
+//    lands on the FHIR batch import (`/patients/import-fhir`), the one
+//    batch path in the navigation. The requirement is "invalid imports are
+//    staged or quarantined, without silent correction"; here a human sees
+//    the RCS-GOV gate's refusal of one row of a bundle only as the Erros 1
+//    count, while the rows that pass are saved in quarantine, none released
+//    by the import. The refused row's matrix reason, and the save's own
+//    writes, are checked off camera.
 //
 // Not demoed here, deliberately: ResultsPage's import-job filter (#889) is
 // new since Wave 4 too, but its UI half is a known full-suite red on this
@@ -573,13 +573,11 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
 
   let client: MongoClient | null = null;
   let db: Db;
-  let governed: GovernedCollection | null = null;
 
   test.beforeAll(async () => {
     client = new MongoClient(mongoUri);
     await client.connect();
     db = client.db(mongoDbName);
-    governed = await seedGovernedCollection(`showcase-w5-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   });
 
   test.afterAll(async () => {
@@ -588,8 +586,6 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       client = null;
     }
     await closeSeedDb();
-    await cleanupGovernedCollection(governed);
-    await closeGovernedCollectionDb();
   });
 
   test('RF010 a participant with no account opens the emailed invitation and consents', async ({ page }) => {
@@ -677,7 +673,20 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       const stored = await db.collection('patients').findOne({ participantId });
       expect(stored?.status).toBe('ACTIVE');
       expect(stored?.consentAcceptedAt).toBeTruthy();
-      expect(stored?.consentTokenHash).toBeNull();
+      // #1542: the accepted link stays the participant's panel, so its hash
+      // is kept rather than cleared.
+      expect(stored?.consentTokenHash).toBe(createHash('sha256').update(consentToken).digest('hex'));
+
+      // 5. The same emailed link, opened again, is now the participant's
+      //    panel: the accepted purpose can be revoked from here, the declined
+      //    one is not listed, and there is nothing left to accept.
+      await page.goto(`/patients/${participantId}/consent?token=${consentToken}`);
+      await expect(page.getByTestId('consent-token-manage')).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId('consent-token-revoke-showcase-w5-research')).toBeVisible();
+      await expect(page.getByTestId('consent-token-revoke-showcase-w5-recontact')).toHaveCount(0);
+      await expect(page.getByTestId('consent-token-accept')).toHaveCount(0);
+      await page.getByTestId('consent-token-manage').scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
     } finally {
       await db.collection('patients').deleteMany({ participantId }).catch(() => {});
       await db.collection('patientConsents').deleteMany({ participantId }).catch(() => {});
@@ -685,11 +694,10 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
     }
   });
 
-  test('RNF011 AC#4 an operator imports a spreadsheet and the rejected row is quarantined, not dropped', async ({ page, request }) => {
+  test('RNF011 AC#4 an operator imports a FHIR batch and the row the gate refuses is held back, not corrected', async ({ page }) => {
     const testUser = process.env.TEST_USER || 'admin';
     const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
-    const createdParticipantIds: string[] = [];
     let batchId: string | null = null;
 
     await page.addInitScript(() => {
@@ -711,117 +719,133 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       await expect(page.getByTestId('system-management-page')).toBeVisible();
       await beat(page, LARGE);
 
-      // Off camera: three real participants for the spreadsheet to reference,
-      // so the uploaded file is a plausible one rather than a file every row
-      // of which would fail for the same reason.
-      const admin = await realLogin(request);
-      for (let i = 0; i < 3; i += 1) {
-        const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-        createdParticipantIds.push(participant.participantId);
-      }
-      const [firstId, secondId, badId] = createdParticipantIds;
-
-      // The MIABIS ids are the real seeded ones (foundation-bootstrap-test);
-      // the third row's sampleType is not, which is what gets it rejected.
-      // Same mixed-file shape as lgpd-sample-import.spec.ts's #787 block.
-      const csv = [
-        'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,collectionId',
-        `${firstId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase),${governed!.collectionId}`,
-        `${secondId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,3,GOOD,Coorte Wave 5 (showcase),${governed!.collectionId}`,
-        `${badId},TIPO_QUE_NAO_EXISTE,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase),${governed!.collectionId}`,
-      ].join('\n');
-
-      // 2. The LGPD import surface (#808) -- the only importer that
-      //    quarantines its rejected rows.
-      await page.goto('/import/lgpd');
-      await expect(page.getByRole('heading', { name: 'Importação LGPD' })).toBeVisible();
-      await beat(page, LARGE);
-
-      await page.getByTestId('import-lgpd-type').selectOption('samples');
-      await beat(page, SMALL);
-      await page.getByTestId('import-lgpd-file').setInputFiles({
-        name: 'amostras-coorte-wave5.csv',
-        mimeType: 'text/csv',
-        buffer: Buffer.from(csv, 'utf8'),
+      // A FHIR R4 Bundle of three participants, each with one specimen. The
+      // third specimen asks for the RCS-GOV governance check and carries no
+      // matrix, which that check requires: the gate refuses that row, and
+      // nothing fills the matrix in for the operator.
+      const run = String(Date.now()).slice(-6);
+      const participant = (n: number) => ({
+        resourceType: 'Patient',
+        id: `7${n}${run}`,
+        identifier: [{ system: 'urn:showcase:cpf', value: `000${n}${run}00` }],
+        name: [{ text: `Participante Wave 5 ${n} (showcase)` }],
+        telecom: [{ system: 'email', value: `showcase-w5-${n}-${run}@example.test` }],
       });
+      const specimen = (n: number, extension: Array<Record<string, unknown>> = []) => ({
+        resourceType: 'Specimen',
+        id: `SPC-W5-${n}-${run}`,
+        subject: { reference: `Patient/7${n}${run}` },
+        type: { text: 'PLASMA' },
+        collection: { collectedDateTime: '2026-11-01T09:00:00Z' },
+        extension,
+      });
+      const bundle = {
+        resourceType: 'Bundle',
+        type: 'collection',
+        entry: [
+          { resource: participant(1) },
+          { resource: participant(2) },
+          { resource: participant(3) },
+          { resource: specimen(1) },
+          { resource: specimen(2) },
+          { resource: specimen(3, [{ url: 'urn:showcase:rcs-gov-required', valueBoolean: true }]) },
+        ],
+      };
+
+      // 2. `/import/lgpd` now lands on the FHIR batch import (#1542): the
+      //    batch path every operator is sent to.
+      await page.goto('/import/lgpd');
+      await page.waitForURL('**/patients/import-fhir');
+      await expect(page.getByTestId('fhir-import-page')).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Importação em lote' })).toBeVisible();
+      await beat(page, LARGE);
+
+      await page.getByTestId('fhir-import-json-input').setInputFiles({
+        name: 'coorte-wave5-bundle.json',
+        mimeType: 'application/fhir+json',
+        buffer: Buffer.from(JSON.stringify(bundle), 'utf8'),
+      });
+      await expect(page.getByTestId('fhir-import-patient-count')).toContainText('3');
+      await expect(page.getByTestId('fhir-import-specimen-count')).toContainText('3');
       await beat(page, MEDIUM);
 
-      await page.getByTestId('import-lgpd-submit').click();
-
-      // 3. The partial outcome, stated as counts rather than a verdict: two
-      //    rows landed, one did not, and nothing was corrected for you.
-      await expect(page.getByTestId('import-lgpd-counts')).toHaveText(
-        '2 de 3 importadas · 1 rejeitadas',
-        { timeout: 30_000 }
+      // 3. Validation stages the batch and runs the gate over every row. On
+      //    screen the refusal shows only as counts: three rows, two valid,
+      //    Erros 1. Its matrix reason is checked off camera after the save.
+      const staged = page.waitForResponse(
+        (response) => response.url().includes('/import/fhir/stage') && response.request().method() === 'POST'
       );
-      await beat(page, MEDIUM);
+      await page.getByTestId('fhir-import-validate-button').click();
+      const stagedBody = await (await staged).json();
+      batchId = String(stagedBody?.data?.batch?._id ?? stagedBody?.batch?._id ?? '') || null;
+      expect(batchId).toBeTruthy();
 
-      await expect(page.getByTestId('import-lgpd-rejected-rows')).toContainText(badId);
+      const summary = page.getByTestId('fhir-import-validation-summary');
+      await expect(summary).toContainText(/Total\s*3/, { timeout: 30_000 });
+      await expect(summary).toContainText(/Válidos\s*2/);
+      await expect(summary).toContainText(/Erros\s*1/);
+      await summary.scrollIntoViewIfNeeded();
       await beat(page, LARGE);
 
-      // 4. The link that closes RNF011 AC#4's loop: the rejected row is
-      //    somewhere, and the operator can go there.
-      await expect(page.getByTestId('import-lgpd-quarantine-link')).toBeVisible();
-      await beat(page, MEDIUM);
-      await page.getByTestId('import-lgpd-quarantine-link').click();
-
-      await expect(page).toHaveURL(/\/import\/quarantine\?batchId=/);
-      batchId = new URL(page.url()).searchParams.get('batchId');
-      await expect(page.getByRole('heading', { name: 'Quarentena de importação' })).toBeVisible();
-      await beat(page, LARGE);
-
-      // 5. The batch, with the uploaded file retained beside it (#792/#806)
-      //    -- "retido" is the difference between a reviewable rejection and
-      //    a silently dropped row.
-      await expect(
-        page.getByRole('cell', { name: 'amostras-coorte-wave5.csv' })
-      ).toBeVisible({ timeout: 15_000 });
-      // Scoped to this run's own row: the quarantine listing is cumulative,
-      // and the mongodb-test-data volume carries earlier sessions' batches.
-      await expect(
-        page.getByRole('row', { name: /amostras-coorte-wave5/ })
-      ).toContainText('retido');
+      // Only the two rows that passed are offered for review and saving.
+      await expect(page.getByTestId('fhir-import-staging-table').locator('tbody tr')).toHaveCount(2);
       await beat(page, MEDIUM);
 
-      // The batchId query param auto-opens the row detail -- no extra click.
-      // It renders below the fold at this viewport, though, and toBeVisible()
-      // does not scroll: without this the reel asserts a payoff the viewer
-      // never sees.
-      const rejectedRows = page.getByRole('heading', { name: /Linhas rejeitadas/ });
-      await expect(rejectedRows).toBeVisible();
-      await rejectedRows.scrollIntoViewIfNeeded();
-      await beat(page, MEDIUM);
-      await expect(page.getByText(/Linha 4/)).toBeVisible({ timeout: 15_000 });
+      // 4. Saving keeps every row in quarantine: a row is released only by a
+      //    signed TCLE or authorized documentation, never by the import. The
+      //    status table reads QUARANTINED/BLOCKED from validation onward, so
+      //    the save is proven by its own commit response and by what it wrote.
+      const committed = page.waitForResponse(
+        (response) => response.url().includes(`/import/fhir/batches/${batchId}/commit`) && response.request().method() === 'POST'
+      );
+      await page.getByTestId('fhir-import-save-quarantine-button').click();
+      expect((await committed).status()).toBe(200);
+
+      // Off camera: the save ran. Each row that passed was sent its TCLE,
+      // which moves it to PENDING_CONSENT, or CONSENT_SEND_FAILED when the
+      // stack's mail send fails; validation alone leaves a row VALID. The
+      // consentTracking the send records is sealed at rest, so this raw read
+      // cannot see it, and the status is the proof.
+      const rows = await db
+        .collection('import_staging_records')
+        .find({ batchId: new ObjectId(batchId!) })
+        .sort({ rowNumber: 1 })
+        .toArray();
+      expect(rows).toHaveLength(3);
+      const passed = rows.filter((row) => row.status !== 'ERROR');
+      expect(passed).toHaveLength(2);
+      for (const row of passed) {
+        expect(['PENDING_CONSENT', 'CONSENT_SEND_FAILED']).toContain(row.status);
+      }
+
+      // Off camera: the refused row survived its own import, held as an
+      // error naming the missing matrix rather than dropped or corrected.
+      const refused = rows.filter((row) => row.status === 'ERROR');
+      expect(refused).toHaveLength(1);
+      expect(refused[0].errors.map((error: { field?: string }) => error.field)).toContain('matrix');
+      expect(rows.some((row) => row.availabilityStatus === 'AVAILABLE')).toBe(false);
+
+      const statusTable = page.getByTestId('fhir-import-status-table');
+      await expect(statusTable.locator('tbody tr')).toHaveCount(3, { timeout: 30_000 });
+      await expect(statusTable).toContainText('QUARANTINED');
+      await expect(statusTable).toContainText('BLOCKED');
+      await expect(statusTable).not.toContainText('AVAILABLE');
+      await statusTable.scrollIntoViewIfNeeded();
       await beat(page, LARGE);
     } finally {
       // Same restore-what-the-reel-changed discipline as Waves 3 and 4: the
       // mongodb-test-data volume is persistent, so demo rows would otherwise
-      // accumulate in the quarantine listing across every future session.
-      if (client) {
-        if (createdParticipantIds.length) {
-          await db
-            .collection('samples')
-            .deleteMany({ participantId: { $in: createdParticipantIds } })
-            .catch(() => {});
-          await db
-            .collection('patients')
-            .deleteMany({ participantId: { $in: createdParticipantIds } })
-            .catch(() => {});
-          await db
-            .collection('participantIdentities')
-            .deleteMany({ participantId: { $in: createdParticipantIds } })
-            .catch(() => {});
-        }
-        if (batchId) {
-          await db
-            .collection('import_staging_records')
-            .deleteMany({ batchId: new ObjectId(batchId) })
-            .catch(() => {});
-          await db
-            .collection('import_batches')
-            .deleteOne({ _id: new ObjectId(batchId) })
-            .catch(() => {});
-        }
+      // accumulate in the import listings across every future session. No
+      // row is signed, so the save commits no patient or sample.
+      if (client && batchId) {
+        await db
+          .collection('import_staging_records')
+          .deleteMany({ batchId: new ObjectId(batchId) })
+          .catch(() => {});
+        await db
+          .collection('import_batches')
+          .deleteOne({ _id: new ObjectId(batchId) })
+          .catch(() => {});
       }
     }
   });

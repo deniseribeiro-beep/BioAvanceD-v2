@@ -1640,7 +1640,15 @@ class AuthService {
         module: 'Autenticação'
       });
 
-      const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+      // Prefer the public origin the browser used (access proxy / LB) so the
+      // emailed and in-response lab link is reachable, not FRONTEND_URL's e2e host.
+      const header = (name) => (req && typeof req.get === 'function' ? req.get(name) : undefined);
+      const forwardedHost = header('x-forwarded-host') || header('host');
+      const forwardedProto = header('x-forwarded-proto') || (req && req.protocol) || 'http';
+      const publicOrigin = forwardedHost
+        ? `${String(forwardedProto).split(',')[0].trim()}://${String(forwardedHost).split(',')[0].trim()}`
+        : (process.env.FRONTEND_URL || 'http://localhost:5173');
+      const resetLink = `${publicOrigin}/reset-password?token=${resetToken}`;
 
       // #1203: the link goes out by email in every environment. Until now it
       // left only in the development response below, so in production this
@@ -1661,12 +1669,17 @@ class AuthService {
 
       logger.info('Token de recuperação gerado para:', email);
 
+      // Lab/e2e stacks run NODE_ENV=test: surface the link in the JSON so the
+      // SPA can open it without Mailpit. Production never returns the token.
+      const exposeResetSecret = process.env.NODE_ENV !== 'production'
+        || process.env.ALLOW_PASSWORD_RESET_LINK_IN_RESPONSE === 'true'
+        || process.env.ALLOW_PASSWORD_RESET_LINK_IN_RESPONSE === '1';
+
       return {
         success: true,
         message: 'Se o email estiver cadastrado, você receberá um link de recuperação',
-        // Em desenvolvimento, retorna o link (remover em produção)
-        resetLink: process.env.NODE_ENV === 'development' ? resetLink : undefined,
-        token: process.env.NODE_ENV === 'development' ? resetToken : undefined
+        resetLink: exposeResetSecret ? resetLink : undefined,
+        token: exposeResetSecret ? resetToken : undefined
       };
     } catch (error) {
       logger.error('Erro ao solicitar recuperação de senha:', error.message);

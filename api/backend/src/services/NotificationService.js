@@ -2,6 +2,7 @@ const { Resend } = require('resend');
 const { Queue } = require('bullmq');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
+const os = require('os');
 const logger = require('../utils/logger');
 const { withRequestId } = require('../utils/requestContext');
 const { connectDB } = require('../database/mongo');
@@ -111,7 +112,7 @@ class NotificationService {
 
   formatConsentMessage(name, link) {
     const safeName = name || 'Paciente';
-    return `BioAvanceD: Olá ${safeName}, sua participação no biobanco exige o aceite do termo de consentimento. Acesse: ${link}`;
+    return `BioAvanceD: Olá ${safeName}, sua participação no biobanco exige o aceite do termo de consentimento. Neste painel você pode aceitar o TCLE e, depois, revogar o termo inteiro ou apenas algumas permissões: ${link}`;
   }
 
   getResendClient() {
@@ -172,11 +173,39 @@ class NotificationService {
     };
   }
 
+  emailSendTrace() {
+    const sentAt = new Date();
+    const smtpHost = String(process.env.SMTP_HOST || '').trim();
+    const provider = smtpHost ? 'smtp' : 'resend';
+    const sentAtLocal = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).format(sentAt);
+    return {
+      sentAt,
+      sentAtLocal,
+      provider,
+      location: {
+        kind: provider === 'smtp' ? 'smtp_relay' : 'resend',
+        host: provider === 'smtp' ? smtpHost : 'resend',
+        port: provider === 'smtp' ? String(process.env.SMTP_PORT || '1025') : null,
+        machine: os.hostname(),
+      },
+    };
+  }
+
   async persistComplianceLog(payload) {
     try {
       const db = await connectDB();
+      const activeProvider = String(process.env.SMTP_HOST || '').trim() ? 'smtp' : 'resend';
       await db.collection('notification_compliance_logs').insertOne({
-        provider: 'resend',
+        provider: activeProvider,
         ...payload,
         createdAt: new Date()
       });
@@ -218,6 +247,7 @@ class NotificationService {
     // a validation failure isn't invisible in the compliance log.
     if (!subject || (!html && !text)) {
       await this.persistComplianceLog({
+        ...this.emailSendTrace(),
         notificationType: notificationType || 'generic',
         subject,
         originalTo: String(to || '').trim(),
@@ -231,6 +261,7 @@ class NotificationService {
 
     if (!this.emailFrom) {
       await this.persistComplianceLog({
+        ...this.emailSendTrace(),
         notificationType: notificationType || 'generic',
         subject,
         originalTo: String(to || '').trim(),
@@ -247,6 +278,7 @@ class NotificationService {
       recipient = this.resolveRecipient(to);
     } catch (error) {
       await this.persistComplianceLog({
+        ...this.emailSendTrace(),
         notificationType: notificationType || 'generic',
         subject,
         originalTo: String(to || '').trim(),
@@ -290,6 +322,7 @@ class NotificationService {
     // nothing. Insert-only, same as every other compliance write here;
     // volume/retention of these rows is #812's tracked concern.
     await this.persistComplianceLog({
+      ...this.emailSendTrace(),
       provider,
       notificationType: notificationType || 'generic',
       subject,
@@ -331,6 +364,7 @@ class NotificationService {
       }
     } catch (error) {
       await this.persistComplianceLog({
+        ...this.emailSendTrace(),
         provider,
         notificationType: notificationType || 'generic',
         subject,
@@ -346,6 +380,7 @@ class NotificationService {
     }
 
     await this.persistComplianceLog({
+      ...this.emailSendTrace(),
       messageId,
       provider,
       notificationType: notificationType || 'generic',
@@ -354,7 +389,7 @@ class NotificationService {
       originalTo: recipient.originalTo,
       redirectedByEnvironment: recipient.redirected,
       metadata,
-      sentAt: new Date()
+      deliveryStatus: 'SENT'
     });
 
     return {
@@ -428,7 +463,7 @@ class NotificationService {
   buildConsentMetadata() {
     const token = this.generateConsentToken();
     const createdAt = new Date();
-    const expiresAt = new Date(Date.now() + CONSENT_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+    const expiresAt = new Date(createdAt.getTime() + CONSENT_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
 
     return {
       token,

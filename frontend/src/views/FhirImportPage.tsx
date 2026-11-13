@@ -251,16 +251,16 @@ export default function FhirImportPage() {
   const rowsToReview = getRelevantRows();
 
   return (
-    <div style={{ width: '100%', minHeight: '100%', padding: '1.25rem 1.5rem 2rem' }} data-testid="fhir-import-page">
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+    <div className="page-shell" data-testid="fhir-import-page">
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <Button variant="secondary" onClick={() => navigate('/patients')} style={{ minWidth: 'auto' }} data-testid="fhir-import-back-button">
             <ArrowLeft size={18} />
           </Button>
           <div>
-            <h1 style={{ margin: 0, fontSize: '1.9rem' }}>Importação Inteligente de Dados FHIR</h1>
-            <p style={{ margin: '0.35rem 0 0', color: 'var(--text-light)', maxWidth: 960 }}>
-              As amostras importadas serão salvas em quarentena até assinatura do TCLE ou anexação de documentação autorizada. Salvar não libera a amostra para uso.
+            <h1 className="page-title">Importação em lote</h1>
+            <p className="page-subtitle">
+              Importação em lote FHIR R4: participantes e amostras entram em quarentena até TCLE assinado ou documentação autorizada. Salvar não libera a amostra para uso.
             </p>
           </div>
         </div>

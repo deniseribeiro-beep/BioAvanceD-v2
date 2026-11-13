@@ -32,13 +32,15 @@ test.describe('Organizations CRUD through the real UI (#606, #608)', () => {
 
     await page.goto('/system-management?tab=organizations');
     await page.getByTestId('new-organization-button').click();
+    await expect(page).toHaveURL(/\/organizations\/new/);
+    await expect(page.getByTestId('organization-form-page')).toBeVisible();
 
     await page.getByTestId('organization-official-name-input').fill(officialName);
     await page.getByTestId('organization-country-code-input').fill('BR');
     await page.getByTestId('organization-acronym-input').fill('E2EORG');
 
     await page.getByTestId('organization-form-submit').click();
-    await expect(page.getByTestId('organization-form-submit')).not.toBeVisible();
+    await expect(page).toHaveURL(/system-management\?tab=organizations/);
     await expect(page.getByText(officialName, { exact: true })).toBeVisible();
 
     // organizationId is server-generated (buildOrganizationSubmissionPayload
@@ -53,11 +55,12 @@ test.describe('Organizations CRUD through the real UI (#606, #608)', () => {
 
     try {
       await page.getByTestId(`edit-organization-button-${organizationId}`).click();
+      await expect(page).toHaveURL(new RegExp(`/organizations/${organizationId}/edit`));
       const updatedName = `${officialName} (updated)`;
       const nameInput = page.getByTestId('organization-official-name-input');
       await nameInput.fill(updatedName);
       await page.getByTestId('organization-form-submit').click();
-      await expect(page.getByTestId('organization-form-submit')).not.toBeVisible();
+      await expect(page).toHaveURL(/system-management\?tab=organizations/);
       await expect(page.getByText(updatedName, { exact: true })).toBeVisible();
 
       const getResponse = await request.get(`${apiBaseURL}/api/organizations/${organizationId}`, {
@@ -103,6 +106,8 @@ test.describe('Collections CRUD through the real UI (#607, #608)', () => {
     try {
       await page.goto('/system-management?tab=collections');
       await page.getByTestId('new-collection-button').click();
+      await expect(page).toHaveURL(/\/collections\/new/);
+      await expect(page.getByTestId('collection-form-page')).toBeVisible();
 
       await page.getByTestId('collection-id-input').fill(collectionId);
       await page.getByTestId('collection-name-input').fill(collectionName);
@@ -110,7 +115,7 @@ test.describe('Collections CRUD through the real UI (#607, #608)', () => {
       await page.getByTestId('collection-governance-regime-select').selectOption('biorepository');
 
       await page.getByTestId('collection-form-submit').click();
-      await expect(page.getByTestId('collection-form-submit')).not.toBeVisible();
+      await expect(page).toHaveURL(/system-management\?tab=collections/);
       await expect(page.getByText(collectionId, { exact: true })).toBeVisible();
 
       const getAfterCreate = await request.get(`${apiBaseURL}/api/collections/${collectionId}`, {
@@ -121,11 +126,12 @@ test.describe('Collections CRUD through the real UI (#607, #608)', () => {
       expect(created.data.sampleTypes).toEqual([{ text: 'plasma' }, { text: 'serum' }]);
 
       await page.getByTestId(`edit-collection-button-${collectionId}`).click();
+      await expect(page).toHaveURL(new RegExp(`/collections/${collectionId}/edit`));
       const updatedName = `${collectionName} (updated)`;
       const nameInput = page.getByTestId('collection-name-input');
       await nameInput.fill(updatedName);
       await page.getByTestId('collection-form-submit').click();
-      await expect(page.getByTestId('collection-form-submit')).not.toBeVisible();
+      await expect(page).toHaveURL(/system-management\?tab=collections/);
       await expect(page.getByText(updatedName, { exact: true })).toBeVisible();
 
       const getAfterUpdate = await request.get(`${apiBaseURL}/api/collections/${collectionId}`, {

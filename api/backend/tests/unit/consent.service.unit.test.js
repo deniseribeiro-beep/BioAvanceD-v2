@@ -2128,6 +2128,29 @@ describe('ConsentService.revokeConsent', () => {
 
   // RF010 AC6: a scope naming some permissions leaves the consent in force
   // with those permissions blocked, and sends no revocation notice.
+  it('records the server time and an unavailable location on the revocation evidence', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: 'PART-1', consentTemplateId: 'tmpl-1', responses: { analytics: true, contact: true } };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const history = makeHistoryCollections();
+    const db = makeDb({ patientConsents: consents, ...history });
+
+    await consentService.revokeConsent(db, consentId.toString(), {
+      scope: ['contact'],
+      location: { status: 'unavailable' },
+    });
+
+    expect(consentEvidence.storeRevocationEvidence).toHaveBeenCalledWith(expect.objectContaining({
+      location: { status: 'unavailable' },
+      effectiveAt: expect.any(Date),
+      channel: 'paper',
+    }));
+    expect(history.consentRevocations.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      location: { status: 'unavailable' },
+      effectiveAt: expect.any(Date),
+    }));
+  });
+
   it('revokes only the scoped permissions and keeps the consent in force', async () => {
     const consentId = new ObjectId();
     const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: 'PART-1', consentTemplateId: 'tmpl-1', responses: { analytics: true, contact: true } };

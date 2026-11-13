@@ -274,6 +274,35 @@ describe('SystemManagementPage', () => {
       renderPage();
       expect(screen.queryByTestId('disable-mfa-button-u-9')).not.toBeInTheDocument();
     });
+
+    it('filters the table by email substring and restores the full list when cleared', async () => {
+      const user = userEvent.setup();
+      usersHook.users = [TECH_USER, ADMIN_USER];
+      renderPage();
+      expect(screen.getByText('Ana Técnica')).toBeInTheDocument();
+      expect(screen.getByText('Bruno Admin')).toBeInTheDocument();
+      expect(screen.getByTestId('reset-mfa-button-u-1')).toBeInTheDocument();
+
+      await user.type(screen.getByTestId('users-search-input'), 'bruno@example');
+      expect(screen.queryByText('Ana Técnica')).not.toBeInTheDocument();
+      expect(screen.getByText('Bruno Admin')).toBeInTheDocument();
+      expect(screen.queryByTestId('reset-mfa-button-u-1')).not.toBeInTheDocument();
+
+      await user.clear(screen.getByTestId('users-search-input'));
+      expect(screen.getByText('Ana Técnica')).toBeInTheDocument();
+      expect(screen.getByText('Bruno Admin')).toBeInTheDocument();
+      expect(screen.getByTestId('reset-mfa-button-u-1')).toBeInTheDocument();
+    });
+
+    it('shows the empty state when the query matches no user', async () => {
+      const user = userEvent.setup();
+      usersHook.users = [TECH_USER, ADMIN_USER];
+      renderPage();
+      await user.type(screen.getByTestId('users-search-input'), 'zzz-no-match');
+      expect(screen.getByTestId('users-search-empty')).toBeInTheDocument();
+      expect(screen.queryByText('Ana Técnica')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('reset-mfa-button-u-1')).not.toBeInTheDocument();
+    });
   });
 
   describe('MFA and password actions', () => {
@@ -508,66 +537,21 @@ describe('SystemManagementPage', () => {
       expect(within(rowOf('Hospital Central')).getAllByText('-')).toHaveLength(3);
     });
 
-    it('creates an organization with empty optionals as null and the country code upper-cased', async () => {
+    it('navigates to Nova Organização page', async () => {
       const user = userEvent.setup();
       renderPage('/system?tab=organizations');
       await user.click(screen.getByTestId('new-organization-button'));
-      expect(screen.getByText('Nova Organização', { selector: 'h2' })).toBeInTheDocument();
-      await fill(user, screen.getByTestId('organization-official-name-input'), 'Instituto Novo');
-      await fill(user, screen.getByTestId('organization-country-code-input'), 'br');
-      expect(screen.getByTestId('organization-country-code-input')).toHaveValue('BR');
-      await user.click(screen.getByTestId('organization-form-submit'));
-      await waitFor(() => expect(screen.queryByTestId('organization-form')).not.toBeInTheDocument());
-      expect(orgsHook.createOrganization).toHaveBeenCalledWith({
-        officialName: 'Instituto Novo',
-        acronym: null,
-        organizationType: null,
-        countryCode: 'BR',
-        website: null,
-      });
+      expect(navigate).toHaveBeenCalledWith('/organizations/new');
     });
 
-    it('updates an organization without its organizationId in the payload', async () => {
+    it('navigates to Editar Organização with state', async () => {
       const user = userEvent.setup();
       orgsHook.organizations = [FULL_ORG];
       renderPage('/system?tab=organizations');
       await user.click(screen.getByTestId('edit-organization-button-org-1'));
-      expect(screen.getByText('Editar Organização')).toBeInTheDocument();
-      for (const [testId, value] of [
-        ['organization-official-name-input', 'Hospital Renomeado'],
-        ['organization-acronym-input', 'HR'],
-        ['organization-type-input', 'university'],
-        ['organization-website-input', 'https://hr.example.org'],
-      ]) {
-        await fill(user, screen.getByTestId(testId), value);
-      }
-      await user.click(screen.getByTestId('organization-form-submit'));
-      await waitFor(() => expect(screen.queryByTestId('organization-form')).not.toBeInTheDocument());
-      expect(orgsHook.updateOrganization).toHaveBeenCalledWith('org-1', {
-        officialName: 'Hospital Renomeado',
-        acronym: 'HR',
-        organizationType: 'university',
-        countryCode: 'BR',
-        website: 'https://hr.example.org',
+      expect(navigate).toHaveBeenCalledWith('/organizations/org-1/edit', {
+        state: { organization: FULL_ORG },
       });
-      expect(orgsHook.createOrganization).not.toHaveBeenCalled();
-    });
-
-    it('alerts a failed save and keeps the modal open, and Cancel closes it', async () => {
-      const user = userEvent.setup();
-      orgsHook.organizations = [FULL_ORG];
-      orgsHook.updateOrganization.mockRejectedValueOnce(new Error('Nome duplicado'));
-      renderPage('/system?tab=organizations');
-      await user.click(screen.getByTestId('edit-organization-button-org-1'));
-      await user.click(screen.getByTestId('organization-form-submit'));
-      await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Nome duplicado'));
-      expect(screen.getByTestId('organization-form')).toBeInTheDocument();
-      await user.click(screen.getByText('common.cancel'));
-      expect(screen.queryByTestId('organization-form')).not.toBeInTheDocument();
-      await user.click(screen.getByTestId('new-organization-button'));
-      await user.click(document.querySelector('.modal-close') as HTMLElement);
-      expect(screen.queryByTestId('organization-form')).not.toBeInTheDocument();
-      expect(orgsHook.createOrganization).not.toHaveBeenCalled();
     });
 
     it('deletes an organization on confirm and alerts a failure', async () => {
@@ -614,105 +598,21 @@ describe('SystemManagementPage', () => {
       expect(within(rowOf('Coleção Oncológica')).getByText('plasma')).toBeInTheDocument();
     });
 
-    it('creates a collection with sample types as text objects', async () => {
+    it('navigates to Nova Coleção page', async () => {
       const user = userEvent.setup();
       renderPage('/system?tab=collections');
       await user.click(screen.getByTestId('new-collection-button'));
-      const regime = screen.getByTestId('collection-governance-regime-select');
-      expect(regime).toBeEnabled();
-      await fill(user, screen.getByTestId('collection-id-input'), 'col-new');
-      await fill(user, screen.getByTestId('collection-name-input'), 'Coleção Nova');
-      await user.selectOptions(regime, 'biorepository');
-      await fill(user, screen.getByTestId('collection-sample-types-input'), 'plasma; serum');
-      await user.click(screen.getByTestId('collection-form-submit'));
-      await waitFor(() => expect(screen.queryByTestId('collection-form')).not.toBeInTheDocument());
-      expect(collectionsHook.createCollection).toHaveBeenCalledWith(
-        expect.objectContaining({
-          collectionId: 'col-new',
-          collectionName: 'Coleção Nova',
-          collectionStatus: 'active',
-          governanceRegime: 'biorepository',
-          sampleTypes: [{ text: 'plasma' }, { text: 'serum' }],
-        })
-      );
+      expect(navigate).toHaveBeenCalledWith('/collections/new');
     });
 
-    it('submits every optional collection field the form edits', async () => {
+    it('navigates to Editar Coleção with state', async () => {
       const user = userEvent.setup();
+      collectionsHook.collections = [GOVERNED];
       renderPage('/system?tab=collections');
-      await user.click(screen.getByTestId('new-collection-button'));
-      await fill(user, screen.getByTestId('collection-id-input'), 'col-full');
-      await fill(user, screen.getByTestId('collection-name-input'), 'Coleção Completa');
-      await user.selectOptions(screen.getByTestId('collection-governance-regime-select'), 'biobank');
-      await user.selectOptions(screen.getByLabelText('Status'), 'inactive');
-      await fill(user, screen.getByTestId('collection-dataset-types-input'), 'clinical; genomic');
-      await fill(user, screen.getByTestId('collection-disease-scope-input'), 'ICD-11:2C25');
-      await fill(user, screen.getByTestId('collection-inclusion-criteria-input'), 'adultos');
-      await fill(user, screen.getByTestId('collection-exclusion-criteria-input'), 'gestantes');
-      await fill(user, screen.getByTestId('collection-use-access-input'), 'DUO:0000042');
-      await fill(user, screen.getByTestId('collection-storage-temperature-input'), '-80 °C');
-      await fill(user, screen.getByTestId('collection-participant-count-input'), '120');
-      await fill(user, screen.getByTestId('collection-sample-count-input'), '480');
-      await fill(user, screen.getByTestId('collection-related-publications-input'), 'doi:10.1/x; pmid:123');
-      await user.click(screen.getByTestId('collection-form-submit'));
-      await waitFor(() => expect(collectionsHook.createCollection).toHaveBeenCalledTimes(1));
-      expect(collectionsHook.createCollection).toHaveBeenCalledWith({
-        collectionId: 'col-full',
-        collectionName: 'Coleção Completa',
-        collectionStatus: 'inactive',
-        governanceRegime: 'biobank',
-        exclusionCriteria: 'gestantes',
-        participantCount: 120,
-        sampleCount: 480,
-        relatedPublications: [{ value: 'doi:10.1/x' }, { value: 'pmid:123' }],
-        sampleTypes: [],
-        datasetTypes: [{ text: 'clinical' }, { text: 'genomic' }],
-        diseaseScope: [{ text: 'ICD-11:2C25' }],
-        inclusionCriteriaCategories: [{ text: 'adultos' }],
-        miabisUseAccessConditions: [{ text: 'DUO:0000042' }],
-        storageTemperatureCategories: [{ text: '-80 °C' }],
+      await user.click(screen.getByTestId('edit-collection-button-col-1'));
+      expect(navigate).toHaveBeenCalledWith('/collections/col-1/edit', {
+        state: { collection: GOVERNED },
       });
-    });
-
-    it('edits a collection without its id input and with the set regime locked', async () => {
-      const user = userEvent.setup();
-      collectionsHook.collections = [GOVERNED];
-      renderPage('/system?tab=collections');
-      await user.click(screen.getByTestId('edit-collection-button-col-1'));
-      expect(screen.getByText('Editar Coleção')).toBeInTheDocument();
-      expect(screen.queryByTestId('collection-id-input')).not.toBeInTheDocument();
-      expect(screen.getByTestId('collection-governance-regime-select')).toBeDisabled();
-      const name = screen.getByTestId('collection-name-input');
-      await fill(user, name, 'Coleção Renomeada');
-      await user.click(screen.getByTestId('collection-form-submit'));
-      await waitFor(() => expect(screen.queryByTestId('collection-form')).not.toBeInTheDocument());
-      expect(collectionsHook.updateCollection).toHaveBeenCalledWith(
-        'col-1',
-        expect.objectContaining({
-          collectionId: 'col-1',
-          collectionName: 'Coleção Renomeada',
-          governanceRegime: 'biobank',
-          sampleTypes: [{ text: 'plasma' }],
-        })
-      );
-      expect(collectionsHook.createCollection).not.toHaveBeenCalled();
-    });
-
-    it('alerts a failed save and keeps the modal open, and Cancel closes it', async () => {
-      const user = userEvent.setup();
-      collectionsHook.collections = [GOVERNED];
-      collectionsHook.updateCollection.mockRejectedValueOnce(new Error('Coleção bloqueada'));
-      renderPage('/system?tab=collections');
-      await user.click(screen.getByTestId('edit-collection-button-col-1'));
-      await user.click(screen.getByTestId('collection-form-submit'));
-      await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Coleção bloqueada'));
-      expect(screen.getByTestId('collection-form')).toBeInTheDocument();
-      await user.click(screen.getByText('common.cancel'));
-      expect(screen.queryByTestId('collection-form')).not.toBeInTheDocument();
-      await user.click(screen.getByTestId('new-collection-button'));
-      await user.click(document.querySelector('.modal-close') as HTMLElement);
-      expect(screen.queryByTestId('collection-form')).not.toBeInTheDocument();
-      expect(collectionsHook.createCollection).not.toHaveBeenCalled();
     });
 
     it('deletes a collection on confirm and alerts a failure', async () => {
@@ -727,17 +627,14 @@ describe('SystemManagementPage', () => {
       await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Coleção com amostras'));
     });
 
-    it('opens the governance panel and reloads the collections on close', async () => {
+    it('navigates to governance page with state', async () => {
       const user = userEvent.setup();
       collectionsHook.collections = [GOVERNED];
       renderPage('/system?tab=collections');
       await user.click(screen.getByTestId('governance-collection-button-col-1'));
-      expect(screen.getByText('Governança: Coleção Oncológica')).toBeInTheDocument();
-      expect(screen.getByTestId('governance-panel-stub')).toHaveTextContent('Coleção Oncológica');
-      expect(collectionsHook.loadCollections).not.toHaveBeenCalled();
-      await user.click(document.querySelector('.modal-close') as HTMLElement);
-      expect(screen.queryByTestId('governance-panel-stub')).not.toBeInTheDocument();
-      expect(collectionsHook.loadCollections).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith('/collections/col-1/governance', {
+        state: { collection: GOVERNED },
+      });
     });
   });
 });

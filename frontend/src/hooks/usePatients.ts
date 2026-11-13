@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { Patient } from '../types/models';
 import { patientService } from '../services/api';
-import { extractResponseItems } from '../api/response.adapters';
+import { extractResponseItems, extractResponseTotal } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 import { useRequestSequence } from './useRequestSequence';
@@ -74,11 +74,13 @@ function extractPatients(payload: unknown): Patient[] {
 
 export function usePatients() {
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // #901: discards a stale response when loadPatients is called again
   // before a previous in-flight call resolves.
   const requestSeq = useRequestSequence();
+  const silentSeq = useRequestSequence();
 
   useEffect(() => {
     loadPatients();
@@ -87,6 +89,7 @@ export function usePatients() {
   useEffect(() => {
     return onClientLogout(() => {
       setPatients([]);
+      setTotal(null);
       setError(null);
       setLoading(false);
     });
@@ -101,6 +104,7 @@ export function usePatients() {
       if (!requestSeq.isCurrent(seq)) return;
       const patientsData = extractPatients(response.data);
       setPatients(patientsData);
+      setTotal(extractResponseTotal(response.data, patientsData.length));
     } catch (err: unknown) {
       if (!requestSeq.isCurrent(seq)) return;
       if (isSilentAuthAbort(err)) {
@@ -108,11 +112,28 @@ export function usePatients() {
       }
       console.error('Erro ao carregar pacientes:', err);
       setError(extractErrorMessage(err, 'Erro ao carregar pacientes'));
-      setPatients([]); // Garante que a lista seja limpa em caso de erro
+      setPatients([]);
+      setTotal(0);
     } finally {
       if (requestSeq.isCurrent(seq)) setLoading(false);
     }
   };
+
+  // A signature that arrives by email must show up without hiding the table.
+  // A failed refresh leaves the rows already on screen.
+  const refreshPatients = useCallback(async () => {
+    const seq = silentSeq.next();
+    try {
+      const response = await patientService.getAll();
+      if (!silentSeq.isCurrent(seq)) return;
+      const patientsData = extractPatients(response.data);
+      setPatients(patientsData);
+      setTotal(extractResponseTotal(response.data, patientsData.length));
+      setError(null);
+    } catch (err: unknown) {
+      if (!silentSeq.isCurrent(seq) || isSilentAuthAbort(err)) return;
+    }
+  }, [silentSeq]);
 
   const createPatient = async (data: Partial<Patient>) => {
     try {
@@ -164,9 +185,11 @@ export function usePatients() {
 
   return {
     patients,
+    total,
     loading,
     error,
     loadPatients,
+    refreshPatients,
     createPatient,
     updatePatient,
     deletePatient,

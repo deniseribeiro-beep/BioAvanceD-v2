@@ -57,6 +57,8 @@ export function useTemperatureReadings(): {
 
   useEffect(() => {
     void reload();
+    const interval = setInterval(() => { void reload(); }, 15_000);
+    return () => clearInterval(interval);
   }, [reload]);
 
   return { readings, loading, error, reload };

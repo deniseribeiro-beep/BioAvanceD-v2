@@ -965,10 +965,18 @@ class PacienteController {
         });
       }
 
-      const result = await this.withConsentStatus(
-        db,
-        await patientService.searchPatients(db, searchTerm, req.organizationScope)
-      );
+      let searched = await patientService.searchPatients(db, searchTerm, req.organizationScope);
+      if (Array.isArray(searched.patients) && searched.patients.length > 0) {
+        const { userHasPermission } = require('../services/rbac-assignment.service');
+        const hasCreatePatientPermission = await userHasPermission(db, req.user?.userID, 'createPatient');
+        if (hasCreatePatientPermission) {
+          searched = {
+            ...searched,
+            patients: await patientService.attachDirectoryIdentity(db, searched.patients)
+          };
+        }
+      }
+      const result = await this.withConsentStatus(db, searched);
 
       // Registra log de busca (sanitizado)
       const auditLogger = require('../utils/auditLogger');

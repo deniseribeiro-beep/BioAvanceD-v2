@@ -36,6 +36,7 @@ export const DEMO_ROUTES: DemoRoute[] = [
   { path: '/samples/custody-reports', title: 'Relatórios de Custódia', group: 'Laboratório', description: 'Relatórios de custódia', shell: 'app' },
   { path: '/results', title: 'Arquivos de Análise', group: 'Laboratório', description: 'Resultados e uploads', shell: 'app' },
   { path: '/quality-descriptions', title: 'Descrições de Qualidade', group: 'Laboratório', description: 'Qualidade de amostras', shell: 'app' },
+  { path: '/quality-descriptions/new', title: 'Nova Descrição de Qualidade', group: 'Laboratório', description: 'Formulário de qualidade', shell: 'app' },
 
   // Facility — obrigatório temperatura + grid
   { path: '/facility-management?tab=equipment', title: 'Facility · Equipamentos + CryoBox', group: 'Facility', description: 'Equipamentos e grid de localização', shell: 'app', highlight: true },
@@ -44,21 +45,26 @@ export const DEMO_ROUTES: DemoRoute[] = [
   { path: '/facility-management?tab=incidents', title: 'Facility · Incidentes', group: 'Facility', description: 'Gerenciamento de incidentes', shell: 'app' },
   { path: '/facility-management?tab=sensors', title: 'Facility · Sensores', group: 'Facility', description: 'Cadastro de sensores', shell: 'app' },
   { path: '/facility-management?tab=policies', title: 'Facility · Políticas', group: 'Facility', description: 'Políticas de temperatura', shell: 'app' },
+  { path: '/equipment/new', title: 'Novo Equipamento', group: 'Facility', description: 'Formulário de equipamento', shell: 'app' },
+  { path: '/sensors/new', title: 'Novo Sensor', group: 'Facility', description: 'Formulário de sensor', shell: 'app' },
+  { path: '/policies/new', title: 'Nova Política', group: 'Facility', description: 'Formulário de política', shell: 'app' },
 
   // Governança / TCLE
   { path: '/admin/tcle/new', title: 'Construtor de TCLE', group: 'Governança', description: 'Novo termo com 4 blocos', shell: 'app', highlight: true },
   { path: '/admin/tcle/edit/demo-template', title: 'Editar TCLE', group: 'Governança', description: 'Edição versionada de termo', shell: 'app' },
   { path: '/consents', title: 'Consentimentos (TCLE)', group: 'Governança', description: 'Histórico e revogação', shell: 'app' },
   { path: '/biomarker-associations', title: 'Associações de Biomarcadores', group: 'Governança', description: 'Master data biomarcadores', shell: 'app' },
+  { path: '/biomarker-associations/new', title: 'Nova Associação de Biomarcador', group: 'Governança', description: 'Formulário de biomarcador', shell: 'app' },
   { path: '/access-requests', title: 'Solicitações de Acesso', group: 'Governança', description: 'Pedidos e distribuição', shell: 'app' },
 
   // Importação
-  { path: '/import/lgpd', title: 'Importação LGPD', group: 'Importação', description: 'Importação com quarentena LGPD', shell: 'app' },
+  { path: '/patients/import-fhir', title: 'Importação em lote', group: 'Importação', description: 'Importação em lote FHIR R4', shell: 'app' },
   { path: '/import/quarantine', title: 'Quarentena de Importação', group: 'Importação', description: 'Itens em quarentena', shell: 'app' },
 
   // Relatórios / auditoria
   { path: '/reports', title: 'Central de Relatórios', group: 'Relatórios', description: 'Catálogo de relatórios', shell: 'app' },
   { path: '/reports/templates', title: 'Modelos de Relatório', group: 'Relatórios', description: 'CRUD de templates', shell: 'app' },
+  { path: '/reports/templates/new', title: 'Novo Modelo de Relatório', group: 'Relatórios', description: 'Formulário de template', shell: 'app' },
   { path: '/reports/query/custody', title: 'Consulta de Relatório', group: 'Relatórios', description: 'Filtro / preview / export', shell: 'app' },
   { path: '/reports/demo-id', title: 'Visualizar Relatório', group: 'Relatórios', description: 'Detalhe de relatório gerado', shell: 'app' },
   { path: '/logs', title: 'Logs de Auditoria', group: 'Relatórios', description: 'Trilha de auditoria', shell: 'app' },
@@ -67,7 +73,9 @@ export const DEMO_ROUTES: DemoRoute[] = [
   // Sistema
   { path: '/system-management?tab=users', title: 'Sistema · Usuários', group: 'Sistema', description: 'Gestão de usuários', shell: 'app' },
   { path: '/system-management?tab=organizations', title: 'Sistema · Organizações', group: 'Sistema', description: 'Organizações', shell: 'app' },
+  { path: '/organizations/new', title: 'Nova Organização', group: 'Sistema', description: 'Formulário de organização', shell: 'app' },
   { path: '/system-management?tab=collections', title: 'Sistema · Coleções', group: 'Sistema', description: 'Coleções MIABIS', shell: 'app' },
+  { path: '/collections/new', title: 'Nova Coleção', group: 'Sistema', description: 'Formulário de coleção', shell: 'app' },
   { path: '/system-management?tab=security', title: 'Sistema · Segurança', group: 'Sistema', description: 'Configuração de segurança', shell: 'app' },
   { path: '/users/new', title: 'Novo Usuário', group: 'Sistema', description: 'Formulário de criação', shell: 'app' },
   { path: '/users/new/success', title: 'Usuário Criado', group: 'Sistema', description: 'Confirmação pós-criação', shell: 'app' },
@@ -116,7 +124,7 @@ export const SIDEBAR_SECTIONS = [
       { path: '/consents', label: 'Consentimentos' },
       { path: '/biomarker-associations', label: 'Biomarcadores' },
       { path: '/access-requests', label: 'Solicitações de Acesso' },
-      { path: '/import/lgpd', label: 'Importação LGPD' },
+      { path: '/patients/import-fhir', label: 'Importação em lote' },
       { path: '/import/quarantine', label: 'Quarentena' },
     ],
   },

@@ -11,3 +11,12 @@ services:
     build:
       args:
         VITE_API_BASE_URL: /api
+
+  # Browser Origin is the public proxy/LB host, not :5173 — without these the
+  # cors() callback rejects with HTTP 500 (see app.js allowedOrigins).
+  backend-app-test:
+    environment:
+      ALLOWED_ORIGINS: >-
+        http://127.0.0.1:8080,http://localhost:8080,
+        https://bioadvanced.dev,https://www.bioadvanced.dev,
+        http://localhost:5173,http://127.0.0.1:5173

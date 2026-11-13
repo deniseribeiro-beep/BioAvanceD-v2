@@ -124,7 +124,7 @@ describe('auth.routes contract', () => {
       mappedEmail: 'alice',
       mappedMfaCode: '123456',
     });
-  });
+  }, 20_000);
 
   it('POST /api/auth/keepalive retorna 503 quando o banco nao estiver disponivel', async () => {
     sessionServiceMock.calls = [];

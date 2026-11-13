@@ -94,6 +94,8 @@ const TOKEN_OPTIONAL_ROUTES = [
   // (routes/eConsent.js:246-247, no `authenticate`).
   '/e-consent/consent-tokens/validate',
   '/e-consent/consent-tokens/accept',
+  '/e-consent/consent-tokens/revoke',
+  '/e-consent/consent-tokens/signed-tcle',
   // #822: the other two participant-facing pages, on the JWT token system.
   // Same reasoning as the pair above -- EConsentPage and EConsentImportPage
   // are entered by emailed link, so the visitor has no session and the token
@@ -953,10 +955,12 @@ export const consentService = {
   createPatientConsent: (data: {
     participantId: string;
     templateId: string;
+    consentTemplateId?: string;
     responses: Record<string, boolean>;
     signatureName?: string;
     signatureImageBase64?: string;
     signatureMimeType?: string;
+    collectionPlace?: string;
   }) => api.post<PatientConsent>('/e-consent/consents', data),
   // RF010 AC6 (#1375): `consentId` is the consent's Mongo _id. No scope means
   // the whole consent; a scope names the permission codes to withdraw.
@@ -964,7 +968,9 @@ export const consentService = {
     api.post<{ success: boolean; data: PatientConsent }>(`/e-consent/consents/${consentId}/revoke`, request),
   getConsentHistory: (consentId: string) =>
     api.get<{ success: boolean; data: ConsentHistory }>(`/e-consent/consents/${consentId}/history`),
-  getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`)
+  getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`),
+  getSignedTcle: (consentId: string) =>
+    api.get<Blob>(`/e-consent/consents/${consentId}/signed-tcle`, { responseType: 'blob' }),
 };
 
 // #809: the bulk consent-token pair, consumed by ConsentTokenPage. Unlike the
@@ -982,7 +988,24 @@ export type ConsentTokenTemplatePayload = {
 
 export const consentTokenService = {
   validate: (participantId: string, token: string) =>
-    api.post<{ success: boolean; data: { valid: boolean; participantId: string; template: ConsentTokenTemplatePayload | null } }>(
+    api.post<{
+      success: boolean;
+      data: {
+        valid: boolean;
+        participantId: string;
+        patientStatus?: string | null;
+        panel?: 'pending' | 'manage' | 'closed';
+        template: ConsentTokenTemplatePayload | null;
+        consent?: {
+          participantId: string;
+          status: string;
+          currentStateDerived: string | null;
+          signedAt?: string | null;
+          hasSignedTcle?: boolean;
+          effectivePermissions: Record<string, boolean>;
+        } | null;
+      };
+    }>(
       '/e-consent/consent-tokens/validate',
       { patientId: participantId, token }
     ),
@@ -1001,7 +1024,26 @@ export const consentTokenService = {
       '/e-consent/consent-tokens/accept',
       { patientId: participantId, token, ...manifestation }
     ),
+  revoke: (
+    participantId: string,
+    token: string,
+    revocation: { scope?: string[]; reason?: string; location: ConsentPanelLocation }
+  ) =>
+    api.post<{ success: boolean; data: { participantId: string; status: string; currentStateDerived: string | null; effectivePermissions: Record<string, boolean> } }>(
+      '/e-consent/consent-tokens/revoke',
+      { patientId: participantId, token, ...revocation }
+    ),
+  signedTcle: (participantId: string, token: string) =>
+    api.post<Blob>(
+      '/e-consent/consent-tokens/signed-tcle',
+      { patientId: participantId, token },
+      { responseType: 'blob' }
+    ),
 };
+
+export type ConsentPanelLocation =
+  | { status: 'unavailable' }
+  | { status: 'captured'; latitude: number; longitude: number; accuracyMeters: number | null; capturedAt: string | null };
 
 // #822: the JWT consent-token pair behind EConsentPage, and the FHIR import
 // consent pair behind EConsentImportPage. Both pages previously called raw

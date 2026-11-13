@@ -65,6 +65,20 @@ bash ~/BioAvanceD-v2-homolog/scripts/gcp-access-proxy/run-proxy.sh
 Frontend de lab usa `VITE_API_BASE_URL=/api` via overlay
 `scripts/gcp-access-proxy/compose.access-overlay.yml`.
 
+## Caixa de e-mail da pilha de teste
+
+O homolog entrega e-mail por SMTP ao Mailpit (`smtp-test`, porta `1025`). A caixa fica no mesmo acesso da porta 8080, em `/mailpit/` (`scripts/gcp-access-proxy/nginx.conf`, raiz `MP_WEBROOT=/mailpit`). As mensagens permanecem na pilha.
+
+Pelo túnel local:
+
+```powershell
+gcloud compute ssh instance-20261029-155615 --zone=us-central1-a --ssh-flag="-L 8080:127.0.0.1:8080" --command "sleep 600"
+```
+
+Abrir http://127.0.0.1:8080/mailpit/
+
+Cada `sendEmail` grava em `notification_compliance_logs` a hora do servidor, a mesma hora em `America/Sao_Paulo` e o lugar do envio (`smtp-test:1025` e o nome da máquina). O alerta de segurança usa o mesmo envio quando `ALERT_EMAIL_TO` está definido.
+
 ## Notas
 - Não use o UbiquiTLS Name.com para este caminho (cert do LB é Google-managed).
 - Portas `5173`/`3000` continuam só em `127.0.0.1` no host; o mundo entra só por 443 no LB + IAP.

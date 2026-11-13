@@ -348,15 +348,23 @@ export default function LoginPage() {
                     try {
                       const response = await authService.requestPasswordReset(forgotPasswordEmail);
                       setForgotPasswordSuccess(true);
-                      if (response.data.resetLink) {
-                        setResetLink(response.data.resetLink);
-                      }
-                      if (response.data.token) {
-                        // Em desenvolvimento, mostra o token
-                        setResetLink(`${window.location.origin}/reset-password?token=${response.data.token}`);
+                      // Controller wraps payload as { success, message, data: { resetLink, token } }.
+                      const payload = response?.data?.data || response?.data || {};
+                      // Prefer same-origin link from the token so tunnel/LB port stays correct
+                      // even when the API builds resetLink from a stripped X-Forwarded-Host.
+                      if (payload.token) {
+                        setResetLink(`${window.location.origin}/reset-password?token=${payload.token}`);
+                      } else if (payload.resetLink) {
+                        setResetLink(payload.resetLink);
                       }
                     } catch (err: any) {
-                      setForgotPasswordError(err.response?.data?.error || t('auth.passwordResetError', 'Erro ao solicitar recuperação de senha'));
+                      const apiError = err.response?.data?.error || err.response?.data?.message;
+                      const status = err.response?.status;
+                      setForgotPasswordError(
+                        apiError
+                        || (status ? `${t('auth.passwordResetError', 'Erro ao solicitar recuperação de senha')} (HTTP ${status})` : null)
+                        || t('auth.passwordResetError', 'Erro ao solicitar recuperação de senha')
+                      );
                     } finally {
                       setForgotPasswordLoading(false);
                     }

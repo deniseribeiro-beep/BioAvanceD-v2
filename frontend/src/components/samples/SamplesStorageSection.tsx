@@ -5,11 +5,8 @@ export default function SamplesStorageSection() {
   return (
     <section className="samples-storage-section" data-testid="samples-storage-section">
       <div className="samples-storage-section__header" data-testid="samples-storage-header">
-        <div>
-          <p className="samples-storage-section__eyebrow">Armazenagem Física</p>
-          <h2>Localização física de amostras</h2>
-          <p>Consulte a posição e mova a amostra em poucos passos.</p>
-        </div>
+        <h2>Localização física de amostras</h2>
+        <p>Consulte a posição e mova a amostra em poucos passos.</p>
       </div>
 
       <div className="samples-storage-section__grid" data-testid="samples-storage-grid">
@@ -17,7 +14,9 @@ export default function SamplesStorageSection() {
           <Card className="samples-storage-guidance-card">
             <div className="samples-storage-guidance-card__eyebrow">Fluxo de armazenagem</div>
             <h3 className="samples-storage-guidance-card__title">Escolha a caixa, o sistema define a posição</h3>
-            <p className="samples-storage-guidance-card__description">Selecione freezer, rack e caixa; o destino final é resolvido automaticamente.</p>
+            <p className="samples-storage-guidance-card__description">
+              Selecione freezer, rack e caixa; o destino final é resolvido automaticamente.
+            </p>
 
             <div className="samples-storage-guidance-card__steps">
               <div className="samples-storage-step">

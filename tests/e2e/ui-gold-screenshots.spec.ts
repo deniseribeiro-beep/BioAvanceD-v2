@@ -44,6 +44,7 @@ const ROUTES: GoldRoute[] = [
   { name: '20-custody-reports', path: '/samples/custody-reports', group: 'laboratorio', auth: true },
   { name: '21-results', path: '/results', group: 'laboratorio', auth: true },
   { name: '22-quality-descriptions', path: '/quality-descriptions', group: 'laboratorio', auth: true },
+  { name: '22b-quality-descriptions-new', path: '/quality-descriptions/new', group: 'laboratorio', auth: true },
 
   // Facility
   { name: '23-facility-equipment', path: '/facility-management?tab=equipment', group: 'facility', auth: true },
@@ -52,21 +53,26 @@ const ROUTES: GoldRoute[] = [
   { name: '26-facility-incidents', path: '/facility-management?tab=incidents', group: 'facility', auth: true },
   { name: '27-facility-sensors', path: '/facility-management?tab=sensors', group: 'facility', auth: true },
   { name: '28-facility-policies', path: '/facility-management?tab=policies', group: 'facility', auth: true },
+  { name: '28b-equipment-new', path: '/equipment/new', group: 'facility', auth: true },
+  { name: '28c-sensors-new', path: '/sensors/new', group: 'facility', auth: true },
+  { name: '28d-policies-new', path: '/policies/new', group: 'facility', auth: true },
 
   // Governança
   { name: '29-tcle-builder', path: '/admin/tcle/new', group: 'governanca', auth: true },
   { name: '30-tcle-edit', path: '/admin/tcle/edit/demo-template', group: 'governanca', auth: true },
   { name: '31-consents', path: '/consents', group: 'governanca', auth: true },
   { name: '32-biomarkers', path: '/biomarker-associations', group: 'governanca', auth: true },
+  { name: '32b-biomarkers-new', path: '/biomarker-associations/new', group: 'governanca', auth: true },
   { name: '33-access-requests', path: '/access-requests', group: 'governanca', auth: true },
 
   // Importação
-  { name: '34-import-lgpd', path: '/import/lgpd', group: 'importacao', auth: true },
+  { name: '34-import-batch', path: '/patients/import-fhir', group: 'importacao', auth: true },
   { name: '35-import-quarantine', path: '/import/quarantine', group: 'importacao', auth: true },
 
   // Relatórios
   { name: '36-reports', path: '/reports', group: 'relatorios', auth: true },
   { name: '37-report-templates', path: '/reports/templates', group: 'relatorios', auth: true },
+  { name: '37b-report-templates-new', path: '/reports/templates/new', group: 'relatorios', auth: true },
   { name: '38-report-query', path: '/reports/query/custody', group: 'relatorios', auth: true },
   { name: '39-report-view', path: '/reports/demo-id', group: 'relatorios', auth: true },
   { name: '40-logs', path: '/logs', group: 'relatorios', auth: true },
@@ -75,7 +81,9 @@ const ROUTES: GoldRoute[] = [
   // Sistema
   { name: '42-system-users', path: '/system-management?tab=users', group: 'sistema', auth: true },
   { name: '43-system-orgs', path: '/system-management?tab=organizations', group: 'sistema', auth: true },
+  { name: '43b-organizations-new', path: '/organizations/new', group: 'sistema', auth: true },
   { name: '44-system-collections', path: '/system-management?tab=collections', group: 'sistema', auth: true },
+  { name: '44b-collections-new', path: '/collections/new', group: 'sistema', auth: true },
   { name: '45-system-security', path: '/system-management?tab=security', group: 'sistema', auth: true },
   { name: '46-users-new', path: '/users/new', group: 'sistema', auth: true },
   { name: '47-users-new-success', path: '/users/new/success', group: 'sistema', auth: true },

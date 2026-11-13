@@ -48,6 +48,12 @@ describe('#827 consentEvidence.buildConsentEvidenceDocument', () => {
     expect(doc.signerRole).toBe('participant');
     expect(doc.origin).toEqual({ ipAddress: '203.0.113.7', userAgent: 'Mozilla/5.0' });
   });
+
+  it('records the collection place beside the origin when the signature was taken in person', () => {
+    const doc = consentEvidence.buildConsentEvidenceDocument({ ...input, collectionPlace: ' Laboratório Central ' });
+    expect(doc.origin.collectionPlace).toBe('Laboratório Central');
+    expect(doc.decisionDateTime).toBe('2026-09-24T12:00:00.000Z');
+  });
 });
 
 describe('#827 consentEvidence.storeConsentEvidence', () => {
@@ -68,6 +74,70 @@ describe('#827 consentEvidence.storeConsentEvidence', () => {
     vi.restoreAllMocks();
     if (originalOptOut === undefined) delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
     else process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = originalOptOut;
+  });
+
+  it('stores the signed TCLE pdf beside the evidence when a signature image is present', () => {
+    const key = Buffer.alloc(32, 7);
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(key);
+    vi.spyOn(keyRegistry, 'getActiveKeyId').mockReturnValue('k1');
+    vi.spyOn(keyRegistry, 'getKeyById').mockReturnValue(key);
+    const writes = [];
+    fs.writeFileSync.mockImplementation((filePath, data) => {
+      writes.push({ path: String(filePath), data });
+      written = { path: filePath, data };
+    });
+
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64'
+    );
+    const result = consentEvidence.storeConsentEvidence({
+      ...input,
+      collectionPlace: 'Laboratório Central',
+      signatureImageBase64: `data:image/png;base64,${png.toString('base64')}`,
+    });
+
+    expect(result.signedTcleDocumentUri).toBe(`objstore://consents/${input.consentId}/tcle.pdf`);
+    expect(result.signedTcleHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(result.evidenceDocumentUri).toMatch(/evidence\.json$/);
+    const pdfWrite = writes.find((entry) => entry.path.replace(/\\/g, '/').endsWith('tcle.pdf'));
+    const pdf = fileCrypto.decryptFileBuffer(pdfWrite.data, {
+      encryptionKeyId: 'k1',
+      encryptionIv: result.signedTcleEncryption.iv,
+      encryptionTag: result.signedTcleEncryption.tag,
+    });
+    expect(pdf.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+    expect(pdf.toString('latin1')).toContain('Laborat');
+  });
+
+  it('reads the signed TCLE back and refuses a consent that has no document', () => {
+    const key = Buffer.alloc(32, 7);
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(key);
+    vi.spyOn(keyRegistry, 'getActiveKeyId').mockReturnValue('k1');
+    vi.spyOn(keyRegistry, 'getKeyById').mockReturnValue(key);
+    const files = new Map();
+    fs.writeFileSync.mockImplementation((filePath, data) => {
+      files.set(String(filePath), data);
+    });
+    vi.spyOn(fs, 'existsSync').mockImplementation((filePath) => files.has(String(filePath)));
+    vi.spyOn(fs, 'readFileSync').mockImplementation((filePath) => files.get(String(filePath)));
+
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64'
+    );
+    const stored = consentEvidence.storeConsentEvidence({
+      ...input,
+      signatureImageBase64: `data:image/png;base64,${png.toString('base64')}`,
+    });
+
+    const pdf = consentEvidence.readSignedTcle({
+      signedTcleDocumentUri: stored.signedTcleDocumentUri,
+      signedTcleHash: stored.signedTcleHash,
+      signedTcleEncryption: stored.signedTcleEncryption,
+    });
+    expect(pdf.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+    expect(consentEvidence.readSignedTcle({ signedTcleDocumentUri: null })).toBeNull();
   });
 
   it('stores the evidence encrypted and returns the three dictionary fields', () => {

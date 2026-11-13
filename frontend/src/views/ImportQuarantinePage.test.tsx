@@ -105,12 +105,12 @@ afterEach(() => {
 });
 
 describe('ImportQuarantinePage: batch listing', () => {
-  it('shows the loading text until the listing answers, asking for 50 batches', async () => {
+  it('shows the loading text until the listing answers, asking for the first page of 10 batches', async () => {
     const list = deferred<unknown>();
     h.listQuarantineBatches.mockReturnValue(list.promise);
     renderAt();
     expect(screen.getByText('Carregando lotes...')).toBeInTheDocument();
-    expect(h.listQuarantineBatches).toHaveBeenCalledWith({ limit: 50 });
+    expect(h.listQuarantineBatches).toHaveBeenCalledWith({ limit: 10, page: 1 });
     await act(async () => list.resolve({ data: { data: [] } }));
     expect(screen.queryByText('Carregando lotes...')).not.toBeInTheDocument();
     expect(
