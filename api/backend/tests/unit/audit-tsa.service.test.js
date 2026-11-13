@@ -12,6 +12,7 @@ const execFileMock = vi.fn();
 childProcess.execFile = execFileMock;
 
 const auditTsaService = require('../../src/services/audit-tsa.service');
+const { runWithRequestId } = require('../../src/utils/requestContext');
 
 function writeFakeReplyForQuery(args) {
   const outIndex = args.indexOf('-out');
@@ -140,5 +141,31 @@ describe('audit-tsa.service', () => {
         body: expect.any(Buffer),
       }),
     );
+  });
+
+  // #1468 (RNF015 C3): the TSA can tie the call to the request or job that made it.
+  it('envia X-Request-Id ao TSA dentro de um request e nenhum fora dele', async () => {
+    execFileMock.mockImplementation((file, args, options, callback) => {
+      writeFakeReplyForQuery(args);
+      callback(null, '', '');
+    });
+    const replyBytes = Buffer.from('reply-1468');
+    const fetchMock = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      arrayBuffer: async () => replyBytes.buffer.slice(
+        replyBytes.byteOffset,
+        replyBytes.byteOffset + replyBytes.byteLength,
+      ),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await runWithRequestId('req-1468-0001', () => auditTsaService.requestTimestamp('f'.repeat(64)));
+    await auditTsaService.requestTimestamp('f'.repeat(64));
+
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({
+      'content-type': 'application/timestamp-query',
+      'X-Request-Id': 'req-1468-0001',
+    });
+    expect(fetchMock.mock.calls[1][1].headers).not.toHaveProperty('X-Request-Id');
   });
 });
