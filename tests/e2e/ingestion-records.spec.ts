@@ -191,6 +191,15 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
   });
 
   test('#1523 RF029 AC2: provenance.accessPolicyId naming a policy in force for the entityType is stamped on the document; one not applicable, or unknown, quarantines', async ({ request }) => {
+    // #1545: an AccessPolicy's organizationScopeIds must name an existing organization, else 422.
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName: `RF029 AC2 Org ${Date.now()} ${Math.random().toString(36).slice(2, 6)}`, acronym: 'RF029', organizationType: 'biobank', countryCode: 'BR' },
+    });
+    expect(orgRes.status(), await orgRes.text()).toBe(201);
+    const organizationId: string = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
+
     const createPolicy = async (applicableEntityTypes: string[]) => {
       const res = await request.post(`${apiBaseURL}/api/access-policies`, {
         headers: auth,
@@ -202,7 +211,7 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
           ruleExpression: 'all-conditions',
           effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
           roleCodes: ['researcher'],
-          organizationScopeIds: ['rf1523-e2e-org'],
+          organizationScopeIds: [organizationId],
           resourceScopes: ['Specimen'],
           conditions: [{ consent: 'compatible', study: 'active' }],
           decisionReasonsRequired: true,
