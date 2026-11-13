@@ -893,7 +893,7 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     procedures: z.array(z.any()).optional(),
     observationRecords: z.array(z.any()).optional(),
     clinicalOutcomes: z.array(z.any()).optional(),
-    biomarkers_values: z.record(z.string()).optional(),
+    biomarkers_values: z.record(z.string(), z.string()).optional(),
     treatmentStatus: z.string().trim().optional().or(z.literal('')),
     medicationName: z.string().trim().max(180, t('wizard.validation.medicationNameTooLong', 'Medication name is too long')).optional().or(z.literal('')),
     medicationCode: z.string().trim().max(80, t('wizard.validation.medicationCodeTooLong', 'Medication code is too long')).optional().or(z.literal('')),

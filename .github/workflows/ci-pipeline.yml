@@ -318,7 +318,7 @@ jobs:
             frontend/package-lock.json
 
       - name: Audit frontend dependencies
-        run: npm --prefix frontend audit --audit-level=critical
+        run: npm --prefix frontend audit --audit-level=high
 
       - name: Audit backend dependencies
         run: npm --prefix api/backend audit --audit-level=high
