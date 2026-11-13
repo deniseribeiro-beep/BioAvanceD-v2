@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, FileSearch, Boxes, BarChart3, UserCog, ShieldCheck, ScrollText, Settings } from 'lucide-react';
 import { usePatients } from '../hooks/usePatients';
 import { useSamples } from '../hooks/useSamples';
@@ -7,9 +7,10 @@ import { useResults } from '../hooks/useResults';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTemperatureReadings } from '../hooks/useTemperatureReadings';
-import { securityService, reportsService } from '../services/api';
+import { equipmentService, logService, reportsService, securityService, userService } from '../services/api';
+import { extractResponseItems, extractResponseTotal } from '../api/response.adapters';
 import { apiClient } from '../api/client';
-import { DASHBOARD_CARDS, dashboardRole, needsReportCount, type DashboardCardKey } from './dashboardCards';
+import { DASHBOARD_CARDS, dashboardRole, needsReportCount, showsCard, type DashboardCardKey } from './dashboardCards';
 import { activeIncidents, buildTemperatureSeries } from './dashboardTemperature';
 import { onDashboardDataChanged } from '../utils/dashboardRefresh';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/shadcn/card';
@@ -23,7 +24,7 @@ type DashboardIncident = {
   status: 'open' | 'acknowledged' | 'escalated' | 'resolved';
 };
 
-type IncidentRead = { status: 'loading' } | { status: 'error' } | { status: 'ready'; items: DashboardIncident[] };
+type IncidentRead = { status: 'loading' } | { status: 'error' } | { status: 'ready'; items: DashboardIncident[]; total: number };
 
 const CHART_COLORS = ['#2563eb', '#16a34a', '#dc2626'];
 
@@ -146,8 +147,8 @@ export default function Dashboard() {
   const { user } = useAuth();
   const { t, language } = useLanguage();
   const locale = language;
-  const { patients, loading: loadingPatients, loadPatients } = usePatients();
-  const { samples, loading: loadingSamples, loadSamples } = useSamples();
+  const { patients, total: patientTotal, loading: loadingPatients, loadPatients } = usePatients();
+  const { samples, total: sampleTotal, loading: loadingSamples, loadSamples } = useSamples();
   const { results, loading: loadingResults, loadResults } = useResults();
   const [consentQueueStats, setConsentQueueStats] = useState<{ waiting: number; delayed: number; active: number; failed: number; totalQueued: number; available: boolean } | null>(null);
   const [loadingConsentQueue, setLoadingConsentQueue] = useState(false);
@@ -155,6 +156,39 @@ export default function Dashboard() {
   // RF002 AC2/AC4: saved reports, which the backend limits to the granted
   // ones for an external user. null until loaded or when the call fails.
   const [reportCount, setReportCount] = useState<number | null>(null);
+  const [equipmentCount, setEquipmentCount] = useState<number | null>(null);
+  const [userCount, setUserCount] = useState<number | null>(null);
+  const [logCount, setLogCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!showsCard(role, 'storage')) return;
+    let cancelled = false;
+    setEquipmentCount(null);
+    equipmentService.getAll()
+      .then((response) => { if (!cancelled) setEquipmentCount(extractResponseItems(response).length); })
+      .catch(() => { if (!cancelled) setEquipmentCount(Number.NaN); });
+    return () => { cancelled = true; };
+  }, [role]);
+
+  useEffect(() => {
+    if (!showsCard(role, 'users')) return;
+    let cancelled = false;
+    setUserCount(null);
+    userService.getAll()
+      .then((response) => { if (!cancelled) setUserCount(extractResponseItems(response).length); })
+      .catch(() => { if (!cancelled) setUserCount(Number.NaN); });
+    return () => { cancelled = true; };
+  }, [role]);
+
+  useEffect(() => {
+    if (!showsCard(role, 'audit')) return;
+    let cancelled = false;
+    setLogCount(null);
+    logService.getLogs({ limit: 1 })
+      .then((response) => { if (!cancelled) setLogCount(extractResponseTotal(response.data, 0)); })
+      .catch(() => { if (!cancelled) setLogCount(Number.NaN); });
+    return () => { cancelled = true; };
+  }, [role]);
 
   useEffect(() => {
     if (!needsReportCount(role)) return;
@@ -174,14 +208,18 @@ export default function Dashboard() {
     let cancelled = false;
     setIncidentRead({ status: 'loading' });
     apiClient.get('/incidents', {
-      params: { limit: '50' },
+      params: { limit: '3', excludeResolved: 'true' },
       suppressErrorToast: true,
     } as Parameters<typeof apiClient.get>[1])
       .then(({ data }) => {
         if (cancelled) return;
-        setIncidentRead(Array.isArray(data?.incidents)
-          ? { status: 'ready', items: activeIncidents(data.incidents as DashboardIncident[]) }
-          : { status: 'error' });
+        if (!Array.isArray(data?.incidents)) {
+          setIncidentRead({ status: 'error' });
+          return;
+        }
+        const items = activeIncidents(data.incidents as DashboardIncident[]);
+        const total = typeof data.total === 'number' && Number.isFinite(data.total) ? data.total : items.length;
+        setIncidentRead({ status: 'ready', items, total });
       })
       .catch(() => { if (!cancelled) setIncidentRead({ status: 'error' }); });
     return () => { cancelled = true; };
@@ -207,11 +245,11 @@ export default function Dashboard() {
     const resultsArray = Array.isArray(results) ? results : [];
 
     return {
-      patients: patientsArray.length,
-      samples: samplesArray.length,
+      patients: patientTotal ?? patientsArray.length,
+      samples: sampleTotal ?? samplesArray.length,
       results: resultsArray.length,
     };
-  }, [patients, samples, results]);
+  }, [patients, patientTotal, samples, sampleTotal, results]);
 
   const loading = loadingPatients || loadingSamples || loadingResults;
 
@@ -253,23 +291,24 @@ export default function Dashboard() {
     if (!role) return [];
     const open = t('dashboard.openCard', 'Abrir');
     const reports = reportCount === null ? '—' : reportCount;
-    const temperatureAlerts = incidentRead.status === 'ready' ? incidentRead.items.length : '—';
+    const temperatureAlerts = incidentRead.status === 'ready' ? incidentRead.total : '—';
+    const listed = (count: number | null) => count === null ? '...' : Number.isNaN(count) ? '—' : count;
     const cards: Record<DashboardCardKey, { title: string; value: number | string; icon: typeof Users; link: string }> = {
       patients: { title: t('dashboard.patients'), value: stats.patients, icon: Users, link: '/patients' },
       samples: { title: t('dashboard.samples'), value: stats.samples, icon: FlaskConical, link: '/samples' },
       custodyReports: { title: t('dashboard.custodyReports', 'Relatórios de Custódia'), value: stats.samples, icon: FileSearch, link: '/samples/custody-reports' },
-      storage: { title: t('dashboard.storage', 'Armazenamento'), value: open, icon: Boxes, link: '/locations' },
+      storage: { title: t('dashboard.storage', 'Armazenamento'), value: listed(equipmentCount), icon: Boxes, link: '/locations' },
       results: { title: t('dashboard.results'), value: stats.results, icon: FileText, link: '/results' },
-      temperatureAlerts: { title: t('dashboard.temperatureAlerts'), value: temperatureAlerts, icon: Thermometer, link: '/temperature' },
+      temperatureAlerts: { title: t('dashboard.temperatureAlerts'), value: temperatureAlerts, icon: Thermometer, link: '/incidents' },
       governanceReports: { title: t('dashboard.governanceReports', 'Relatórios de Governança'), value: reports, icon: BarChart3, link: '/reports' },
       authorizedReports: { title: t('dashboard.authorizedReports', 'Relatórios Autorizados'), value: reports, icon: BarChart3, link: '/reports' },
-      users: { title: t('dashboard.users', 'Usuários'), value: open, icon: UserCog, link: '/users' },
+      users: { title: t('dashboard.users', 'Usuários'), value: listed(userCount), icon: UserCog, link: '/users' },
       security: { title: t('dashboard.security', 'Segurança'), value: open, icon: ShieldCheck, link: '/security' },
-      audit: { title: t('dashboard.audit', 'Auditoria'), value: open, icon: ScrollText, link: '/logs' },
+      audit: { title: t('dashboard.audit', 'Auditoria'), value: listed(logCount), icon: ScrollText, link: '/logs' },
       settings: { title: t('dashboard.settings', 'Configurações'), value: open, icon: Settings, link: '/system-management' },
     };
     return DASHBOARD_CARDS[role].map((key) => ({ key, ...cards[key] }));
-  }, [role, stats, t, incidentRead, reportCount]);
+  }, [role, stats, t, incidentRead, reportCount, equipmentCount, userCount, logCount]);
 
   const iconTone: Record<string, string> = {
     primary: 'bg-primary text-primary-foreground',
@@ -295,7 +334,7 @@ export default function Dashboard() {
           const handleClick = () => {
             if (stat.link) navigate(stat.link);
           };
-          const isAlert = stat.link === '/temperature';
+          const isAlert = stat.link === '/incidents';
           const variant =
             stat.link === '/patients'
               ? 'primary'
@@ -305,26 +344,31 @@ export default function Dashboard() {
                   ? 'secondary'
                   : stat.link === '/sensors'
                     ? 'action'
-                    : stat.link === '/temperature'
+                    : stat.link === '/incidents'
                       ? 'danger'
                       : 'primary';
           return (
-            <Card
+            <button
+              type="button"
               key={stat.key}
               data-testid={`dashboard-card-${stat.key}`}
-              className={cn(isAlert && 'border-destructive/40', stat.link && 'cursor-pointer hover:bg-accent/30')}
+              className={cn(
+                'rounded-lg border border-border bg-card text-left text-card-foreground shadow-card',
+                isAlert && 'border-destructive/40',
+                'cursor-pointer hover:bg-accent/30',
+              )}
               onClick={handleClick}
             >
-              <CardContent className="flex items-center gap-3 p-4">
-                <div className={cn('flex h-10 w-10 items-center justify-center rounded-md', iconTone[variant])}>
+              <span className="flex items-center gap-3 p-4">
+                <span className={cn('flex h-10 w-10 items-center justify-center rounded-md', iconTone[variant])}>
                   <Icon size={18} />
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">{stat.title}</p>
-                  <p className="kpi-value text-2xl font-semibold text-foreground">{loading ? '...' : stat.value}</p>
-                </div>
-              </CardContent>
-            </Card>
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">{stat.title}</span>
+                  <span className="kpi-value block text-2xl font-semibold text-foreground">{loading ? '...' : stat.value}</span>
+                </span>
+              </span>
+            </button>
           );
         })}
       </div>
@@ -359,6 +403,11 @@ export default function Dashboard() {
                         </p>
                       </div>
                     ))}
+                    {incidentRead.total > incidentRead.items.length && (
+                      <Link to="/incidents" data-testid="dashboard-alerts-more" className="inline-flex text-sm font-medium text-primary">
+                        {t('dashboard.seeMoreAlerts', 'Ver mais')}
+                      </Link>
+                    )}
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground" data-testid="dashboard-alerts-empty">{t('dashboard.noActiveAlerts', 'Nenhum alerta ativo.')}</p>

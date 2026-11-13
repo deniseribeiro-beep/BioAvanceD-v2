@@ -71,8 +71,14 @@ function page(overrides: Record<string, unknown> = {}) {
     openPrintModal: vi.fn(),
     closePrintModal: vi.fn(),
     refreshSamples: vi.fn(),
+    currentPage: 1,
+    totalPages: 1,
+    pageSize: 10,
+    setCurrentPage: vi.fn(),
     ...overrides,
   };
+  // The list shows one page of the filtered samples; these fixtures fit on one.
+  if (!('pagedSamples' in overrides)) h.page.pagedSamples = h.page.filteredSamples;
   return h.page;
 }
 

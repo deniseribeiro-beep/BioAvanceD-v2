@@ -9,6 +9,8 @@ export type SampleWithId = Sample & {
   consentMessage?: string;
 };
 
+export const SAMPLES_PAGE_SIZE = 10;
+
 function getSampleId(sample: Sample): string {
   return (sample as any)._id || String(sample.specimenId ?? sample.barcode ?? sample.participantId);
 }
@@ -19,6 +21,8 @@ export function useSamplesPage() {
   const [search, setSearch] = useState('');
   const [selectedSampleIds, setSelectedSampleIds] = useState<string[]>([]);
   const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = SAMPLES_PAGE_SIZE;
 
   useEffect(() => {
     const preselected = samples.filter((s) => (s as any).checked).map((s) => getSampleId(s));
@@ -72,14 +76,27 @@ export function useSamplesPage() {
       .map((s) => ({ ...s, id: getSampleId(s) }));
   }, [samples, search]);
 
-  const allSelected = filteredSamples.length > 0 && selectedSampleIds.length === filteredSamples.length;
+  const totalPages = Math.max(1, Math.ceil(filteredSamples.length / pageSize));
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
+  const pagedSamples = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredSamples.slice(startIndex, startIndex + pageSize);
+  }, [filteredSamples, currentPage, pageSize]);
+
+  const pageSelectedIds = pagedSamples.map((sample) => sample.id);
+  const allSelected =
+    pagedSamples.length > 0 && pageSelectedIds.every((id) => selectedSampleIds.includes(id));
 
   const toggleSelectAll = () => {
     if (allSelected) {
-      setSelectedSampleIds([]);
+      setSelectedSampleIds((prev) => prev.filter((id) => !pageSelectedIds.includes(id)));
       return;
     }
-    setSelectedSampleIds(filteredSamples.map((s) => s.id));
+    setSelectedSampleIds((prev) => [...new Set([...prev, ...pageSelectedIds])]);
   };
 
   const toggleSelect = (sample: SampleWithId) => {
@@ -104,6 +121,7 @@ export function useSamplesPage() {
 
   const submitSearch = () => {
     setSearch(searchInput.trim());
+    setCurrentPage(1);
   };
 
   return {
@@ -115,6 +133,11 @@ export function useSamplesPage() {
     setSearchInput,
     submitSearch,
     filteredSamples,
+    pagedSamples,
+    pageSize,
+    currentPage,
+    totalPages,
+    setCurrentPage,
     selectedSampleIds,
     selectedSamples,
     allSelected,
@@ -126,4 +149,3 @@ export function useSamplesPage() {
     closePrintModal: () => setPrintModalOpen(false),
   };
 }
-

@@ -24,3 +24,11 @@ Vídeos showcase grandes (`docs/e2e-showcase-2026-11-01-*.mp4`) referenciados no
 3. Version `1.0.3`; manter metadados da 1.0.2; mencionar RNF030 exceção e bloqueio gate #1440 no description.
 4. Publish; guardar DOI da versão.
 5. Conferir `md5`/`sha256` do zip com `*.sha256` / `*.md5` gerados no repo.
+
+## Aditivo UI 2026-11-06 (próximo zip / patch)
+
+Incluir após tip-deploy + captura ui-gold:
+
+- `docs/qa/MANUAL_VERIFY_20261106_import_intake.md`
+- Screenshots regenerados: `test-results/ui-gold-screenshots/` (rota `34-import-batch` = `/patients/import-fhir`; intake com SPREC em grid e biomarcadores do dicionário)
+- Apêndice atualizado (linha *UI import/intake 2026-11-06*)

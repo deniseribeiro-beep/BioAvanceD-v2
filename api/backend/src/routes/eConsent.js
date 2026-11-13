@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const router = express.Router();
 const notificationService = require('../services/notification.service');
 const { authenticate } = require('../infrastructure/middleware/auth');
-const { requireRole, requirePermission } = require('../infrastructure/middleware/rbac');
+const { requireRole, requirePermission, requireOrganizationScope } = require('../infrastructure/middleware/rbac');
 const consentController = require('../controllers/consent.controller');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
@@ -329,11 +329,14 @@ router.post('/consents', authenticate, requireRole(3, 4), consentController.crea
 router.post('/consents/:id/revoke', authenticate, requireRole(3, 4), consentController.revokeConsent.bind(consentController));
 // RF010 AC5: the decision events and revocations a consent's state derives from.
 router.get('/consents/:id/history', authenticate, requireRole(3, 4), consentController.getConsentHistory.bind(consentController));
+router.get('/consents/:id/signed-tcle', authenticate, requireRole(3, 4), requireOrganizationScope, consentController.getSignedTcle.bind(consentController));
 router.get('/patients/:participantId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
 // Consent token validation/acceptance (public)
 router.post('/consent-tokens/validate', consentController.validateConsentToken.bind(consentController));
 router.post('/consent-tokens/accept', consentController.acceptConsentToken.bind(consentController));
+router.post('/consent-tokens/revoke', consentController.revokeConsentToken.bind(consentController));
+router.post('/consent-tokens/signed-tcle', consentController.getSignedTcleByToken.bind(consentController));
 
 module.exports = router;
 

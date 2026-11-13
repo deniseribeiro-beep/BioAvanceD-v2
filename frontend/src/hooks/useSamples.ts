@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Sample, Result } from '../types/models';
 import { samplesApi } from '../services/samples/samplesApi';
-import { extractResponseItems } from '../api/response.adapters';
+import { extractResponseItems, extractResponseTotal } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 import { useRequestSequence } from './useRequestSequence';
@@ -36,6 +36,7 @@ function unwrapData<T>(payload: unknown): T | unknown {
 
 export function useSamples() {
   const [samples, setSamples] = useState<Sample[]>([]);
+  const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // #901: discards a stale response when loadSamples is called again
@@ -50,11 +51,13 @@ export function useSamples() {
       if (!requestSeq.isCurrent(seq)) return;
       const samplesData = extractSamples(response.data);
       setSamples(samplesData);
+      setTotal(extractResponseTotal(response.data, samplesData.length));
       setError(null);
     } catch (err: unknown) {
       if (!requestSeq.isCurrent(seq)) return;
       setError(extractErrorMessage(err, 'Erro ao carregar amostras'));
-      setSamples([]); // Garante array vazio em caso de erro
+      setSamples([]);
+      setTotal(0);
     } finally {
       if (requestSeq.isCurrent(seq)) setLoading(false);
     }
@@ -68,6 +71,7 @@ export function useSamples() {
   useEffect(() => {
     return onClientLogout(() => {
       setSamples([]);
+      setTotal(null);
       setError(null);
       setLoading(false);
     });
@@ -116,6 +120,7 @@ export function useSamples() {
 
   return {
     samples,
+    total,
     loading,
     error,
     loadSamples,

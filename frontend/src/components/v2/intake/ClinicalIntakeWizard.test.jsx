@@ -352,8 +352,8 @@ describe('ClinicalIntakeWizard -- suggest-error retry (#871)', () => {
     expect(screen.getByTestId('wizard-suggest-retry-phenotypes')).toBeInTheDocument();
     expect(screen.getByTestId('wizard-suggest-error-biomarkers')).toBeInTheDocument();
     expect(screen.getByTestId('wizard-suggest-retry-biomarkers')).toBeInTheDocument();
-    expect(screen.queryByText('Nenhum fenótipo sugerido para esta doença.')).not.toBeInTheDocument();
-    expect(screen.queryByText('Nenhum biomarcador sugerido para esta doença.')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nenhum fenótipo HPO encontrado/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nenhuma associação de biomarcador/)).not.toBeInTheDocument();
   });
 
   it('clicking retry re-fetches and renders the suggested phenotype/biomarker once the endpoint recovers', async () => {

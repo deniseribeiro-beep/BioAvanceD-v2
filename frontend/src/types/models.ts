@@ -474,6 +474,7 @@ export interface PatientConsent {
   participantId: string;
   consentTemplateId: string;
   signedAt?: Date | string;
+  signedTcleDocumentUri?: string | null;
   status: 'ACTIVE' | 'REVOKED';
   revokedAt?: Date | string | null;
   ipAddress?: string;
@@ -511,6 +512,24 @@ export interface ConsentRevocationRecord {
   reason: string | null;
   effectiveAt: Date | string;
   priorUseDisposition?: string | null;
+  channel?: string | null;
+  location?: {
+    status: 'captured' | 'unavailable';
+    latitude?: number;
+    longitude?: number;
+    accuracyMeters?: number | null;
+    capturedAt?: string | null;
+  } | null;
+}
+
+export interface ConsentCommunicationRecord {
+  consentCommunicationEventId: string;
+  participantId?: string | null;
+  communicationType: string;
+  contentTemplateId: string;
+  purpose?: string | null;
+  deliveryStatus: string;
+  sentAt: Date | string;
 }
 
 /** GET /api/e-consent/consents/:id/history (RF010 AC5). */
@@ -523,6 +542,7 @@ export interface ConsentHistory {
   supersedesConsentId: string | null;
   decisionEvents: ConsentDecisionEvent[];
   revocations: ConsentRevocationRecord[];
+  communications?: ConsentCommunicationRecord[];
 }
 
 export enum FileType {

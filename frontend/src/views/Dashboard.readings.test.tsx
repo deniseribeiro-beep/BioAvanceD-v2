@@ -8,6 +8,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 // (GET /incidents), never a generated value.
 let roleName = 'Tecnico';
 let signedIn = true;
+let sampleTotal: number | null = 0;
 
 vi.mock('../contexts/LanguageContext', () => ({
   useLanguage: () => ({ t: (_k: string, fb?: string) => fb ?? _k, language: 'pt-BR' }),
@@ -28,7 +29,7 @@ vi.mock('../hooks/usePatients', () => ({
   usePatients: () => ({ ...hooks.patients, loadPatients: hooks.loadPatients }),
 }));
 vi.mock('../hooks/useSamples', () => ({
-  useSamples: () => ({ ...hooks.samples, loadSamples: hooks.loadSamples }),
+  useSamples: () => ({ ...hooks.samples, total: sampleTotal, loadSamples: hooks.loadSamples }),
 }));
 vi.mock('../hooks/useResults', () => ({
   useResults: () => ({ ...hooks.results, loadResults: hooks.loadResults }),
@@ -38,13 +39,16 @@ vi.mock('../services/api', async (importOriginal) => ({
   temperatureService: { getAll: vi.fn() },
   securityService: { getConsentQueueStatus: vi.fn() },
   reportsService: { getAll: vi.fn() },
+  equipmentService: { getAll: vi.fn() },
+  userService: { getAll: vi.fn() },
+  logService: { getLogs: vi.fn() },
 }));
 vi.mock('../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/client')>()),
   apiClient: { get: vi.fn() },
 }));
 
-import { temperatureService, securityService, reportsService } from '../services/api';
+import { temperatureService, securityService, reportsService, equipmentService, userService, logService } from '../services/api';
 import { apiClient } from '../api/client';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import Dashboard from './Dashboard';
@@ -52,6 +56,9 @@ import Dashboard from './Dashboard';
 const getAll = vi.mocked(temperatureService.getAll);
 const getConsentQueueStatus = vi.mocked(securityService.getConsentQueueStatus);
 const getReports = vi.mocked(reportsService.getAll);
+const getEquipment = vi.mocked(equipmentService.getAll);
+const getUsers = vi.mocked(userService.getAll);
+const getLogs = vi.mocked(logService.getLogs);
 const clientGet = vi.mocked(apiClient.get);
 
 type Row = {
@@ -140,6 +147,7 @@ function queueCount(card: HTMLElement, label: string) {
 beforeEach(() => {
   roleName = 'Tecnico';
   signedIn = true;
+  sampleTotal = null;
   hooks.patients = { patients: [], loading: false };
   hooks.samples = { samples: [], loading: false };
   hooks.results = { results: [], loading: false };
@@ -147,6 +155,9 @@ beforeEach(() => {
   hooks.loadSamples.mockClear();
   hooks.loadResults.mockClear();
   getAll.mockReset();
+  getEquipment.mockReset().mockResolvedValue({ data: { success: true, data: [] } } as never);
+  getUsers.mockReset().mockResolvedValue({ data: { success: true, data: [] } } as never);
+  getLogs.mockReset().mockResolvedValue({ data: { success: true, data: { logs: [], total: 0 } } } as never);
   getConsentQueueStatus.mockReset().mockResolvedValue({ data: { data: null } } as never);
   getReports.mockReset().mockResolvedValue({ data: [] } as never);
   incidentsResponse = () => Promise.resolve({ data: { success: true, incidents: [], total: 0, limit: 50, skip: 0 } });
@@ -178,8 +189,9 @@ describe('Dashboard temperature chart and alerts read persisted data (#1397, RF0
     const { container } = renderDashboard();
 
     await waitFor(() => expect(lines()).toHaveLength(1));
-    // x = 56 + (860 - 56 - 24) / 2; y = 20 + ((-50 - -60) / 40) * (280 - 20 - 36)
-    expect(screen.getByTestId('dashboard-temperature-line-freezer-c').getAttribute('points')).toBe('446,76');
+    // The y domain hugs the plotted points, -62 to -58 for a lone -60.
+    // x = 56 + (860 - 56 - 24) / 2; y = 20 + ((-58 - -60) / 4) * (280 - 20 - 36)
+    expect(screen.getByTestId('dashboard-temperature-line-freezer-c').getAttribute('points')).toBe('446,132');
     expect(container.querySelectorAll('svg text[font-size="11"]')).toHaveLength(1);
   });
 
@@ -219,6 +231,49 @@ describe('Dashboard temperature chart and alerts read persisted data (#1397, RF0
     expect(screen.getByTestId('dashboard-alert-inc-escalated')).toHaveTextContent('Freezer C');
     expect(screen.queryByTestId('dashboard-alert-inc-resolved')).toBeNull();
     expect(kpiValue('temperatureAlerts')).toBe('2');
+    expect(screen.queryByTestId('dashboard-alerts-more')).toBeNull();
+  });
+
+  it('shows three alerts and the active total, with a link to the rest', async () => {
+    getAll.mockResolvedValue(envelope(rows) as never);
+    incidentsResponse = () => Promise.resolve({
+      data: {
+        success: true,
+        total: 12,
+        incidents: [
+          incident('inc-1', 'open', 'Freezer A', -47.5),
+          incident('inc-2', 'open', 'Freezer B', -48),
+          incident('inc-3', 'escalated', 'Freezer C', -55),
+          incident('inc-4', 'open', 'Freezer D', -60),
+          incident('inc-5', 'acknowledged', 'Freezer E', -61),
+        ],
+      },
+    });
+    renderDashboard();
+
+    await waitFor(() => expect(alertItems()).toHaveLength(3));
+    expect(screen.queryByTestId('dashboard-alert-inc-4')).toBeNull();
+    expect(kpiValue('temperatureAlerts')).toBe('12');
+    expect(screen.getByTestId('dashboard-alerts-more')).toHaveAttribute('href', '/incidents');
+  });
+
+  it('shows each list page\'s total, and leaves pages without a list as Abrir', async () => {
+    roleName = 'Administrador';
+    sampleTotal = 528;
+    getAll.mockResolvedValue(envelope([]) as never);
+    getEquipment.mockResolvedValue({ data: { success: true, data: [{}, {}, {}] } } as never);
+    getUsers.mockResolvedValue({ data: { success: true, data: [{}, {}] } } as never);
+    getLogs.mockResolvedValue({ data: { success: true, data: { logs: [], total: 41 } } } as never);
+    renderDashboard();
+
+    await waitFor(() => expect(kpiValue('storage')).toBe('3'));
+    expect(kpiValue('samples')).toBe('528');
+    expect(kpiValue('custodyReports')).toBe('528');
+    expect(kpiValue('users')).toBe('2');
+    expect(kpiValue('audit')).toBe('41');
+    expect(screen.queryByTestId('dashboard-card-security')).toBeNull();
+    expect(screen.queryByTestId('dashboard-card-settings')).toBeNull();
+    expect(getLogs).toHaveBeenCalledWith({ limit: 1 });
   });
 
   it('shows a failed incidents read as failed, with no alert count', async () => {

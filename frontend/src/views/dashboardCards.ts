@@ -1,7 +1,8 @@
 // RF002 (Requisitos v4.0.0): the dashboard shows each role its own cards.
 //   AC1  Técnico: authorized registration, custody and storage operations.
 //   AC2  Coordenador: operational indicators, alerts and governance reports.
-//   AC3  Administrador: security, users, audit and settings, besides the above.
+//   AC3  Administrador: users and audit, besides the above.
+//        Security and settings open from the header account menu.
 //   AC4  Usuário Externo: only the reports a grant authorizes (the backend
 //        filters GET /api/reports to them; RF002 AC5 keeps the check there).
 
@@ -26,7 +27,7 @@ const OPERATIONS: DashboardCardKey[] = ['patients', 'samples', 'custodyReports',
 export const DASHBOARD_CARDS: Record<DashboardRole, DashboardCardKey[]> = {
   technician: OPERATIONS,
   coordinator: [...OPERATIONS, 'governanceReports'],
-  administrator: [...OPERATIONS, 'governanceReports', 'users', 'security', 'audit', 'settings'],
+  administrator: [...OPERATIONS, 'governanceReports', 'users', 'audit'],
   external: ['authorizedReports'],
 };
 
@@ -62,4 +63,9 @@ export function dashboardRole(user: { roleName?: string | null; accessType?: num
 /** Whether a role's dashboard needs the saved-report count. */
 export function needsReportCount(role: DashboardRole | null): boolean {
   return role !== null && DASHBOARD_CARDS[role].some((key) => key === 'governanceReports' || key === 'authorizedReports');
+}
+
+/** Whether this role's dashboard draws the card. */
+export function showsCard(role: DashboardRole | null, key: DashboardCardKey): boolean {
+  return role !== null && DASHBOARD_CARDS[role].includes(key);
 }

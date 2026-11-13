@@ -1,24 +1,22 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 
 import { useLanguage } from '../contexts/LanguageContext';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
-import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X } from 'lucide-react';
+import { Plus, Edit, Trash2, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X, Search } from 'lucide-react';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { Equipment, Temperature, Sensor, Policy } from '../types/models';
+import { Equipment } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
 import { useTemperatureReadings, TemperatureReading } from '../hooks/useTemperatureReadings';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
-import { useOrganizations } from '../hooks/useOrganizations';
-import { validateThresholds } from '../utils/validations';
-import { CryoBoxGrid } from '../components/CryoBoxGrid';
-import { storageApi } from '../services/storageApi';
-import { MAINTENANCE_STATUS_OPTIONS, getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
+import { equipmentFormEditPath } from './EquipmentFormPage';
+import { sensorFormEditPath, resolveSensorId } from './SensorFormPage';
+import { policyFormEditPath } from './PolicyFormPage';
+import { getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import IncidentManagementPage from './IncidentManagementPage';
 
 type TabType = 'equipment' | 'temperature' | 'history' | 'sensors' | 'policies' | 'incidents';
@@ -112,19 +110,27 @@ export default function FacilityManagementPage() {
 // Seção de Equipamentos
 function EquipmentSection() {
   const { t } = useLanguage();
-  const { equipment, loading, error, createEquipment, updateEquipment, deleteEquipment, loadEquipment } = useEquipment();
-  const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
+  const navigate = useNavigate();
+  const { equipment, loading, error, deleteEquipment } = useEquipment();
+  const [search, setSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
   const equipmentRows = useMemo(() => (Array.isArray(equipment) ? equipment : []), [equipment]);
-  const totalPages = Math.max(1, Math.ceil(equipmentRows.length / pageSize));
+  const filteredEquipment = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return equipmentRows;
+    return equipmentRows.filter((eq) =>
+      [eq.equipmentDescription, eq.model, eq.serialNumber, eq.equipmentID]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q)),
+    );
+  }, [equipmentRows, search]);
+  const totalPages = Math.max(1, Math.ceil(filteredEquipment.length / pageSize));
   const paginatedEquipment = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize;
-    return equipmentRows.slice(startIndex, startIndex + pageSize);
-  }, [equipmentRows, currentPage, pageSize]);
-  const equipmentHeaders = ['ID', 'Descrição', 'Modelo', 'Número de Série', 'Data da Compra', 'Ações'];
+    return filteredEquipment.slice(startIndex, startIndex + pageSize);
+  }, [filteredEquipment, currentPage, pageSize]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -132,76 +138,29 @@ function EquipmentSection() {
     }
   }, [currentPage, totalPages]);
 
-  const openNewEquipmentForm = () => {
-    setEditingEquipment(null);
-    setIsFormOpen(true);
-  };
-
-  const openEditEquipmentForm = (equipmentItem: Equipment) => {
-    const equipmentToEdit = { ...equipmentItem, _id: (equipmentItem as any)._id || undefined };
-    setEditingEquipment(equipmentToEdit);
-    setIsFormOpen(true);
-  };
-
-  const closeEquipmentForm = () => {
-    setIsFormOpen(false);
-    setEditingEquipment(null);
-  };
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search]);
 
   return (
     <>
-      <div className="section-header">
-        <Button data-testid="equipment-new-button" onClick={openNewEquipmentForm}>
+      <div className="section-header flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[12rem] flex-1">
+          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 opacity-50" />
+          <input
+            type="search"
+            className="input w-full pl-9"
+            data-testid="equipment-search-input"
+            placeholder={t('facility.equipment.search', 'Buscar equipamentos…')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <Button data-testid="equipment-new-button" onClick={() => navigate('/equipment/new')}>
           <Plus size={18} />
           {t('facility.equipment.new', 'Novo Equipamento')}
         </Button>
       </div>
-
-      {isFormOpen && (
-        <div data-testid="equipment-form-panel">
-        <Card className="equipment-form-panel equipment-form-panel--open">
-          <div className="equipment-form-panel__header">
-            <div>
-              <p className="equipment-form-panel__eyebrow">
-                {editingEquipment ? t('facility.equipment.quickEdit', 'Edição rápida') : t('facility.equipment.quickCreate', 'Criação rápida')}
-              </p>
-              <h2 className="equipment-form-panel__title">
-                {editingEquipment ? 'Editar Equipamento' : 'Novo Equipamento'}
-              </h2>
-              <p className="equipment-form-panel__subtitle">
-                Formulário inline para reduzir atrito e manter a navegação na mesma tela.
-              </p>
-            </div>
-            <Button data-testid="equipment-form-close-button" variant="secondary" onClick={closeEquipmentForm}>
-              Fechar
-            </Button>
-          </div>
-
-          <EquipmentForm
-            equipment={editingEquipment}
-            onSave={async (data) => {
-              try {
-                if (editingEquipment) {
-                  const equipmentId = (editingEquipment as any)._id
-                    ? String((editingEquipment as any)._id)
-                    : String(editingEquipment.equipmentID);
-                  await updateEquipment(equipmentId, data);
-                } else {
-                  await createEquipment(data);
-                }
-                closeEquipmentForm();
-                await loadEquipment();
-              } catch (err: any) {
-                const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao salvar equipamento';
-                alert(errorMessage);
-                console.error('Erro ao salvar equipamento:', err);
-              }
-            }}
-            onCancel={closeEquipmentForm}
-          />
-        </Card>
-        </div>
-      )}
 
       {loading && <p>Carregando...</p>}
       {error && <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>}
@@ -233,7 +192,8 @@ function EquipmentSection() {
                       data-testid={`equipment-edit-button-${eq.equipmentID || index}`}
                       className="action-button"
                       onClick={() => {
-                        openEditEquipmentForm(eq);
+                        const equipmentToEdit = { ...eq, _id: (eq as { _id?: string })._id || undefined };
+                        navigate(equipmentFormEditPath(eq), { state: { equipment: equipmentToEdit } });
                       }}
                       title="Editar"
                     >
@@ -265,9 +225,9 @@ function EquipmentSection() {
         </Table>
         <div className="equipment-pagination">
           <div className="equipment-pagination__summary">
-            {equipmentRows.length === 0
+            {filteredEquipment.length === 0
               ? 'Nenhum equipamento cadastrado'
-              : `Mostrando ${Math.min((currentPage - 1) * pageSize + 1, equipmentRows.length)}-${Math.min(currentPage * pageSize, equipmentRows.length)} de ${equipmentRows.length}`}
+              : `Mostrando ${Math.min((currentPage - 1) * pageSize + 1, filteredEquipment.length)}-${Math.min(currentPage * pageSize, filteredEquipment.length)} de ${filteredEquipment.length}`}
           </div>
 
           <div className="equipment-pagination__controls">
@@ -310,139 +270,6 @@ function EquipmentSection() {
         </div>
       </Card>
     </>
-  );
-}
-
-function EquipmentForm({
-  equipment,
-  onSave,
-  onCancel,
-}: {
-  equipment: Equipment | null;
-  onSave: (data: Partial<Equipment>) => void;
-  onCancel: () => void;
-}) {
-  const { organizations } = useOrganizations();
-
-  const [formData, setFormData] = useState<Partial<Equipment>>(() => {
-    if (equipment) {
-      return {
-        equipmentDescription: equipment.equipmentDescription || '',
-        model: equipment.model || '',
-        serialNumber: equipment.serialNumber || '',
-        purchaseDate: equipment.purchaseDate ? new Date(equipment.purchaseDate) : undefined,
-        organizationId: equipment.organizationId || null,
-      };
-    }
-    return {
-      equipmentDescription: '',
-      model: '',
-      serialNumber: '',
-      purchaseDate: undefined,
-      organizationId: null,
-    };
-  });
-
-  // Atualiza o formData quando equipment muda (para edição)
-  useEffect(() => {
-    if (equipment) {
-      setFormData({
-        equipmentDescription: equipment.equipmentDescription || '',
-        model: equipment.model || '',
-        serialNumber: equipment.serialNumber || '',
-        purchaseDate: equipment.purchaseDate ? new Date(equipment.purchaseDate) : undefined,
-        organizationId: equipment.organizationId || null,
-      });
-    } else {
-      setFormData({
-        equipmentDescription: '',
-        model: '',
-        serialNumber: '',
-        purchaseDate: undefined,
-        organizationId: null,
-      });
-    }
-  }, [equipment]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSave(formData);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="form" data-testid="equipment-form">
-      <div className="form-grid">
-        <Input
-          data-testid="equipment-description-input"
-          label="Descrição do Equipamento"
-          value={formData.equipmentDescription || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, equipmentDescription: e.target.value })
-          }
-          required
-        />
-        <Input
-          data-testid="equipment-model-input"
-          label="Modelo"
-          value={formData.model || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, model: e.target.value })
-          }
-          placeholder="Ex: Freezer -80°C, Refrigerador 4°C"
-        />
-        <Input
-          data-testid="equipment-serial-input"
-          label="Número de Série"
-          value={formData.serialNumber || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, serialNumber: e.target.value })
-          }
-          placeholder="Ex: SN123456789"
-        />
-        <Input
-          data-testid="equipment-purchase-date-input"
-          label="Data da Compra"
-          type="date"
-          value={
-            formData.purchaseDate
-              ? new Date(formData.purchaseDate).toISOString().split('T')[0]
-              : ''
-          }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              purchaseDate: e.target.value ? new Date(e.target.value) : undefined,
-            })
-          }
-        />
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="equipmentOrganizationSelect">Organização</label>
-          <select
-            id="equipmentOrganizationSelect"
-            data-testid="equipment-organization-select"
-            className="input"
-            value={formData.organizationId || ''}
-            onChange={(e) =>
-              setFormData({
-                ...formData,
-                organizationId: e.target.value || null,
-              })
-            }
-          >
-            <option value="">Selecione uma organização</option>
-            {organizations.map((org) => (
-              <option key={org.organizationId} value={org.organizationId}>
-                {org.officialName}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div className="form-actions">
-        <Button data-testid="equipment-cancel-button" type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
-        <Button data-testid="equipment-save-button" type="submit">Salvar</Button>
-      </div>
-    </form>
   );
 }
 
@@ -839,16 +666,38 @@ function HistorySection() {
 
 // Seção de Sensores
 function SensorsSection() {
-  const { sensors, loading, error, createSensor, updateSensor, deleteSensor } = useSensors();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingSensor, setEditingSensor] = useState<Sensor | null>(null);
+  const { t } = useLanguage();
+  const navigate = useNavigate();
+  const { sensors, loading, error, deleteSensor } = useSensors();
+  const [search, setSearch] = useState('');
 
   const sensorRows = useMemo(() => (Array.isArray(sensors) ? sensors : []), [sensors]);
+  const filteredSensors = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return sensorRows;
+    return sensorRows.filter((sensor) => {
+      const sensorId = resolveSensorId(sensor) ?? '';
+      return [sensorId, sensor.sensorType, sensor.sensorModel]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q));
+    });
+  }, [sensorRows, search]);
 
   return (
     <>
-      <div className="section-header">
-        <Button data-testid="new-sensor-button" onClick={() => setIsModalOpen(true)}>
+      <div className="section-header flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[12rem] flex-1">
+          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 opacity-50" />
+          <input
+            type="search"
+            className="input w-full pl-9"
+            data-testid="sensors-search-input"
+            placeholder={t('facility.sensors.search', 'Buscar sensores…')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <Button data-testid="new-sensor-button" onClick={() => navigate('/sensors/new')}>
           <Plus size={18} />
           Novo Sensor
         </Button>
@@ -869,9 +718,9 @@ function SensorsSection() {
             'Ações',
           ]}
         >
-          {sensorRows.length > 0 ? (
-            sensorRows.map((sensor) => {
-              const sensorId = sensor.sensorID || (sensor as any).sensorId || sensor._id || 'N/A';
+          {filteredSensors.length > 0 ? (
+            filteredSensors.map((sensor) => {
+              const sensorId = resolveSensorId(sensor) || 'N/A';
               return (
             <tr key={sensorId}>
               <td>{sensorId}</td>
@@ -896,11 +745,8 @@ function SensorsSection() {
                 <div className="table-actions">
                   <button
                     className="action-button"
-                    data-testid={`sensor-edit-${sensor.sensorId}`}
-                    onClick={() => {
-                      setEditingSensor(sensor);
-                      setIsModalOpen(true);
-                    }}
+                    data-testid={`sensor-edit-${sensor.sensorId ?? resolveSensorId(sensor)}`}
+                    onClick={() => navigate(sensorFormEditPath(sensor), { state: { sensor } })}
                     title="Editar"
                   >
                     <Edit size={16} />
@@ -934,313 +780,30 @@ function SensorsSection() {
           )}
         </Table>
       </Card>
-
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingSensor(null);
-        }}
-        title={editingSensor ? 'Editar Sensor' : 'Novo Sensor'}
-      >
-        <SensorForm
-          sensor={editingSensor}
-          onSave={async (data) => {
-            try {
-              if (editingSensor) {
-                const sensorId = (editingSensor as any).sensorID || (editingSensor as any).sensorId || editingSensor._id;
-                if (!sensorId) {
-                  throw new Error('ID do sensor não encontrado');
-                }
-                await updateSensor(String(sensorId), data);
-              } else {
-                await createSensor(data);
-              }
-              setIsModalOpen(false);
-              setEditingSensor(null);
-            } catch (err: any) {
-              alert(err.message);
-            }
-          }}
-          onCancel={() => {
-            setIsModalOpen(false);
-            setEditingSensor(null);
-          }}
-        />
-      </Modal>
     </>
-  );
-}
-
-function SensorForm({
-  sensor,
-  onSave,
-  onCancel,
-}: {
-  sensor: Sensor | null;
-  onSave: (data: Partial<Sensor>) => void;
-  onCancel: () => void;
-}) {
-  const { policies } = usePolicies();
-  const { organizations } = useOrganizations();
-  const [freezers, setFreezers] = useState<{ _id: string; name: string; containerID?: number }[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    storageApi.listFreezers().then((response) => {
-      if (!cancelled && response.success && Array.isArray(response.data)) {
-        setFreezers(response.data);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const [formData, setFormData] = useState<Partial<Sensor>>(
-    sensor || {
-      sensorType: '',
-      sensorModel: '',
-      maintenanceStatus: 'operational',
-      lastCalibration: null,
-      nextCalibration: null,
-      calibrationCertificate: '',
-      locationID: undefined,
-      temperaturePolicy: undefined,
-      macAddress: '',
-      storageContainer: undefined,
-      organizationId: null,
-    }
-  );
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSave(formData);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="form">
-      <div className="form-grid">
-        {!sensor && (
-          <Input
-            label="ID do Sensor"
-            data-testid="sensor-id-input"
-            value={formData.sensorID || ''}
-            onChange={(e) =>
-              setFormData({ ...formData, sensorID: e.target.value })
-            }
-            required
-          />
-        )}
-        <Input
-          label="Tipo de Sensor"
-          data-testid="sensor-type-input"
-          value={formData.sensorType || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, sensorType: e.target.value })
-          }
-          required
-        />
-        <Input
-          label="Modelo"
-          value={formData.sensorModel || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, sensorModel: e.target.value })
-          }
-        />
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="maintenanceStatusSelect">Status de Manutenção</label>
-          <select
-            id="maintenanceStatusSelect"
-            className="input"
-            value={formData.maintenanceStatus || 'operational'}
-            onChange={(e) =>
-              setFormData({ ...formData, maintenanceStatus: e.target.value })
-            }
-          >
-            {MAINTENANCE_STATUS_OPTIONS.map((option, index) => (
-              <option key={`${option.value}-${index}`} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <Input
-          label="Última Calibração"
-          type="date"
-          value={
-            formData.lastCalibration
-              ? new Date(formData.lastCalibration).toISOString().split('T')[0]
-              : ''
-          }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              lastCalibration: e.target.value ? new Date(e.target.value) : null,
-            })
-          }
-        />
-        <Input
-          label="Próxima Calibração"
-          type="date"
-          value={
-            formData.nextCalibration
-              ? new Date(formData.nextCalibration).toISOString().split('T')[0]
-              : ''
-          }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              nextCalibration: e.target.value ? new Date(e.target.value) : null,
-            })
-          }
-        />
-        <Input
-          label="Certificado de Calibração"
-          value={formData.calibrationCertificate || ''}
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              calibrationCertificate: e.target.value,
-            })
-          }
-        />
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="sensorLocationSelect">Localização</label>
-          <select
-            id="sensorLocationSelect"
-            className="input"
-            value={formData.locationID || ''}
-            onChange={(e) =>
-              setFormData({
-                ...formData,
-                locationID: e.target.value ? parseInt(e.target.value) : undefined,
-              })
-            }
-          >
-            <option value="">Selecione um freezer</option>
-            {freezers
-              .filter((freezer) => freezer.containerID !== undefined && freezer.containerID !== null)
-              .map((freezer) => (
-                <option key={freezer._id} value={String(freezer.containerID)}>
-                  {freezer.name}
-                </option>
-              ))}
-          </select>
-        </div>
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="sensorPolicySelect">Política de Temperatura</label>
-          {/* #1145: binds SensorMetadata.temperaturePolicy, the field the
-              telemetry path resolves thresholds from, by the policy's _id.
-              It used to send a numeric policyID onto Sensor.policyId, which
-              nothing read. The binding lives on SensorMetadata, which only
-              exists when a MAC address is given, so it needs one. On edit it
-              rebinds that row (#1179), pre-filled from the list. The freezer
-              select below lives on the same row and has the same rule. */}
-          <select
-            id="sensorPolicySelect"
-            data-testid="sensor-policy-select"
-            className="input"
-            value={formData.temperaturePolicy || ''}
-            disabled={!formData.macAddress}
-            onChange={(e) =>
-              setFormData({
-                ...formData,
-                temperaturePolicy: e.target.value || undefined,
-              })
-            }
-          >
-            <option value="">
-              {formData.macAddress ? 'Selecione uma política' : 'Informe o MAC Address para vincular uma política'}
-            </option>
-            {policies.filter((policy) => policy && policy._id).map((policy) => (
-              <option key={policy._id} value={policy._id}>
-                {policy.name || 'Política'} (Limites: {policy.minTemp} - {policy.maxTemp}{policy.temperatureUnit})
-              </option>
-            ))}
-          </select>
-        </div>
-        <Input
-          label="MAC Address"
-          data-testid="sensor-mac-address-input"
-          placeholder="AA:BB:CC:DD:EE:FF"
-          value={formData.macAddress || ''}
-          onChange={(e) =>
-            // #1145: without a MAC there is no SensorMetadata to bind a policy
-            // to, so clearing it clears the choice rather than submitting one
-            // the backend would refuse.
-            setFormData({
-              ...formData,
-              macAddress: e.target.value,
-              ...(e.target.value ? {} : { temperaturePolicy: undefined, storageContainer: undefined }),
-            })
-          }
-        />
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="sensorStorageContainerSelect">Contêiner de Armazenamento (Freezer)</label>
-          <select
-            id="sensorStorageContainerSelect"
-            data-testid="sensor-storage-container-select"
-            className="input"
-            value={formData.storageContainer || ''}
-            disabled={!formData.macAddress}
-            onChange={(e) =>
-              setFormData({
-                ...formData,
-                storageContainer: e.target.value || undefined,
-              })
-            }
-          >
-            <option value="">{formData.macAddress ? 'Selecione um freezer' : 'Informe o MAC Address para vincular um freezer'}</option>
-            {freezers.map((freezer) => (
-              <option key={freezer._id} value={freezer._id}>
-                {freezer.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="sensorOrganizationSelect">Organização</label>
-          <select
-            id="sensorOrganizationSelect"
-            data-testid="sensor-organization-select"
-            className="input"
-            value={formData.organizationId || ''}
-            onChange={(e) =>
-              setFormData({
-                ...formData,
-                organizationId: e.target.value || null,
-              })
-            }
-          >
-            <option value="">Selecione uma organização</option>
-            {organizations.map((org) => (
-              <option key={org.organizationId} value={org.organizationId}>
-                {org.officialName}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          Cancelar
-        </Button>
-        <Button type="submit" data-testid="sensor-form-submit">Salvar</Button>
-      </div>
-    </form>
   );
 }
 
 // Seção de Políticas
 function PoliciesSection() {
-  const { policies, loading, error, getActiveLimit, createPolicy, updatePolicy, deletePolicy } = usePolicies();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
+  const { t } = useLanguage();
+  const navigate = useNavigate();
+  const { policies, loading, error, getActiveLimit, deletePolicy } = usePolicies();
+  const [search, setSearch] = useState('');
   // #1178: keyed by _id, the only id the policy API returns.
   const [activeLimits, setActiveLimits] = useState<Record<string, number>>({});
 
   const policyRows = useMemo(() => (Array.isArray(policies) ? policies : []), [policies]);
+  const filteredPolicies = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const withId = policyRows.filter((p) => p && p._id);
+    if (!q) return withId;
+    return withId.filter((p) =>
+      [p.name, p.minTemp, p.maxTemp]
+        .filter((v) => v !== undefined && v !== null)
+        .some((v) => String(v).toLowerCase().includes(q)),
+    );
+  }, [policyRows, search]);
 
   useEffect(() => {
     const validPolicies = policyRows.filter((p) => p && p._id);
@@ -1256,8 +819,19 @@ function PoliciesSection() {
 
   return (
     <>
-      <div className="section-header">
-        <Button onClick={() => setIsModalOpen(true)}>
+      <div className="section-header flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[12rem] flex-1">
+          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 opacity-50" />
+          <input
+            type="search"
+            className="input w-full pl-9"
+            data-testid="policies-search-input"
+            placeholder={t('facility.policies.search', 'Buscar políticas…')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <Button data-testid="new-policy-button" onClick={() => navigate('/policies/new')}>
           <Plus size={18} />
           Nova Política
         </Button>
@@ -1278,7 +852,7 @@ function PoliciesSection() {
             'Ações',
           ]}
         >
-          {policyRows.filter((policy) => policy && policy._id).length === 0 ? (
+          {filteredPolicies.length === 0 ? (
             <tr>
               <td colSpan={8} className="table-empty-state-cell">
                 <div className="table-empty-state">
@@ -1291,9 +865,7 @@ function PoliciesSection() {
               </td>
             </tr>
           ) : (
-            policyRows
-              .filter((policy) => policy && policy._id)
-              .map((policy) => (
+            filteredPolicies.map((policy) => (
               <tr key={`policy-${policy._id}`} data-testid={`policy-row-${policy._id}`}>
                 <td>{policy.name}</td>
                 <td>
@@ -1314,10 +886,7 @@ function PoliciesSection() {
                     <button
                       className="action-button"
                       data-testid={`policy-edit-${policy._id}`}
-                      onClick={() => {
-                        setEditingPolicy(policy);
-                        setIsModalOpen(true);
-                      }}
+                      onClick={() => navigate(policyFormEditPath(policy), { state: { policy } })}
                       title="Editar"
                     >
                       <Edit size={16} />
@@ -1345,196 +914,7 @@ function PoliciesSection() {
           )}
         </Table>
       </Card>
-
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingPolicy(null);
-        }}
-        title={editingPolicy ? 'Editar Política' : 'Nova Política'}
-      >
-        <PolicyForm
-          policy={editingPolicy}
-          onSave={async (data) => {
-            const policyToValidate = { ...(editingPolicy || {}), ...data } as Policy;
-            
-            if (!validateThresholds(policyToValidate)) {
-              alert('Limites de temperatura inválidos! Verifique se min < target < max.');
-              return;
-            }
-
-            try {
-              if (editingPolicy) {
-                await updatePolicy(String(editingPolicy._id), data);
-              } else {
-                await createPolicy(data);
-              }
-              setIsModalOpen(false);
-              setEditingPolicy(null);
-            } catch (err: any) {
-              alert(err.message);
-            }
-          }}
-          onCancel={() => {
-            setIsModalOpen(false);
-            setEditingPolicy(null);
-          }}
-        />
-      </Modal>
     </>
   );
 }
-
-function PolicyForm({
-  policy,
-  onSave,
-  onCancel,
-}: {
-  policy: Policy | null;
-  onSave: (data: Partial<Policy>) => void;
-  onCancel: () => void;
-}) {
-  const [formData, setFormData] = useState<Partial<Policy>>(
-    policy || {
-      // #1089: required by the API as of the temperaturePolicies cutover.
-      name: '',
-      minTemp: -85,
-      maxTemp: -75,
-      hysteresis: 2,
-      // #1196: 30 min, past a -80 °C freezer's recovery to -75 °C after a
-      // routine door opening, so a retrieval does not compromise the samples.
-      minimumDuration: 30,
-      temperatureUnit: '°C',
-      effectivePeriod: { start: new Date(), end: new Date() },
-    }
-  );
-  // #1139: the API takes effectivePeriod whole, so each date input edits
-  // one bound and keeps the other.
-  const setPeriodBound = (bound: 'start' | 'end', value: string) =>
-    setFormData({
-      ...formData,
-      effectivePeriod: {
-        start: formData.effectivePeriod?.start ?? new Date(),
-        end: formData.effectivePeriod?.end ?? null,
-        [bound]: new Date(value),
-      },
-    });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSave(formData);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="form">
-      <div className="form-grid">
-        {/* #1089: sources dict-02 P1X-0106 profileName, which the canonical
-            store requires. Also the first thing to populate the policy
-            table's existing name column, which was blank until now. */}
-        <Input
-          label="Nome da Política"
-          type="text"
-          value={formData.name || ''}
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              name: e.target.value,
-            })
-          }
-          helperText="Identifica a política na listagem e nos alertas. Ex.: Freezer -80."
-          required
-        />
-        <Input
-          label="Limite Mínimo"
-          type="number"
-          step="0.1"
-          value={formData.minTemp || ''}
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              minTemp: parseFloat(e.target.value),
-            })
-          }
-          helperText="Temperatura mínima permitida. Deve ser menor que a temperatura alvo."
-          required
-        />
-        <Input
-          label="Limite Máximo"
-          type="number"
-          step="0.1"
-          value={formData.maxTemp || ''}
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              maxTemp: parseFloat(e.target.value),
-            })
-          }
-          helperText="Temperatura máxima permitida. Deve ser maior que a temperatura alvo."
-          required
-        />
-        <Input
-          label="Histerese"
-          type="number"
-          step="0.1"
-          value={formData.hysteresis || ''}
-          onChange={(e) =>
-            setFormData({ ...formData, hysteresis: parseFloat(e.target.value) })
-          }
-          helperText="Margem de tolerância para evitar alertas frequentes. Valor recomendado: 1-5 unidades."
-        />
-        <Input
-          label="Duração Mínima da Excursão (minutos)"
-          type="number"
-          value={formData.minimumDuration || ''}
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              minimumDuration: parseInt(e.target.value),
-            })
-          }
-          helperText="Tempo em minutos que a temperatura deve permanecer fora dos limites antes de as amostras serem marcadas como comprometidas."
-        />
-        {/* #1198: fixed, not selectable. Alert enforcement compares readings
-            against these limits in Celsius, so a policy entered in another
-            unit was misapplied (°F) or rejected by the API (K). */}
-        <div className="form-grid-full">
-          <p className="input-label">Unidade de Temperatura</p>
-          <p className="form-help-text" data-testid="policy-temperature-unit" style={{ fontSize: '0.875rem', color: 'var(--text-light)' }}>
-            Celsius (°C). Todas as temperaturas desta política são em °C.
-          </p>
-        </div>
-        <Input
-          label="Válido De"
-          type="date"
-          value={
-            formData.effectivePeriod?.start
-              ? new Date(formData.effectivePeriod.start).toISOString().split('T')[0]
-              : ''
-          }
-          onChange={(e) => setPeriodBound('start', e.target.value)}
-          helperText="Data de início da vigência desta política. Deve ser anterior à data de término."
-          required
-        />
-        <Input
-          label="Válido Até"
-          type="date"
-          value={
-            formData.effectivePeriod?.end
-              ? new Date(formData.effectivePeriod.end).toISOString().split('T')[0]
-              : ''
-          }
-          onChange={(e) => setPeriodBound('end', e.target.value)}
-          helperText="Data de término da vigência desta política. Deve ser posterior à data de início."
-          required
-        />
-      </div>
-      <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
-        <Button type="submit">Salvar</Button>
-      </div>
-    </form>
-  );
-}
-
 

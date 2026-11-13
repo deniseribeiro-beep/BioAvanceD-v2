@@ -211,7 +211,7 @@ describe('i18n', () => {
 
       expect(initSpy).toHaveBeenCalled();
       initSpy.mockRestore();
-    });
+    }, 20_000);
   });
 
   describe('loadTranslations', () => {

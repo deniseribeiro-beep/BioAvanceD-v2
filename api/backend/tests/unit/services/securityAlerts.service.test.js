@@ -30,6 +30,8 @@ describe('securityAlerts.service', () => {
     // Reset singleton state between tests
     securityAlertsService.db = null;
     securityAlertsService.alertHandlers = [];
+    securityAlertsService.mailHandlerRegistered = false;
+    delete process.env.ALERT_EMAIL_TO;
     vi.restoreAllMocks();
   });
 
@@ -336,6 +338,27 @@ describe('securityAlerts.service', () => {
       securityAlertsService.registerAlertHandler(123);
       securityAlertsService.registerAlertHandler(null);
       expect(securityAlertsService.alertHandlers).toHaveLength(0);
+    });
+  });
+
+  describe('init mail handler', () => {
+    it('sends a high alert through NotificationService when ALERT_EMAIL_TO is set', async () => {
+      process.env.ALERT_EMAIL_TO = 'e2e-admin@bioavanced.test';
+      const notificationService = require('../../../src/services/NotificationService');
+      const sendEmail = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      const collection = makeFakeCollection();
+      securityAlertsService.init(makeFakeDb(collection));
+
+      await securityAlertsService.logSecurityAlert({
+        type: 'SUSPICIOUS_ACTIVITY',
+        severity: 'high',
+        reason: 'tentativa repetida',
+      });
+
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+        to: 'e2e-admin@bioavanced.test',
+        notificationType: 'SECURITY_ALERT',
+      }));
     });
   });
 

@@ -109,6 +109,29 @@ export function missingRequiredPermissions(
     .map(permission => permission.label);
 }
 
+export type ConsentPanelLocation =
+  | { status: 'unavailable' }
+  | { status: 'captured'; latitude: number; longitude: number; accuracyMeters: number | null; capturedAt: string | null };
+
+export function readPanelLocation(): Promise<ConsentPanelLocation> {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    return Promise.resolve({ status: 'unavailable' });
+  }
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => resolve({
+        status: 'captured',
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracyMeters: Number.isFinite(position.coords.accuracy) ? position.coords.accuracy : null,
+        capturedAt: new Date(position.timestamp).toISOString(),
+      }),
+      () => resolve({ status: 'unavailable' }),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  });
+}
+
 export function mapConsentTokenError(status?: number): string {
   if (status === 422) {
     // #821: the link was accepted as valid but the answers could not be

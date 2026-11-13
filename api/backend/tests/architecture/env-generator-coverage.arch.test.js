@@ -29,7 +29,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const GENERATOR = path.resolve(REPO_ROOT, 'generate-env-docker-secrets.sh');
@@ -48,6 +48,23 @@ const test = IN_REPO_TREE
 // S3_*) and returns a confident wrong count. Same trap as #477/#837, and it
 // cost a wrong number in #1153's own sitting before being caught.
 const DECLARATION = /^([A-Z0-9_]+)=/;
+
+// WSL's `bash` (WindowsApps) rewrites a bare `C:\...` argv into `C:Users...`
+// and fails; Git Bash accepts `C:/...`. Same rewrite as env-generator-behaviour.
+function toBashPath(winPath) {
+  if (process.platform !== 'win32') return winPath;
+  const resolved = path.resolve(winPath);
+  const uname = spawnSync('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
+  const kind = String(uname.stdout || '');
+  if (/MINGW|MSYS/i.test(kind)) return resolved.replace(/\\/g, '/');
+  const drive = /^([A-Za-z]):(.*)$/.exec(resolved);
+  if (drive) return `/mnt/${drive[1].toLowerCase()}${drive[2].replace(/\\/g, '/')}`;
+  return resolved.replace(/\\/g, '/');
+}
+
+function runGenerator(outFile) {
+  execFileSync('bash', [toBashPath(GENERATOR), toBashPath(outFile)], { cwd: REPO_ROOT, stdio: 'pipe' });
+}
 
 function declaredIn(file) {
   return new Set(
@@ -68,7 +85,7 @@ test('a fresh generate covers every variable .env.docker.example declares (#1153
   try {
     // bash explicitly rather than relying on the executable bit, which does not
     // survive every checkout on every platform.
-    execFileSync('bash', [GENERATOR, outFile], { cwd: REPO_ROOT, stdio: 'pipe' });
+    runGenerator(outFile);
 
     const declared = declaredIn(EXAMPLE);
     const generated = declaredIn(outFile);
@@ -93,7 +110,7 @@ test('a fresh generate declares nothing .env.docker.example omits (#1161)', () =
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-generator-arch-'));
   const outFile = path.join(outDir, '.env.docker');
   try {
-    execFileSync('bash', [GENERATOR, outFile], { cwd: REPO_ROOT, stdio: 'pipe' });
+    runGenerator(outFile);
 
     const declared = declaredIn(EXAMPLE);
     const generated = declaredIn(outFile);
@@ -117,7 +134,7 @@ test('a fresh generate does not trust a proxy that does not exist (#1162)', () =
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-generator-arch-'));
   const outFile = path.join(outDir, '.env.docker');
   try {
-    execFileSync('bash', [GENERATOR, outFile], { cwd: REPO_ROOT, stdio: 'pipe' });
+    runGenerator(outFile);
 
     const trustLines = fs.readFileSync(outFile, 'utf8')
       .split(/\r?\n/)
@@ -137,7 +154,7 @@ test('a fresh generate writes the rate-limit relaxations blank, not the example\
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-generator-arch-'));
   const outFile = path.join(outDir, '.env.docker');
   try {
-    execFileSync('bash', [GENERATOR, outFile], { cwd: REPO_ROOT, stdio: 'pipe' });
+    runGenerator(outFile);
 
     const lines = fs.readFileSync(outFile, 'utf8').split(/\r?\n/);
     const exampleLines = fs.readFileSync(EXAMPLE, 'utf8').split(/\r?\n/);
@@ -161,7 +178,7 @@ test('syncing from the example does not overwrite a value the generator chose (#
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-generator-arch-'));
   const outFile = path.join(outDir, '.env.docker');
   try {
-    execFileSync('bash', [GENERATOR, outFile], { cwd: REPO_ROOT, stdio: 'pipe' });
+    runGenerator(outFile);
 
     const generated = fs.readFileSync(outFile, 'utf8');
     const modeLines = generated

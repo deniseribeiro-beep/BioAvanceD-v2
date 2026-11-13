@@ -14,6 +14,29 @@ import type { ConsentHistory, PatientConsent } from '../types/models';
  */
 
 const SCOPE_ALL = 'all';
+const CONSENT_REFRESH_MS = 15_000;
+
+const CHANNEL_LABELS: Record<string, string> = {
+  paper: 'Presencial',
+  electronic_link: 'Link do participante',
+  staff_portal: 'Portal',
+  fhir_import: 'Importação',
+  term_expiry: 'Vencimento do termo',
+};
+
+const COMMUNICATION_LABELS: Record<string, string> = {
+  'consent.panel_link.v1': 'Envio do link',
+  'consent.revocation_confirmation.v1': 'Confirmação de revogação',
+  'consent.term_expiry.v1': 'Aviso de encerramento',
+  'consent.policy_change_notice.v1': 'Atualização do termo',
+};
+
+const STATE_LABELS: Record<string, string> = {
+  active: 'Ativo',
+  partially_revoked: 'Parcialmente revogado',
+  revoked: 'Revogado',
+  superseded: 'Substituído',
+};
 
 function errorMessages(err: any, fallback: string): string[] {
   const data = err?.response?.data;
@@ -26,6 +49,18 @@ function errorMessages(err: any, fallback: string): string[] {
 
 function formatDate(value: Date | string | null | undefined): string {
   return value ? new Date(value).toLocaleString('pt-BR') : '-';
+}
+
+function channelLabel(channel: string | null | undefined): string {
+  if (!channel) return '-';
+  return CHANNEL_LABELS[channel] || channel;
+}
+
+function locationLabel(location: { status?: string; latitude?: number; longitude?: number } | null | undefined): string {
+  if (location?.status === 'captured' && location.latitude != null && location.longitude != null) {
+    return `${location.latitude}, ${location.longitude}`;
+  }
+  return 'Localização não obtida';
 }
 
 export default function ConsentHistoryPage() {
@@ -42,6 +77,12 @@ export default function ConsentHistoryPage() {
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
   const [reason, setReason] = useState('');
 
+  const applyLoaded = (loadedConsent: PatientConsent, loadedHistory: ConsentHistory) => {
+    setConsent(loadedConsent);
+    setHistory(loadedHistory);
+    setNotFound(false);
+  };
+
   const load = async (targetParticipantId: string) => {
     const trimmed = targetParticipantId.trim();
     if (!trimmed) return;
@@ -52,8 +93,7 @@ export default function ConsentHistoryPage() {
       const consentResponse = await consentService.getPatientConsent(trimmed);
       const loadedConsent = consentResponse.data.data;
       const historyResponse = await consentService.getConsentHistory(String(loadedConsent._id));
-      setConsent(loadedConsent);
-      setHistory(historyResponse.data.data);
+      applyLoaded(loadedConsent, historyResponse.data.data);
       setSelectedCodes([]);
     } catch (err: any) {
       setConsent(null);
@@ -65,11 +105,53 @@ export default function ConsentHistoryPage() {
     }
   };
 
+  const refreshSilent = async (targetParticipantId: string) => {
+    const trimmed = targetParticipantId.trim();
+    if (!trimmed) return;
+    try {
+      const consentResponse = await consentService.getPatientConsent(trimmed);
+      const loadedConsent = consentResponse.data.data;
+      const historyResponse = await consentService.getConsentHistory(String(loadedConsent._id));
+      applyLoaded(loadedConsent, historyResponse.data.data);
+    } catch {
+      // A missed refresh keeps the trace already on screen.
+    }
+  };
+
   useEffect(() => {
     if (initialParticipantId) load(initialParticipantId);
     // Loads once, from the URL the page was opened with.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const tracked = (consent?.participantId || (initialParticipantId && consent ? initialParticipantId : '')).trim();
+    if (!tracked) return undefined;
+    let intervalId = 0;
+    const stop = () => window.clearInterval(intervalId);
+    const start = () => {
+      stop();
+      intervalId = window.setInterval(() => {
+        if (!document.hidden) void refreshSilent(tracked);
+      }, CONSENT_REFRESH_MS);
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+        return;
+      }
+      void refreshSilent(tracked);
+      start();
+    };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+    // The interval follows the consent on screen, not each keystroke in the search box.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consent?.participantId]);
 
   const search = (event: FormEvent) => {
     event.preventDefault();
@@ -122,13 +204,40 @@ export default function ConsentHistoryPage() {
     }
   };
 
+  const openSignedTcle = async (download: boolean) => {
+    if (!consent?._id) return;
+    setErrors([]);
+    try {
+      const response = await consentService.getSignedTcle(consent._id);
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      if (download) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'tcle.pdf';
+        link.click();
+      } else {
+        window.open(url, '_blank', 'noopener');
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err: any) {
+      setErrors(errorMessages(err, 'Erro ao abrir o termo assinado'));
+    }
+  };
+
   return (
     <div className="page-shell consent-history-page">
       <div className="page-header">
-        <h1>Consentimentos (TCLE)</h1>
+        <div>
+          <h1 className="page-title">Consentimentos (TCLE)</h1>
+          <p className="page-subtitle">Estado, histórico e termo assinado do participante</p>
+          {consent?.participantId && (
+            <p className="page-subtitle" data-testid="consent-participant-id">Participante {consent.participantId}</p>
+          )}
+        </div>
       </div>
 
-      <section className="card">
+      <section className="card-surface">
         <form onSubmit={search} className="form" data-testid="consent-search-form">
           <Input label="ID do participante" data-testid="consent-participant-input" value={participantId}
             onChange={(e) => setParticipantId(e.target.value)} required />
@@ -153,9 +262,22 @@ export default function ConsentHistoryPage() {
 
       {consent && history && (
         <>
-          <section className="card">
-            <h3>Estado do consentimento</h3>
-            <p>Estado: <strong data-testid="consent-state">{state}</strong></p>
+          <section className="card-surface" data-testid="signed-tcle-card">
+            <h3 className="text-base font-semibold text-foreground">Termo assinado</h3>
+            <p className="mt-2 text-sm text-muted-foreground">Assinado em {formatDate(consent.signedAt)}</p>
+            {consent.signedTcleDocumentUri ? (
+              <div className="form-actions">
+                <Button type="button" data-testid="view-signed-tcle" onClick={() => { void openSignedTcle(false); }}>Ver</Button>
+                <Button type="button" variant="secondary" data-testid="download-signed-tcle" onClick={() => { void openSignedTcle(true); }}>Baixar</Button>
+              </div>
+            ) : (
+              <p className="mt-3 text-sm" data-testid="signed-tcle-missing">Não há termo assinado em arquivo.</p>
+            )}
+          </section>
+
+          <section className="card-surface">
+            <h3 className="mb-3 text-base font-semibold text-foreground">Estado do consentimento</h3>
+            <p>Estado: <strong data-testid="consent-state">{STATE_LABELS[state || ''] || state}</strong></p>
             <table className="table" data-testid="consent-permissions">
               <thead>
                 <tr><th>Permissão</th><th>Permitida</th></tr>
@@ -171,8 +293,8 @@ export default function ConsentHistoryPage() {
             </table>
           </section>
 
-          <section className="card">
-            <h3>Histórico de decisões</h3>
+          <section className="card-surface">
+            <h3 className="mb-3 text-base font-semibold text-foreground">Histórico de decisões</h3>
             <table className="table" data-testid="consent-decision-events">
               <thead>
                 <tr><th>Data</th><th>Decisão</th><th>Canal</th><th>Papel do signatário</th></tr>
@@ -190,21 +312,23 @@ export default function ConsentHistoryPage() {
             </table>
           </section>
 
-          <section className="card">
-            <h3>Revogações</h3>
+          <section className="card-surface">
+            <h3 className="mb-3 text-base font-semibold text-foreground">Revogações</h3>
             <table className="table" data-testid="consent-revocations">
               <thead>
-                <tr><th>Vigência</th><th>Escopo</th><th>Motivo</th><th>Uso anterior</th></tr>
+                <tr><th>Vigência</th><th>Canal</th><th>Escopo</th><th>Motivo</th><th>Localização</th><th>Uso anterior</th></tr>
               </thead>
               <tbody>
                 {history.revocations.length === 0 && (
-                  <tr><td colSpan={4}>Nenhuma revogação registrada.</td></tr>
+                  <tr><td colSpan={6}>Nenhuma revogação registrada.</td></tr>
                 )}
                 {history.revocations.map((revocation) => (
-                  <tr key={revocation.consentRevocationId}>
+                  <tr key={revocation.consentRevocationId} data-testid={`consent-revocation-${revocation.consentRevocationId}`}>
                     <td>{formatDate(revocation.effectiveAt)}</td>
+                    <td>{channelLabel(revocation.channel)}</td>
                     <td>{(revocation.scope || []).map(labelOf).join(', ')}</td>
                     <td>{revocation.reason || '-'}</td>
+                    <td>{locationLabel(revocation.location)}</td>
                     <td>{revocation.priorUseDisposition || '-'}</td>
                   </tr>
                 ))}
@@ -212,9 +336,30 @@ export default function ConsentHistoryPage() {
             </table>
           </section>
 
+          <section className="card-surface">
+            <h3 className="mb-3 text-base font-semibold text-foreground">Comunicações</h3>
+            <table className="table" data-testid="consent-communications">
+              <thead>
+                <tr><th>Data</th><th>Comunicação</th><th>Situação</th></tr>
+              </thead>
+              <tbody>
+                {(history.communications || []).length === 0 && (
+                  <tr><td colSpan={3}>Nenhuma comunicação registrada.</td></tr>
+                )}
+                {(history.communications || []).map((event) => (
+                  <tr key={event.consentCommunicationEventId} data-testid={`consent-communication-${event.contentTemplateId}`}>
+                    <td>{formatDate(event.sentAt)}</td>
+                    <td>{COMMUNICATION_LABELS[event.contentTemplateId] || event.communicationType}</td>
+                    <td>{event.deliveryStatus}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
           {canRevoke && (
-            <section className="card" data-testid="consent-revoke-form">
-              <h3>Revogar consentimento</h3>
+            <section className="card-surface" data-testid="consent-revoke-form">
+              <h3 className="mb-3 text-base font-semibold text-foreground">Revogar consentimento</h3>
               {permittedCodes.map((code) => (
                 <label key={code} style={{ display: 'block' }}>
                   <input

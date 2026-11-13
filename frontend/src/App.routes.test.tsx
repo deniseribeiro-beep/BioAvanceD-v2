@@ -46,7 +46,6 @@ vi.mock('./views/ReportTemplatesPage', () => ({ default: () => <p>page:report-te
 vi.mock('./views/ReportQueryPage', () => ({ default: () => <p>page:report-query</p> }));
 vi.mock('./views/ReportViewPage', () => ({ default: () => <p>page:report-view</p> }));
 vi.mock('./views/QualityDescriptionPage', () => ({ default: () => <p>page:quality-descriptions</p> }));
-vi.mock('./views/ImportLGPDPage', () => ({ default: () => <p>page:import-lgpd</p> }));
 vi.mock('./views/ImportQuarantinePage', () => ({ default: () => <p>page:import-quarantine</p> }));
 vi.mock('./components/v2/ImportForm', () => ({ default: () => <p>page:import</p> }));
 vi.mock('./views/AccessRequestsPage', () => ({ default: () => <p>page:access-requests</p> }));
@@ -111,7 +110,6 @@ describe('page routes in App.tsx', () => {
     ['/reports/query/samples', 'page:report-query'],
     ['/reports/R-1', 'page:report-view'],
     ['/quality-descriptions', 'page:quality-descriptions'],
-    ['/import/lgpd', 'page:import-lgpd'],
     ['/import/quarantine', 'page:import-quarantine'],
     ['/import', 'page:import'],
     ['/access-requests', 'page:access-requests'],
@@ -132,6 +130,7 @@ describe('redirect routes in App.tsx', () => {
     ['/', 'page:dashboard', '/dashboard'],
     ['/pacientes/novo-atendimento', 'page:intake', '/next/intake'],
     ['/import/fhir', 'page:fhir-import', '/patients/import-fhir'],
+    ['/import/lgpd', 'page:fhir-import', '/patients/import-fhir'],
     ['/admin/master-data', 'page:data-dictionary', '/admin/dicionario'],
   ])('%s lands on %s at %s', async (url, page, landed) => {
     await expectOnlyPage(url, page);

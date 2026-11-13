@@ -19,7 +19,7 @@ describe('facility-management redirects in App.tsx', () => {
   it('finds every facility-management redirect in App.tsx', () => {
     // Guards the regex: a changed redirect shape would make the next case
     // vacuously green.
-    expect(redirectTabs).toHaveLength(5);
+    expect(redirectTabs).toHaveLength(6);
     expect(validTabs.length).toBeGreaterThan(0);
   });
 

@@ -397,8 +397,9 @@ Validações estruturais do workbook (VAL-001–VAL-028) permanecem **PASS** no 
 | RNF030 exceção | **GO** por desenho |
 | RNF001 p95 UI | **GO** — CT-RNF001-LOAD-01 `overallPass=true`; p95 `/login` 85 ms, `/dashboard` 390 ms, `/samples` 274 ms, `/next/intake` 155 ms |
 | Zenodo v1.0.3 pacote | **GO** para upload (zip inclui apêndice + `rnf001-ui-p95-results.json`) |
+| UI import/intake 2026-11-06 | **GO parcial** — menu Importação em lote → FHIR; paginação quarentena/access/backup; CSS SPREC + biomarcadores do dicionário no intake; empty state de associações. Evidência unitária PASS; smoke homolog e ui-gold após tip-deploy (`docs/qa/MANUAL_VERIFY_20261106_import_intake.md`) |
 
-**Publicação runtime “padrão ouro”:** **GO** — única lacuna consciente remanescente: RNF030 Pendente por desenho.
+**Publicação runtime “padrão ouro”:** **GO** — única lacuna consciente remanescente: RNF030 Pendente por desenho. Atualização UI 2026-11-06 (import FHIR + intake) entra no pacote Zenodo seguinte após captura ui-gold na homolog.
 
 ---
 

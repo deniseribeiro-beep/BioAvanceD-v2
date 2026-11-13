@@ -346,7 +346,7 @@ describe('ClinicalIntakeWizard step 3 -- diagnosis select', () => {
     await waitFor(() => expect(screen.getByPlaceholderText('Select disease in Orphadata to fill fields.')).toHaveValue('Distrofia muscular'));
     expect(textbox('ORPHA')).toHaveValue('');
     expect(textbox('ICD-10')).toHaveValue('');
-    expect(screen.getByText('No phenotype suggestions for this disease.')).toBeInTheDocument();
+    expect(screen.getByText('No HPO phenotype found in the graph or terminologies for this disease.')).toBeInTheDocument();
     expect(getCalls('/dictionary/disease-profile')).toHaveLength(0);
     expect(getCalls('/dictionary/suggest')).toHaveLength(0);
   });
@@ -365,8 +365,8 @@ describe('ClinicalIntakeWizard step 3 -- diagnosis select', () => {
     await reachStep3();
     await selectDiagnosis();
 
-    await waitFor(() => expect(screen.getByText('No phenotype suggestions for this disease.')).toBeInTheDocument(), { timeout: 2000 });
-    expect(screen.getByText('No biomarker suggestions for this disease.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('No HPO phenotype found in the graph or terminologies for this disease.')).toBeInTheDocument(), { timeout: 2000 });
+    expect(screen.getByText(/No biomarker association in the graph or catalog for this disease/)).toBeInTheDocument();
     expect(getCalls('/dictionary/suggest').map(([, config]) => config.params.orphaCode)).toEqual(['324', 'ORPHA:324']);
   });
 });
@@ -385,7 +385,14 @@ describe('ClinicalIntakeWizard step 3 -- suggested phenotypes and biomarkers', (
     fireEvent.click(screen.getByRole('checkbox', { name: /Angioqueratoma/ }));
 
     expect(screen.queryByText('Angioqueratoma')).not.toBeInTheDocument();
-    expect(screen.getByText('No phenotype suggestions for this disease.')).toBeInTheDocument();
+    expect(screen.getByText('No HPO phenotype found in the graph or terminologies for this disease.')).toBeInTheDocument();
+  });
+
+  it('renders clinical dictionary biomarker inputs on step 3', async () => {
+    mockApiClient({ suggestImpl: () => Promise.resolve({ data: {}, status: 200 }) });
+    await reachStep3();
+    expect(screen.getByTestId('wizard-dictionary-biomarkers-section')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard-dictionary-biomarker-lyso_gb3')).toBeInTheDocument();
   });
 
   it('typing a biomarker value sets it and clearing it empties the input', async () => {

@@ -139,7 +139,7 @@ export default function Sidebar() {
         { path: '/samples', icon: FlaskConical, label: t('navigation.samples') || 'Inventário de Amostras', roles: ['Administrador', 'Coordenador', 'Técnico'] },
         { path: '/results', icon: FileText, label: t('navigation.results'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
         { path: '/facility-management', icon: Box, label: t('navigation.facilityManagement'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
-        { path: '/import/lgpd', icon: Upload, label: t('navigation.importLGPD', 'Importação LGPD'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
+        { path: '/patients/import-fhir', icon: Upload, label: t('navigation.importBatch', 'Importação em lote'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
         { path: '/import/quarantine', icon: FileWarning, label: t('navigation.importQuarantine', 'Quarentena de Importação'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
       ],
     },

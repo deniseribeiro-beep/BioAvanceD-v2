@@ -18,10 +18,14 @@ function renderList(samples: SampleWithId[], overrides: Partial<ComponentProps<t
       search=""
       selectedSampleIds={[]}
       filteredSamples={samples}
+      pagedSamples={samples}
       selectedSamples={[]}
       allSelected={false}
       canEdit={false}
       printModalOpen={false}
+      currentPage={1}
+      totalPages={1}
+      pageSize={10}
       onSearchChange={noop}
       onSearchSubmit={noop}
       onToggleSelectAll={noop}
@@ -38,6 +42,7 @@ function renderList(samples: SampleWithId[], overrides: Partial<ComponentProps<t
       onResendConsent={noop}
       onAttachExternalDocument={noop}
       onViewPending={noop}
+      onPageChange={noop}
       {...overrides}
     />
   );
@@ -96,7 +101,7 @@ describe('SamplesPageView list states', () => {
     const { unmount } = renderList([]);
     expect(screen.getByText('Nenhuma amostra carregada')).toBeInTheDocument();
     expect(screen.getByText('Lista completa de amostras carregadas no inventário.')).toBeInTheDocument();
-    expect(screen.getByText(/0 amostras exibidas/)).toBeInTheDocument();
+    expect(screen.getByTestId('samples-page-summary')).toHaveTextContent('Nenhuma amostra exibida');
     unmount();
     renderList([], { search: '  BR-9  ' });
     expect(screen.getByText('Nenhuma amostra encontrada')).toBeInTheDocument();
@@ -104,9 +109,9 @@ describe('SamplesPageView list states', () => {
     expect(screen.getByText('Resultado da pesquisa para "BR-9".')).toBeInTheDocument();
   });
 
-  it('counts one displayed sample in the singular', () => {
+  it('summarises a single displayed sample as the range 1–1 of 1', () => {
     renderList([{ id: 'x' } as SampleWithId]);
-    expect(screen.getByText(/1 amostra exibida/)).toBeInTheDocument();
+    expect(screen.getByTestId('samples-page-summary')).toHaveTextContent('Mostrando 1–1 de 1');
   });
 
   it('shows the batch toolbar only when samples are selected', () => {

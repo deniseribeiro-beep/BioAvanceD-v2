@@ -95,7 +95,7 @@ afterEach(() => {
 describe('FhirImportPage', () => {
   it('renders the empty flow with the actions that need input disabled', () => {
     renderPage();
-    expect(screen.getByText('Importação Inteligente de Dados FHIR')).toBeInTheDocument();
+    expect(screen.getByText('Importação em lote')).toBeInTheDocument();
     expect(screen.getByText('Nenhum JSON FHIR selecionado')).toBeInTheDocument();
     expect(within(screen.getByTestId('fhir-import-patient-count')).getByText('0')).toBeInTheDocument();
     expect(screen.getByText('Valide o lote para visualizar as linhas staging.')).toBeInTheDocument();

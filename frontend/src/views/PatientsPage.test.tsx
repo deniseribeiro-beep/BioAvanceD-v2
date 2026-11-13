@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import PatientsPage from './PatientsPage';
-import { patientService } from '../services/api';
+import { consentService, patientService } from '../services/api';
 
 const navigate = vi.fn();
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -17,6 +17,10 @@ vi.mock('../services/api', () => ({
     findForEdit: vi.fn(),
     getById: vi.fn(),
     resendConsentNotification: vi.fn(),
+  },
+  consentService: {
+    getActiveTemplate: vi.fn(),
+    createPatientConsent: vi.fn(),
   },
   dataImportService: {},
 }));
@@ -52,12 +56,14 @@ const hook = {
   error: null as string | null,
   deletePatient: vi.fn(),
   loadPatients: vi.fn(),
+  refreshPatients: vi.fn(),
 };
 vi.mock('../hooks/usePatients', () => ({
   usePatients: () => hook,
 }));
 
 const mocked = vi.mocked(patientService);
+const consentApi = vi.mocked(consentService);
 const ADMIN = { roleName: 'Administrador', accessType: 4 };
 const TECH = { roleName: 'Técnico', accessType: 2 };
 
@@ -82,6 +88,7 @@ describe('PatientsPage', () => {
     hook.error = null;
     hook.deletePatient.mockResolvedValue(undefined);
     hook.loadPatients.mockResolvedValue(undefined);
+    hook.refreshPatients.mockResolvedValue(undefined);
     alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
     confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -127,14 +134,33 @@ describe('PatientsPage', () => {
       expect(screen.queryByTestId('patients-table')).not.toBeInTheDocument();
     });
 
+    it('refreshes the open directory every 15s and again when the tab returns', () => {
+      vi.useFakeTimers();
+      renderPage();
+      expect(hook.refreshPatients).not.toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(15_000); });
+      expect(hook.refreshPatients).toHaveBeenCalledTimes(1);
+
+      const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+      act(() => { vi.advanceTimersByTime(15_000); });
+      expect(hook.refreshPatients).toHaveBeenCalledTimes(1);
+
+      hidden.mockReturnValue(false);
+      act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+      expect(hook.refreshPatients).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    });
+
     it('navigates back to the dashboard', async () => {
       renderPage();
       await userEvent.click(screen.getByTestId('patients-back-button'));
       expect(navigate).toHaveBeenCalledWith('/dashboard');
     });
 
-    it('offers FHIR import to an administrator and navigates to it', async () => {
+    it('offers LGPD import to an administrator and navigates to it', async () => {
       renderPage();
+      expect(screen.getByTestId('patients-import-fhir-button')).toHaveTextContent('Importar dados');
       await userEvent.click(screen.getByTestId('patients-import-fhir-button'));
       expect(navigate).toHaveBeenCalledWith('/patients/import-fhir');
     });
@@ -171,47 +197,68 @@ describe('PatientsPage', () => {
       expect(screen.getAllByRole('row')).toHaveLength(2);
     });
 
-    it('offers signature, TCLE link and resend for a pending consent, and no history', () => {
+    it('shows the record number and the birth date on the row', () => {
+      hook.patients = [{ participantId: '12345678', consentStatus: 'PENDING', recordNumber: 'PR-100', birthDate: '03/05/1990' }];
+      renderPage();
+      const row = screen.getByTestId('patient-row-12345678');
+      expect(screen.getByText('patients.recordNumber')).toBeInTheDocument();
+      expect(screen.getByText('patients.birthDate')).toBeInTheDocument();
+      expect(row).toHaveTextContent('PR-100');
+      expect(row).toHaveTextContent('03/05/1990');
+    });
+
+    it('offers signature and the email action for a pending consent, and no history', () => {
       hook.patients = [{ participantId: '12345678', consentStatus: 'PENDING' }];
       renderPage();
       expect(screen.getByTestId('collect-signature-button-12345678')).toHaveTextContent('patients.collectSignature');
-      expect(screen.getByTestId('send-tcle-link-button-12345678')).toHaveTextContent('Enviar Link TCLE');
-      expect(screen.getByTestId('resend-consent-button-12345678')).toHaveTextContent('patients.resendNotifications');
+      expect(screen.getByTestId('send-tcle-link-button-12345678')).toHaveTextContent('Enviar TCLE por e-mail');
+      expect(screen.queryByTestId('resend-consent-button-12345678')).not.toBeInTheDocument();
       expect(screen.queryByTestId('consent-history-button-12345678')).not.toBeInTheDocument();
     });
 
-    it('shows signed and the consent history for a granted consent', async () => {
+    it('shows one signed badge and the consent history for a granted consent', async () => {
       hook.patients = [{ participantId: '12345678', consentStatus: 'ACTIVE' }];
       renderPage();
-      expect(screen.getByTestId('patient-row-12345678')).toHaveTextContent('patients.signed');
+      expect(screen.getAllByText('Assinado')).toHaveLength(1);
+      expect(screen.queryByText('patients.signed')).not.toBeInTheDocument();
       expect(screen.queryByTestId('collect-signature-button-12345678')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('resend-consent-button-12345678')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('send-tcle-link-button-12345678')).not.toBeInTheDocument();
       await userEvent.click(screen.getByTestId('consent-history-button-12345678'));
       expect(navigate).toHaveBeenCalledWith('/consents?participantId=12345678');
     });
 
     it.each([
-      ['en-US', 'Collect Signature', 'Resend Notifications'],
-      ['es-ES', 'Recolectar firma', 'Reenviar notificaciones'],
-    ])('labels the consent actions in %s', (language, collect, resend) => {
+      ['en-US', 'Collect Signature'],
+      ['es-ES', 'Recolectar firma'],
+    ])('labels the consent action in %s', (language, collect) => {
       lang.language = language;
       hook.patients = [{ participantId: '12345678', consentStatus: 'PENDING' }];
       renderPage();
       expect(screen.getByTestId('collect-signature-button-12345678')).toHaveTextContent(collect);
-      expect(screen.getByTestId('resend-consent-button-12345678')).toHaveTextContent(resend);
     });
   });
 
   describe('signature modal', () => {
-    it('marks the consent signed on confirm', async () => {
+    it('saves the in-person signature with the collection place and reloads the list', async () => {
       hook.patients = [{ participantId: '12345678', consentStatus: 'PENDING' }];
+      consentApi.getActiveTemplate.mockResolvedValue({
+        data: { data: { _id: '507f1f77bcf86cd799439011', title: 'TCLE Biobanco', htmlContent: '<p>Termo</p>', permissions: [] } },
+      } as any);
+      consentApi.createPatientConsent.mockResolvedValue({} as any);
       renderPage();
       await userEvent.click(screen.getByTestId('collect-signature-button-12345678'));
-      expect(screen.getByText('patients.digitalSignature')).toBeInTheDocument();
+      expect(await screen.findByTestId('collection-place-input')).toBeInTheDocument();
+      await userEvent.type(screen.getByTestId('collection-place-input'), 'Laboratório Central');
       await userEvent.click(screen.getByText('pad-confirm'));
-      expect(screen.queryByText('patients.digitalSignature')).not.toBeInTheDocument();
-      expect(screen.getByTestId('patient-row-12345678')).toHaveTextContent('patients.signed');
-      expect(screen.getByTestId('consent-history-button-12345678')).toBeInTheDocument();
+      await userEvent.click(screen.getByTestId('confirm-in-person-consent'));
+      await waitFor(() => expect(consentApi.createPatientConsent).toHaveBeenCalledWith(expect.objectContaining({
+        participantId: '12345678',
+        templateId: '507f1f77bcf86cd799439011',
+        consentTemplateId: '507f1f77bcf86cd799439011',
+        collectionPlace: 'Laboratório Central',
+        signatureImageBase64: 'data:image/png;base64,AAAA',
+      })));
+      expect(hook.loadPatients).toHaveBeenCalled();
     });
 
     it('closes on cancel and leaves the consent pending', async () => {
@@ -244,9 +291,8 @@ describe('PatientsPage', () => {
       await userEvent.click(screen.getByTestId('send-tcle-link-button-12345678'));
       expect(screen.getByTestId('send-tcle-link-button-12345678')).toHaveTextContent('Resending...');
       expect(screen.getByTestId('send-tcle-link-button-12345678')).toBeDisabled();
-      expect(screen.getByTestId('resend-consent-button-12345678')).toHaveTextContent('Resending...');
       await act(async () => { resolve({}); });
-      expect(screen.getByTestId('send-tcle-link-button-12345678')).toHaveTextContent('Enviar Link TCLE');
+      expect(screen.getByTestId('send-tcle-link-button-12345678')).toHaveTextContent('Enviar TCLE por e-mail');
     });
 
     it.each([
@@ -261,25 +307,6 @@ describe('PatientsPage', () => {
       await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expected));
     });
 
-    it('resends notifications for a pending consent', async () => {
-      hook.patients = [{ participantId: '12345678', consentStatus: 'PENDING' }];
-      mocked.resendConsentNotification.mockResolvedValue({} as any);
-      renderPage();
-      await userEvent.click(screen.getByTestId('resend-consent-button-12345678'));
-      await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('patients.notificationsResent'));
-      expect(hook.loadPatients).toHaveBeenCalled();
-    });
-
-    it.each([
-      [{ response: { data: { message: 'Sem e-mail' } } }, 'Sem e-mail'],
-      [{}, 'patients.notificationsResendError'],
-    ])('alerts the resend failure %#', async (err, expected) => {
-      hook.patients = [{ participantId: '12345678', consentStatus: 'PENDING' }];
-      mocked.resendConsentNotification.mockRejectedValue(err);
-      renderPage();
-      await userEvent.click(screen.getByTestId('resend-consent-button-12345678'));
-      await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expected));
-    });
   });
 
   describe('edit', () => {

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
+import ListPagination from '../components/UI/ListPagination';
 import { useOrganizations } from '../hooks/useOrganizations';
+import { LIST_PAGE_SIZE, useClientPagination } from '../hooks/useClientPagination';
 import { accessRequestService, consentService } from '../services/api';
 import type {
   AccessCheck,
@@ -344,16 +346,20 @@ export default function AccessRequestsPage() {
     setRequests((current) => current.map((item) => (item.accessRequestId === updated.accessRequestId ? updated : item)));
 
   const selected = requests.find((item) => item.accessRequestId === selectedId) || null;
+  const listPagination = useClientPagination(requests, LIST_PAGE_SIZE);
 
   return (
     <div className="page-shell access-requests-page">
       <div className="page-header">
-        <h1>Solicitações de acesso e distribuição</h1>
+        <h1 className="page-title">Solicitações de acesso e distribuição</h1>
+        <p className="page-subtitle">
+          Registrar pedidos de acesso a espécimes ou conjuntos de dados, avaliar compatibilidade de consentimento e disponibilizar ou revogar o uso.
+        </p>
       </div>
       {error && <p role="alert" data-testid="access-requests-error" style={{ color: 'var(--danger)' }}>{error}</p>}
 
       <section className="card">
-        <h3>Nova solicitação (RF024 AC1)</h3>
+        <h3>Nova solicitação</h3>
         <form onSubmit={submit} className="form" data-testid="access-request-form">
           <div className="form-grid">
             <Input label="Solicitante" data-testid="access-request-requester-input" value={form.requesterId}
@@ -419,41 +425,57 @@ export default function AccessRequestsPage() {
         {requests.length === 0 ? (
           <p>Nenhuma solicitação registrada.</p>
         ) : (
-          <table className="table" data-testid="access-requests-table">
-            <thead>
-              <tr>
-                <th>Solicitante</th>
-                <th>Estudo</th>
-                <th>Finalidade</th>
-                <th>Itens</th>
-                <th>Decisão</th>
-                <th>Disponibilização</th>
-                <th>Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {requests.map((item) => (
-                <tr key={item.accessRequestId} data-testid={`access-request-row-${item.accessRequestId}`}>
-                  <td>{item.requesterId}</td>
-                  <td>{item.studyId}</td>
-                  <td>{item.requestedPurpose}</td>
-                  <td>{item.requestedItems.length}</td>
-                  <td>{item.committeeDecision.status}</td>
-                  <td>{item.distributionStatus}</td>
-                  <td>
-                    <Button type="button" variant="secondary" data-testid={`access-request-open-${item.accessRequestId}`}
-                      onClick={() => setSelectedId(item.accessRequestId)}>
-                      Abrir
-                    </Button>
-                  </td>
+          <>
+            <table className="table" data-testid="access-requests-table">
+              <thead>
+                <tr>
+                  <th>Solicitante</th>
+                  <th>Estudo</th>
+                  <th>Finalidade</th>
+                  <th>Itens</th>
+                  <th>Decisão</th>
+                  <th>Disponibilização</th>
+                  <th>Ações</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {listPagination.pagedItems.map((item) => (
+                  <tr key={item.accessRequestId} data-testid={`access-request-row-${item.accessRequestId}`}>
+                    <td>{item.requesterId}</td>
+                    <td>{item.studyId}</td>
+                    <td>{item.requestedPurpose}</td>
+                    <td>{item.requestedItems.length}</td>
+                    <td>{item.committeeDecision.status}</td>
+                    <td>{item.distributionStatus}</td>
+                    <td>
+                      <Button type="button" variant="secondary" data-testid={`access-request-open-${item.accessRequestId}`}
+                        onClick={() => setSelectedId(item.accessRequestId)}>
+                        Abrir
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <ListPagination
+              currentPage={listPagination.currentPage}
+              totalPages={listPagination.totalPages}
+              pageStart={listPagination.pageStart}
+              pageEnd={listPagination.pageEnd}
+              total={listPagination.total}
+              onPageChange={listPagination.setCurrentPage}
+              testIdPrefix="access-requests-pagination"
+              emptyLabel="Nenhuma solicitação registrada"
+            />
+          </>
         )}
       </section>
 
-      {selected && <AccessRequestDetail key={selected.accessRequestId} accessRequest={selected} onChanged={replaceRequest} />}
+      {selected && (
+        <section className="card" data-testid="access-request-detail-panel">
+          <AccessRequestDetail key={selected.accessRequestId} accessRequest={selected} onChanged={replaceRequest} />
+        </section>
+      )}
     </div>
   );
 }

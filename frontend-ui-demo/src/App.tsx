@@ -51,9 +51,10 @@ export default function App() {
           <Route path="/biomarker-associations" element={<GenericScreen title="Associações de Biomarcadores" />} />
           <Route path="/access-requests" element={<GenericScreen title="Solicitações de Acesso" />} />
 
-          <Route path="/import/lgpd" element={<GenericScreen title="Importação LGPD" />} />
+          <Route path="/patients/import-fhir" element={<GenericScreen title="Importação em lote" />} />
+          <Route path="/import/lgpd" element={<Navigate to="/patients/import-fhir" replace />} />
           <Route path="/import/quarantine" element={<GenericScreen title="Quarentena de Importação" />} />
-          <Route path="/import" element={<Navigate to="/import/lgpd" replace />} />
+          <Route path="/import" element={<Navigate to="/patients/import-fhir" replace />} />
 
           <Route path="/reports" element={<GenericScreen title="Central de Relatórios" />} />
           <Route path="/reports/templates" element={<GenericScreen title="Modelos de Relatório" />} />

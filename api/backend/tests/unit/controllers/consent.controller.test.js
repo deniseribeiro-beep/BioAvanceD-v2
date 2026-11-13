@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // NOTE on mocking strategy: this repo's Vitest setup does not let vi.mock()
 // intercept CommonJS require().
@@ -20,6 +20,8 @@ function createRes() {
   return {
     status: vi.fn().mockReturnThis(),
     json: vi.fn(),
+    setHeader: vi.fn(),
+    send: vi.fn(),
   };
 }
 
@@ -1050,6 +1052,10 @@ describe('ConsentController.getPatientConsent', () => {
 });
 
 describe('ConsentController.validateConsentToken', () => {
+  beforeEach(() => {
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
+  });
+
   const ACTIVE_TEMPLATE = {
     _id: 'tpl-1',
     title: 'TCLE Biobanco v2',
@@ -1067,6 +1073,32 @@ describe('ConsentController.validateConsentToken', () => {
     const res = createRes();
     await consentController.validateConsentToken(req, res);
     expect(res.status).toHaveBeenCalledWith(503);
+  });
+
+  it('opens the management panel when a consent is already in force', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1', patientStatus: 'PENDING_CONSENT' });
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(ACTIVE_TEMPLATE);
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({
+      participantId: 'p1',
+      status: 'ACTIVE',
+      currentStateDerived: 'active',
+      signedAt: '2026-11-05T18:45:07.000Z',
+      signedTcleDocumentUri: 'objstore://consents/c-uuid-1/tcle.pdf',
+      signedTcleEncryption: { keyId: 'k', iv: 'iv', tag: 'tag' },
+      effectivePermissions: { research: true },
+    });
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0].data;
+    expect(payload.panel).toBe('manage');
+    expect(payload.consent.hasSignedTcle).toBe(true);
+    expect(payload.consent.signedTcleDocumentUri).toBeUndefined();
+    expect(payload.consent.signedTcleEncryption).toBeUndefined();
   });
 
   it('returns 200 with validation result on success, using body values', async () => {
@@ -1345,5 +1377,116 @@ describe('ConsentController.acceptConsentToken', () => {
     await consentController.acceptConsentToken(req, res);
 
     expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p2', 'tok2', expect.any(Object));
+  });
+});
+
+describe('ConsentController.getSignedTcleByToken', () => {
+  const consentEvidence = require('../../../src/services/consentEvidence.service');
+
+  it('returns this participant pdf', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1', patientStatus: 'ACTIVE' });
+    const consent = {
+      participantId: 'p1',
+      signedTcleDocumentUri: 'objstore://consents/c-uuid-1/tcle.pdf',
+      signedTcleEncryption: { keyId: 'k', iv: 'iv', tag: 'tag' },
+    };
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(consent);
+    const read = vi.spyOn(consentEvidence, 'readSignedTcle').mockReturnValue(Buffer.from('%PDF-1.4'));
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.getSignedTcleByToken(req, res);
+
+    expect(read).toHaveBeenCalledWith(consent);
+    expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/pdf');
+    expect(res.setHeader).toHaveBeenCalledWith('Content-Disposition', 'inline; filename="tcle.pdf"');
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.send).toHaveBeenCalledWith(Buffer.from('%PDF-1.4'));
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it('refuses a token that does not match', async () => {
+    const refusal = await realConsentTokenRefusal();
+    vi.spyOn(patientService, 'validateConsentToken').mockRejectedValue(refusal);
+    const req = createReq({ body: { patientId: 'p1', token: 'nope' } });
+    const res = createRes();
+
+    await consentController.getSignedTcleByToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Link inválido ou expirado' });
+  });
+
+  it('answers 404 when this consent has no signed file', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1', patientStatus: 'ACTIVE' });
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ participantId: 'p1' });
+    vi.spyOn(consentEvidence, 'readSignedTcle').mockReturnValue(null);
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.getSignedTcleByToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Termo assinado não encontrado' });
+  });
+
+  it('returns 503 when the database is down', async () => {
+    const res = createRes();
+    await consentController.getSignedTcleByToken(NO_DB_REQ(), res);
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Banco de dados não disponível' });
+  });
+
+  it('downloads the pdf when the query asks for a file', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1', patientStatus: 'ACTIVE' });
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ participantId: 'p1' });
+    vi.spyOn(consentEvidence, 'readSignedTcle').mockReturnValue(Buffer.from('%PDF-1.4'));
+    const res = createRes();
+
+    await consentController.getSignedTcleByToken(createReq({
+      body: { participantId: 'p1', token: 'tok' },
+      query: { download: '1' },
+    }), res);
+
+    expect(res.setHeader).toHaveBeenCalledWith('Content-Disposition', 'attachment; filename="tcle.pdf"');
+  });
+
+  it('answers the same not-found error when the stored file no longer matches', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1', patientStatus: 'ACTIVE' });
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ participantId: 'p1' });
+    const mismatch = new Error('hash');
+    mismatch.statusCode = 409;
+    vi.spyOn(consentEvidence, 'readSignedTcle').mockImplementation(() => { throw mismatch; });
+    const res = createRes();
+
+    await consentController.getSignedTcleByToken(createReq({ body: { patientId: 'p1', token: 'tok' } }), res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Termo assinado não encontrado' });
+  });
+
+  it('answers 503 when the signed file cannot be opened', async () => {
+    vi.spyOn(patientService, 'validateConsentToken').mockRejectedValue(new Error('storage'));
+    const res = createRes();
+
+    await consentController.getSignedTcleByToken(createReq({ body: { patientId: 'p1', token: 'tok' } }), res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Não foi possível abrir o termo assinado' });
+  });
+
+  it('answers 404 when the participant has no consent in force', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1', patientStatus: 'ACTIVE' });
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
+    const res = createRes();
+
+    await consentController.getSignedTcleByToken(createReq({ body: { patientId: 'p1', token: 'tok' } }), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });

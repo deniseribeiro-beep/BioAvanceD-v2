@@ -19,7 +19,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, FileWarning, RefreshCw, FileCheck2, FileX2 } from 'lucide-react';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
+import ListPagination from '../components/UI/ListPagination';
 import { importLGPDService } from '../services/api';
+import { LIST_PAGE_SIZE, useClientPagination } from '../hooks/useClientPagination';
 import {
   formatBatchSummary,
   formatRecordErrors,
@@ -137,23 +139,30 @@ export default function ImportQuarantinePage() {
   const [loadingBatch, setLoadingBatch] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [batchPage, setBatchPage] = useState(1);
+  const [batchTotal, setBatchTotal] = useState(0);
+  const [batchTotalPages, setBatchTotalPages] = useState(1);
 
-  const loadBatches = useCallback(async () => {
+  const loadBatches = useCallback(async (page = batchPage) => {
     setLoadingList(true);
     setError(null);
     try {
-      const response = await importLGPDService.listQuarantineBatches({ limit: 50 });
+      const response = await importLGPDService.listQuarantineBatches({ limit: LIST_PAGE_SIZE, page });
       setBatches(response.data?.data || []);
+      const pagination = response.data?.pagination;
+      setBatchTotal(Number(pagination?.total) || 0);
+      setBatchTotalPages(Math.max(1, Number(pagination?.totalPages) || 1));
+      setBatchPage(Number(pagination?.page) || page);
     } catch (err) {
       setError('Não foi possível carregar os lotes em quarentena.');
     } finally {
       setLoadingList(false);
     }
-  }, []);
+  }, [batchPage]);
 
   useEffect(() => {
-    loadBatches();
-  }, [loadBatches]);
+    loadBatches(batchPage);
+  }, [batchPage]); // eslint-disable-line react-hooks/exhaustive-deps -- reload on page change only
 
   useEffect(() => {
     if (!selectedId) {
@@ -189,26 +198,30 @@ export default function ImportQuarantinePage() {
   }, [selectedId, reloadKey]);
 
   const summaries = batches.map(formatBatchSummary);
+  const recordsPagination = useClientPagination(records, LIST_PAGE_SIZE);
+  const batchPageStart = batchTotal === 0 ? 0 : (batchPage - 1) * LIST_PAGE_SIZE + 1;
+  const batchPageEnd = Math.min(batchPage * LIST_PAGE_SIZE, batchTotal);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <Button variant="secondary" onClick={() => navigate(-1)} aria-label="Voltar">
-          <ArrowLeft size={16} /> Voltar
-        </Button>
-        <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <FileWarning size={22} /> Quarentena de importação
-        </h1>
-        <Button variant="secondary" onClick={loadBatches} aria-label="Atualizar">
+    <div className="page-shell" data-testid="import-quarantine-page">
+      <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Button variant="secondary" onClick={() => navigate(-1)} aria-label="Voltar">
+            <ArrowLeft size={16} /> Voltar
+          </Button>
+          <div>
+            <h1 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+              <FileWarning size={22} /> Quarentena de importação
+            </h1>
+            <p className="page-subtitle">
+              Revisar e reenviar linhas rejeitadas de planilhas históricas. A importação operacional em lote FHIR fica em Importação em lote.
+            </p>
+          </div>
+        </div>
+        <Button variant="secondary" onClick={() => loadBatches(batchPage)} aria-label="Atualizar">
           <RefreshCw size={16} /> Atualizar
         </Button>
       </div>
-
-      <p style={{ color: '#4b5563', marginTop: 0 }}>
-        Linhas rejeitadas em importações LGPD ficam retidas aqui para revisão, em vez de
-        serem descartadas silenciosamente (RNF011). Uma linha de um lote de amostras pode
-        ser corrigida e reenviada; o reenvio passa pela mesma validação da importação.
-      </p>
 
       {error && (
         <div role="alert" style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 6, marginBottom: 16 }}>
@@ -225,59 +238,67 @@ export default function ImportQuarantinePage() {
             Nenhum lote em quarentena. Importações sem linhas rejeitadas não geram lote.
           </p>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={headStyle}>Arquivo</th>
-                  {/* #915: participant batches share this listing with specimen
-                      ones, so the origin has to be visible. */}
-                  <th style={headStyle}>Origem</th>
-                  <th style={headStyle}>Data</th>
-                  <th style={headStyle}>Linhas</th>
-                  <th style={headStyle}>Importadas</th>
-                  <th style={headStyle}>Rejeitadas</th>
-                  <th style={headStyle}>Arquivo original</th>
-                  <th style={headStyle} />
-                </tr>
-              </thead>
-              <tbody>
-                {summaries.map((summary) => (
-                  <tr key={summary.id} style={summary.id === selectedId ? { background: '#eff6ff' } : undefined}>
-                    <td style={cellStyle}>{summary.fileName}</td>
-                    <td style={cellStyle}>{summary.kindLabel}</td>
-                    <td style={cellStyle}>{summary.createdAtLabel}</td>
-                    <td style={cellStyle}>{summary.total}</td>
-                    <td style={cellStyle}>{summary.imported}</td>
-                    <td style={{ ...cellStyle, color: summary.rejected > 0 ? '#b91c1c' : undefined }}>
-                      {summary.rejected}
-                    </td>
-                    <td style={cellStyle}>
-                      {/* #792 retention is best-effort, so "not retained" is a
-                          real state worth showing rather than hiding. */}
-                      {summary.sourceFileRetained ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#047857' }}>
-                          <FileCheck2 size={14} /> retido
-                        </span>
-                      ) : (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#92400e' }}>
-                          <FileX2 size={14} /> não retido
-                        </span>
-                      )}
-                    </td>
-                    <td style={cellStyle}>
-                      <Button
-                        variant="secondary"
-                        onClick={() => setSearchParams(summary.id === selectedId ? {} : { batchId: summary.id })}
-                      >
-                        {summary.id === selectedId ? 'Fechar' : 'Ver linhas'}
-                      </Button>
-                    </td>
+          <>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={headStyle}>Arquivo</th>
+                    <th style={headStyle}>Origem</th>
+                    <th style={headStyle}>Data</th>
+                    <th style={headStyle}>Linhas</th>
+                    <th style={headStyle}>Importadas</th>
+                    <th style={headStyle}>Rejeitadas</th>
+                    <th style={headStyle}>Arquivo original</th>
+                    <th style={headStyle} />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {summaries.map((summary) => (
+                    <tr key={summary.id} style={summary.id === selectedId ? { background: '#eff6ff' } : undefined}>
+                      <td style={cellStyle}>{summary.fileName}</td>
+                      <td style={cellStyle}>{summary.kindLabel}</td>
+                      <td style={cellStyle}>{summary.createdAtLabel}</td>
+                      <td style={cellStyle}>{summary.total}</td>
+                      <td style={cellStyle}>{summary.imported}</td>
+                      <td style={{ ...cellStyle, color: summary.rejected > 0 ? '#b91c1c' : undefined }}>
+                        {summary.rejected}
+                      </td>
+                      <td style={cellStyle}>
+                        {summary.sourceFileRetained ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#047857' }}>
+                            <FileCheck2 size={14} /> retido
+                          </span>
+                        ) : (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#92400e' }}>
+                            <FileX2 size={14} /> não retido
+                          </span>
+                        )}
+                      </td>
+                      <td style={cellStyle}>
+                        <Button
+                          variant="secondary"
+                          onClick={() => setSearchParams(summary.id === selectedId ? {} : { batchId: summary.id })}
+                        >
+                          {summary.id === selectedId ? 'Fechar' : 'Ver linhas'}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <ListPagination
+              currentPage={batchPage}
+              totalPages={batchTotalPages}
+              pageStart={batchPageStart}
+              pageEnd={batchPageEnd}
+              total={batchTotal}
+              onPageChange={setBatchPage}
+              testIdPrefix="quarantine-batches-pagination"
+              emptyLabel="Nenhum lote em quarentena"
+            />
+          </>
         )}
       </Card>
 
@@ -290,10 +311,6 @@ export default function ImportQuarantinePage() {
           {loadingBatch ? (
             <p>Carregando linhas...</p>
           ) : records.length === 0 ? (
-            // #806: a FAILED batch (throw at header level) also has zero
-            // records -- "nenhuma linha rejeitada" would misleadingly read as
-            // a clean import instead of an import that never got past its
-            // headers.
             selectedBatch?.status === 'FAILED' ? (
               <p style={{ color: '#b91c1c' }}>
                 Esta importação falhou antes de processar qualquer linha
@@ -303,61 +320,73 @@ export default function ImportQuarantinePage() {
               <p style={{ color: '#4b5563' }}>Nenhuma linha rejeitada neste lote.</p>
             )
           ) : (
-            records.map((record) => {
-              const errors = formatRecordErrors(record);
-              const fields = describeRowFields(record);
-              return (
-                <div
-                  key={String(record._id || record.rowNumber)}
-                  style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12, marginTop: 12 }}
-                >
-                  <strong>Linha {record.rowNumber ?? '--'}</strong>
-                  {record.status && record.status !== 'ERROR' && (
-                    <span style={{ marginLeft: 8, color: '#047857' }}>{record.status}</span>
-                  )}
-
-                  <ul style={{ color: '#b91c1c', marginTop: 6, marginBottom: 6 }}>
-                    {errors.length === 0 ? (
-                      <li>Rejeitada sem mensagem registrada.</li>
-                    ) : (
-                      errors.map((message, index) => <li key={index}>{message}</li>)
+            <>
+              {recordsPagination.pagedItems.map((record) => {
+                const errors = formatRecordErrors(record);
+                const fields = describeRowFields(record);
+                return (
+                  <div
+                    key={String(record._id || record.rowNumber)}
+                    style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12, marginTop: 12 }}
+                  >
+                    <strong>Linha {record.rowNumber ?? '--'}</strong>
+                    {record.status && record.status !== 'ERROR' && (
+                      <span style={{ marginLeft: 8, color: '#047857' }}>{record.status}</span>
                     )}
-                  </ul>
 
-                  {fields.length === 0 ? (
-                    <p style={{ color: '#6b7280', margin: 0 }}>
-                      Conteúdo original não retido para esta linha.
-                    </p>
-                  ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ borderCollapse: 'collapse' }}>
-                        <tbody>
-                          {fields.map((field) => (
-                            <tr key={field.label}>
-                              <td style={{ ...cellStyle, fontWeight: 600 }}>{field.label}</td>
-                              <td style={cellStyle}>{field.value}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                    <ul style={{ color: '#b91c1c', marginTop: 6, marginBottom: 6 }}>
+                      {errors.length === 0 ? (
+                        <li>Rejeitada sem mensagem registrada.</li>
+                      ) : (
+                        errors.map((message, index) => <li key={index}>{message}</li>)
+                      )}
+                    </ul>
 
-                  {canResubmit(selectedBatch, record) && (
-                    <div style={{ marginTop: 8 }}>
-                      <ResubmitForm
-                        batchId={selectedId}
-                        record={record}
-                        onResubmitted={() => {
-                          setReloadKey((key) => key + 1);
-                          loadBatches();
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })
+                    {fields.length === 0 ? (
+                      <p style={{ color: '#6b7280', margin: 0 }}>
+                        Conteúdo original não retido para esta linha.
+                      </p>
+                    ) : (
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ borderCollapse: 'collapse' }}>
+                          <tbody>
+                            {fields.map((field) => (
+                              <tr key={field.label}>
+                                <td style={{ ...cellStyle, fontWeight: 600 }}>{field.label}</td>
+                                <td style={cellStyle}>{field.value}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {canResubmit(selectedBatch, record) && (
+                      <div style={{ marginTop: 8 }}>
+                        <ResubmitForm
+                          batchId={selectedId}
+                          record={record}
+                          onResubmitted={() => {
+                            setReloadKey((key) => key + 1);
+                            loadBatches(batchPage);
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <ListPagination
+                currentPage={recordsPagination.currentPage}
+                totalPages={recordsPagination.totalPages}
+                pageStart={recordsPagination.pageStart}
+                pageEnd={recordsPagination.pageEnd}
+                total={recordsPagination.total}
+                onPageChange={recordsPagination.setCurrentPage}
+                testIdPrefix="quarantine-records-pagination"
+                emptyLabel="Nenhuma linha rejeitada"
+              />
+            </>
           )}
         </Card>
       )}

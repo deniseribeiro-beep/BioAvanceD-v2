@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import ConsentHistoryPage from './ConsentHistoryPage';
@@ -7,7 +7,7 @@ import { consentService } from '../services/api';
 import type { ConsentHistory, PatientConsent } from '../types/models';
 
 vi.mock('../services/api', () => ({
-  consentService: { getPatientConsent: vi.fn(), getConsentHistory: vi.fn(), revokeConsent: vi.fn() },
+  consentService: { getPatientConsent: vi.fn(), getConsentHistory: vi.fn(), revokeConsent: vi.fn(), getSignedTcle: vi.fn() },
 }));
 
 const CONSENT_ID = '68ab12cd34ef56ab78cd90ef';
@@ -65,12 +65,14 @@ describe('ConsentHistoryPage (#1375, RF010 AC5/AC6)', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   it('loads from the participantId query parameter and shows the state, the permissions and the accepted event', async () => {
     renderPage();
-    expect(await screen.findByTestId('consent-state')).toHaveTextContent('active');
+    expect(await screen.findByTestId('consent-state')).toHaveTextContent('Ativo');
+    expect(screen.getByTestId('signed-tcle-missing')).toBeInTheDocument();
     expect(mocked.getPatientConsent).toHaveBeenCalledWith('P1');
     expect(mocked.getConsentHistory).toHaveBeenCalledWith(CONSENT_ID);
     expect(screen.getByTestId('consent-permission-storage')).toHaveTextContent('Armazenamento de amostras');
@@ -134,11 +136,82 @@ describe('ConsentHistoryPage (#1375, RF010 AC5/AC6)', () => {
       },
     } as any);
     renderPage();
-    expect(await screen.findByTestId('consent-state')).toHaveTextContent('revoked');
+    expect(await screen.findByTestId('consent-state')).toHaveTextContent('Revogado');
     expect(screen.queryByTestId('consent-revoke-form')).not.toBeInTheDocument();
     const revocations = within(screen.getByTestId('consent-revocations'));
     expect(revocations.getByText('Todos os usos')).toBeInTheDocument();
     expect(revocations.getByText('Retirada')).toBeInTheDocument();
+  });
+
+  it('opens and downloads the signed term linked to the consent', async () => {
+    mocked.getPatientConsent.mockResolvedValue({
+      data: { success: true, data: { ...consent, signedAt: '2026-10-01T12:00:00.000Z', signedTcleDocumentUri: 'objstore://consents/c-uuid-1/tcle.pdf' } },
+    } as any);
+    mocked.getSignedTcle.mockResolvedValue({ data: new Blob(['%PDF-'], { type: 'application/pdf' }) } as any);
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:tcle');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText(/Assinado em/)).toBeInTheDocument();
+    await user.click(screen.getByTestId('view-signed-tcle'));
+    await waitFor(() => expect(mocked.getSignedTcle).toHaveBeenCalledWith(CONSENT_ID));
+    expect(open).toHaveBeenCalledWith('blob:tcle', '_blank', 'noopener');
+    await user.click(screen.getByTestId('download-signed-tcle'));
+    await waitFor(() => expect(mocked.getSignedTcle).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows the revocation location and the closure notice for this participant', async () => {
+    mocked.getConsentHistory.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          ...activeHistory,
+          revocations: [{
+            consentRevocationId: 'rev-1',
+            scope: ['all'],
+            reason: 'Vencimento do termo',
+            effectiveAt: '2026-11-01T12:00:00.000Z',
+            priorUseDisposition: 'retain_history',
+            channel: 'term_expiry',
+            location: { status: 'captured', latitude: -23.5, longitude: -46.6 },
+          }],
+          communications: [{
+            consentCommunicationEventId: 'com-1',
+            participantId: 'P1',
+            communicationType: 'notice',
+            contentTemplateId: 'consent.term_expiry.v1',
+            purpose: 'consent_term_expiry',
+            deliveryStatus: 'delivered',
+            sentAt: '2026-11-01T12:00:00.000Z',
+          }],
+        },
+      },
+    } as any);
+    renderPage();
+    expect(await screen.findByTestId('consent-participant-id')).toHaveTextContent('Participante P1');
+    const revocation = await screen.findByTestId('consent-revocation-rev-1');
+    expect(revocation).toHaveTextContent('Vencimento do termo');
+    expect(revocation).toHaveTextContent('-23.5, -46.6');
+    expect(screen.getByTestId('consent-communication-consent.term_expiry.v1')).toHaveTextContent('Aviso de encerramento');
+  });
+
+  it('refreshes the open consent every 15s and pauses while the tab is hidden', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    renderPage();
+    expect(await screen.findByTestId('consent-state')).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(15_000); });
+    expect(mocked.getPatientConsent).toHaveBeenCalledTimes(2);
+
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    act(() => { vi.advanceTimersByTime(15_000); });
+    expect(mocked.getPatientConsent).toHaveBeenCalledTimes(2);
+
+    hidden.mockReturnValue(false);
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(mocked.getPatientConsent).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
   });
 
   it('says so when the participant has no consent', async () => {

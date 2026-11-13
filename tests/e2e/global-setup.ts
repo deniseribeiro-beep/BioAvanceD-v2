@@ -69,7 +69,7 @@ async function clearSourceAttemptStore(): Promise<void> {
 //     silently left cold -- this list is not derived from App.tsx at runtime.
 
 // Keep this list in step with the `lazy(() => import(...))` declarations in
-// frontend/src/App.tsx (42 as of #1453). One concrete path per distinct lazy
+// frontend/src/App.tsx (50 as of #1542). One concrete path per distinct lazy
 // chunk; where a path takes a route param, a syntactically valid placeholder
 // is used -- the chunk loads because the element renders, not because the id
 // resolves to real data.
@@ -83,7 +83,6 @@ const ROUTES_TO_WARM: readonly string[] = [
   '/patients/import-fhir',
   '/patients/1/consent',
   '/import/quarantine',
-  '/import/lgpd',
   '/samples',
   '/samples/1',
   '/results',
@@ -114,6 +113,15 @@ const ROUTES_TO_WARM: readonly string[] = [
   '/access-requests',
   '/consents',
   '/biomarker-associations',
+  '/biomarker-associations/new',
+  '/quality-descriptions/new',
+  '/reports/templates/new',
+  '/organizations/new',
+  '/collections/new',
+  '/collections/1/governance',
+  '/equipment/new',
+  '/sensors/new',
+  '/policies/new',
   '/next/warmup',
   '/next/intake',
 ];
@@ -129,11 +137,12 @@ const CONCURRENCY = 4;
 // lazy chunk without considering the warm list.
 //
 // The equality is a TRIPWIRE, not a semantic invariant, and it is worth knowing
-// why before trusting it. App.tsx declares 42 lazy chunks and
+// why before trusting it. App.tsx declares 50 lazy chunks and
 // foundation/FoundationApp.tsx nests none, so the list holds exactly one path
-// per chunk. But two App.tsx chunks each serve two route paths (MFASetupPage at
-// /mfa-setup and /security/mfa-setup, TcleBuilderPage at /admin/tcle/new and
-// /admin/tcle/edit/:templateId), and the check counts paths against
+// per chunk. But several App.tsx chunks serve more than one route path
+// (MFASetupPage at /mfa-setup and /security/mfa-setup, TcleBuilderPage at
+// /admin/tcle/new and /admin/tcle/edit/:templateId, and each entity form page
+// at its /new and /:id/edit paths), and the check counts paths against
 // declarations without mapping one to the other. So a future change could keep
 // the counts equal -- a path swapped for a second path of another chunk --
 // while leaving a chunk cold. It still fires on the common case --

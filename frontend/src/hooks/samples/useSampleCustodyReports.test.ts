@@ -35,6 +35,7 @@ let state: SamplesState;
 function setSamples(samples: Sample[], loading = false) {
   state = {
     samples,
+    total: samples.length,
     loading,
     error: null,
     loadSamples: vi.fn(),

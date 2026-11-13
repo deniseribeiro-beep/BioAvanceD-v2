@@ -11,6 +11,7 @@ import InlineStorageMovementPanel from './InlineStorageMovementPanel';
 import type { Sample } from '../../types/models';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 import { getStorageLabel, buildSprecSummary } from './sampleListFormatters';
+import InventoryBoxGrid from './InventoryBoxGrid';
 import { resolveSampleLifecycleStatus } from '../../foundation/contracts';
 import { BLOCKED_SPECIMEN_STATUSES, resolveSpecimenStatus } from '../../utils/sampleHelpers';
 
@@ -24,10 +25,14 @@ interface SamplesPageViewProps {
   search: string;
   selectedSampleIds: string[];
   filteredSamples: SampleWithId[];
+  pagedSamples: SampleWithId[];
   selectedSamples: SampleWithId[];
   allSelected: boolean;
   canEdit: boolean;
   printModalOpen: boolean;
+  currentPage: number;
+  totalPages: number;
+  pageSize: number;
   onSearchChange: (value: string) => void;
   onSearchSubmit: () => void;
   onToggleSelectAll: () => void;
@@ -44,6 +49,7 @@ interface SamplesPageViewProps {
   onResendConsent: (sample: SampleWithId) => void;
   onAttachExternalDocument: (sample: SampleWithId) => void;
   onViewPending: (sample: SampleWithId) => void;
+  onPageChange: (page: number) => void;
 }
 
 // The list row's status badge. #532: specimenStatus is the canonical,
@@ -80,10 +86,14 @@ export default function SamplesPageView({
   search,
   selectedSampleIds,
   filteredSamples,
+  pagedSamples,
   selectedSamples,
   allSelected,
   canEdit,
   printModalOpen,
+  currentPage,
+  totalPages,
+  pageSize,
   onSearchChange,
   onSearchSubmit,
   onToggleSelectAll,
@@ -100,9 +110,12 @@ export default function SamplesPageView({
   onResendConsent,
   onAttachExternalDocument,
   onViewPending,
+  onPageChange,
 }: SamplesPageViewProps) {
   const [scanMode, setScanMode] = useState(false);
   const hasSearch = search.trim().length > 0;
+  const pageStart = filteredSamples.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const pageEnd = Math.min(currentPage * pageSize, filteredSamples.length);
 
   return (
     <div className="page-shell samples-page" data-testid="sample-list-root">
@@ -152,8 +165,13 @@ export default function SamplesPageView({
             </div>
           )}
           <div className="toolbar info">
-            <strong>
-              {filteredSamples.length} {filteredSamples.length === 1 ? t('samples.displayedOne', 'amostra exibida') : t('samples.displayedMany', 'amostras exibidas')}
+            <strong data-testid="samples-page-summary">
+              {filteredSamples.length === 0
+                ? t('samples.displayedNone', 'Nenhuma amostra exibida')
+                : t('samples.displayedRange', 'Mostrando {start}–{end} de {total}')
+                    .replace('{start}', String(pageStart))
+                    .replace('{end}', String(pageEnd))
+                    .replace('{total}', String(filteredSamples.length))}
             </strong>
             <p>
               {hasSearch
@@ -162,6 +180,8 @@ export default function SamplesPageView({
             </p>
           </div>
         </div>
+
+        <InventoryBoxGrid samples={filteredSamples} t={t} />
 
         <Table>
           <thead>
@@ -215,7 +235,7 @@ export default function SamplesPageView({
                 </td>
               </tr>
             ) : (
-              filteredSamples.map((sample) => {
+              pagedSamples.map((sample) => {
                 const { initial, current } = computeVolume(sample);
                 const participantId = sample.participantId ?? (sample as any).patient?.participantId;
                 const isExpanded = expandedStorageSample?.id === sample.id;
@@ -269,9 +289,9 @@ export default function SamplesPageView({
                       <td>{participantId ?? 'N/A'}</td>
                       <td style={{ fontSize: '0.92rem' }}>{getStorageLabel(sample, t)}</td>
                       <td>
-                        <div className="samples-row-actions" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.4rem' }}>
+                        <div className="table-actions samples-row-actions">
                           {isQuarantined(sample) && (
-                            <div className="samples-row-actions" style={{ gap: '0.4rem', flexWrap: 'wrap' }}>
+                            <>
                               <Button
                                 variant="secondary"
                                 className="samples-row-action"
@@ -299,7 +319,7 @@ export default function SamplesPageView({
                               >
                                 {t('samples.actions.viewPending', 'Visualizar pendência')}
                               </Button>
-                            </div>
+                            </>
                           )}
                           <Button
                             variant="secondary"
@@ -351,6 +371,38 @@ export default function SamplesPageView({
             )}
           </tbody>
         </Table>
+
+        {!loading && !error && filteredSamples.length > 0 && (
+          <div className="samples-pagination" data-testid="samples-pagination">
+            <div className="samples-pagination__summary" data-testid="samples-pagination-summary">
+              {t('samples.displayedRange', 'Mostrando {start}–{end} de {total}')
+                .replace('{start}', String(pageStart))
+                .replace('{end}', String(pageEnd))
+                .replace('{total}', String(filteredSamples.length))}
+            </div>
+            <div className="samples-pagination__controls">
+              <Button
+                variant="secondary"
+                onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+                disabled={currentPage === 1}
+                data-testid="samples-pagination-prev"
+              >
+                {t('common.previous', 'Anterior')}
+              </Button>
+              <span className="samples-pagination__page" data-testid="samples-pagination-page">
+                {t('common.page', 'Página')} {currentPage} {t('common.of', 'de')} {totalPages}
+              </span>
+              <Button
+                variant="secondary"
+                onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+                disabled={currentPage === totalPages}
+                data-testid="samples-pagination-next"
+              >
+                {t('common.next', 'Próxima')}
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
 
       {printModalOpen && (
