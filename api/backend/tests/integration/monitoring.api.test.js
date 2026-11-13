@@ -137,6 +137,59 @@ describe('GET /api/monitoring/metrics', () => {
 
     expect(res.status).toBe(401);
   });
+
+  // RNF015 C1/C3 and C7 (#1468): the worker job metrics in the JSON, and the
+  // same metrics in the Prometheus text format.
+  function workerJobMetricsMock() {
+    const workerJobMetrics = createCollectionMock();
+    workerJobMetrics.find.mockImplementation(() => {
+      const cursor = {};
+      cursor.sort = vi.fn(() => cursor);
+      cursor.limit = vi.fn(() => cursor);
+      cursor.toArray = vi.fn().mockResolvedValue([{ worker: 'neo4j-projection', job: 'project-event', completed: 5, failed: 1, durationMsSum: 12.5, durationMsMax: 4 }]);
+      return cursor;
+    });
+    return workerJobMetrics;
+  }
+
+  it('carries the worker job metrics in the JSON for an Administrador', async () => {
+    app.locals.db = createDbMock({ workerJobMetrics: workerJobMetricsMock(), ...rbacCollectionsAdmin });
+
+    const res = await asAdmin(request(app).get(METRICS));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.jobs).toEqual([expect.objectContaining({ worker: 'neo4j-projection', job: 'project-event', completed: 5, failed: 1 })]);
+  });
+
+  it('answers ?format=prometheus with the text format 0.0.4 for an Administrador', async () => {
+    app.locals.db = createDbMock({ workerJobMetrics: workerJobMetricsMock(), ...rbacCollectionsAdmin });
+    // A request is recorded when it finishes, so one goes first.
+    await request(app).get(METRICS);
+
+    const res = await asAdmin(request(app).get(METRICS).query({ format: 'prometheus' }));
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type'].startsWith('text/plain; version=0.0.4')).toBe(true);
+    expect(res.text).toMatch(/^bioavanced_http_requests_total\{/m);
+    expect(res.text).toContain('bioavanced_worker_jobs_total{worker="neo4j-projection",job="project-event",outcome="completed"} 5\n');
+  });
+
+  it('answers 400 to a format other than json or prometheus', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsAdmin });
+
+    const res = await asAdmin(request(app).get(METRICS).query({ format: 'xml' }));
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ success: false, error: 'Parâmetro inválido', message: 'format deve ser json ou prometheus' });
+  });
+
+  it('refuses ?format=prometheus to a Coordenador with 403', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsCoordinator });
+
+    const res = await asCoordinator(request(app).get(METRICS).query({ format: 'prometheus' }));
+
+    expect(res.status).toBe(403);
+  });
 });
 
 // RNF015 C2 (#1323): GET /api/monitoring/alerts gives the Administrador the

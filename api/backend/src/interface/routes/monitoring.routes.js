@@ -6,6 +6,8 @@ const logger = require('../../utils/logger');
 const runMonitoring = require('../../services/runMonitoring.service');
 const httpMetrics = require('../../infrastructure/metrics/httpMetrics');
 const queueDepth = require('../../infrastructure/metrics/queueDepth');
+const { readJobMetrics } = require('../../infrastructure/metrics/jobMetrics');
+const { renderPrometheus, CONTENT_TYPE } = require('../../infrastructure/metrics/prometheusText');
 const platformAlert = require('../../services/platformAlert.service');
 
 // RNF015 AC5/AC6 (#1323): the recent Foundation, configuration, reference
@@ -28,12 +30,28 @@ router.get('/runs', authenticate, requireRole(4), async (req, res) => {
 });
 
 // RNF015 C1/C2 (#1323): request count, latency and errors per route template,
-// and the BullMQ queue depths. JSON behind the same Administrador gate as
-// /runs; the unauthenticated /api/health keeps no such detail.
+// and the BullMQ queue depths; RNF015 C1/C3 (#1468): the worker job metrics.
+// Behind the same Administrador gate as /runs; the unauthenticated /api/health
+// keeps no such detail. RNF015 C7 (#1468): ?format=prometheus serves the same
+// metrics in the Prometheus text format for an equivalent tool to scrape;
+// absent or ?format=json keeps the JSON.
 router.get('/metrics', authenticate, requireRole(4), async (req, res) => {
+  const format = req.query.format === undefined ? 'json' : req.query.format;
+  if (format !== 'json' && format !== 'prometheus') {
+    return res.status(400).json({ success: false, error: 'Parâmetro inválido', message: 'format deve ser json ou prometheus' });
+  }
   try {
-    const queues = await queueDepth.readQueueDepths(queueDepth.inputsFrom());
-    return res.status(200).json({ success: true, data: { http: httpMetrics.snapshot(), queues } });
+    const [queues, jobs] = await Promise.all([
+      queueDepth.readQueueDepths(queueDepth.inputsFrom()),
+      readJobMetrics(req.app.locals.db),
+    ]);
+    const http = httpMetrics.snapshot();
+    if (format === 'prometheus') {
+      // A Buffer, because send() on a string rewrites the charset parameter
+      // and moves it ahead of version=0.0.4.
+      return res.status(200).set('Content-Type', CONTENT_TYPE).send(Buffer.from(renderPrometheus({ http, queues, jobs }), 'utf8'));
+    }
+    return res.status(200).json({ success: true, data: { http, queues, jobs } });
   } catch (error) {
     logger.error('Erro ao ler as métricas', { error: error.message, stack: error.stack });
     return res.status(500).json({ success: false, error: 'Erro interno', message: 'Erro ao ler as métricas' });
