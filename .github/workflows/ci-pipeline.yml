@@ -385,3 +385,63 @@ jobs:
             --env-file .env.test.example \
             -f compose.test.yml \
             down --volumes --remove-orphans
+
+  # #1469 (RNF002 C1, C3, C4): the identifier lookups' p95 against the 3 s
+  # budget, on 100,000 seeded records per lookup collection, with the
+  # explain plan, the indexes and the load profile recorded. The script
+  # exits 1 when a lookup is unindexed, misses its index or is over budget,
+  # so a breach fails this job. A fresh MongoDB service, no compose stack.
+  identifier-lookup-budget:
+    name: Identifier lookup budget (RNF002)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      mongodb:
+        image: mongo:7.0.45
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: api/backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm --prefix api/backend ci
+
+      - name: Seed 100,000 records and check the lookup budget
+        working-directory: api/backend
+        env:
+          MONGO_URI: mongodb://localhost:27017
+          MONGO_DB: bioavanced_rnf002
+          MONGO_DB_NOVO: bioavanced_rnf002
+        run: |
+          mkdir -p ../rnf002-out
+          node scripts/identifier-lookup-explain.js --seed 100000 --out ../rnf002-out/identifier-lookup.json
+
+      - name: Print the lookup summary
+        if: always()
+        run: |
+          test -f rnf002-out/identifier-lookup.json || exit 0
+          node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));for(const l of r.lookups)console.log((l.withinBudget===true&&l.indexed===true&&l.indexName===l.expectedIndex?"PASS ":"BREACH ")+l.id+" p95Ms="+l.p95Ms+" index="+l.indexName)' rnf002-out/identifier-lookup.json
+
+      - name: Upload the lookup record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rnf002-identifier-lookup
+          path: rnf002-out/
+          if-no-files-found: ignore
+          retention-days: 7
