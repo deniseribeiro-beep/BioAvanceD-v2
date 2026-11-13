@@ -12,7 +12,111 @@ vi.spyOn(neo4jConnection, 'connectNeo4j').mockResolvedValue({
   session: () => ({ close: async () => undefined }),
 });
 
+// #1468: the worker records each event through jobMetrics.recordJob, called
+// on the module (not destructured) so this spy intercepts it; the cases pass
+// `db: {}`, which a real record would warn about. Its own behaviour is proven
+// in tests/unit/infrastructure/metrics/jobMetrics.test.js.
+const jobMetrics = require('../../src/infrastructure/metrics/jobMetrics');
+const requestContext = require('../../src/utils/requestContext');
+
+vi.spyOn(jobMetrics, 'recordJob').mockResolvedValue(undefined);
+
+beforeEach(() => {
+  jobMetrics.recordJob.mockReset().mockResolvedValue(undefined);
+});
+
 const { runProjectionOnce, runProjectionWorker, PROJECTOR_NAME } = require('../../src/workers/neo4jProjection.worker');
+
+// #1468 (RNF015 C1/C3): each event runs under its own correlation id and is
+// recorded as one job run.
+describe('#1468 neo4jProjection.worker job context and metrics', () => {
+  const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+  const outboxFor = (events) => ({
+    rescheduleStaleProcessing: async () => 0,
+    leaseNextBatch: async () => events,
+    markProjected: async () => undefined,
+    markRetrying: async () => undefined,
+    markDeadLetter: async () => undefined,
+  });
+
+  function captureRecords() {
+    const records = [];
+    jobMetrics.recordJob.mockImplementation(async (db, entry) => {
+      records.push({ db, ...entry, requestId: requestContext.currentRequestId() });
+    });
+    return records;
+  }
+
+  it('records a projected event as completed under its traceId', async () => {
+    const records = captureRecords();
+    const db = {};
+    let seen;
+    const projector = { applyEvent: async () => { seen = requestContext.currentRequestId(); } };
+
+    const result = await runProjectionOnce({
+      db,
+      neo4jDriver,
+      outboxService: outboxFor([{ eventId: 'evt-t1', attempts: 1, traceId: 'req-trace-0001' }]),
+      projector,
+      maxAttempts: 8,
+    });
+
+    expect(result).toMatchObject({ processed: 1, projected: 1, failed: 0 });
+    expect(seen).toBe('req-trace-0001');
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      db,
+      worker: 'neo4j-projection',
+      job: 'project-event',
+      outcome: 'completed',
+      requestId: 'req-trace-0001',
+    });
+    expect(records[0].durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('runs an event without a traceId under a fresh well-formed id of its own', async () => {
+    const records = captureRecords();
+    const projector = { applyEvent: async () => undefined };
+
+    await requestContext.runAsJob('req-outer-0003', () => runProjectionOnce({
+      db: {},
+      neo4jDriver,
+      outboxService: outboxFor([{ eventId: 'evt-t2', attempts: 1 }, { eventId: 'evt-t3', attempts: 1 }]),
+      projector,
+      maxAttempts: 8,
+    }));
+
+    expect(records).toHaveLength(2);
+    for (const record of records) {
+      expect(requestContext.WELL_FORMED.test(record.requestId)).toBe(true);
+      expect(record.requestId).not.toBe('req-outer-0003');
+    }
+    expect(records[0].requestId).not.toBe(records[1].requestId);
+  });
+
+  it('records an event whose applyEvent throws as failed, and still counts it failed', async () => {
+    const records = captureRecords();
+    const projector = { applyEvent: async () => { throw new Error('neo4j offline'); } };
+    const logger = require('../../src/utils/logger');
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const result = await runProjectionOnce({
+        db: {},
+        neo4jDriver,
+        outboxService: outboxFor([{ eventId: 'evt-t4', attempts: 1, traceId: 'req-trace-0002' }]),
+        projector,
+        maxAttempts: 8,
+      });
+
+      expect(result).toMatchObject({ processed: 1, projected: 0, failed: 1 });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ outcome: 'failed', requestId: 'req-trace-0002' });
+    } finally {
+      logger.warn.mockRestore();
+    }
+  });
+});
 
 describe('neo4jProjection.worker', () => {
   it('replays outbox events idempotently and marks dead letters after repeated failures', async () => {

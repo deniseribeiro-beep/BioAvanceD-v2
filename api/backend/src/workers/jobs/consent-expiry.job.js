@@ -1,4 +1,6 @@
 const logger = require('../../utils/logger');
+const requestContext = require('../../utils/requestContext');
+const jobMetrics = require('../../infrastructure/metrics/jobMetrics');
 
 const SWEEP_MS = 60 * 60 * 1000;
 
@@ -8,21 +10,31 @@ const SWEEP_MS = 60 * 60 * 1000;
  * not leave an ended term looking open.
  */
 function scheduleNextRun() {
-  const timer = setTimeout(async () => {
+  const timer = setTimeout(() => requestContext.runAsJob(null, async () => {
+    // #1468 (RNF015 C1/C3): each sweep runs under its own correlation id and
+    // is recorded once, completed or failed, when a database was reached.
+    let db = null;
+    let outcome = 'completed';
+    const t0 = process.hrtime.bigint();
     try {
       const { connectDB } = require('../../database/mongo');
       const consentService = require('../../services/consent.service');
-      const db = await connectDB();
+      db = await connectDB();
       const result = await consentService.expireDueConsents(db);
       if (result.closed > 0) {
         logger.info(`Termos encerrados por vencimento: ${result.closed}`);
       }
     } catch (error) {
+      outcome = 'failed';
       logger.error('Erro na varredura de vencimento do TCLE:', error.message || error);
     } finally {
+      if (db) {
+        const durationMs = Number(process.hrtime.bigint() - t0) / 1e6;
+        await jobMetrics.recordJob(db, { worker: 'consent-expiry', job: 'sweep', outcome, durationMs });
+      }
       scheduleNextRun();
     }
-  }, SWEEP_MS);
+  }), SWEEP_MS);
   if (typeof timer.unref === 'function') timer.unref();
 }
 

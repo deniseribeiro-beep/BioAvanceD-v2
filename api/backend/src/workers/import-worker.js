@@ -6,6 +6,7 @@ const { initRedis } = require('../config/queue');
 const { validateRedisOnly } = require('../config/validateEnv');
 const logger = require('../utils/logger');
 const { withJobRequestContext } = require('../utils/requestContext');
+const { withJobMetrics } = require('../infrastructure/metrics/jobMetrics');
 const patientWorker = require('./workers/patient-worker');
 const sampleWorker = require('./workers/sample-worker');
 const resultWorker = require('./workers/result-worker');
@@ -102,7 +103,9 @@ async function initWorker() {
     // Cria worker
     worker = new Worker(
       'import-queue',
-      withJobRequestContext(async (job) => {
+      // #1468 (RNF015 C1/C3): the context is outermost, so the metrics record
+      // carries the job's correlation id.
+      withJobRequestContext(withJobMetrics('import-queue', () => db, async (job) => {
         const { jobID, userID, dataType, filePath, fileName, options } = job.data;
         const dataTypeNormalized = (dataType || '').toString().trim().toLowerCase();
         const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot']);
@@ -401,7 +404,7 @@ async function initWorker() {
 
           throw error;
         }
-      }),
+      })),
       {
         connection,
         // #971: default 1, NOT 2. Every duplicate check on the import path is a
@@ -455,7 +458,7 @@ async function initWorker() {
     if (!notificationWorker) {
       notificationWorker = new Worker(
         'notification-queue',
-        withJobRequestContext(async (job) => {
+        withJobRequestContext(withJobMetrics('notification-queue', () => db, async (job) => {
           if (job.name !== 'consent-notification') {
             logger.warn(`Job desconhecido em notification-queue: ${job.name}`);
             return null;
@@ -463,7 +466,7 @@ async function initWorker() {
 
           const notificationService = getNotificationService();
           return notificationService.processConsentNotificationJob(job.data, db);
-        }),
+        })),
         {
           connection,
           concurrency: parseInt(process.env.NOTIFICATION_WORKER_CONCURRENCY || '3', 10),

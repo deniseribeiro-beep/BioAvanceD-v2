@@ -28,6 +28,7 @@ const notificationServicePath = require.resolve('../../src/services/notification
 const iotStreamingServicePath = require.resolve('../../src/services/iot-streaming.service');
 const loggerPath = require.resolve('../../src/utils/logger');
 const neo4jConnectionPath = require.resolve('../../src/infrastructure/database/neo4j/connection');
+const jobMetricsPath = require.resolve('../../src/infrastructure/metrics/jobMetrics');
 
 let FakeWorker;
 let fakeWorkerInstances;
@@ -48,6 +49,10 @@ let fakeIotStreamingService;
 let fakeDb;
 let fakeLogger;
 let fakeNeo4jConnection;
+// #1468: what the fake withJobMetrics saw per processed job. The real
+// recordJob would add an updateOne to fakeDb's shared collection; its own
+// behaviour is proven in tests/unit/infrastructure/metrics/jobMetrics.test.js.
+let metricCalls;
 
 function makeWorkerResult(overrides = {}) {
   return {
@@ -257,6 +262,20 @@ function installFakes() {
     loaded: true,
     exports: fakeNeo4jConnection,
   };
+
+  metricCalls = [];
+  const { currentRequestId } = require('../../src/utils/requestContext');
+  require.cache[jobMetricsPath] = {
+    id: jobMetricsPath,
+    filename: jobMetricsPath,
+    loaded: true,
+    exports: {
+      withJobMetrics: (worker, getDb, processor) => (job, ...rest) => {
+        metricCalls.push({ worker, job: job && job.name, requestId: currentRequestId() });
+        return processor(job, ...rest);
+      },
+    },
+  };
 }
 
 function freshImportWorkerModule() {
@@ -283,6 +302,7 @@ function clearAllCaches() {
   delete require.cache[iotStreamingServicePath];
   delete require.cache[loggerPath];
   delete require.cache[neo4jConnectionPath];
+  delete require.cache[jobMetricsPath];
 }
 
 describe('workers/import-worker', () => {
@@ -475,6 +495,28 @@ describe('workers/import-worker', () => {
 
       expect(fakePatientWorker.process).toHaveBeenCalled();
       expect(seen).toBe('req-job-0002');
+    });
+
+    // #1468: RNF015 C1/C3 -- each processed job is recorded under its queue
+    // and name, inside its request context.
+    it('#1468 records the processed job as import-queue:<name> under its request id', async () => {
+      const processor = await getProcessor();
+      const job = {
+        id: 'j-metric',
+        name: 'import',
+        data: {
+          jobID: 'j-metric',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+          requestId: 'req-job-0003',
+        },
+      };
+
+      await processor(job);
+
+      expect(metricCalls).toEqual([{ worker: 'import-queue', job: 'import', requestId: 'req-job-0003' }]);
     });
 
     it('routes "samples" to the sample worker with userID and a connected Neo4j driver threaded through options (#483)', async () => {
@@ -1226,6 +1268,20 @@ describe('workers/import-worker', () => {
 
       expect(result).toBeNull();
       expect(fakeNotificationService.processConsentNotificationJob).not.toHaveBeenCalled();
+    });
+
+    it('#1468 records a notification job as notification-queue:<name> under a fresh id when it carries none', async () => {
+      process.env.NODE_ENV = 'test';
+      const { WELL_FORMED } = require('../../src/utils/requestContext');
+      const importWorker = freshImportWorkerModule();
+      await importWorker.initWorker();
+      const notificationProcessor = fakeWorkerInstances[1].processor;
+
+      await notificationProcessor({ name: 'consent-notification' });
+
+      expect(metricCalls).toHaveLength(1);
+      expect(metricCalls[0]).toMatchObject({ worker: 'notification-queue', job: 'consent-notification' });
+      expect(WELL_FORMED.test(metricCalls[0].requestId)).toBe(true);
     });
   });
 });

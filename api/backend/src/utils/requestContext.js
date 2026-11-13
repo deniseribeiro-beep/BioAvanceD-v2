@@ -9,7 +9,9 @@
  *
  * A queue job enqueued during a request carries the id as `requestId` in its
  * data, and the worker runs each job under it, so the worker's log lines and
- * audit events keep the request's correlation (#1323; RNF015 C1).
+ * audit events keep the request's correlation (#1323; RNF015 C1). A job with
+ * no id, or a malformed one, runs under a new correlation id, never an outer
+ * one (#1468; RNF015 C1): every job's log lines stay tied to one run.
  *
  * Outbound calls carry it too (#1323; RNF015 C1): a Neo4j transaction as its
  * metadata, an outbox event as its traceId (P1X-0391), and an InfluxDB HTTP
@@ -70,9 +72,16 @@ function requestIdHeaders(requestId) {
   return isWellFormed(requestId) ? { 'X-Request-Id': requestId } : null;
 }
 
+// #1468 (RNF015 C1): a job always runs under a correlation id of its own --
+// the given one when it is well-formed, else a new UUID -- in a fresh store,
+// so it never inherits an outer request's id.
+function runAsJob(requestId, fn) {
+  return storage.run({ requestId: isWellFormed(requestId) ? requestId : crypto.randomUUID() }, fn);
+}
+
 function withJobRequestContext(processor) {
   return (job, ...rest) =>
-    runWithRequestId(job && job.data ? job.data.requestId : undefined, () => processor(job, ...rest));
+    runAsJob(job && job.data ? job.data.requestId : undefined, () => processor(job, ...rest));
 }
 
 module.exports = {
@@ -82,6 +91,7 @@ module.exports = {
   WELL_FORMED,
   withRequestId,
   runWithRequestId,
+  runAsJob,
   withJobRequestContext,
   neo4jTxConfig,
   requestIdHeaders,
