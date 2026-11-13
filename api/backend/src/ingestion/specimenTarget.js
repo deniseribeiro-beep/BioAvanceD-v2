@@ -5,11 +5,14 @@
  * (docs/decisions/2026-10-23-ingestion-specimen-target.md). A given barcode
  * is issued as the specimen's LabelIdentifier (#1378); storage is never
  * allocated here (docs/decisions/2026-10-25-ingestion-specimen-storage-and-label.md).
+ * RNF011 AC1 (#1523): a named unit is an active UCUM code
+ * (docs/decisions/2026-11-12-ingestion-specimen-unit.md).
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { SampleModel } = require('../models/Sample');
 const { GraphProjectionService } = require('../services/graphProjection.service');
 const sampleCollectionGate = require('../services/sample-collection-gate.service');
+const { checkActiveCode } = require('./activeCodeValidator');
 const { SPECIMEN_LABEL_NAMESPACE_ID, issueSpecimenLabel } = require('../services/specimenLabel.service');
 const { getCollection } = require('../utils/collectionResolver');
 const { LEGACY_BARCODE_WRITE_REFUSED, sampleBarcodeWindowOpen } = require('../utils/sampleBarcodeWindow');
@@ -17,6 +20,10 @@ const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 
 // RegisterSample.js's assertConsent: the statuses that are positive evidence.
 const ACTIVE_CONSENT_STATUSES = ['ACTIVE', 'VALID', 'GRANTED'];
+
+// The systemUri the UCUM reference import stamps on its concepts
+// (reference-data/reference-imports/sources/ucum.js).
+const UCUM_SYSTEM_URI = 'http://unitsofmeasure.org';
 
 function referenceError(statusCode, message, violationCode) {
   const error = new Error(message);
@@ -135,6 +142,16 @@ async function validateSpecimenReferences(db, payload) {
       throw referenceError(409, error.message, error.code);
     }
     throw error;
+  }
+
+  // RNF011 AC1 (#1523): a named unit is a code of the active UCUM release
+  // (ELM-0138), checked as RF029 AC3 checks every coded value. An absent
+  // unit is not checked here.
+  if (typeof payload.unit === 'string' && payload.unit !== '') {
+    const unitCheck = await checkActiveCode(db, { systemUri: UCUM_SYSTEM_URI, code: payload.unit });
+    if (!unitCheck.active) {
+      throw referenceError(409, `unit ${payload.unit} não é um código UCUM de uma release de referência ativa (status: ${unitCheck.status})`, 'INACTIVE_OR_UNKNOWN_CODE');
+    }
   }
 }
 

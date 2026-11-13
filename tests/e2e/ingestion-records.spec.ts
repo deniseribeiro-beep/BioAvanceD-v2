@@ -633,6 +633,21 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
   });
 
+  test('#1523 RNF011 AC1: a Specimen whose unit is no active UCUM code answers 422 INGESTION_QUARANTINED with INACTIVE_OR_UNKNOWN_CODE and writes no sample', async ({ request }) => {
+    const sourceRecordId = `rf1523-e2e-${Date.now()}-specimen-unit`;
+    const payload = { ...(await seedSpecimenReferences(request)), unit: `rf1523-not-ucum-${Date.now()}` };
+
+    const res = await ingest(request, { entityType: 'Specimen', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['INACTIVE_OR_UNKNOWN_CODE']);
+    expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
+  });
+
   // #1318: a Participant runs the participant mount's clinical unit and
   // consent template gates against real records: an organization the admin's
   // global scope holds, and the shared consent template, which is never

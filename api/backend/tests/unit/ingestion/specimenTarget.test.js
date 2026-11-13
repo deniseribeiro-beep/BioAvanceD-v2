@@ -24,8 +24,10 @@ function specimenDb({
   labelIdentifiers = [],
   collections = [GOVERNED_COLLECTION],
   collectionGovernanceApprovals = [GOVERNED_APPROVAL],
+  terminologyConcepts = [],
+  referenceDatasetReleases = [],
 } = {}) {
-  return createFakeDb({ patients, patientConsents: consents, organizations, samples, labelIdentifiers, collections, collectionGovernanceApprovals });
+  return createFakeDb({ patients, patientConsents: consents, organizations, samples, labelIdentifiers, collections, collectionGovernanceApprovals, terminologyConcepts, referenceDatasetReleases });
 }
 
 const SPECIMEN = { specimenId: 'client-1', participantId: PARTICIPANT, collectionSite: 'org-site-1', collectionId: 'COL-GOV-1' };
@@ -306,5 +308,34 @@ describe('ingestion/specimenTarget appendSpecimenProjection (RF029 AC6, #1313)',
     expect(db.collection('labelIdentifiers').docs).toHaveLength(0);
     expect(db.collection('containers').docs).toHaveLength(0);
     expect(db.collection('specimenContainerAssignments').docs).toHaveLength(0);
+  });
+});
+
+// RNF011 AC1 (#1523): a named unit is a code of the active UCUM release.
+const UCUM_MG = { systemUri: 'http://unitsofmeasure.org', code: 'mg', referenceDatasetReleaseId: 'rel-ucum', conceptStatus: 'active' };
+
+describe('ingestion/specimenTarget validateSpecimenReferences unit (RNF011 AC1, #1523)', () => {
+  it('19. a unit of the active UCUM release resolves', async () => {
+    const db = specimenDb({ terminologyConcepts: [UCUM_MG], referenceDatasetReleases: [{ referenceDatasetReleaseId: 'rel-ucum', releaseStatus: 'active' }] });
+
+    await expect(validateSpecimenReferences(db, { ...SPECIMEN, unit: 'mg' })).resolves.toBeUndefined();
+  });
+
+  it('20. an unknown unit is 409 INACTIVE_OR_UNKNOWN_CODE', async () => {
+    const error = await refusal(specimenDb(), { ...SPECIMEN, unit: 'banana' });
+
+    expect(error).toMatchObject({ statusCode: 409, violationCode: 'INACTIVE_OR_UNKNOWN_CODE' });
+  });
+
+  it('21. a unit of a superseded release is 409 INACTIVE_OR_UNKNOWN_CODE', async () => {
+    const db = specimenDb({ terminologyConcepts: [UCUM_MG], referenceDatasetReleases: [{ referenceDatasetReleaseId: 'rel-ucum', releaseStatus: 'superseded' }] });
+
+    const error = await refusal(db, { ...SPECIMEN, unit: 'mg' });
+
+    expect(error).toMatchObject({ statusCode: 409, violationCode: 'INACTIVE_OR_UNKNOWN_CODE' });
+  });
+
+  it('22. no unit resolves with no concept seeded', async () => {
+    await expect(validateSpecimenReferences(specimenDb(), { ...SPECIMEN })).resolves.toBeUndefined();
   });
 });
