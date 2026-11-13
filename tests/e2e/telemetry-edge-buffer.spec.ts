@@ -3,7 +3,8 @@ import fs from 'fs';
 import { createHash } from 'crypto';
 import { createEdgeBuffer, httpSender, canonicalJson } from '../../api/backend/scripts/telemetry-edge-buffer';
 import { bindSensor, unbindSensor, closeSeedSensorDb } from './helpers/seedSensor';
-import { queryFreezerReadingIds, queryTemperaturePointFields } from './helpers/queryInflux';
+import { queryFreezerReadingIds, queryTemperaturePointFields, queryTemperatureRevisions } from './helpers/queryInflux';
+import { realLogin } from './helpers/realAuth';
 
 // Real-backend proof of RNF004 C1/C2 (#1392): the device's durable edge
 // buffer keeps each reading on disk until the backend confirms it, and a
@@ -14,6 +15,9 @@ import { queryFreezerReadingIds, queryTemperaturePointFields } from './helpers/q
 // included (RNF004 C3), and the server keeps the sequenceNumber and its own
 // receivedAt beside the device time, so the clock is not the only order
 // (RNF025 C7).
+// A late correction of a stored reading is kept beside it, never over it,
+// the history reads the correction alone and the original stays readable
+// by its id; an identical resend is no correction (RNF025 C8).
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
@@ -21,10 +25,14 @@ test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test
 test.describe('Telemetry edge buffer (#1392, RNF004 C1/C2) — real backend', () => {
   const sensorId = `rnf004-edge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const orderSensorId = `rnf004-order-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const correctionSensorId = `rnf025-correction-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const resendSensorId = `rnf025-resend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   test.afterAll(async () => {
     await unbindSensor(sensorId).catch(() => {});
     await unbindSensor(orderSensorId).catch(() => {});
+    await unbindSensor(correctionSensorId).catch(() => {});
+    await unbindSensor(resendSensorId).catch(() => {});
     await closeSeedSensorDb().catch(() => {});
   });
 
@@ -165,5 +173,102 @@ test.describe('Telemetry edge buffer (#1392, RNF004 C1/C2) — real backend', ()
       .toEqual(answers.map((answer) => answer.telemetryReadingId));
     expect(bySequence.map((point) => ({ sourceEventId: point.sourceEventId, payloadHash: point.payloadHash })))
       .toEqual(entries.map((entry) => ({ sourceEventId: entry.sourceEventId, payloadHash: entry.payloadHash })));
+  });
+
+  test('a late correction of a stored reading is kept beside the original, which it names (#1518, RNF025 C8)', async ({ request }, testInfo) => {
+    await bindSensor(correctionSensorId);
+
+    const buffer = createEdgeBuffer({ dir: testInfo.outputPath('edge-correction'), deviceId: correctionSensorId });
+    const observedAt = new Date(Date.now() - 1_000).toISOString();
+
+    const answers: any[] = [];
+    const send = httpSender({
+      endpoint: `${apiBaseURL}/api/iot/telemetry`,
+      secret: process.env.TELEMETRY_INGEST_SECRET,
+      fetchImpl: async (url: string, init: RequestInit) => {
+        const response = await fetch(url, init);
+        answers.push(await response.clone().json());
+        return response;
+      },
+    });
+
+    const original = buffer.enqueue({ sensorId: correctionSensorId, temperature: -75, timestamp: observedAt });
+    expect(await buffer.drain(send)).toEqual({ acked: 1, deadLettered: 0, retained: 0, stoppedOn: null });
+    // The original is stored before its correction is sent.
+    await expect
+      .poll(async () => (await queryTemperatureRevisions(correctionSensorId)).length, { timeout: 15_000 })
+      .toBe(1);
+
+    // The device corrects the reading it already sent for the same time: a
+    // new source event, so no replay of the first.
+    const correction = buffer.enqueue({ sensorId: correctionSensorId, temperature: -70, timestamp: observedAt });
+    expect(await buffer.drain(send)).toEqual({ acked: 1, deadLettered: 0, retained: 0, stoppedOn: null });
+
+    expect(answers).toHaveLength(2);
+    for (const answer of answers) {
+      expect(answer).toMatchObject({ success: true, accepted: true, clockStatus: 'synchronized' });
+      expect(answer.replayed).toBeUndefined();
+    }
+    expect(answers[1].telemetryReadingId).not.toBe(answers[0].telemetryReadingId);
+
+    // Same sensor, time and tags: only the revision tag keeps two series, so
+    // the original is not overwritten.
+    await expect
+      .poll(async () => (await queryTemperatureRevisions(correctionSensorId)).length, { timeout: 15_000 })
+      .toBe(2);
+    const points = (await queryTemperatureRevisions(correctionSensorId))
+      .map((point) => ({ ...point, time: new Date(point.time).toISOString() }))
+      .sort((a, b) => (a.revision ?? '').localeCompare(b.revision ?? ''));
+    expect(points).toEqual([
+      {
+        time: observedAt, value: -75, telemetryReadingId: answers[0].telemetryReadingId,
+        sourceEventId: original.sourceEventId, revision: null, supersedesTelemetryReadingId: null,
+      },
+      {
+        time: observedAt, value: -70, telemetryReadingId: answers[1].telemetryReadingId,
+        sourceEventId: correction.sourceEventId, revision: '1', supersedesTelemetryReadingId: answers[0].telemetryReadingId,
+      },
+    ]);
+
+    // The history reads the current revision alone; the original stays
+    // readable by its id.
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const history = await request.get(`${apiBaseURL}/api/temperature/history?sensorId=${encodeURIComponent(correctionSensorId)}`, { headers: auth });
+    expect(history.status(), await history.text()).toBe(200);
+    const page = (await history.json()).data;
+    expect(page.total).toBe(1);
+    expect(page.temperatures[0]).toMatchObject({ logId: answers[1].telemetryReadingId, temperatureValue: -70, revision: '1' });
+
+    const byId = await request.get(`${apiBaseURL}/api/temperature/${encodeURIComponent(answers[0].telemetryReadingId)}`, { headers: auth });
+    expect(byId.status(), await byId.text()).toBe(200);
+    expect((await byId.json()).data).toMatchObject({ telemetryReadingId: answers[0].telemetryReadingId, temperatureValue: -75 });
+  });
+
+  test('an identical resend of a stored reading with no source event is no correction: one point (#1518, RNF025 C8)', async ({ request }) => {
+    await bindSensor(resendSensorId);
+
+    // No sourceEventId, deviceMessageId or idempotencyKey: the server keys
+    // the reading by its payload alone.
+    const body = { sensorId: resendSensorId, temperature: 4, timestamp: new Date(Date.now() - 1_000).toISOString() };
+    const answers: any[] = [];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: { 'x-telemetry-ingest-secret': process.env.TELEMETRY_INGEST_SECRET ?? '' },
+        data: body,
+      });
+      expect(response.status(), await response.text()).toBe(200);
+      const answer = await response.json();
+      expect(answer.replayed).toBeUndefined();
+      answers.push(answer);
+    }
+
+    await expect
+      .poll(async () => (await queryTemperatureRevisions(resendSensorId)).length, { timeout: 15_000 })
+      .toBe(1);
+    const points = await queryTemperatureRevisions(resendSensorId);
+    expect(points).toHaveLength(1);
+    expect(points[0]).toMatchObject({ revision: null, supersedesTelemetryReadingId: null, value: 4 });
+    expect(answers.map((answer) => answer.telemetryReadingId)).toContain(points[0].telemetryReadingId);
   });
 });

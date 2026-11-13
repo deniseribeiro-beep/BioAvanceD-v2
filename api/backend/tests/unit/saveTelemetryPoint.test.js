@@ -16,7 +16,13 @@ const loggerPath = require.resolve('../../src/utils/logger');
 // Workaround: clear the require cache for both the connection module and the
 // service module, replace the connection module's exports with mocks, then
 // require the service fresh so its destructuring picks up the mocked functions.
-function loadServiceWithMocks({ connectInfluxDB, getInfluxWriteApi, loggerError }) {
+// #1518: by default no point is stored at the reading's time.
+function loadServiceWithMocks({
+  connectInfluxDB,
+  getInfluxWriteApi,
+  loggerError,
+  collectRows = vi.fn().mockResolvedValue([]),
+}) {
   delete require.cache[connectionPath];
   delete require.cache[servicePath];
   delete require.cache[loggerPath];
@@ -24,6 +30,8 @@ function loadServiceWithMocks({ connectInfluxDB, getInfluxWriteApi, loggerError 
   const connectionModule = require(connectionPath);
   connectionModule.connectInfluxDB = connectInfluxDB;
   connectionModule.getInfluxWriteApi = getInfluxWriteApi;
+  connectionModule.getInfluxQueryApi = vi.fn().mockReturnValue({ collectRows });
+  connectionModule.getInfluxConfig = vi.fn().mockReturnValue({ bucket: 'telemetry' });
 
   const loggerModule = require(loggerPath);
   if (loggerError) {
@@ -242,5 +250,100 @@ describe('saveTelemetryPoint', () => {
     await expect(saveTelemetryPoint('sensor-5', 10)).rejects.toBe(flushError);
     expect(loggerError).toHaveBeenCalledTimes(1);
     expect(loggerError.mock.calls[0][0]).toContain('influx write failed');
+  });
+
+  // #1518 (RNF025 C8): a late correction of a stored reading keeps the
+  // original; InfluxDB would overwrite a point of the same series and time.
+  describe('late corrections (#1518, RNF025 C8)', () => {
+    const observedAt = new Date('2026-10-10T12:00:00.000Z');
+
+    function loadWith(collectRows) {
+      const writePoint = vi.fn();
+      const flush = vi.fn().mockResolvedValue(undefined);
+      const { saveTelemetryPoint } = loadServiceWithMocks({
+        connectInfluxDB: vi.fn().mockResolvedValue(undefined),
+        getInfluxWriteApi: vi.fn().mockReturnValue({ writePoint, flush }),
+        collectRows,
+      });
+      return { saveTelemetryPoint, writePoint };
+    }
+
+    it('looks up the points stored for the sensor at the reading time, and writes a first reading without a revision', async () => {
+      const collectRows = vi.fn().mockResolvedValue([]);
+      const { saveTelemetryPoint, writePoint } = loadWith(collectRows);
+
+      await saveTelemetryPoint('sensor-1', 4, observedAt, { telemetryReadingId: 'tr-1' });
+
+      const query = String(collectRows.mock.calls[0][0]);
+      expect(query).toContain('range(start: 2026-10-10T12:00:00.000Z, stop: 2026-10-10T12:00:00.001Z)');
+      expect(query).toContain('r.sensorId == "sensor-1"');
+      expect(query).toContain('r._measurement == "temperature"');
+      const line = writePoint.mock.calls[0][0].toLineProtocol();
+      expect(line).not.toContain('revision=');
+      expect(line).not.toContain('supersedesTelemetryReadingId');
+    });
+
+    it('writes a correction of a stored reading as revision 1, naming the reading it supersedes', async () => {
+      const { saveTelemetryPoint, writePoint } = loadWith(vi.fn().mockResolvedValue([
+        { _time: observedAt.toISOString(), value: 4, telemetryReadingId: 'tr-1' },
+      ]));
+
+      await saveTelemetryPoint('sensor-1', 6, observedAt, { telemetryReadingId: 'tr-2' });
+
+      const line = writePoint.mock.calls[0][0].toLineProtocol();
+      expect(line).toMatch(/,revision=1[, ]/);
+      expect(line).toContain('supersedesTelemetryReadingId="tr-1"');
+      expect(line).toContain('telemetryReadingId="tr-2"');
+      expect(line).toContain('value=6');
+    });
+
+    it('writes a second correction one past the highest stored revision, superseding that one', async () => {
+      const { saveTelemetryPoint, writePoint } = loadWith(vi.fn().mockResolvedValue([
+        { value: 6, telemetryReadingId: 'tr-2', revision: '1' },
+        { value: 4, telemetryReadingId: 'tr-1' },
+      ]));
+
+      await saveTelemetryPoint('sensor-1', 7, observedAt, { telemetryReadingId: 'tr-3' });
+
+      const line = writePoint.mock.calls[0][0].toLineProtocol();
+      expect(line).toMatch(/,revision=2[, ]/);
+      expect(line).toContain('supersedesTelemetryReadingId="tr-2"');
+    });
+
+    it('writes nothing and rejects when the stored points cannot be read', async () => {
+      const lookupError = new Error('influx query failed');
+      const { saveTelemetryPoint, writePoint } = loadWith(vi.fn().mockRejectedValue(lookupError));
+
+      await expect(saveTelemetryPoint('sensor-1', 6, observedAt, { telemetryReadingId: 'tr-2' })).rejects.toBe(lookupError);
+      expect(writePoint).not.toHaveBeenCalled();
+    });
+
+    it('writes a retry of a stored reading, by its sourceEventId, into that reading\'s series and not as a correction', async () => {
+      const { saveTelemetryPoint, writePoint } = loadWith(vi.fn().mockResolvedValue([
+        { value: 4, telemetryReadingId: 'tr-1', sourceEventId: 'ev-1' },
+        { value: 6, telemetryReadingId: 'tr-2', sourceEventId: 'ev-2', revision: '1' },
+      ]));
+
+      await saveTelemetryPoint('sensor-1', 6, observedAt, { telemetryReadingId: 'tr-2', sourceEventId: 'ev-2' });
+      await saveTelemetryPoint('sensor-1', 4, observedAt, { telemetryReadingId: 'tr-1', sourceEventId: 'ev-1' });
+
+      const [retryOfCorrection, retryOfOriginal] = writePoint.mock.calls.map(([point]) => point.toLineProtocol());
+      expect(retryOfCorrection).toMatch(/,revision=1[, ]/);
+      expect(retryOfOriginal).not.toContain('revision=');
+      expect(retryOfCorrection).not.toContain('supersedesTelemetryReadingId');
+      expect(retryOfOriginal).not.toContain('supersedesTelemetryReadingId');
+    });
+
+    it('writes an identical resend with no client sourceEventId, by its payloadHash, into the stored reading\'s series and not as a correction', async () => {
+      const { saveTelemetryPoint, writePoint } = loadWith(vi.fn().mockResolvedValue([
+        { value: 4, telemetryReadingId: 'tr-1', sourceEventId: 'tr-1', payloadHash: 'h-1' },
+      ]));
+
+      await saveTelemetryPoint('sensor-1', 4, observedAt, { telemetryReadingId: 'tr-2', sourceEventId: 'tr-2', payloadHash: 'h-1' });
+
+      const line = writePoint.mock.calls[0][0].toLineProtocol();
+      expect(line).not.toContain('revision=');
+      expect(line).not.toContain('supersedesTelemetryReadingId');
+    });
   });
 });

@@ -222,6 +222,14 @@ describe('InfluxTelemetryWriteRepository', () => {
       expect(line).toContain('telemetryReadingId="tr-1"');
       expect(line).toContain('clockStatus=drift');
     });
+
+    // #1518 (RNF025 C8): as saveTelemetryPoint writes them.
+    it('carries the reading\'s sourceEventId and payloadHash as fields', () => {
+      const line = repository.toPoint({ temperatureValue: 1, sourceEventId: 'ev-1', payloadHash: 'h-1' }).toLineProtocol();
+
+      expect(line).toContain('sourceEventId="ev-1"');
+      expect(line).toContain('payloadHash="h-1"');
+    });
   });
 
   // #1317 (RF009 AC1): the authoritative write is awaited, not buffered.
@@ -229,6 +237,7 @@ describe('InfluxTelemetryWriteRepository', () => {
     it('writes and flushes the one point, then returns the confirmation time', async () => {
       const writeApi = { writePoint: vi.fn(), flush: vi.fn().mockResolvedValue(undefined) };
       repository.writeApi = writeApi;
+      vi.spyOn(repository, 'storedPointsAt').mockResolvedValue([]);
       const before = Date.now();
 
       const persistedAt = await repository.writeTemperatureReadingNow({ temperatureValue: 4, sensorId: 's1' });
@@ -241,7 +250,71 @@ describe('InfluxTelemetryWriteRepository', () => {
 
     it('rejects when the flush fails, so the caller stores nothing', async () => {
       repository.writeApi = { writePoint: vi.fn(), flush: vi.fn().mockRejectedValue(new Error('influx down')) };
+      vi.spyOn(repository, 'storedPointsAt').mockResolvedValue([]);
       await expect(repository.writeTemperatureReadingNow({ temperatureValue: 4 })).rejects.toThrow('influx down');
+    });
+
+    // #1518 (RNF025 C8): a late correction keeps the stored reading; an
+    // identical resend is no correction.
+    describe('late corrections (#1518, RNF025 C8)', () => {
+      const observedAt = new Date('2026-10-10T12:00:00.000Z');
+
+      function withWriteApi() {
+        const writeApi = { writePoint: vi.fn(), flush: vi.fn().mockResolvedValue(undefined) };
+        repository.writeApi = writeApi;
+        return writeApi;
+      }
+
+      it('writes a correction of a stored reading as revision 1, naming the reading it supersedes', async () => {
+        const writeApi = withWriteApi();
+        const lookup = vi.spyOn(repository, 'storedPointsAt').mockResolvedValue([
+          { temperatureValue: 4, telemetryReadingId: 'tr-1', payloadHash: 'h-0' },
+        ]);
+
+        await repository.writeTemperatureReadingNow({
+          temperatureValue: 6, sensorId: 's1', observedAt, telemetryReadingId: 'tr-2', payloadHash: 'h-1',
+        });
+
+        expect(lookup).toHaveBeenCalledWith('s1', observedAt);
+        const line = writeApi.writePoint.mock.calls[0][0].toLineProtocol();
+        expect(line).toMatch(/,revision=1[, ]/);
+        expect(line).toContain('supersedesTelemetryReadingId="tr-1"');
+        expect(line).toContain('telemetryReadingId="tr-2"');
+      });
+
+      it('writes an identical resend of a stored reading, by its payloadHash, with no revision', async () => {
+        const writeApi = withWriteApi();
+        vi.spyOn(repository, 'storedPointsAt').mockResolvedValue([
+          { temperatureValue: 4, telemetryReadingId: 'tr-1', payloadHash: 'h-0' },
+        ]);
+
+        await repository.writeTemperatureReadingNow({
+          temperatureValue: 4, sensorId: 's1', observedAt, telemetryReadingId: 'tr-2', payloadHash: 'h-0',
+        });
+
+        const line = writeApi.writePoint.mock.calls[0][0].toLineProtocol();
+        expect(line).not.toContain('revision=');
+        expect(line).not.toContain('supersedesTelemetryReadingId');
+      });
+
+      it('looks nothing up for a reading with no sensorId', async () => {
+        const writeApi = withWriteApi();
+        const lookup = vi.spyOn(repository, 'storedPointsAt').mockResolvedValue([]);
+
+        await repository.writeTemperatureReadingNow({ temperatureValue: 4, observedAt });
+
+        expect(lookup).not.toHaveBeenCalled();
+        expect(writeApi.writePoint).toHaveBeenCalledTimes(1);
+      });
+
+      it('rejects and writes nothing when the stored points cannot be read', async () => {
+        const writeApi = withWriteApi();
+        vi.spyOn(repository, 'storedPointsAt').mockRejectedValue(new Error('influx query failed'));
+
+        await expect(repository.writeTemperatureReadingNow({ temperatureValue: 4, sensorId: 's1', observedAt }))
+          .rejects.toThrow('influx query failed');
+        expect(writeApi.writePoint).not.toHaveBeenCalled();
+      });
     });
   });
 

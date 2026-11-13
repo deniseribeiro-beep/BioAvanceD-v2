@@ -2,8 +2,11 @@ const { Point } = require('@influxdata/influxdb-client');
 const logger = require('../../../utils/logger');
 const {
   connectInfluxDB,
+  getInfluxConfig,
+  getInfluxQueryApi,
   getInfluxWriteApi
 } = require('../../database/influxdb/connection');
+const { storedPointsAt, revisionPlan } = require('./telemetryRevisions');
 
 class InfluxTelemetryWriteRepository {
   constructor() {
@@ -33,11 +36,40 @@ class InfluxTelemetryWriteRepository {
   // RF009 AC1, RNF016 C3 (#1317): InfluxDB is the reading's authority, so a
   // reading is acknowledged only after its point is written. This awaits the
   // write and throws on failure; the caller stores nothing and answers 503.
+  //
+  // #1518 (RNF025 C8): a late correction never overwrites the history. The
+  // points stored for the sensor at the reading's time are read first, and
+  // the point is planned as saveTelemetryPoint plans a `temperature` one
+  // (telemetryRevisions.js): a retry of a stored reading goes into that
+  // reading's series, a correction gets the next `revision` tag and names
+  // the reading it supersedes. A failed lookup throws before any write, so
+  // the caller answers the reading as not persisted.
   async writeTemperatureReadingNow(reading) {
+    const observedAt = reading.observedAt || reading.timestamp;
+    const time = observedAt ? new Date(observedAt) : new Date();
+    const point = this.toPoint({ ...reading, observedAt: time });
     const writeApi = await this.ensureWriteApi();
-    writeApi.writePoint(this.toPoint(reading));
+    const sensorId = reading.sensorId || reading.sensorID;
+    if (sensorId) {
+      const stored = await this.storedPointsAt(String(sensorId), time);
+      const plan = revisionPlan(stored, reading);
+      if (plan.revision !== null) point.tag('revision', plan.revision);
+      if (plan.supersedesTelemetryReadingId !== null) {
+        point.stringField('supersedesTelemetryReadingId', plan.supersedesTelemetryReadingId);
+      }
+    }
+    writeApi.writePoint(point);
     await writeApi.flush();
     return new Date();
+  }
+
+  async storedPointsAt(sensorId, time) {
+    return storedPointsAt(getInfluxQueryApi(), getInfluxConfig().bucket, {
+      measurement: 'freezer_temperature',
+      valueField: 'temperatureValue',
+      sensorId,
+      time,
+    });
   }
 
   scheduleFlush() {
@@ -97,6 +129,15 @@ class InfluxTelemetryWriteRepository {
     // timestamp; a reading from before the contract has only `timestamp`.
     if (reading.telemetryReadingId) {
       point.stringField('telemetryReadingId', String(reading.telemetryReadingId));
+    }
+    // #1518 (RNF025 C8): the source event (V2E-0551) and payload hash
+    // (V2E-0555), as saveTelemetryPoint writes them, so a resend of a stored
+    // reading is told from its correction.
+    if (reading.sourceEventId) {
+      point.stringField('sourceEventId', String(reading.sourceEventId));
+    }
+    if (reading.payloadHash) {
+      point.stringField('payloadHash', String(reading.payloadHash));
     }
     if (reading.clockStatus) {
       point.tag('clockStatus', String(reading.clockStatus));
