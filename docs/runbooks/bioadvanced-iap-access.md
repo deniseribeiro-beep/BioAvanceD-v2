@@ -18,7 +18,7 @@ Browser → Google HTTPS Load Balancer (IAP) → VM `:8080` (`bioavanced-access-
 
 ## Login
 1. **IAP (Google):** conta autorizada (ex. `denise.ribeiro@mail.usf.edu.br`) — tela Google antes do app.
-2. **BioAvanceD (app):** `admin` / `Admin@123-e2e-stack` (lab; sem OAuth no produto).
+2. **BioAvanceD (app):** usuário `admin`, senha `BOOTSTRAP_ADMIN_TEMP_PASSWORD` de `compose.test.yml` (lab; sem OAuth no produto).
 
 ### Conceder acesso IAP (manual — IAM)
 A conta CLI atual (`deniser.contato@gmail.com`) não tem `setIamPolicy`. No Console GCP (projeto `fundamental-run-494721-e2`), com uma conta Owner/Admin:
