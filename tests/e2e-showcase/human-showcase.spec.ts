@@ -1264,11 +1264,11 @@ test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
 // W9 reel (#1396): RF009 telemetry and RF015 alerts. A freezer's readings
 // go through the real ingest endpoint, are persisted in InfluxDB, and the
 // out-of-range ones open a temperature incident the operator inspects in
-// Facility Management's Incidents tab. The "Controle de Temperatura" and
-// "Histórico de Leituras" tabs now read the persisted readings, and
-// tests/e2e/facility-temperature-readings.spec.ts covers them. Deliberately
-// not demoed: the notification attempt the alert dispatches, which is
-// recorded by the backend but has no UI that shows it.
+// Facility Management's Incidents tab. The same persisted readings then show
+// in its "Controle de Temperatura" and "Histórico de Leituras" tabs
+// (RNF016 C3) and in the Dashboard's temperature chart (RF009 C1, #1522).
+// Deliberately not demoed: the notification attempt the alert dispatches,
+// which is recorded by the backend but has no UI that shows it (RF015 C2).
 test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () => {
   // POST /api/iot/telemetry is gated by the machine ingest secret (#1091).
   const ingestHeaders = () => ({ 'x-telemetry-ingest-secret': process.env.TELEMETRY_INGEST_SECRET ?? '' });
@@ -1295,21 +1295,25 @@ test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () =>
       // reading, so the readable name is set before any reading arrives.
       await db.collection('sensorMetadata').updateOne({ sensorId: sensor.sensorId }, { $set: { sensorName } });
 
-      const postReading = async (temperature: number) => {
+      // Returns the reading's id, which keys its row in the readings history.
+      const postReading = async (temperature: number): Promise<string> => {
         const res = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
           headers: ingestHeaders(),
           data: { sensorId: sensor.sensorId, temperature, timestamp: new Date().toISOString() },
         });
         expect(res.status(), await res.text()).toBe(200);
+        const { telemetryReadingId } = await res.json();
+        expect(telemetryReadingId).toBeTruthy();
+        return String(telemetryReadingId);
       };
 
       // Off camera: two readings above the -60 °C limit. The second is sent
       // only once the first has opened the incident, so it updates that one.
-      await postReading(-52);
+      const firstReadingId = await postReading(-52);
       await expect
         .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.samplesOutOfRange ?? null, { timeout: 15_000 })
         .toBe(1);
-      await postReading(-45);
+      const secondReadingId = await postReading(-45);
       await expect
         .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.samplesOutOfRange ?? null, { timeout: 15_000 })
         .toBe(2);
@@ -1342,6 +1346,35 @@ test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () =>
       await expect(panel).toContainText('Detalhes do Incidente');
       await expect(panel).toContainText('-45.0°C / -52.0°C');
       await panel.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 4. "Controle de Temperatura": the freezer's card shows its newest persisted reading. (RNF016 C3)
+      await page.getByTestId('facility-tab-temperature').click();
+      const card = page.getByTestId(`temperature-sensor-card-${sensor.sensorId}`);
+      await expect(card).toBeVisible();
+      await expect(card).toContainText('-45.0°C');
+      await card.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 5. "Histórico de Leituras": both persisted readings, each above the alert threshold. (RNF016 C3)
+      await page.getByTestId('facility-tab-history').click();
+      const newestRow = page.getByTestId(`history-row-${secondReadingId}`);
+      const firstRow = page.getByTestId(`history-row-${firstReadingId}`);
+      await expect(newestRow).toContainText(sensor.sensorId);
+      await expect(newestRow).toContainText('-45.0°C');
+      await expect(newestRow).toContainText('Alerta');
+      await expect(firstRow).toContainText('-52.0°C');
+      await expect(firstRow).toContainText('Alerta');
+      await newestRow.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 6. The Dashboard's temperature chart draws the same readings, its legend naming the newest. (RF009 C1)
+      await page.goto('/dashboard');
+      await beat(page, MEDIUM);
+      const legend = page.getByTestId(`dashboard-temperature-sensor-${sensor.sensorId}`);
+      await expect(legend).toContainText('-45.0°C');
+      await expect(page.getByTestId(`dashboard-temperature-line-${sensor.sensorId}`)).toBeAttached();
+      await page.locator('.temperature-card').scrollIntoViewIfNeeded();
       await beat(page, LARGE);
     } finally {
       await removeSeededSensor(sensor);
