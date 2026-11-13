@@ -64,4 +64,33 @@ describe('ingestion/provenanceEnvelope (RF029 AC 3)', () => {
       expect(result.valid).toBe(true);
     });
   });
+
+  // RF029 AC2 (#1523): ELM-0022 accessPolicyId, optional, 0..*.
+  describe('accessPolicyId (RF029 AC2, ELM-0022)', () => {
+    it('normalizes an array with a duplicate and padding to the trimmed unique ids', () => {
+      const result = validateProvenanceEnvelope({ ...validRaw, accessPolicyId: [' pol-a ', 'pol-b', 'pol-a'] });
+      expect(result.envelope.accessPolicyId).toEqual(['pol-a', 'pol-b']);
+      expect(result.violations).toEqual([]);
+    });
+
+    it('absent or null gives [] and no violation', () => {
+      for (const raw of [validRaw, { ...validRaw, accessPolicyId: null }]) {
+        const result = validateProvenanceEnvelope(raw);
+        expect(result.envelope.accessPolicyId).toEqual([]);
+        expect(result.violations).toEqual([]);
+        expect(result.valid).toBe(true);
+      }
+    });
+
+    it("a bare string, [1] and ['  '] each give exactly one PROVENANCE_FIELD_INVALID", () => {
+      for (const accessPolicyId of ['pol-a', [1], ['  ']]) {
+        const result = validateProvenanceEnvelope({ ...validRaw, accessPolicyId });
+        expect(result.valid).toBe(false);
+        expect(result.violations).toEqual([
+          expect.objectContaining({ code: 'PROVENANCE_FIELD_INVALID', field: 'provenance.accessPolicyId' }),
+        ]);
+        expect(result.envelope.accessPolicyId).toEqual([]);
+      }
+    });
+  });
 });

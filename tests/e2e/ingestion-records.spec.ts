@@ -104,6 +104,8 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
   const organizationIdsToDelete: string[] = [];
   const participantIdsToDelete: string[] = [];
   const consentIdsToDelete: string[] = [];
+  // #1523: the AccessPolicy rows the RF029 AC2 case creates.
+  const accessPolicyIdsToDelete: string[] = [];
 
   test.afterAll(async ({ request }) => {
     await Promise.all(
@@ -116,6 +118,9 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     await cleanupGovernedCollection(governed);
     await closeGovernedCollectionDb();
     await closeSeedDb();
+    if (accessPolicyIdsToDelete.length > 0) {
+      await (await ingestionDb()).collection('accessPolicies').deleteMany({ accessPolicyId: { $in: accessPolicyIdsToDelete } });
+    }
     await closeIngestionDb();
     await closeNeo4jDriver();
   });
@@ -183,6 +188,57 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ resourceType: 'Dataset', status: 'success', severity: 'info' });
     expect(rows[0].payload.configurationReleaseId).toBe(inForce);
+  });
+
+  test('#1523 RF029 AC2: provenance.accessPolicyId naming a policy in force for the entityType is stamped on the document; one not applicable, or unknown, quarantines', async ({ request }) => {
+    const createPolicy = async (applicableEntityTypes: string[]) => {
+      const res = await request.post(`${apiBaseURL}/api/access-policies`, {
+        headers: auth,
+        data: {
+          policyName: `RF029 AC2 e2e ${applicableEntityTypes[0]} ${Date.now()}`,
+          policyVersion: '1.0.0',
+          applicableEntityTypes,
+          decisionEffect: 'permit',
+          ruleExpression: 'all-conditions',
+          effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+          roleCodes: ['researcher'],
+          organizationScopeIds: ['rf1523-e2e-org'],
+          resourceScopes: ['Specimen'],
+          conditions: [{ consent: 'compatible', study: 'active' }],
+          decisionReasonsRequired: true,
+        },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+      const accessPolicyId: string = (await res.json()).data.accessPolicyId;
+      accessPolicyIdsToDelete.push(accessPolicyId);
+      return accessPolicyId;
+    };
+    const datasetPolicyId = await createPolicy(['Dataset']);
+    const accessRequestPolicyId = await createPolicy(['AccessRequest']);
+
+    const sourceRecordId = `rf1523-e2e-${Date.now()}-dataset-policy`;
+    const accepted = await ingest(request, {
+      entityType: 'Dataset',
+      payload: datasetPayload(),
+      provenance: { ...provenance(sourceRecordId), accessPolicyId: [datasetPolicyId] },
+    });
+    expect(accepted.status(), await accepted.text()).toBe(201);
+    const acceptedBody = await accepted.json();
+    const stored = await findIngestedRecord('datasets', 'datasetId', acceptedBody.entityId);
+    expect(stored).toMatchObject({ accessPolicyId: [datasetPolicyId] });
+
+    for (const [label, accessPolicyId] of [['not-applicable', accessRequestPolicyId], ['unknown', `rf1523-unknown-${Date.now()}`]]) {
+      const res = await ingest(request, {
+        entityType: 'Dataset',
+        payload: datasetPayload(),
+        provenance: { ...provenance(`rf1523-e2e-${Date.now()}-${label}`), accessPolicyId: [accessPolicyId] },
+      });
+      expect(res.status(), await res.text()).toBe(422);
+      const body = await res.json();
+      expect(body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+      const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+      expect(record?.violations).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'ACCESS_POLICY_NOT_APPLICABLE' })]));
+    }
   });
 
   test('an accepted WorkflowRun is stored with the server actor as createdBy, not the payload value', async ({ request }) => {

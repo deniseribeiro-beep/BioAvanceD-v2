@@ -28,6 +28,7 @@ function seededDb({ release = { canonicalModelReleaseId: 'release-2.0.0', releas
     ingestionIdempotencyKeys: [],
     missingDataReasons: [],
     dataQualityAssessments: [],
+    accessPolicies: [],
   });
 }
 
@@ -1631,5 +1632,72 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     await expect(ingest(db, { outbox, entityType, payload: FILE_METADATA })).rejects.toMatchObject({ statusCode: 503, code: 'CANONICAL_RELEASE_NOT_ACTIVE' });
     expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
     expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+});
+
+// RF029 AC2 (#1523): provenance.accessPolicyId (ELM-0022) is accepted only on
+// a policy in force whose applicableEntityTypes names the entityType.
+describe('ingestion/productionIngestion accessPolicyId (RF029 AC2, #1523)', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  function policy(accessPolicyId, applicableEntityTypes, effectivePeriod = { start: new Date(Date.now() - DAY), end: null }) {
+    return { accessPolicyId, policyVersion: '1.0.0', applicableEntityTypes, effectivePeriod };
+  }
+
+  function withPolicies(...rows) {
+    const db = seededDb();
+    db.collection('accessPolicies').docs.push(...rows);
+    return db;
+  }
+
+  it('a policy in force applicable to the entityType is accepted and stamped', async () => {
+    const db = withPolicies(policy('pol-ds', ['Dataset']));
+
+    const result = await ingest(db, { provenance: { ...provenance(), accessPolicyId: ['pol-ds'] } });
+
+    expect(result.status).toBe('accepted');
+    expect(db.collections.datasets.docs).toHaveLength(1);
+    expect(db.collections.datasets.docs[0].accessPolicyId).toEqual(['pol-ds']);
+  });
+
+  it('a policy in force not applicable to the entityType quarantines and inserts nothing', async () => {
+    const db = withPolicies(policy('pol-ar', ['AccessRequest']));
+
+    const result = await ingest(db, { provenance: { ...provenance(), accessPolicyId: ['pol-ar'] } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations.filter((v) => v.code === 'ACCESS_POLICY_NOT_APPLICABLE')).toEqual([
+      expect.objectContaining({ field: 'provenance.accessPolicyId' }),
+    ]);
+    expect(db.collections.datasets.docs).toHaveLength(0);
+  });
+
+  it('an unknown accessPolicyId quarantines', async () => {
+    const db = withPolicies(policy('pol-ds', ['Dataset']));
+
+    const result = await ingest(db, { provenance: { ...provenance(), accessPolicyId: ['pol-unknown'] } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations.map((v) => v.code)).toEqual(['ACCESS_POLICY_NOT_APPLICABLE']);
+    expect(db.collections.datasets.docs).toHaveLength(0);
+  });
+
+  it('a policy out of force quarantines', async () => {
+    const db = withPolicies(policy('pol-old', ['Dataset'], { start: new Date(Date.now() - 10 * DAY), end: new Date(Date.now() - DAY) }));
+
+    const result = await ingest(db, { provenance: { ...provenance(), accessPolicyId: ['pol-old'] } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations.map((v) => v.code)).toEqual(['ACCESS_POLICY_NOT_APPLICABLE']);
+    expect(db.collections.datasets.docs).toHaveLength(0);
+  });
+
+  it('naming no policy stores no accessPolicyId key', async () => {
+    const db = withPolicies(policy('pol-ds', ['Dataset']));
+
+    const result = await ingest(db);
+
+    expect(result.status).toBe('accepted');
+    expect('accessPolicyId' in db.collections.datasets.docs[0]).toBe(false);
   });
 });
