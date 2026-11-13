@@ -70,7 +70,6 @@ export default function Header() {
                       type="button"
                       data-testid="account-menu-trigger"
                       className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      aria-label={user.name}
                     >
                       <Avatar className="h-7 w-7">
                         <AvatarFallback>{initials}</AvatarFallback>
