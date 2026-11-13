@@ -277,14 +277,21 @@ test.describe('Showcase scene — intake wizard main flow (#1543)', () => {
     await expect(label).toContainText(position);
     await beat(page, LARGE);
 
-    // A reading for whoever cuts the reel, not a pass condition: the compliance graph the specimen page draws.
+    // The release state the specimen page draws (#1546): signed consent, sealed at registration, so releasable.
     const graph = await request.get(`${apiBaseURL}/api/samples/${encodeURIComponent(specimenId)}/compliance-graph`, { headers });
-    console.log(`[showcase-1543] compliance-graph ${graph.status()}: ${(await graph.text()).slice(0, 800)}`);
+    const graphText = await graph.text();
+    expect(graph.status(), graphText).toBe(200);
+    const graphBody = JSON.parse(graphText).data;
+    expect(graphBody.graphPath.ethics.valid, graphText).toBe(true);
+    expect(graphBody.graphPath.integrity.valid, graphText).toBe(true);
+    expect(graphBody.isReleasable, graphText).toBe(true);
+    expect(graphBody.suggestedStatus, graphText).toBe('AVAILABLE');
 
     // The registered specimen: the RCS quality check, its SPREC code and
     // where it sits in the freezer.
     await page.goto(`/samples/${encodeURIComponent(specimenId)}`);
     await expect(page.getByTestId('sample-detail-root')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('Amostra liberável', { exact: true })).toBeVisible({ timeout: 15_000 });
     await caption(page, 'A amostra registrada', 'Validação de qualidade RCS, código SPREC e posição física no freezer');
     await beat(page, LARGE);
     const qualityRow = page.getByText('Qualidade', { exact: true }).locator('xpath=..');

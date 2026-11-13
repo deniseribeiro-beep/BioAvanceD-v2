@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const patientIdentityService = require('../services/PatientIdentityService');
 const participantIdentityService = require('../services/participantIdentity.service');
-const { generateSampleHash } = require('../services/MerkleService');
+const { generateSampleHashFromSample } = require('../services/MerkleService');
 const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
@@ -921,7 +921,6 @@ async function handleIntakeWizard(req, res) {
     if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
       sampleToPersist.sprec = qualidade.sprec;
     }
-    sampleToPersist.merkleRoot = generateSampleHash(sampleToPersist);
     // RNF018 AC5 (#1524): createSample certifies the sprec again, so it gets
     // the same references to resolve; SampleModel.create does not store them.
     if (data.governanceEvidence !== undefined) {
@@ -966,6 +965,17 @@ async function handleIntakeWizard(req, res) {
       allocatedSample.sealedRcsAssessmentId = assessment._id;
     } catch (assessmentError) {
       logger.error('Falha ao registrar RcsAssessment para a amostra do intake wizard:', assessmentError.message || assessmentError);
+    }
+
+    // #1546: sealed last, once createSample's certification has set the RCS
+    // fields and both snapshots are pinned, so the seal covers what
+    // generateSampleHashFromSample recomputes (#502).
+    try {
+      const merkleRoot = await generateSampleHashFromSample(db, allocatedSample);
+      await samplesCollection.updateOne({ _id: createdSample._id }, { $set: { merkleRoot } });
+      allocatedSample.merkleRoot = merkleRoot;
+    } catch (sealError) {
+      logger.error('Falha ao selar a merkleRoot da amostra do intake wizard:', sealError.message || sealError);
     }
 
     // #693 (RF005 AC4-6): additive real-entity recording, best-effort --

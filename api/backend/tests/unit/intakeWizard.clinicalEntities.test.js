@@ -198,7 +198,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     });
 
     const merkleServiceModule = require(merkleServicePath);
-    merkleServiceModule.generateSampleHash = vi.fn(() => 'hash-1');
+    merkleServiceModule.generateSampleHashFromSample = vi.fn(async () => 'hash-1');
 
     const auditLoggerModule = require(auditLoggerPath);
     auditLoggerModule.init = vi.fn();

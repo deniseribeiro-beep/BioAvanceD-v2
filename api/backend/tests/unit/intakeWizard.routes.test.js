@@ -59,7 +59,7 @@ function loadRoute({
   buildConsentLink,
   sendConsentEmail,
   matchOrUpsertParticipant,
-  generateSampleHash,
+  generateSampleHashFromSample,
   getCollectionImpl,
   resolveMethodologicalQuality,
 } = {}) {
@@ -80,7 +80,7 @@ function loadRoute({
   );
 
   const merkleServiceModule = require(merkleServicePath);
-  merkleServiceModule.generateSampleHash = generateSampleHash || vi.fn(() => 'hash-1');
+  merkleServiceModule.generateSampleHashFromSample = generateSampleHashFromSample || vi.fn(async () => 'hash-1');
 
   const collectionResolverModule = require(collectionResolverPath);
   collectionResolverModule.getCollection = getCollectionImpl || vi.fn();
@@ -747,6 +747,102 @@ describe('intakeWizard routes', () => {
         expect(updateOne).not.toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
+        );
+      });
+
+      it('seals the merkleRoot after the RcsAssessment pin, from the stored sample (#1546)', async () => {
+        const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+        const findOne = vi.fn().mockResolvedValue({
+          _id: 'sample-1',
+          specimenId: 'spec-1',
+          participantId: '12345678',
+          sealedSpecimenPreanalyticsId: 'profile-1',
+        });
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const samplesCollection = { insertOne, findOne, updateOne };
+        const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+
+        const { db } = buildHappyPathDb();
+        const generateSampleHashFromSample = vi.fn(async () => 'sealed-root');
+
+        const { router } = loadRoute({
+          getCollectionImpl,
+          generateSampleHashFromSample,
+          resolveMethodologicalQuality: () => ({ governance_status: 1, final_grade: 'A', rcs_score: 87.5 }),
+        });
+
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(generateSampleHashFromSample).toHaveBeenCalledWith(
+          db,
+          expect.objectContaining({ sealedRcsAssessmentId: 'assessment-1', sealedSpecimenPreanalyticsId: 'profile-1' })
+        );
+        expect(updateOne).toHaveBeenCalledWith({ _id: 'sample-1' }, { $set: { merkleRoot: 'sealed-root' } });
+        const callIndex = (key) => updateOne.mock.calls.findIndex(([, update]) => update?.$set && key in update.$set);
+        const pinIndex = callIndex('sealedRcsAssessmentId');
+        const sealIndex = callIndex('merkleRoot');
+        expect(pinIndex).toBeGreaterThanOrEqual(0);
+        expect(updateOne.mock.invocationCallOrder[sealIndex]).toBeGreaterThan(updateOne.mock.invocationCallOrder[pinIndex]);
+        expect(res.body.sample.merkleRoot).toBe('sealed-root');
+      });
+
+      it('keeps the intake a 200 when sealing the merkleRoot rejects (#1546)', async () => {
+        const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+        const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const samplesCollection = { insertOne, findOne, updateOne };
+        const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+
+        const { db } = buildHappyPathDb();
+
+        const { router } = loadRoute({
+          getCollectionImpl,
+          generateSampleHashFromSample: vi.fn().mockRejectedValue(new Error('snapshot read failed')),
+        });
+
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(updateOne).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ $set: expect.objectContaining({ merkleRoot: expect.anything() }) })
         );
       });
     });
@@ -1886,7 +1982,11 @@ describe('intakeWizard routes: fallbacks on sparse rows (#1337)', () => {
     const { res, samplesCollection } = await postIntake({ recordAssessment: vi.fn().mockRejectedValue(new Error('')) });
 
     expect(res.status).toBe(200);
-    expect(samplesCollection.updateOne).not.toHaveBeenCalled();
+    // #1546: the merkleRoot seal still writes; the RcsAssessment pin does not.
+    expect(samplesCollection.updateOne).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
+    );
     expect(res.body.sample.sealedRcsAssessmentId).toBeUndefined();
   });
 

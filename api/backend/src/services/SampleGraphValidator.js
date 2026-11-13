@@ -229,9 +229,13 @@ class SampleGraphValidator {
         { _id: ObjectId.isValid(tcleId) ? new ObjectId(tcleId) : null },
         { consentTemplateId: tcleId },
       ].filter(Boolean),
+      // #1546: the template is shared across participants, so the lookup is
+      // scoped to the sample's participant and the newest consent decides,
+      // as resolveConsentDecision does at intake.
+      participantId,
     };
 
-    const consent = await consentsCollection.findOne(consentQuery);
+    const consent = await consentsCollection.findOne(consentQuery, { sort: { signedAt: -1, updatedAt: -1, createdAt: -1 } });
 
     if (!consent) {
       return { valid: false, reason: 'Consentimento Inválido ou Revogado' };
