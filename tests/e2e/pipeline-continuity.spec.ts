@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'crypto';
+import { SIGNATURE_PNG_DATA_URL } from './helpers/consentSignature';
 import { MongoClient, ObjectId } from 'mongodb';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
@@ -110,9 +111,10 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
   // neo4jProjection.worker.js). signatureName/signatureImageBase64 are
   // required by normalizeSignaturePayload's schema validation (minLength 1
   // once the keys are present, even though they're not in the schema's
-  // `required` array) — any non-empty string passes, no real image needed.
+  // `required` array). The signature must also decode to a real PNG, because
+  // the signed TCLE PDF embeds it (#1544).
   function signatureFields() {
-    return { signatureName: 'RF023 e2e signer', signatureImageBase64: 'e2e-fixture-signature' };
+    return { signatureName: 'RF023 e2e signer', signatureImageBase64: SIGNATURE_PNG_DATA_URL };
   }
 
   test('a signed consent projects into Neo4j as an ACTIVE EthicalConsent node', async ({ request }) => {
@@ -547,7 +549,7 @@ test.describe('Outbox → Neo4j projection with the projection worker stopped (R
 
   // Same signature fields as the RF023 describe above (normalizeSignaturePayload).
   function signatureFields() {
-    return { signatureName: 'RF023 e2e signer', signatureImageBase64: 'e2e-fixture-signature' };
+    return { signatureName: 'RF023 e2e signer', signatureImageBase64: SIGNATURE_PNG_DATA_URL };
   }
 
   test('@projection-worker-stopped a created consent returns while Mongo holds it and its PENDING outbox event, and the graph is unchanged', async ({

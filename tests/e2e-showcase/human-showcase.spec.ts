@@ -1705,21 +1705,25 @@ test.describe('Human-paced e2e showcase reel — login and sample inventory', ()
     await page.getByText('Inventário de Amostras', { exact: true }).first().click();
     await page.waitForURL('**/samples');
     await expect(page.getByTestId('samples-page-title')).toBeVisible();
-    // The table names each specimen by its barcode, not the API's specimenId.
+    // Earlier scenes register specimens too, so the inventory holds more than this
+    // scene's rows. The list is newest-first (10 per page), so this scene's own
+    // specimens are on page 1; each is listed once.
     const rows = page.locator('[data-testid^="sample-row-"]');
-    await expect(rows).toHaveCount(specimenIds.length);
+    for (const specimenId of specimenIds) {
+      await expect(rows.filter({ has: page.getByText(specimenId, { exact: true }) })).toHaveCount(1);
+    }
     await beat(page, LARGE);
     await page.getByTestId('samples-table').scrollIntoViewIfNeeded();
     await beat(page, MEDIUM);
 
-    // 3. A search by barcode narrows the list to one specimen.
-    const target = (await page.getByRole('cell', { name: /^BR-\d{4}-\d{3}$/ }).last().textContent())!.trim();
+    // 3. A search by its specimen id narrows the list to one specimen.
+    const target = specimenIds[0];
     await page.getByTestId('samples-search-input').scrollIntoViewIfNeeded();
     await page.getByTestId('samples-search-input').fill(target);
     await beat(page, SMALL);
     await page.getByTestId('samples-search-button').click();
     await expect(rows).toHaveCount(1);
-    await expect(page.getByRole('cell', { name: target, exact: true })).toBeVisible();
+    await expect(rows.filter({ has: page.getByText(target, { exact: true }) })).toBeVisible();
     await beat(page, MEDIUM);
 
     // 4. That specimen's own page.

@@ -2,6 +2,7 @@ import { type Page } from '@playwright/test';
 import { MongoClient, ObjectId } from 'mongodb';
 import { test, expect } from './showcaseFixtures';
 import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
+import { SIGNATURE_PNG_DATA_URL } from '../e2e/helpers/consentSignature';
 import {
   closeSeedDb,
   seedActiveConsentTemplate,
@@ -171,7 +172,7 @@ test.describe('Showcase scene — intake wizard main flow (#1543)', () => {
     expect(participantId).toBeTruthy();
     const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
       headers,
-      data: { participantId, consentTemplateId, responses: {}, signatureName: patientName, signatureImageBase64: 'showcase-signature' },
+      data: { participantId, consentTemplateId, responses: {}, signatureName: patientName, signatureImageBase64: SIGNATURE_PNG_DATA_URL },
     });
     expect(signed.ok(), await signed.text()).toBe(true);
 

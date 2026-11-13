@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { mockLogin } from './helpers/mockAuth';
+import { SIGNATURE_PNG_DATA_URL } from './helpers/consentSignature';
 import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { deleteOrganizations } from './helpers/listOrganizations';
@@ -185,7 +186,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
         consentTemplateId: participant.consentTemplateId,
         responses: {},
         signatureName: 'RF023 e2e signer',
-        signatureImageBase64: 'e2e-fixture-signature',
+        signatureImageBase64: SIGNATURE_PNG_DATA_URL,
       },
     });
     expect(response.ok()).toBe(true);
@@ -1000,7 +1001,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
         consentTemplateId,
         responses: {},
         signatureName: '#1371 e2e signer',
-        signatureImageBase64: 'e2e-fixture-signature',
+        signatureImageBase64: SIGNATURE_PNG_DATA_URL,
       },
     });
     expect(signed.ok(), await signed.text()).toBe(true);

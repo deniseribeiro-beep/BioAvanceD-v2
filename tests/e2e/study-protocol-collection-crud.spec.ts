@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
+import { SIGNATURE_PNG_DATA_URL } from './helpers/consentSignature';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { createRealParticipant, seedStudy, closeSeedDb } from './helpers/seedParticipant';
 import { findOrganizationInList } from './helpers/listOrganizations';
@@ -261,7 +262,7 @@ test.describe('Consent/patient study linkage (RF021 AC#4/AC#5) — #593, #594, #
         responses: {},
         studyId: 'does-not-exist',
         signatureName: 'e2e signer',
-        signatureImageBase64: Buffer.from('e2e-signature').toString('base64'),
+        signatureImageBase64: SIGNATURE_PNG_DATA_URL,
       },
     });
 
@@ -286,7 +287,7 @@ test.describe('Consent/patient study linkage (RF021 AC#4/AC#5) — #593, #594, #
         responses: {},
         studyId,
         signatureName: 'e2e signer',
-        signatureImageBase64: Buffer.from('e2e-signature').toString('base64'),
+        signatureImageBase64: SIGNATURE_PNG_DATA_URL,
       },
     });
 
@@ -309,7 +310,7 @@ test.describe('Consent/patient study linkage (RF021 AC#4/AC#5) — #593, #594, #
         responses: {},
         studyId,
         signatureName: 'e2e signer',
-        signatureImageBase64: Buffer.from('e2e-signature').toString('base64'),
+        signatureImageBase64: SIGNATURE_PNG_DATA_URL,
       },
     });
 
