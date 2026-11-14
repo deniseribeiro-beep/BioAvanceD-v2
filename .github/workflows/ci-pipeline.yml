@@ -328,7 +328,8 @@ jobs:
   # (#599). The job's exit is the gate's: 3 build, 4 stack up, 5 one-shot,
   # 6 projection worker, 7 the projection worker did not stop or restart,
   # 8 the stopped-worker phase failed (its log in e2e-worker-stopped.txt),
-  # 9 the main run never started, otherwise the runner's own code (#1503).
+  # 9 the main run never started, 10 the RNF001 UI p95 breached or did not
+  # run (#1469), otherwise the runner's own code (#1503).
   e2e-tests:
     name: E2E tests (in-container Playwright)
     runs-on: ubuntu-latest
@@ -359,6 +360,12 @@ jobs:
         env:
           COMPOSE_PARALLEL_LIMIT: "2"
         run: bash scripts/e2e-gate.sh e2e-gate-out
+
+      - name: Print the RNF001 UI p95 summary
+        if: always()
+        run: |
+          test -f e2e-gate-out/rnf001-ui-p95.json || exit 0
+          node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));for(const[p,r]of Object.entries(x.routes||{}))console.log((r.pass===true?"PASS ":"BREACH ")+p+" p95Ms="+r.p95+(r.skipped?" skipped="+r.reason:""));console.log("overallPass="+x.overallPass)' e2e-gate-out/rnf001-ui-p95.json
 
       - name: Collect Compose logs on failure
         if: failure()

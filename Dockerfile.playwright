@@ -10,6 +10,8 @@ COPY tests/e2e ./tests/e2e
 # #1392: the edge-buffer spec drives the real device-side buffer module, which
 # needs only Node built-ins, so this one file is copied, not the api/ tree.
 COPY api/backend/scripts/telemetry-edge-buffer.js ./api/backend/scripts/telemetry-edge-buffer.js
+# RNF001 C1 (#1469): the e2e gate runs the UI p95 script in this image.
+COPY scripts/rnf001-ui-p95.mjs ./scripts/rnf001-ui-p95.mjs
 
 # #1233: forward localhost:5173/:3000 to the compose services, so the bundle's
 # baked http://localhost:3000/api base resolves inside this container.

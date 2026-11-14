@@ -7,14 +7,17 @@
 # and the reference-data bootstrap chain with --no-deps; check
 # every one-shot exited 0 and the projection worker is still up; stop the
 # projection worker, run the test tagged @projection-worker-stopped alone
-# (#1503) and start the worker again; run playwright-runner with --no-deps
-# and collect its logs.
+# (#1503) and start the worker again; run the RNF001 UI p95 script (#1469)
+# in its own runner container; run playwright-runner with --no-deps and
+# collect its logs.
 #
 # Exit codes: 3 build, 4 stack up, 5 a one-shot did not exit 0, 6 projection
 # worker not up, 7 the projection worker did not stop or restart, 8 the
 # stopped-worker phase failed, its log in e2e-worker-stopped.txt, 9 the main
-# run never started (no exit code); otherwise the runner's own exit code,
-# which wins over 8. Checks that depend on the
+# run never started (no exit code), 10 the RNF001 UI p95 run (#1469) breached
+# 2 s, skipped a route, left no result or ran past 15 minutes, its result in
+# rnf001-ui-p95.json and log in rnf001.txt; otherwise the runner's own exit
+# code, which wins over 8 and 10, and 8 wins over 10. Checks that depend on the
 # machine (free RAM, the engine running) stay outside this script.
 set -u
 OUT="${1:?usage: e2e-gate.sh <output dir>}"
@@ -52,6 +55,18 @@ stopped_code=$(docker wait e2e-gate-worker-stopped)
 docker logs e2e-gate-worker-stopped > "$OUT/e2e-worker-stopped.txt" 2>&1
 docker rm e2e-gate-worker-stopped > /dev/null 2>&1
 $DC up -d --wait --no-deps neo4j-projection-worker-test > "$OUT/worker-start.txt" 2>&1 || exit 7
+# RNF001 C1 (#1469): the UI p95 on the critical routes, in its own runner
+# container before the main run, on the stack the bootstraps just seeded.
+# Only a run that exits 0 and leaves its result file passes; a breach, a
+# skipped route, no result or a run past 15 minutes is exit 10.
+docker rm -f e2e-gate-rnf001 > /dev/null 2>&1
+$DC run -d --no-deps --name e2e-gate-rnf001 -e N=30 -e OUT=/workspace/rnf001-ui-p95.json playwright-runner \
+  node tests/e2e/docker/loopback-forward.cjs 5173=frontend-app-test:5173 3000=backend-app-test:3000 \
+  -- node scripts/rnf001-ui-p95.mjs > /dev/null 2>&1
+rnf_code=$(timeout 900 docker wait e2e-gate-rnf001)
+docker logs e2e-gate-rnf001 > "$OUT/rnf001.txt" 2>&1
+docker cp e2e-gate-rnf001:/workspace/rnf001-ui-p95.json "$OUT/rnf001-ui-p95.json" > /dev/null 2>&1 || rnf_code=missing
+docker rm -f e2e-gate-rnf001 > /dev/null 2>&1
 docker rm -f e2e-gate > /dev/null 2>&1
 $DC run -d --no-deps --name e2e-gate playwright-runner > /dev/null 2>&1
 code=$(docker wait e2e-gate)
@@ -66,4 +81,7 @@ case "$code" in
 esac
 # An empty $stopped_code (the phase's run never started) counts as a failure.
 [ "$stopped_code" = "0" ] || exit 8
+# An empty $rnf_code (never started, or the wait timed out) or `missing` (no
+# result file) counts as a failure, like a breach.
+[ "$rnf_code" = "0" ] || exit 10
 exit 0

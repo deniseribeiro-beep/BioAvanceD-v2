@@ -152,19 +152,25 @@ for (const route of routes) {
     results.routes[route.path] = { skipped: true, reason: 'all_samples_failed', errors };
     continue;
   }
-  const sorted = [...samples].sort((a, b) => a - b);
+  // A failed sample (a navigation that errored or never became ready) ranks
+  // above every measured one, so it can raise the p95 but never lower it.
+  const sorted = [...samples].sort((a, b) => a - b).concat(errors.map(() => Infinity));
+  const p95 = percentile(sorted, 95);
   const summary = {
     samples,
-    p50: percentile(sorted, 50),
-    p95: percentile(sorted, 95),
-    max: sorted[sorted.length - 1],
-    pass: percentile(sorted, 95) <= 2000,
+    p50: Number.isFinite(percentile(sorted, 50)) ? percentile(sorted, 50) : null,
+    p95: Number.isFinite(p95) ? p95 : null,
+    max: Number.isFinite(sorted[sorted.length - 1]) ? sorted[sorted.length - 1] : null,
+    failedSamples: errors.length,
+    pass: Number.isFinite(p95) && p95 <= results.passCriterionMs,
   };
   if (errors.length) summary.errors = errors;
   results.routes[route.path] = summary;
 }
 
-results.overallPass = Object.values(results.routes).every((r) => r.skipped || r.pass === true);
+// RNF001 C1: the run passes only when every route was measured and met the
+// budget; a skipped route (login failed, every sample failed) is a failure.
+results.overallPass = routes.every((r) => results.routes[r.path]?.pass === true);
 
 await browser.close();
 mkdirSync(dirname(OUT), { recursive: true });
