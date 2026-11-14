@@ -956,15 +956,21 @@ async function handleIntakeWizard(req, res) {
     // (sample.service.js#createSample), recorded once the sample has fully
     // landed (create + allocation both already succeeded by this point) so
     // a best-effort failure here never fails the intake itself.
-    try {
-      const assessment = await rcsAssessmentService.recordAssessment(db, allocatedSample.specimenId, qualidade);
-      await samplesCollection.updateOne(
-        { _id: createdSample._id },
-        { $set: { sealedRcsAssessmentId: assessment._id } }
-      );
-      allocatedSample.sealedRcsAssessmentId = assessment._id;
-    } catch (assessmentError) {
-      logger.error('Falha ao registrar RcsAssessment para a amostra do intake wizard:', assessmentError.message || assessmentError);
+    // #1549: createSample records and pins the RcsAssessment from the SPREC
+    // it certified; the wizard records one (from qualidade) only when the
+    // stored sample carries no pin, so a registration leaves exactly one
+    // snapshot, the one the pin and the seal name.
+    if (!allocatedSample.sealedRcsAssessmentId) {
+      try {
+        const assessment = await rcsAssessmentService.recordAssessment(db, allocatedSample.specimenId, qualidade);
+        await samplesCollection.updateOne(
+          { _id: createdSample._id },
+          { $set: { sealedRcsAssessmentId: assessment._id } }
+        );
+        allocatedSample.sealedRcsAssessmentId = assessment._id;
+      } catch (assessmentError) {
+        logger.error('Falha ao registrar RcsAssessment para a amostra do intake wizard:', assessmentError.message || assessmentError);
+      }
     }
 
     // #1546: sealed last, once createSample's certification has set the RCS

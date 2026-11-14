@@ -710,6 +710,70 @@ describe('intakeWizard routes', () => {
         expect(res.body.sample.sealedRcsAssessmentId).toBe('assessment-1');
       });
 
+      it('records no second RcsAssessment when createSample already pinned one (#1549)', async () => {
+        let storedSample = null;
+        const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+        const findOne = vi.fn(async () => ({ ...storedSample }));
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const samplesCollection = { insertOne, findOne, updateOne };
+        const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+
+        const rcsAssessments = createFakeDb().collection('rcsAssessments');
+        const happyDb = buildHappyPathDb().db;
+        const db = { collection: (name) => (name === 'rcsAssessments' ? rcsAssessments : happyDb.collection(name)) };
+        const generateSampleHashFromSample = vi.fn(async () => 'sealed-root');
+
+        const { router, rcsAssessmentServiceModule } = loadRoute({
+          getCollectionImpl,
+          generateSampleHashFromSample,
+          resolveMethodologicalQuality: () => ({ governance_status: 1, final_grade: 'A', rcs_score: 87.5 }),
+        });
+        let recordCount = 0;
+        rcsAssessmentServiceModule.recordAssessment = vi.fn(async (_db, specimenId) => {
+          recordCount += 1;
+          const assessment = { _id: `assessment-${recordCount}`, specimenId: String(specimenId), assessedAt: new Date(recordCount) };
+          await rcsAssessments.insertOne(assessment);
+          return assessment;
+        });
+
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async () => {
+          const assessment = await rcsAssessmentServiceModule.recordAssessment(db, 'spec-1', { final_grade: 'A' });
+          storedSample = { _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', sealedRcsAssessmentId: assessment._id };
+          return { ...storedSample };
+        });
+
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        const history = await rcsAssessmentServiceModule.getAssessmentsForSpecimen(db, 'spec-1');
+        expect(history.map((a) => a._id)).toEqual(['assessment-1']);
+        expect(updateOne).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
+        );
+        expect(generateSampleHashFromSample).toHaveBeenCalledWith(
+          db,
+          expect.objectContaining({ sealedRcsAssessmentId: 'assessment-1' })
+        );
+        expect(res.body.sample.sealedRcsAssessmentId).toBe('assessment-1');
+      });
+
       it('does not fail the intake when recording the RcsAssessment snapshot rejects', async () => {
         const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
         const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
