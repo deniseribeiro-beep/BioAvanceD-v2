@@ -64,8 +64,6 @@ const ROUTER_BINDING = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:requir
 const GATE_NAME = /^(?:authenticate|requireMachineIngestSecret|requireTestSupportSecret)$/;
 const CHAINED_CALL = /^\s*\.\s*([A-Za-z_$][\w$]*)\s*\(/;
 
-const UNJUDGED = 'pre-existing unauthenticated route, not judged by #1552';
-
 const EXEMPT = new Map([
   // Mounted only behind interface/routes/dictionary.routes.js's
   // router.use(authenticate, dictionaryRouter); the bare file exists for its
@@ -106,12 +104,6 @@ const EXEMPT = new Map([
   ['routes/eConsent.js POST /consent-tokens/accept', 'participant link: the patient consent token is the credential'],
   ['routes/eConsent.js POST /consent-tokens/revoke', 'participant link: the patient consent token is the credential'],
   ['routes/eConsent.js POST /consent-tokens/signed-tcle', 'participant link: the patient consent token is the credential'],
-
-  // Terminology reads mounted bare in app.js. The code states no reason.
-  ['routes/hpo.js GET /search', UNJUDGED],
-  ['routes/hpo.js GET /:id', UNJUDGED],
-  ['routes/orphanet.js GET /search', UNJUDGED],
-  ['interface/routes/terminologies.routes.js GET /', UNJUDGED],
 ]);
 
 /** The first reading: each `router.<verb>(` by exact text, keyed by its opening parenthesis. */

@@ -42843,8 +42843,12 @@
           "terminologies"
         ],
         "summary": "Search the terminologies",
-        "description": "Gates: none. No authenticate, so it never answers 401 or 403 (the code carries no session check). The filter is sistema (upper-cased) and a text search; limit is 1..500. When nothing matches, it may hydrate the local store from a remote Orphanet source before answering. 503 is no database; 500 is any failure of the read. The route has no 400.",
-        "security": [],
+        "description": "Gates: authenticate. There is no permission or organization gate: any signed-in user reads it (#1553). The 403 is authenticate's refusals (an expired role, a pending MFA setup), and the 503 also comes from authenticate. The filter is sistema (upper-cased) and a text search; limit is 1..500. When nothing matches, it may hydrate the local store from a remote Orphanet source before answering. 503 is no database; 500 is any failure of the read. The route has no 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "sistema",
@@ -42973,6 +42977,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -54094,8 +54104,12 @@
           "orphanet"
         ],
         "summary": "Search the Orphanet diseases",
-        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It searches the local cids and terminologies stores; when nothing matches, it asks the Orphadata API (only when external terminology sync is enabled and ORPHADATA_BASE_URL is set), and a remote failure is logged and read as no result. When the local search throws it runs once more, and answers 500 only when that fails too. An empty result is 200 with []. 400 is a missing q; 503 is no database.",
-        "security": [],
+        "description": "Gates: authenticate. There is no permission or organization gate: any signed-in user reads it (#1553). The 403 is authenticate's refusals (an expired role, a pending MFA setup), and the 503 also comes from authenticate. It searches the local cids and terminologies stores; when nothing matches, it asks the Orphadata API (only when external terminology sync is enabled and ORPHADATA_BASE_URL is set), and a remote failure is logged and read as no result. When the local search throws it runs once more, and answers 500 only when that fails too. An empty result is 200 with []. 400 is a missing q; 503 is no database.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -54219,6 +54233,12 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "500": {
             "description": "The local search failed twice.",
             "content": {
@@ -54264,8 +54284,12 @@
           "hpo"
         ],
         "summary": "Search the HPO terms",
-        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It searches the local hpo_terms store (label, hpoId or synonyms, obsolete terms left out, at most 20); when that finds nothing, or throws, it asks the external HPO API only when external HPO lookup is enabled. A local failure with the external lookup disabled is 200 with []. 400 is a missing or blank q; 500 is a failure of the external lookup after a local failure.",
-        "security": [],
+        "description": "Gates: authenticate. There is no permission or organization gate: any signed-in user reads it (#1553). The 403 is authenticate's refusals (an expired role, a pending MFA setup), and the 503 also comes from authenticate. It searches the local hpo_terms store (label, hpoId or synonyms, obsolete terms left out, at most 20); when that finds nothing, or throws, it asks the external HPO API only when external HPO lookup is enabled. A local failure with the external lookup disabled is 200 with []. 400 is a missing or blank q; 500 is a failure of the external lookup after a local failure.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -54311,6 +54335,12 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "500": {
             "description": "Both the local and the external search failed.",
             "content": {
@@ -54328,6 +54358,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -54338,8 +54371,12 @@
           "hpo"
         ],
         "summary": "Read one HPO term",
-        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It reads the hpo_terms record whose hpoId is id. 404 is no such term; 500 is a failure of the read, a missing database included.",
-        "security": [],
+        "description": "Gates: authenticate. There is no permission or organization gate: any signed-in user reads it (#1553). The 403 is authenticate's refusals (an expired role, a pending MFA setup), and the 503 also comes from authenticate. It reads the hpo_terms record whose hpoId is id. 404 is no such term; 500 is a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -54362,6 +54399,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "404": {
             "description": "No such term (error Not found).",
@@ -54398,6 +54441,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
