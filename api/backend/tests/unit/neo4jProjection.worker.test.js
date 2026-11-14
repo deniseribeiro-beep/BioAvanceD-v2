@@ -479,3 +479,81 @@ describe('neo4jProjection.worker - runProjectionWorker', () => {
     setTimeoutSpy.mockRestore();
   });
 });
+
+// RF022 AC4/AC9, RNF014 C7: with FOUNDATION_READINESS_REQUIRED, the worker
+// leases no outbox event unless the newest ReadinessReport is ready for this
+// build's release. The real readiness module reads an in-memory db.
+describe('#1551 runProjectionWorker Foundation readiness gate', () => {
+  const env = require('../../src/config/env');
+  const { createFakeDb } = require('./foundation/helpers/fake-db');
+  const ReadinessReportModel = require('../../src/models/ReadinessReport');
+  const { CANONICAL_MODEL_RELEASE_ID } = require('../../src/foundation/readiness');
+  const projector = { applyEvent: async () => ({ projected: true }) };
+  const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+  let requiredBefore;
+  let outboxService;
+
+  beforeEach(() => {
+    requiredBefore = env.FOUNDATION_READINESS_REQUIRED;
+    env.FOUNDATION_READINESS_REQUIRED = true;
+    outboxService = {
+      rescheduleStaleProcessing: vi.fn().mockResolvedValue(0),
+      leaseNextBatch: vi.fn().mockResolvedValue([]),
+      markProjected: async () => undefined,
+      markRetrying: async () => undefined,
+      markDeadLetter: async () => undefined,
+    };
+  });
+  afterEach(() => {
+    env.FOUNDATION_READINESS_REQUIRED = requiredBefore;
+  });
+
+  async function dbWithReport(gateResults, canonicalModelReleaseId = CANONICAL_MODEL_RELEASE_ID) {
+    const db = createFakeDb();
+    if (gateResults) {
+      await db.collection('readinessReports').insertOne(ReadinessReportModel.create({
+        foundationDataRunId: 'run-1',
+        canonicalModelReleaseId,
+        environment: env.NODE_ENV,
+        gateResults,
+      }));
+    }
+    return db;
+  }
+
+  function run(db) {
+    return runProjectionWorker({ db, neo4jDriver, outboxService, projector, maxAttempts: 8, once: true });
+  }
+
+  async function expectRefusal(db) {
+    await expect(run(db)).rejects.toMatchObject({ name: 'FoundationNotReadyError' });
+    expect(outboxService.rescheduleStaleProcessing).not.toHaveBeenCalled();
+    expect(outboxService.leaseNextBatch).not.toHaveBeenCalled();
+  }
+
+  it('refuses with no ReadinessReport before leasing', async () => {
+    await expectRefusal(await dbWithReport(null));
+  });
+
+  it('refuses a blocked ReadinessReport before leasing', async () => {
+    await expectRefusal(await dbWithReport([{ gate: 'version', result: 'fail', p0: true }]));
+  });
+
+  it('refuses a ready ReadinessReport of another release before leasing', async () => {
+    await expectRefusal(await dbWithReport([{ gate: 'version', result: 'pass', p0: true }], 'release-1.3.0'));
+  });
+
+  it('runs a pass on a ready ReadinessReport for this release', async () => {
+    const db = await dbWithReport([{ gate: 'version', result: 'pass', p0: true }]);
+
+    await expect(run(db)).resolves.toMatchObject({ processed: 0 });
+    expect(outboxService.leaseNextBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads no ReadinessReport with the flag off', async () => {
+    env.FOUNDATION_READINESS_REQUIRED = false;
+
+    await expect(run(await dbWithReport(null))).resolves.toMatchObject({ processed: 0 });
+    expect(outboxService.leaseNextBatch).toHaveBeenCalledTimes(1);
+  });
+});

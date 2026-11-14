@@ -320,6 +320,8 @@ services:
       - .env.production
     environment:
       NODE_ENV: production
+      # RF022 AC9, RNF014 C7 (#1551): the import worker refuses to start without a ready ReadinessReport.
+      FOUNDATION_READINESS_REQUIRED: "true"
     healthcheck:
       test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
       interval: 15s
@@ -373,6 +375,8 @@ services:
       - .env.production
     environment:
       NODE_ENV: production
+      # RF022 AC9, RNF014 C7 (#1551): the graph projection worker refuses to start without a ready ReadinessReport.
+      FOUNDATION_READINESS_REQUIRED: "true"
     healthcheck:
       test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/neo4j-projection-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
       interval: 15s

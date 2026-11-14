@@ -15,6 +15,8 @@ const importAsyncService = require('../services/import-async.service');
 const batchValidationEngine = require('../services/batch-validation-engine.service');
 const { connectDB } = require('../database/mongo');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
+const env = require('../config/env');
+const { assertReadiness } = require('../foundation/readiness');
 
 // #1040: observability-only, matching this file's own fatal-error style
 // (logger.error + process.exit(1), same as the require.main block's
@@ -76,6 +78,15 @@ async function initWorker() {
 
     // Conecta ao banco
     db = await connectDB();
+
+    // RF022 AC4/AC9, RNF014 C7 (#1551): as the API does, the worker consumes
+    // no queue unless the newest ReadinessReport is `ready` for this build's
+    // release. A refusal throws into the catch below, which rethrows; the
+    // entry points (worker.js, the require.main block) exit 1.
+    if (env.FOUNDATION_READINESS_REQUIRED) {
+      const report = await assertReadiness(db, { environment: env.NODE_ENV });
+      logger.info(`[RF022] ReadinessReport ${report.readinessReportId} ready (${report.canonicalModelReleaseId})`);
+    }
 
     // #826: connectDB() abre apenas a conexão do driver nativo. Um modelo
     // Mongoose sem conexão enfileira cada operação e a rejeita após 10s, em

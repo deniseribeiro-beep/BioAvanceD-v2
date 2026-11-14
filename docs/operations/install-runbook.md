@@ -50,7 +50,7 @@ The two env generators add their own: `bash`, `openssl` and Python 3 (`python3`,
    - `frontend` waits for `backend` healthy;
    - `reference-data-bootstrap` (`npm run reference:import:hpo`), started only by the third call, waits for `foundation-bootstrap`. The further importers (`reference-data-bootstrap-mondo`, `reference-data-bootstrap-orpha` and the rest, to `reference-data-bootstrap-edam`) each wait for the one before them, but nothing pulls them in from `reference-data-bootstrap`, and no npm script starts them.
 
-   The development `backend` does not set `FOUNDATION_READINESS_REQUIRED`, so it does not check the ReadinessReport itself (section 4); the `depends_on` above is the only gate.
+   The development `backend` and workers do not set `FOUNDATION_READINESS_REQUIRED`, so they do not check the ReadinessReport itself (section 4); the `depends_on` above is the only gate.
 
 3. Create the first administrator (section 5):
 
@@ -109,13 +109,13 @@ A `foundation` that exits non-zero stops steps 3 to 6: `service_completed_succes
 
 ### 4.3 The readiness gate
 
-`compose.prod.yml` sets `FOUNDATION_READINESS_REQUIRED: "true"` on `backend` (as `compose.test.yml` does on `backend-app-test`). With it set, `startServer` in `api/backend/server.js` calls `assertReadiness` (`api/backend/src/foundation/readiness.js`) right after connecting to MongoDB. `assertReadiness` reads the newest ReadinessReport for the environment `NODE_ENV` (collection `COLL_READINESS_REPORTS`, default `readinessReports`) and throws `FoundationNotReadyError` when:
+`compose.prod.yml` sets `FOUNDATION_READINESS_REQUIRED: "true"` on `backend`, `worker` and `neo4j-projection-worker` (as `compose.test.yml` does on `backend-app-test`). With it set, `startServer` in `api/backend/server.js` calls `assertReadiness` (`api/backend/src/foundation/readiness.js`) right after connecting to MongoDB, and so do the workers: `initWorker` (`api/backend/src/workers/import-worker.js`, run by `worker.js`) before it builds any queue consumer, and `runProjectionWorker` (`api/backend/src/workers/neo4jProjection.worker.js`) before it leases any outbox event. `assertReadiness` reads the newest ReadinessReport for the environment `NODE_ENV` (collection `COLL_READINESS_REPORTS`, default `readinessReports`) and throws `FoundationNotReadyError` when:
 
 - there is no report for the environment;
 - its `status` is not `ready` (the message lists its `blockers`);
 - its `canonicalModelReleaseId` is not this build's `CANONICAL_MODEL_RELEASE_ID` (`release-<DICTIONARY_VERSION>`).
 
-The throw reaches `startServer`'s catch, which exits 1; `restart: unless-stopped` starts it again. With the flag set, the backend also leaves the RBAC catalog and report templates to the Foundation job instead of seeding them at start (`server.js`).
+The throw reaches `startServer`'s catch, which exits 1; `restart: unless-stopped` starts it again. A worker's throw exits 1 the same way, from `startWorker`'s catch in `worker.js` or the `require.main` catch of `neo4jProjection.worker.js`. With the flag set, the backend also leaves the RBAC catalog and report templates to the Foundation job instead of seeding them at start (`server.js`).
 
 Before the readiness check, `startServer` exits 1 when `MONGO_URI`, `JWT_SECRET`, `USER_ANON_SALT` or `CONSENT_SECRET` is missing, and `validateEncryptionAndHalt` (`api/backend/src/config/validateEnv.js`) stops a `production` start with a blank `ENCRYPTION_KEY` or with `ALLOW_UNENCRYPTED_FILE_STORAGE` or `ALLOW_UNENCRYPTED_FIELD_STORAGE` set to `true`.
 
@@ -195,7 +195,6 @@ Ports:
 |---|---|---|
 | RNF006 C2, installation: host scripts | `scripts/start-local-stack.ps1` and `scripts/stop-local-stack.ps1` exist. | Not implemented: both default to `docker-compose.yml`, which the repo does not track, and the start script calls `npm run seed`, which the root `package.json` does not define; neither runs as written. |
 | RNF006 C2, installation: production first administrator | `npm run compose:prod:seed-admin` runs `createFirstAdmin.js` inside the production `backend`, which reads `BOOTSTRAP_ADMIN_*` from its environment. | Not implemented: `.env.production.example` excludes `BOOTSTRAP_ADMIN_*` and the repo defines no other way to hand the four variables to the production container, so no tracked script creates the production administrator end to end. |
-| RNF006 C2, installation: readiness gate on the workers | `compose.prod.yml` starts `worker` and `neo4j-projection-worker` only after `foundation` completed successfully. | Not implemented: neither worker calls `assertReadiness`; only `api/backend/server.js` does, so a worker restarted later is not stopped by a blocked or missing ReadinessReport. The development `backend` does not set `FOUNDATION_READINESS_REQUIRED` and is not gated either. |
 | RNF006 C2, installation: network exposure | `compose.prod.yml` publishes `backend` and `frontend` on every host interface; `frontend/nginx.conf` listens on plain HTTP. | Not implemented: no TLS termination, reverse proxy or firewall rule is part of the production stack; the homolog proxy is outside it ([`docs/runbooks/bioadvanced-iap-access.md`](../runbooks/bioadvanced-iap-access.md)). |
 | RNF006 C2, installation: test and lab stacks | `compose.test.yml` is started by `.github/workflows/ci-pipeline.yml`; `compose.lab.yml` by the command in its header comment. | Not implemented: no npm script starts either stack. |
 | RNF006 C2, installation: host requirements | `compose.prod.yml` sets CPU and memory limits per service, recorded there as "a starting point to revisit against measured use". | Not implemented: no documented host size, disk size or supported operating system. |

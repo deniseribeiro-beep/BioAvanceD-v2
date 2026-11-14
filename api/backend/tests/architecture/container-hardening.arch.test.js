@@ -405,15 +405,13 @@ test('RNF014 C3: every service but the official-image data stores runs read_only
   checkPrivilege(read(COMPOSE_PROD), repoTree);
 });
 
-test('RNF014 C7: the backend requires a ready ReadinessReport and the API and workers wait for the Foundation job', () => {
+test('RNF014 C7: the backend and both workers require a ready ReadinessReport and wait for the Foundation job', () => {
   const parsed = parseCompose(read(COMPOSE_PROD));
-  const backend = parsed.get('backend');
-  assert.ok(backend, 'compose.prod.yml must define backend');
-  const env = mapping(block(backend.get('environment'), 'backend: environment'), 6, 'backend: environment');
-  assert.match(unquote(env.get('FOUNDATION_READINESS_REQUIRED')?.value ?? ''), /^(true|1)$/, 'backend must set FOUNDATION_READINESS_REQUIRED: "true"');
   for (const name of ['backend', 'worker', 'neo4j-projection-worker']) {
     const service = parsed.get(name);
     assert.ok(service, `compose.prod.yml must define ${name}`);
+    const env = mapping(block(service.get('environment'), `${name}: environment`), 6, `${name}: environment`);
+    assert.match(unquote(env.get('FOUNDATION_READINESS_REQUIRED')?.value ?? ''), /^(true|1)$/, `${name} must set FOUNDATION_READINESS_REQUIRED: "true"`);
     const deps = mapping(block(service.get('depends_on'), `${name}: depends_on`), 6, `${name}: depends_on`);
     assert.ok(deps.has('foundation'), `${name} must depend on foundation`);
     const foundation = mapping(block(deps.get('foundation'), `${name}: depends_on.foundation`), 8, `${name}: depends_on.foundation`);

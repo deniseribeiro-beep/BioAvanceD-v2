@@ -40,7 +40,7 @@ Nothing moves between the layers: no env variable is a configuration-release key
 |---|---|---|---|---|---|
 | Runtime | `NODE_ENV` | `compose.prod.yml` sets `production` | `development` | yes | `env.js` |
 | Runtime | `PORT` | no | 3000 | no | `env.js`, `server.js` |
-| Runtime | `FOUNDATION_READINESS_REQUIRED` | `compose.prod.yml` sets it on `backend` | off | no | `env.js`, `server.js` ([install-runbook.md](install-runbook.md), section 4.3) |
+| Runtime | `FOUNDATION_READINESS_REQUIRED` | `compose.prod.yml` sets it on `backend`, `worker` and `neo4j-projection-worker` | off | no | `env.js`, `server.js`, `import-worker.js`, `neo4jProjection.worker.js` ([install-runbook.md](install-runbook.md), section 4.3) |
 | Runtime | `SAMPLE_BARCODE_WINDOW_CLOSED` | no | off | no | `env.js` |
 | MongoDB | `MONGO_URI` | yes (`server.js`) | none | generated | `env.js` |
 | MongoDB | `MONGO_DB` | no | none | yes | `env.js`, `api/backend/src/database/mongo.js` |

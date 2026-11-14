@@ -44,7 +44,9 @@ The `backend` service runs `startServer` in `api/backend/server.js`. A refusal l
   - `Nenhum ReadinessReport para o ambiente <env>: execute o Foundation Data Pipeline antes da API.`
   - `ReadinessReport <id> está <status>: <blockers>`
   - `ReadinessReport <id> é da release <release>, esta build espera <release>.`
-- **Cause**: `FOUNDATION_READINESS_REQUIRED` is on (`compose.prod.yml` sets it to `true` for `backend`), and the newest ReadinessReport for `NODE_ENV` is missing, not `ready`, or names another canonical model release than `CANONICAL_MODEL_RELEASE_ID`.
+
+  A worker shows the same `FoundationNotReadyError` messages after `[ERROR] Erro ao iniciar worker:` (`worker` service, `api/backend/src/workers/worker.js`) or `[GRAPH_OUTBOX] Worker falhou:` (`neo4j-projection-worker`, `api/backend/src/workers/neo4jProjection.worker.js`), and exits 1.
+- **Cause**: `FOUNDATION_READINESS_REQUIRED` is on (`compose.prod.yml` sets it to `true` for `backend`, `worker` and `neo4j-projection-worker`), and the newest ReadinessReport for `NODE_ENV` is missing, not `ready`, or names another canonical model release than `CANONICAL_MODEL_RELEASE_ID`.
 - **Check**: the `foundation` service, which `backend` waits for (`service_completed_successfully`): its logs (above) and exit status in `ps`. For the third message, the build and the Foundation run are of different releases.
 
 ### 1.5 Neo4j unreachable at start

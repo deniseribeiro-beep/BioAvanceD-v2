@@ -7,6 +7,7 @@ const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
 const { Neo4jCanonicalProjectionService } = require('../services/neo4jCanonicalProjection.service');
 const requestContext = require('../utils/requestContext');
 const jobMetrics = require('../infrastructure/metrics/jobMetrics');
+const { assertReadiness } = require('../foundation/readiness');
 
 // #992: heartbeat file probed by the container healthcheck (mtime-based).
 // Not a new env var -- a module-level constant, per #992's decision to avoid
@@ -175,6 +176,16 @@ async function runProjectionWorker(options = {}) {
   const intervalMs = Number(options.intervalMs || env.GRAPH_OUTBOX_RETRY_BACKOFF_MS || 1000);
   const stopAfterOne = options.once === true;
   const shouldStop = typeof options.shouldStop === 'function' ? options.shouldStop : () => false;
+
+  // RF022 AC4/AC9, RNF014 C7 (#1551): as the API does, the worker leases no
+  // outbox event unless the newest ReadinessReport is `ready` for this
+  // build's release. A refusal rejects here, before any lease or heartbeat;
+  // the require.main block exits 1.
+  if (env.FOUNDATION_READINESS_REQUIRED) {
+    const readinessDb = options.db || await connectDB();
+    const report = await assertReadiness(readinessDb, { environment: env.NODE_ENV });
+    logger.info(`[RF022] ReadinessReport ${report.readinessReportId} ready (${report.canonicalModelReleaseId})`);
+  }
 
   do {
     const result = await runProjectionOnce(options);

@@ -394,6 +394,69 @@ describe('workers/import-worker', () => {
     });
   });
 
+  // RF022 AC4/AC9, RNF014 C7: with FOUNDATION_READINESS_REQUIRED, initWorker
+  // consumes no queue unless the newest ReadinessReport is ready for this
+  // build's release. The real readiness module reads an in-memory db.
+  describe('#1551 initWorker Foundation readiness gate', () => {
+    const env = require('../../src/config/env');
+    const { createFakeDb } = require('./foundation/helpers/fake-db');
+    const ReadinessReportModel = require('../../src/models/ReadinessReport');
+    const { CANONICAL_MODEL_RELEASE_ID } = require('../../src/foundation/readiness');
+    let requiredBefore;
+
+    beforeEach(() => {
+      requiredBefore = env.FOUNDATION_READINESS_REQUIRED;
+      env.FOUNDATION_READINESS_REQUIRED = true;
+      process.env.NODE_ENV = 'test';
+    });
+    afterEach(() => {
+      env.FOUNDATION_READINESS_REQUIRED = requiredBefore;
+    });
+
+    async function dbWithReport(gateResults, canonicalModelReleaseId = CANONICAL_MODEL_RELEASE_ID) {
+      const db = createFakeDb();
+      if (gateResults) {
+        await db.collection('readinessReports').insertOne(ReadinessReportModel.create({
+          foundationDataRunId: 'run-1',
+          canonicalModelReleaseId,
+          environment: env.NODE_ENV,
+          gateResults,
+        }));
+      }
+      return db;
+    }
+
+    async function expectRefusal(db) {
+      fakeMongo.connectDB.mockResolvedValue(db);
+      const importWorker = freshImportWorkerModule();
+
+      await expect(importWorker.initWorker()).rejects.toMatchObject({ name: 'FoundationNotReadyError' });
+      expect(FakeWorker).not.toHaveBeenCalled();
+      expect(fakeQueueConfig.initRedis).not.toHaveBeenCalled();
+      expect(fakeMongooseConnection.connectMongoDB).not.toHaveBeenCalled();
+    }
+
+    it('refuses with no ReadinessReport before any Worker is built', async () => {
+      await expectRefusal(await dbWithReport(null));
+    });
+
+    it('refuses a blocked ReadinessReport before any Worker is built', async () => {
+      await expectRefusal(await dbWithReport([{ gate: 'version', result: 'fail', p0: true }]));
+    });
+
+    it('refuses a ready ReadinessReport of another release before any Worker is built', async () => {
+      await expectRefusal(await dbWithReport([{ gate: 'version', result: 'pass', p0: true }], 'release-1.3.0'));
+    });
+
+    it('builds both Workers on a ready ReadinessReport for this release', async () => {
+      fakeMongo.connectDB.mockResolvedValue(await dbWithReport([{ gate: 'version', result: 'pass', p0: true }]));
+      const importWorker = freshImportWorkerModule();
+
+      await expect(importWorker.initWorker()).resolves.toBeTruthy();
+      expect(FakeWorker).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('closeWorker', () => {
     it('closes both workers and resets module state so initWorker creates fresh instances afterward', async () => {
       process.env.NODE_ENV = 'test';
