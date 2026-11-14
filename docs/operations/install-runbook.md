@@ -26,6 +26,8 @@ As `README.md` (Local Development) states them: Git, Docker Engine or Docker Des
 
 The two env generators add their own: `bash`, `openssl` and Python 3 (`python3`, or `python` when it is Python 3). Both refuse to run without them (`generate-env-production-secrets.sh`, `generate-env-docker-secrets.sh`).
 
+The host's clock follows the institution's time source (NTP or the institution's own time server) before the stack starts: the containers read the host's clock and none of them sets it (RNF025 C1, `docs/decisions/2026-11-14-clock-synchronisation-and-utc.md`).
+
 ## 3. Installing the development stack
 
 1. Create `.env.docker`. Either copy `.env.docker.example` to it, as `README.md` does, or generate it, which mints every database password, token and secret and the audit signing key:
