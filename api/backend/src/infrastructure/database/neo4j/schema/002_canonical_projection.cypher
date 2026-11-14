@@ -5,7 +5,8 @@
 // Canonical labels used by stage 1:
 // Donor, Sample, EthicalConsent, RareDisease, Phenotype,
 // Biomarker, BiomarkerObservation, QualityAssessment,
-// CustodyEvent, StoragePosition, TelemetryIncident, ResearchProject
+// CustodyEvent, StoragePosition, TelemetryIncident, ResearchProject,
+// TerminologyConcept
 
 // Canonical relationships used by stage 1:
 // Donor-[:DONATED]->Sample
