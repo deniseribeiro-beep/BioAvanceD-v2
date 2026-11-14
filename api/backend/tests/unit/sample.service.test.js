@@ -260,7 +260,16 @@ function mockOperationalStorage(db) {
   db.collections.samples.findOne.mockImplementation((query) => {
     if (query && query._id !== undefined) {
       const inserted = db.insertedSamples.at(-1);
-      return Promise.resolve({ _id: query._id, specimenId: inserted?.specimenId, barcode: null, storageLocation: null });
+      // #1548: the stored snapshot pins, as the insert stored them (null) and
+      // the pin updateOnes on this _id set them since.
+      const pins = { sealedRcsAssessmentId: null, sealedSpecimenPreanalyticsId: null };
+      for (const [filter, update] of db.collections.samples.updateOne.mock?.calls ?? []) {
+        if (filter?._id !== query._id || !update?.$set) continue;
+        for (const key of Object.keys(pins)) {
+          if (key in update.$set) pins[key] = update.$set[key];
+        }
+      }
+      return Promise.resolve({ _id: query._id, specimenId: inserted?.specimenId, barcode: null, storageLocation: null, ...pins });
     }
     return Promise.resolve(null);
   });
@@ -3373,6 +3382,179 @@ describe('sample.service', () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(null);
       expect(await sampleService.closeSpecimen(db, 'missing')).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------
+  describe('merkleRoot seal (#1548)', () => {
+    const MerkleService = require('../../src/services/MerkleService');
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function mockSnapshotCollections(db) {
+      db.collections.rcsAssessments = {
+        insertOne: vi.fn().mockImplementation((doc) => {
+          doc._id = 'assessment-1';
+          return Promise.resolve({ insertedId: 'assessment-1' });
+        })
+      };
+      db.collections.specimenPreanalytics = {
+        insertOne: vi.fn().mockImplementation((doc) => {
+          doc._id = 'profile-1';
+          return Promise.resolve({ insertedId: 'profile-1' });
+        })
+      };
+      vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+        governance_status: 1,
+        final_grade: 'A',
+        rcs_score: 87.5,
+        score_based_grade: 'A',
+        model_version: 'v1',
+        matrix_type: 'PLASMA',
+        governance_failure_reasons: [],
+        governance_rule_codes: [],
+        grade_route: 'DIRECT',
+        axis_penalties: [],
+        calculation_trace: {}
+      });
+    }
+
+    function storedSample(fields) {
+      return {
+        _id: 'sample-1', specimenId: 'SPC-1', quantity: 10, initialQuantity: 10, currentQuantity: 10,
+        specimenStatus: 'available', ...fields
+      };
+    }
+
+    const setOf = (db, index = 0) => db.collections.samples.updateOne.mock.calls[index][1].$set;
+    const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+    it('seals merkleRoot last, from the sample with both snapshots pinned (#1548)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      mockSnapshotCollections(db);
+      const seal = vi.spyOn(MerkleService, 'generateSampleHashFromSample').mockResolvedValue('sealed-root');
+
+      const result = await sampleService.createSample(db, validSampleData({ sprec: { matrixType: 'PLASMA', sampleType: 'PLASMA' } }));
+
+      expect(seal).toHaveBeenCalledWith(db, expect.objectContaining({
+        sealedRcsAssessmentId: 'assessment-1',
+        sealedSpecimenPreanalyticsId: 'profile-1'
+      }));
+      const calls = db.collections.samples.updateOne.mock.calls;
+      const indexOfSet = (key) => calls.findIndex(([, update]) => update?.$set && key in update.$set);
+      expect(calls[indexOfSet('merkleRoot')]).toEqual([{ _id: 'generated-id' }, { $set: { merkleRoot: 'sealed-root' } }]);
+      expect(indexOfSet('merkleRoot')).toBeGreaterThan(indexOfSet('sealedRcsAssessmentId'));
+      expect(indexOfSet('merkleRoot')).toBeGreaterThan(indexOfSet('sealedSpecimenPreanalyticsId'));
+      expect(result.merkleRoot).toBe('sealed-root');
+    });
+
+    it('ignores a body merkleRoot and leaves it null when the seal rejects, still creating the sample (#1548)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      vi.spyOn(MerkleService, 'generateSampleHashFromSample').mockRejectedValue(new Error('snapshot read failed'));
+
+      const result = await sampleService.createSample(db, validSampleData({ merkleRoot: 'forged-root' }));
+
+      expect(result._id).toBe('generated-id');
+      expect(db.collections.samples.insertOne.mock.calls[0][0].merkleRoot).toBeNull();
+      expect(db.collections.samples.updateOne.mock.calls.some(([, update]) => update?.$set && 'merkleRoot' in update.$set)).toBe(false);
+      expect(result.merkleRoot).toBeNull();
+    });
+
+    it('ignores a body sealedSpecimenPreanalyticsId on create, so the seal hashes no forged profile (#1548)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      const seal = vi.spyOn(MerkleService, 'generateSampleHashFromSample').mockResolvedValue('sealed-root');
+
+      const result = await sampleService.createSample(db, validSampleData({ sealedSpecimenPreanalyticsId: 'forged-profile' }));
+
+      expect(db.collections.samples.insertOne.mock.calls[0][0].sealedSpecimenPreanalyticsId).toBeNull();
+      expect(seal).toHaveBeenCalledWith(db, expect.objectContaining({ sealedSpecimenPreanalyticsId: null }));
+      expect(result.sealedSpecimenPreanalyticsId).toBeNull();
+    });
+
+    it('ignores a client-sent merkleRoot or sealedSpecimenPreanalyticsId and writes the other fields (#1548)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(storedSample({ merkleRoot: 'stored-root', sealedSpecimenPreanalyticsId: 'profile-1' }));
+
+      await sampleService.updateSample(db, 'sample-1', {
+        merkleRoot: 'forged-root', sealedSpecimenPreanalyticsId: 'forged-profile', notes: 'nota'
+      });
+
+      const set = setOf(db);
+      expect(hasOwn(set, 'merkleRoot')).toBe(false);
+      expect(hasOwn(set, 'sealedSpecimenPreanalyticsId')).toBe(false);
+      expect(set.notes).toBe('nota');
+    });
+
+    it('reseals in the same write an edit that changes clinicalData on a sample whose seal verifies (#1548)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(storedSample({ merkleRoot: 'stored-root', clinicalData: { diagnosis: 'A' } }));
+      const seal = vi.spyOn(MerkleService, 'generateSampleHashFromSample')
+        .mockImplementation(async (_db, sample) => (sample.clinicalData?.diagnosis === 'A' ? 'stored-root' : 'resealed-root'));
+
+      await sampleService.updateSample(db, 'sample-1', { clinicalData: { diagnosis: 'B' } });
+
+      expect(seal).toHaveBeenCalledWith(db, expect.objectContaining({ clinicalData: { diagnosis: 'B' } }));
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      expect(setOf(db).clinicalData).toEqual({ diagnosis: 'B' });
+      expect(setOf(db).merkleRoot).toBe('resealed-root');
+    });
+
+    it('reseals in the same write an edit that changes pharmacologyData on a sample whose seal verifies (#1548)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(storedSample({ merkleRoot: 'stored-root', pharmacologyData: { atcCode: 'A01' } }));
+      const seal = vi.spyOn(MerkleService, 'generateSampleHashFromSample')
+        .mockImplementation(async (_db, sample) => (sample.pharmacologyData?.atcCode === 'A01' ? 'stored-root' : 'resealed-root'));
+
+      await sampleService.updateSample(db, 'sample-1', { pharmacologyData: { atcCode: 'B02' } });
+
+      expect(seal).toHaveBeenCalledWith(db, expect.objectContaining({ pharmacologyData: { atcCode: 'B02' } }));
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      expect(setOf(db).pharmacologyData).toEqual({ atcCode: 'B02' });
+      expect(setOf(db).merkleRoot).toBe('resealed-root');
+    });
+
+    it('answers 409 and stores nothing when the stored root changed between the read and a resealing write (#1548)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(storedSample({ merkleRoot: 'stored-root', clinicalData: { diagnosis: 'A' } }));
+      // A concurrent edit already resealed the stored document: a write that
+      // names the root this edit read matches nothing, any other write matches.
+      db.collections.samples.updateOne.mockImplementation(async (filter) => (
+        filter.merkleRoot === undefined || filter.merkleRoot === 'concurrent-root'
+          ? { matchedCount: 1, modifiedCount: 1 }
+          : { matchedCount: 0, modifiedCount: 0 }));
+      vi.spyOn(MerkleService, 'generateSampleHashFromSample')
+        .mockImplementation(async (_db, sample) => (sample.clinicalData?.diagnosis === 'A' ? 'stored-root' : 'resealed-root'));
+
+      await expect(sampleService.updateSample(db, 'sample-1', { clinicalData: { diagnosis: 'B' } }))
+        .rejects.toMatchObject({ statusCode: 409, code: 'SAMPLE_SEAL_WRITE_CONFLICT' });
+
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ specimenId: 'SPC-1', merkleRoot: 'stored-root' });
+    });
+
+    it('does not reseal an edit to a sample whose stored seal does not verify, nor one that changes no sealed input (#1548)', async () => {
+      const cases = [
+        // A stored root the recompute does not match (forged), none at all, and
+        // a verifying root under an edit that leaves the sealed input as stored.
+        { existing: { merkleRoot: 'forged-root', clinicalData: { diagnosis: 'A' } }, update: { clinicalData: { diagnosis: 'B' } } },
+        { existing: { merkleRoot: null, pharmacologyData: { atcCode: 'A01' } }, update: { pharmacologyData: { atcCode: 'B02' } } },
+        { existing: { merkleRoot: 'stored-root', clinicalData: { diagnosis: 'A' } }, update: { clinicalData: { diagnosis: 'A' }, notes: 'nota' } }
+      ];
+      for (const { existing, update } of cases) {
+        const db = makeDb();
+        db.collections.samples.findOne.mockResolvedValue(storedSample(existing));
+        vi.spyOn(MerkleService, 'generateSampleHashFromSample').mockResolvedValue('stored-root');
+
+        await sampleService.updateSample(db, 'sample-1', update);
+
+        expect(hasOwn(setOf(db), 'merkleRoot')).toBe(false);
+        vi.restoreAllMocks();
+      }
     });
   });
 });

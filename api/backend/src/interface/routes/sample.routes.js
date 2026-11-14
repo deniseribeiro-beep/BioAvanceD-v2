@@ -1276,6 +1276,8 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     if (error.code === 'INVALID_QUANTITY') return res.status(422).json({ success: false, error: 'INVALID_QUANTITY', message: error.message, fields: error.fields, details: error.details });
     // RF006 AC4 (#1531): an edit of a ledgered quantity answers 422.
     if (error.code === 'QUANTITY_LEDGER_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'QUANTITY_LEDGER_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
+    // #1548: a reseal that lost a race with another edit answers 409; the client re-reads.
+    if (error.code === 'SAMPLE_SEAL_WRITE_CONFLICT') return res.status(409).json({ success: false, error: 'SAMPLE_SEAL_WRITE_CONFLICT', message: error.message, details: error.details });
     // #1378 (ELM-0116): a barcode write after the migration window answers 422.
     if (error.code === 'LEGACY_BARCODE_WRITE_REFUSED') {
       return res.status(422).json({

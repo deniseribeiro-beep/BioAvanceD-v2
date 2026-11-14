@@ -18,6 +18,7 @@ const { withMongoTransaction, withTransactionWhereSupported, isTransientTransact
 const rcsAssessmentService = require('./rcs-assessment.service');
 const sampleCertification = require('./sample-certification.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
+const merkleService = require('./MerkleService');
 const quarantineActionService = require('./quarantine-action.service');
 const legalHoldService = require('./legalHold.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
@@ -44,6 +45,9 @@ const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadas
 // the sample-file controller and the storage routes resolve it the same way.
 const { findSampleByAnyId } = require('../utils/sampleLookup');
 
+// #1548: the fields an edit may write that MerkleService.generateSampleHash hashes.
+const SEALED_UPDATE_FIELDS = Object.freeze(['clinicalData', 'pharmacologyData']);
+
 function createSampleValidationError(message, statusCode = 422) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -65,6 +69,16 @@ const STATUS_WRITE_REFUSED = 'SPECIMEN_STATUS_WRITE_REFUSED';
 function createStatusWriteRefusal(message) {
   const error = createSampleValidationError(message, 422);
   error.code = STATUS_WRITE_REFUSED;
+  return error;
+}
+
+// #1548: a reseal lands only on the root it verified; a write that matched
+// nothing lost a race with another edit, so it stores nothing and is refused.
+function createSealWriteConflict() {
+  const message = 'Amostra alterada concorrentemente; a merkleRoot lida não é mais a armazenada, leia-a de novo';
+  const error = createSampleValidationError(message, 409);
+  error.code = 'SAMPLE_SEAL_WRITE_CONFLICT';
+  error.details = [message];
   return error;
 }
 
@@ -499,6 +513,11 @@ class SampleService {
       await sampleCertification.certifySampleSprec(db, sampleData);
 
       const sample = SampleModel.create(sampleData);
+      // #1548: the seal and its SPREC pin are server-owned, so a body's
+      // merkleRoot or sealedSpecimenPreanalyticsId is never stored; both stay
+      // null until the pin and the seal below write them.
+      sample.merkleRoot = null;
+      sample.sealedSpecimenPreanalyticsId = null;
       // #1192: the tenancy key comes only from the caller's server-built
       // options, never from sampleData, which a request body or import row fills.
       sample.organizationId = options.organizationId ? String(options.organizationId) : null;
@@ -707,6 +726,17 @@ class SampleService {
         } catch (profileError) {
           logger.error('Falha ao registrar SpecimenPreanalytics para a amostra:', profileError.message || profileError);
         }
+      }
+
+      // #1548: sealed last, once both snapshots above are pinned, from the
+      // stored sample, so the seal covers what the integrity check recomputes.
+      try {
+        const storedSample = await samplesCollection.findOne({ _id: result.insertedId }) || sample;
+        const merkleRoot = await merkleService.generateSampleHashFromSample(db, storedSample);
+        await samplesCollection.updateOne({ _id: result.insertedId }, { $set: { merkleRoot } });
+        sample.merkleRoot = merkleRoot;
+      } catch (sealError) {
+        logger.error('Falha ao selar a merkleRoot da amostra:', sealError.message || sealError);
       }
 
       // Log sanitizado (apenas ID, sem dados sensíveis)
@@ -1060,6 +1090,8 @@ class SampleService {
       // quantityLedgerVersion (RF006 AC4) is excluded on purpose: server-owned like the status fields.
       // currentQuantity, totalWithdrawn and totalReturned are excluded too: only
       // a withdrawal or return writes them (RF006 AC4, #1531).
+      // merkleRoot and sealedSpecimenPreanalyticsId are excluded on purpose: the
+      // seal and the pin it hashes are server-owned (#1548).
       const ALLOWED_UPDATE_FIELDS = [
         'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
         'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
@@ -1067,8 +1099,8 @@ class SampleService {
         // RCS_DERIVED_FIELDS are refused above (RNF018 AC4).
         'externalQualityAssessment', 'locationID', 'linkedProject',
         // sprec is refused above when it changes (RF018 AC10, #1537).
-        'collectionSite', 'merkleRoot',
-        'sealedSpecimenPreanalyticsId', 'consentTemplateId', 'clinicalData',
+        'collectionSite',
+        'consentTemplateId', 'clinicalData',
         'pharmacologyData', 'consentStatus', 'quarantineReason',
         'importBatchId', 'importedAt', 'importedBy',
         'initialQuantity',
@@ -1095,13 +1127,36 @@ class SampleService {
         updatedAt: new Date()
       };
 
+      // #1548: an edit that changes a sealed input reseals in the same write,
+      // but only a sample whose stored seal verifies before the edit: a missing
+      // or mismatched root keeps reading as tampered, and no edit launders it.
+      const changesSealedInput = SEALED_UPDATE_FIELDS.some((key) =>
+        Object.prototype.hasOwnProperty.call(restUpdateData, key)
+        && !isDeepStrictEqual(restUpdateData[key] ?? null, existing[key] ?? null));
+      if (changesSealedInput && existing.merkleRoot) {
+        const priorRoot = await merkleService.generateSampleHashFromSample(db, existing);
+        if (priorRoot === existing.merkleRoot) {
+          payload.merkleRoot = await merkleService.generateSampleHashFromSample(db, { ...existing, ...restUpdateData });
+        }
+      }
+
+      // #1548: a reseal is compare-and-set on the root it verified, so two
+      // concurrent edits cannot each store a root covering only their own edit.
+      const reseals = Object.prototype.hasOwnProperty.call(payload, 'merkleRoot');
+      const updateFilter = reseals
+        ? { specimenId: existing.specimenId, merkleRoot: existing.merkleRoot }
+        : { specimenId: existing.specimenId };
+
       const statusChanges = String(previousStatus || '').toLowerCase() !== String(specimenStatus || '').toLowerCase();
       const writeUpdate = async (session) => {
         const result = await samplesCollection.updateOne(
-          { specimenId: existing.specimenId },
+          updateFilter,
           { $set: payload },
           session ? { session } : undefined
         );
+        if (reseals && result.matchedCount === 0) {
+          throw createSealWriteConflict();
+        }
         // RF006 AC7: an edit that changes specimenStatus records the change,
         // append-only, with the write. The edit has no event of its own, so
         // the decision's trigger is an id minted for this update.

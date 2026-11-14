@@ -2140,6 +2140,62 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     expect(repeated.status()).toBe(200);
   });
 
+  test('a sample created through POST /api/samples is sealed after its snapshot pins, an edit cannot write the seal or its pin, and a clinicalData edit reseals it (#1548)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: auth,
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        collectionId: governedCollectionId(),
+        quantity: 10,
+        boxId: seededStorageBox.boxId,
+        positionCode: seededStorageBox.positionCode,
+        sprec: fluidSprec(),
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId: string = (await create.json()).data.specimenId;
+
+    const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+    expect(assessments.status()).toBe(200);
+    expect((await assessments.json()).data).toHaveLength(1);
+    const profiles = await request.get(`${apiBaseURL}/api/samples/${specimenId}/sprec-profiles`, { headers: auth });
+    expect(profiles.status()).toBe(200);
+    expect((await profiles.json()).data).toHaveLength(1);
+
+    const forged = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: {
+        merkleRoot: 'f'.repeat(64),
+        sealedSpecimenPreanalyticsId: 'forged-profile',
+        linkedProject: '#1548 e2e seal project',
+      },
+    });
+    expect(forged.status()).toBe(200);
+
+    const clinicalEdit = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { clinicalData: { notes: '#1548 e2e clinical edit' } },
+    });
+    expect(clinicalEdit.status()).toBe(200);
+
+    // Read once, last: a graph that is not releasable can quarantine the sample.
+    const graph = await request.get(`${apiBaseURL}/api/samples/${encodeURIComponent(specimenId)}/compliance-graph`, {
+      headers: auth,
+    });
+    const graphText = await graph.text();
+    expect(graph.status(), graphText).toBe(200);
+    expect(JSON.parse(graphText).data.graphPath.integrity.valid, graphText).toBe(true);
+  });
+
   test('an intake resolves its governance evidence references, and refuses certification and quarantines the specimen for a missing hash or an unresolvable URI (RNF018 AC5, #1524)', async ({
     request,
   }) => {

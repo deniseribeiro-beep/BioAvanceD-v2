@@ -2715,6 +2715,19 @@ describe('sample.routes', () => {
       expect(res.body).toEqual({ success: false, error: 'QUANTITY_LEDGER_WRITE_REFUSED', message: 'x', fields: ['currentQuantity'], details: ['x'] });
     });
 
+    // #1548: a resealing edit that lost a race with another edit answers 409, so the client re-reads.
+    it('answers 409 SAMPLE_SEAL_WRITE_CONFLICT when the service refuses a reseal that lost a race (#1548)', async () => {
+      const conflict = Object.assign(new Error('x'), { statusCode: 409, code: 'SAMPLE_SEAL_WRITE_CONFLICT', details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(conflict);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ clinicalData: { notes: 'x' } });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ success: false, error: 'SAMPLE_SEAL_WRITE_CONFLICT', message: 'x', details: ['x'] });
+    });
+
     // #1378 (ELM-0116): a barcode write refused after the migration window answers 422 with its code.
     it('answers 422 LEGACY_BARCODE_WRITE_REFUSED when the service refuses a barcode write', async () => {
       const refusal = Object.assign(new Error('Sample.barcode (ELM-0116) não é mais gravado'), { statusCode: 422, code: 'LEGACY_BARCODE_WRITE_REFUSED' });
