@@ -147,7 +147,7 @@ describe('import-async.controller', () => {
       });
     });
 
-    it('with dataType, returns 200 with metadata on success', async () => {
+    it('with dataType, deletes the upload and returns 200 with metadata on success (#1556)', async () => {
       const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
       const req = {
         app: { locals: { db: {} } },
@@ -160,9 +160,13 @@ describe('import-async.controller', () => {
         valid: true,
         metadata: { rows: 3 },
       });
+      const cleanupSpy = vi
+        .spyOn(importAsyncService, 'cleanupFile')
+        .mockImplementation(() => {});
 
       await controller.validate(req, res);
 
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({
         success: true,
