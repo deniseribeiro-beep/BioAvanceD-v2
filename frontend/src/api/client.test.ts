@@ -107,6 +107,22 @@ describe('apiClient request interceptor', () => {
 
     expect(adapter.mock.calls[0][0].headers.Authorization).toBeUndefined();
   });
+
+  it('RNF001 C4 (#1469) times a call and posts its timing to the frontend-timings route', async () => {
+    localStorage.setItem('token', 'tok-123');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => ok(config));
+    const { apiClient } = await loadClient(adapter);
+    const { flushTimings } = await import('./timingReporter');
+
+    await apiClient.get('/patients/123/consent');
+    await flushTimings();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${apiClient.defaults.baseURL}/monitoring/frontend-timings`);
+    expect(JSON.parse(String(init.body)).timings).toEqual([{ name: 'GET /api/patients/:id/consent', ms: expect.any(Number) }]);
+  });
 });
 
 describe('apiClient response interceptor', () => {

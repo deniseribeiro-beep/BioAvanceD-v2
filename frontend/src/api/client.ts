@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { withRequestId } from './requestId';
+import { installTimingReporter } from './timingReporter';
 import { getLanguage } from '../i18n';
 
 export type ApiToastType = 'success' | 'error' | 'warning' | 'info';
@@ -109,6 +110,9 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+// RNF001 C4 (#1469): installed last, so it times each call around the other interceptors.
+installTimingReporter(apiClient);
 
 export function notifyApiToast(detail: ApiToastEventDetail) {
   dispatchToast(detail);

@@ -33,6 +33,7 @@ import {
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 import { fetchWithRequestId, withRequestId } from '../api/requestId';
+import { installTimingReporter } from '../api/timingReporter';
 import { getLanguage } from '../i18n';
 
 // Opt-out for background/speculative requests (e.g. a prefetch for a later
@@ -309,6 +310,9 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+// RNF001 C4 (#1469): installed last, so it times each call around the other interceptors.
+installTimingReporter(api);
 
 // ========== PATIENT SERVICES ==========
 export const patientService = {

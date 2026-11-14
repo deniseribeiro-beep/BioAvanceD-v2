@@ -91,6 +91,22 @@ describe('request interceptor', () => {
 
     expect(adapter.mock.calls[0][0].headers.Authorization).toBe('Bearer abc');
   });
+
+  it('RNF001 C4 (#1469) times a call and posts its timing to the frontend-timings route', async () => {
+    localStorage.setItem('token', 'abc');
+    fetchWithRequestId.mockResolvedValue(new Response(null, { status: 204 }));
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => ok(config));
+    const api = await loadApi(adapter);
+    const { flushTimings } = await import('../api/timingReporter');
+
+    await api.get('/samples/BAD-2026-0001');
+    await flushTimings();
+
+    expect(fetchWithRequestId).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchWithRequestId.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${api.defaults.baseURL}/monitoring/frontend-timings`);
+    expect(JSON.parse(String(init.body)).timings).toEqual([{ name: 'GET /api/samples/:id', ms: expect.any(Number) }]);
+  });
 });
 
 describe('response interceptor: 401 and the token refresh', () => {
