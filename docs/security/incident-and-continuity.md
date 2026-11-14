@@ -46,7 +46,7 @@ Where they surface: `GET /api/monitoring/alerts` (`monitoring.routes.js`, Admini
 
 ### 1.3 Cold-chain incidents (`temperatureIncidents` collection)
 
-A `TemperatureIncident` (`TemperatureIncident.js`) is a temperature excursion of a storage sensor, not a security incident: `sensorKey`, `sensorName`, current, maximum and minimum temperature, `samplesOutOfRange`, `status` (`open`, `acknowledged`, `escalated`, `resolved`), `escalationLevel` (0 notified, 1 supervisor, 2 critical) and `notes`. It is opened by `upsertTemperatureIncidentAndQuarantine` (`iot.controller.js`) when a reading is out of the sensor's policy range, or by `POST /api/incidents/create` (`createOrUpdateIncident`). One open incident per sensor; a new excursion updates it. Opening one also applies the cold-chain quarantine to the affected samples (`applyColdChainQuarantine`).
+A `TemperatureIncident` (`TemperatureIncident.js`) is a temperature excursion of a storage sensor, not a security incident: `sensorKey`, `sensorName`, current, maximum and minimum temperature, `samplesOutOfRange`, `status` (`open`, `acknowledged`, `escalated`, `resolved`), `escalationLevel` (0 notified, 1 supervisor, 2 critical) and `notes`. It is opened by `upsertTemperatureIncidentAndQuarantine` (`iot.controller.js`) when a reading is out of the sensor's policy range, or by `POST /api/incidents/create` (machine-ingest secret) (`createOrUpdateIncident`). One open incident per sensor; a new excursion updates it. Opening one also applies the cold-chain quarantine to the affected samples (`applyColdChainQuarantine`).
 
 Where they surface: `GET /api/incidents` (permission `viewTemperature`).
 
@@ -144,7 +144,7 @@ RNF013 C2, its incident-management and continuity part. Each row lists what is *
 | Incident notification to authorities and data subjects | None. | Not implemented: no record or workflow for notifying the data-protection authority or affected participants of a security incident (LGPD). |
 | Security alert delivery | High and critical alerts are e-mailed to `ALERT_EMAIL_TO` when it is set; `.env.production.example` ships it empty. | Not implemented: no delivery of low or medium alerts, no second channel (`createSlackHandler` only logs and is registered nowhere), and no escalation or response deadline on a security alert. |
 | Alert types | `REVOKED_ACCESS`, `PII_EXPOSURE` and `SECURITY_BYPASS_ATTEMPT` have methods. | Not implemented: no code raises them. |
-| Cold-chain incident creation | `POST /api/incidents/create` takes no `authenticate` or permission middleware (`incident.routes.js`). | Not implemented: authentication on that route. |
+| Cold-chain incident creation | `POST /api/incidents/create` is gated by the machine-ingest secret (`requireMachineIngestSecret`, #1552, `incident.routes.js`): a missing or wrong `x-telemetry-ingest-secret` gets 403, and an unset `TELEMETRY_INGEST_SECRET` closes the route. | None. |
 | Escalation | Cold-chain escalation is by hand (`PUT /api/incidents/:incidentId/escalate`). | Not implemented: no time-based escalation of an unacknowledged cold-chain incident, security alert or platform alert episode. |
 | Platform alert handling | Episodes open and resolve by rule; notified only through a `platform_alert` NotificationRule. | Not implemented: no acknowledgement or owner on an episode. |
 | Audit-trail verification | `audit:verify-chain`, `audit:verify-witnesses` and `audit:verify` run by hand. | Not implemented: no scheduled verification of the audit chain, and `audit:verify-chain` exits 0 on a broken chain. |

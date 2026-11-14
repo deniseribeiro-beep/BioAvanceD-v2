@@ -123,4 +123,4 @@ function gateSites() {
   return routeFiles().flatMap((file) => gateSitesIn(readStripped(fs, file), file));
 }
 
-module.exports = { BACKEND_SRC, ROUTE_DIRS, routeFiles, relative, gateSitesIn, gateSites };
+module.exports = { BACKEND_SRC, ROUTE_DIRS, routeFiles, relative, argsAt, gateSitesIn, gateSites };

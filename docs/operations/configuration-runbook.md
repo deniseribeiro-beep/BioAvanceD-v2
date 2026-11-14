@@ -92,7 +92,7 @@ Nothing moves between the layers: no env variable is a configuration-release key
 | Alerts | `ALERT_EMAIL_TO`, `RESEND_API_KEY`, `EMAIL_FROM` | no | none | blank | `env.js` |
 | Telemetry | `TELEMETRY_BINDING_MODE` | no | `enforce` | `enforce` | `env.js` |
 | Telemetry | `TELEMETRY_MONITOR_CRON`, `TELEMETRY_CRITICAL_TEMP`, `TELEMETRY_CRITICAL_DURATION_HOURS`, `TELEMETRY_LOOKBACK_HOURS`, `TELEMETRY_TRIGGER_COOLDOWN_MINUTES`, `TELEMETRY_MIN_TEMP_ALERT`, `TELEMETRY_MAX_TEMP_ALERT` | no | none | cron commented | `env.js` |
-| Telemetry | `TELEMETRY_INGEST_SECRET` | no; unset closes the machine-ingest routes | none | blank | `api/backend/src/utils/machineIngestGate.js`, the gate the IoT and temperature ingest routes use |
+| Telemetry | `TELEMETRY_INGEST_SECRET` | no; unset closes the machine-ingest routes | none | blank | `api/backend/src/utils/machineIngestGate.js`, the gate the IoT, temperature and incident-creation ingest routes use |
 | Telemetry | `MQTT_ENABLED`, `MQTT_URL`, `MQTT_TLS_ENABLED`, and the other `MQTT_*` of `env.js` | no | off, none | `false`, blank, `true` | `env.js` |
 | Integrations | `ALLOW_CLOUD_INTEGRATIONS`, `ALLOW_EXTERNAL_TERMINOLOGY_SYNC`, `ALLOW_EXTERNAL_HPO_LOOKUP`, `ALLOW_EXTERNAL_DRUG_LOOKUP` | no | off | `false` | `env.js` |
 | Bootstrap | `BOOTSTRAP_ADMIN_NAME`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_TEMP_PASSWORD`, `BOOTSTRAP_ADMIN_FORCE_RESET` | only to run `createFirstAdmin.js` | none; the reset is forced unless `false` | deliberately absent | `createFirstAdmin.js` ([install-runbook.md](install-runbook.md), section 5) |

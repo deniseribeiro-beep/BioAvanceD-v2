@@ -6823,8 +6823,12 @@
           "incidents"
         ],
         "summary": "Open a temperature incident, or add to the one open for the sensor",
-        "description": "Gates: none. The route registers no authenticate and no permission, so this operation is unauthenticated. The incident and quarantine answer at the top level, not under data. It does not open the request database (req.app.locals.db), so it never answers 503. An open, acknowledged or escalated incident for the sensorKey is updated; otherwise one is created and the alert recipients are mailed.",
-        "security": [],
+        "description": "Gates: requireMachineIngestSecret (header x-telemetry-ingest-secret). No authenticate, so it never answers 401. The incident and quarantine answer at the top level, not under data. It does not open the request database (req.app.locals.db), so it never answers 503. An open, acknowledged or escalated incident for the sensorKey is updated; otherwise one is created and the alert recipients are mailed.",
+        "security": [
+          {
+            "telemetryIngestSecret": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -6886,6 +6890,16 @@
                       }
                     }
                   ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The machine-ingest secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
