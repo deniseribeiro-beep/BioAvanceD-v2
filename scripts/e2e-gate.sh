@@ -15,7 +15,8 @@
 # worker not up, 7 the projection worker did not stop or restart, 8 the
 # stopped-worker phase failed, its log in e2e-worker-stopped.txt, 9 the main
 # run never started (no exit code), 10 the RNF001 UI p95 run (#1469) breached
-# 2 s, skipped a route, left no result or ran past 15 minutes, its result in
+# 2 s, skipped a route, had a download or import measurement that failed, left
+# no result or ran past 15 minutes, its result in
 # rnf001-ui-p95.json and log in rnf001.txt; otherwise the runner's own exit
 # code, which wins over 8 and 10, and 8 wins over 10. Checks that depend on the
 # machine (free RAM, the engine running) stay outside this script.
@@ -56,9 +57,11 @@ docker logs e2e-gate-worker-stopped > "$OUT/e2e-worker-stopped.txt" 2>&1
 docker rm e2e-gate-worker-stopped > /dev/null 2>&1
 $DC up -d --wait --no-deps neo4j-projection-worker-test > "$OUT/worker-start.txt" 2>&1 || exit 7
 # RNF001 C1 (#1469): the UI p95 on the critical routes, in its own runner
-# container before the main run, on the stack the bootstraps just seeded.
-# Only a run that exits 0 and leaves its result file passes; a breach, a
-# skipped route, no result or a run past 15 minutes is exit 10.
+# container before the main run, on the stack the bootstraps just seeded,
+# with a download and an import measured apart from the 2 s budget (RNF001
+# C3). Only a run that exits 0 and leaves its result file passes; a breach, a
+# skipped route, a download or import measurement that failed, no result or a
+# run past 15 minutes is exit 10.
 docker rm -f e2e-gate-rnf001 > /dev/null 2>&1
 $DC run -d --no-deps --name e2e-gate-rnf001 -e N=30 -e OUT=/workspace/rnf001-ui-p95.json playwright-runner \
   node tests/e2e/docker/loopback-forward.cjs 5173=frontend-app-test:5173 3000=backend-app-test:3000 \

@@ -5,6 +5,13 @@
  *   BASE_URL=http://localhost:5173 N=30 node scripts/rnf001-ui-p95.mjs
  * Optional auth (cookie/storage not required for /login; for others set TOKEN via
  * PLAYWRIGHT storage by logging in when TEST_USER/TEST_PASS are set).
+ *
+ * RNF001 C3 (#1469): a download and a large import are measured apart from the
+ * 2 s UI budget, through the API with the login's token, record-only:
+ *   SEPARATE_N   samples per separate measurement (default 5, minimum 1).
+ *   IMPORT_ROWS  synthetic CSV rows posted to /api/import/validate (default
+ *                100000, RNF002's reference volume of 100,000 records).
+ * The run fails when either of them could not be measured on every sample.
  */
 import { chromium } from 'playwright';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -14,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:5173').replace(/\/$/, '');
 const API_URL = (process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || 'http://127.0.0.1:3000').replace(/\/$/, '');
 const N = Math.max(5, Number(process.env.N || 30));
+const SEPARATE_N = Math.max(1, Number(process.env.SEPARATE_N || 5));
+const IMPORT_ROWS = Math.max(1, Number(process.env.IMPORT_ROWS || 100_000));
 const OUT = process.env.OUT
   || join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'evidencias', 'homologacao-runtime', 'rnf001-ui-p95-results.json');
 
@@ -53,7 +62,7 @@ async function apiLogin() {
 
 async function ensureAuth(context) {
   const session = await apiLogin();
-  if (!session) return false;
+  if (!session) return null;
   await context.addInitScript(
     ([tokenValue, userValue]) => {
       window.localStorage.setItem('token', tokenValue);
@@ -61,7 +70,7 @@ async function ensureAuth(context) {
     },
     [session.token, JSON.stringify(session.user)]
   );
-  return true;
+  return session;
 }
 
 async function measure(page, route) {
@@ -90,8 +99,10 @@ const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 
 let authed = false;
+let session = null;
 if (routes.some((r) => r.auth)) {
-  authed = await ensureAuth(context);
+  session = await ensureAuth(context);
+  authed = Boolean(session);
 }
 const page = await context.newPage();
 
@@ -170,7 +181,89 @@ for (const route of routes) {
 
 // RNF001 C1: the run passes only when every route was measured and met the
 // budget; a skipped route (login failed, every sample failed) is a failure.
-results.overallPass = routes.every((r) => results.routes[r.path]?.pass === true);
+const routesPass = routes.every((r) => results.routes[r.path]?.pass === true);
+
+// RNF001 C3 (#1469): downloads, large imports and external-service outage are
+// measured apart from the 2 s budget. The download and the import are timed
+// here, record-only, with no budget of their own; the outage is not yet.
+results.excludedFromBudget = ['download', 'import', 'external-service-unavailable'];
+results.notYetMeasured = ['external-service-unavailable'];
+
+function buildImportCsv(rows) {
+  // Synthetic rows only, no personal data.
+  const lines = ['patientId,name,birthDate'];
+  for (let i = 0; i < rows; i += 1) lines.push(`rnf001-${i},rnf001,2000-01-01`);
+  return `${lines.join('\n')}\n`;
+}
+
+const separate = [
+  {
+    name: 'download GET /api/logs/export/csv',
+    prepare: () => null,
+    request: (token) => fetch(`${API_URL}/api/logs/export/csv`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+  },
+  {
+    name: 'import POST /api/import/validate',
+    prepare: () => buildImportCsv(IMPORT_ROWS),
+    request: (token, csv) => {
+      const form = new FormData();
+      form.append('dataType', 'patients');
+      form.append('file', new Blob([csv], { type: 'text/csv' }), 'rnf001-import.csv');
+      return fetch(`${API_URL}/api/import/validate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+    },
+  },
+];
+
+results.separatelyMeasured = {};
+for (const item of separate) {
+  if (!authed) {
+    results.separatelyMeasured[item.name] = { measured: false, reason: 'auth_required_but_login_failed' };
+    continue;
+  }
+  const payload = item.prepare();
+  const samples = [];
+  const errors = [];
+  let bytes = payload === null ? null : Buffer.byteLength(payload);
+  for (let i = 0; i < SEPARATE_N; i += 1) {
+    try {
+      const t0 = Date.now();
+      const res = await item.request(session.token, payload);
+      const body = await res.arrayBuffer();
+      const ms = Date.now() - t0;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (payload === null) bytes = body.byteLength;
+      samples.push(ms);
+      console.error(`[rnf001] ${item.name} sample ${i + 1}/${SEPARATE_N}: ${ms}ms`);
+    } catch (err) {
+      errors.push(String(err?.message || err));
+      console.error(`[rnf001] ${item.name} sample ${i + 1}/${SEPARATE_N} FAIL: ${errors[errors.length - 1]}`);
+    }
+  }
+  // Same ranking as the routes: a failed sample counts as Infinity.
+  const sorted = [...samples].sort((a, b) => a - b).concat(errors.map(() => Infinity));
+  const finite = (v) => (Number.isFinite(v) ? v : null);
+  const entry = {
+    samples,
+    p50: finite(percentile(sorted, 50)),
+    p95: finite(percentile(sorted, 95)),
+    max: finite(sorted[sorted.length - 1]),
+    bytes,
+    failedSamples: errors.length,
+    measured: samples.length === SEPARATE_N && errors.length === 0,
+  };
+  if (errors.length) entry.errors = errors;
+  results.separatelyMeasured[item.name] = entry;
+}
+
+// Positive evidence only: a missing entry or one not measured fails the run.
+results.overallPass = routesPass
+  && separate.every((item) => results.separatelyMeasured[item.name]?.measured === true);
 
 await browser.close();
 mkdirSync(dirname(OUT), { recursive: true });
