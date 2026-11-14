@@ -419,6 +419,38 @@ test('RNF014 C7: the backend and both workers require a ready ReadinessReport an
   }
 });
 
+// RF023 AC3, RNF019 C1: an aggregate write and its outbox event commit in one
+// transaction only on a replica set; a standalone mongod takes none.
+test('RF023 AC3 (#1550): mongodb runs a replica set, initiated by mongo-rs-init, and every MongoDB writer waits for it', () => {
+  const parsed = parseCompose(read(COMPOSE_PROD));
+
+  const mongodb = parsed.get('mongodb');
+  assert.ok(mongodb, 'compose.prod.yml must define mongodb');
+  const mongodCommand = mongodb.get('command')?.value ?? '';
+  assert.ok(mongodCommand.includes('--replSet rs0'), 'mongodb must start mongod with --replSet rs0');
+  assert.ok(mongodCommand.includes('--keyFile'), 'mongodb must start mongod with --keyFile, which a replica set with root credentials demands');
+  const mongoEnv = mapping(block(mongodb.get('environment'), 'mongodb: environment'), 6, 'mongodb: environment');
+  assert.match(mongoEnv.get('MONGO_REPLICA_SET_KEY')?.value ?? '', /^\$\{MONGO_REPLICA_SET_KEY:\?/, 'mongodb must take MONGO_REPLICA_SET_KEY with a :? guard');
+
+  const init = parsed.get('mongo-rs-init');
+  assert.ok(init, 'compose.prod.yml must define mongo-rs-init');
+  const initCommand = init.get('command')?.value ?? '';
+  assert.ok(initCommand.includes('rs.initiate'), 'mongo-rs-init must run rs.initiate');
+  assert.ok(initCommand.includes('mongodb:27017'), 'mongo-rs-init must name mongodb:27017 as the member');
+  const initDeps = mapping(block(init.get('depends_on'), 'mongo-rs-init: depends_on'), 6, 'mongo-rs-init: depends_on');
+  const initOnMongo = mapping(block(initDeps.get('mongodb'), 'mongo-rs-init: depends_on.mongodb'), 8, 'mongo-rs-init: depends_on.mongodb');
+  assert.equal(initOnMongo.get('condition')?.value, 'service_healthy', 'mongo-rs-init must wait for mongodb to be healthy');
+
+  for (const name of ['foundation', 'backend', 'worker', 'neo4j-projection-worker']) {
+    const service = parsed.get(name);
+    assert.ok(service, `compose.prod.yml must define ${name}`);
+    const deps = mapping(block(service.get('depends_on'), `${name}: depends_on`), 6, `${name}: depends_on`);
+    assert.ok(deps.has('mongo-rs-init'), `${name} must depend on mongo-rs-init`);
+    const rsInit = mapping(block(deps.get('mongo-rs-init'), `${name}: depends_on.mongo-rs-init`), 8, `${name}: depends_on.mongo-rs-init`);
+    assert.equal(rsInit.get('condition')?.value, 'service_completed_successfully', `${name} must wait for mongo-rs-init to complete successfully`);
+  }
+});
+
 // Fixtures: a minimal stack that passes, and one planted bypass per case.
 const FIXTURE_DOCKERFILE = 'FROM node:22.23.4-alpine\nRUN addgroup -S app && adduser -S app -G app\nUSER app\n';
 function fixtureTree(files = {}) {

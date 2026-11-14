@@ -14,7 +14,7 @@ Every stack is Docker Compose. The compose project name is the file's own `name:
 |---|---|---|---|---|
 | `compose.yml` | `bioavanced` | Base of the development stack: `mongodb`, `neo4j`, `influxdb`, `redis`, `tsa`, `witness`, each with a healthcheck and no published port. Never started alone. | Always with `compose.dev.yml` on top. | Through the `compose:*` scripts below. |
 | `compose.dev.yml` | `bioavanced` | Development overlay: adds `backend`, `worker`, `neo4j-projection-worker`, `frontend` (built from `Dockerfile.dev`, source bind-mounted), the one-shot jobs `foundation-bootstrap`, `essential-reference-bootstrap` and the `reference-data-bootstrap*` importers, and publishes every port on `127.0.0.1`. | `--env-file .env.docker -f compose.yml -f compose.dev.yml` | `compose:config`, `compose:up`, `compose:ps`, `compose:logs`, `compose:seed-admin`, `compose:down` |
-| `compose.prod.yml` | `bioavanced-prod` | Production stack, self-contained: `mongodb`, `neo4j`, `influxdb`, `redis`, `tsa`, `witness`, the one-shot jobs `foundation` and `essential-references`, `backend`, `worker`, `neo4j-projection-worker`, `frontend`, built from `Dockerfile.prod`, read-only containers with CPU and memory limits. | `--env-file .env.production -f compose.prod.yml` | `compose:prod:config`, `compose:prod:up`, `compose:prod:ps`, `compose:prod:logs`, `compose:prod:seed-admin`, `compose:prod:down` |
+| `compose.prod.yml` | `bioavanced-prod` | Production stack, self-contained: `mongodb`, `neo4j`, `influxdb`, `redis`, `tsa`, `witness`, the one-shot jobs `mongo-rs-init`, `foundation` and `essential-references`, `backend`, `worker`, `neo4j-projection-worker`, `frontend`, built from `Dockerfile.prod`, read-only containers with CPU and memory limits. | `--env-file .env.production -f compose.prod.yml` | `compose:prod:config`, `compose:prod:up`, `compose:prod:ps`, `compose:prod:logs`, `compose:prod:seed-admin`, `compose:prod:down` |
 | `compose.test.yml` | `bioavanced-test` | The e2e stack: every service with a `-test` suffix, its own S3-compatible store (`s3-test`), SMTP (`smtp-test`) and MQTT (`mqtt-test`) services, an `admin-bootstrap-test` job, and the unit and Playwright runners. | `.github/workflows/ci-pipeline.yml` runs it with `--env-file .env.test.example -f compose.test.yml`. | None. |
 | `compose.lab.yml` | (overlay) | "Opt-in overlay for REFERENCE_IMPORT_PROFILE=full-lab on a lab VM/host": mounts the host directories `REFERENCE_FULL_ASSET_DIR_HOST` and `REFERENCE_FULL_CACHE_DIR_HOST` into `backend`, `worker` and the `reference-data-bootstrap*` importers. Its own header says it "Does not change the default compose:up / e2e-gate fixture path." | On top of the development pair; the command is in the file's header comment. | None. |
 
@@ -79,11 +79,13 @@ bash generate-env-production-secrets.sh
 What the script does (`generate-env-production-secrets.sh`):
 
 - Refuses to overwrite an existing `.env.production` (or the path given as its argument), "so a re-run cannot mint new credentials over the volumes a running stack was initialised with".
-- Mints `MONGO_ROOT_PASSWORD`, `NEO4J_PASSWORD`, `INFLUXDB_INIT_PASSWORD`, `REDIS_PASSWORD`, `INFLUXDB_TOKEN`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `CONSENT_SECRET`, `ENCRYPTION_KEY` and `USER_ANON_SALT`; builds `MONGO_URI` from `MONGO_ROOT_USERNAME`, the minted password and `MONGO_DB`, so the two cannot disagree; sets `MONGO_DB_NOVO` to `MONGO_DB`.
+- Mints `MONGO_ROOT_PASSWORD`, `NEO4J_PASSWORD`, `INFLUXDB_INIT_PASSWORD`, `REDIS_PASSWORD`, `INFLUXDB_TOKEN`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `CONSENT_SECRET`, `ENCRYPTION_KEY` and `USER_ANON_SALT`, and `MONGO_REPLICA_SET_KEY` as 96 hex digits (a mongod key file takes only base64 characters); builds `MONGO_URI` from `MONGO_ROOT_USERNAME`, the minted password and `MONGO_DB`, so the two cannot disagree, with `replicaSet=rs0` after `authSource=admin`; sets `MONGO_DB_NOVO` to `MONGO_DB`.
 - Mints the Ed25519 audit signing key to `infra/audit/prod/secrets/merkle_signing_key.pem` when absent, sets `AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE` to its in-container path and `AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON` to its public half under `AUDIT_MERKLE_SIGN_KEY_ID`. On Linux it sets the key 0400 in a 0700 directory and, as root, gives it to uid 10001, the `app` user of `api/backend/Dockerfile.prod`; run as another user, it prints the `chown` and `chmod` to run. On Windows it skips the modes and says so.
 - Copies every other line of `.env.production.example` as it is, writes the file mode 600, and prints:
   - the keys it left blank, to fill by hand. From `.env.production.example` these are `RESEND_API_KEY`, `EMAIL_FROM`, `ALLOWED_ORIGINS`, `AUDIT_RFC3161_TSA_AUTH_TOKEN`, `AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY`, `FRONTEND_URL`, `MQTT_URL`, `ALERT_EMAIL_TO` and `TELEMETRY_INGEST_SECRET`, plus `ENCRYPTION_KEY_PREVIOUS` and `ENCRYPTION_KEY_PREVIOUS_ID`, which it marks as the rotation slot, blank by design;
   - the commented `BACKUP_OFFSITE_S3_*` keys, off until all four of endpoint, bucket, access key id and secret are set ([backup-restore-runbook.md](backup-restore-runbook.md), section 2).
+
+A stack whose `.env.production` predates the replica set (RF023 AC3, #1550) is not regenerated, since the script refuses to overwrite it: add `MONGO_REPLICA_SET_KEY` by hand, 96 hex digits such as `openssl rand -hex 48` prints, append `&replicaSet=rs0` to `MONGO_URI`, then run `npm run compose:prod:up`. The existing `mongodb_data` volume becomes the set's only member.
 
 `api/backend/tests/architecture/env-production-generator.arch.test.js` pins this behaviour. What each variable does, and which are required, is in [configuration-runbook.md](configuration-runbook.md).
 
@@ -98,14 +100,15 @@ npm run compose:prod:up
 
 `compose:prod:up` is `docker compose --env-file .env.production -f compose.prod.yml up -d --wait`: it builds the four images from the repo when they are absent (`api/backend/Dockerfile.prod` for `foundation`, `essential-references`, `backend`, `worker` and `neo4j-projection-worker`; `frontend/Dockerfile.prod`; `infra/tsa/Dockerfile`; `infra/witness/Dockerfile`) and starts the stack in the order `depends_on` gives:
 
-1. `mongodb`, `neo4j`, `influxdb`, `redis`, `tsa`, `witness` start and must turn healthy (section 6).
-2. `foundation` starts when `mongodb` is healthy. It runs `node scripts/seed-essential-reference-data.js` (the image's form of `npm run seed:essential`): the Foundation Data Pipeline's dry-run, apply and verify. It writes a ReadinessReport and exits non-zero when that report is blocked.
-3. `essential-references` starts when `foundation` completed successfully. It runs `node scripts/load-essential-references.js` (`npm run reference:load:essential`), the essential reference set, and exits 1 without a ready ReadinessReport.
-4. `worker` and `neo4j-projection-worker` start when `foundation` completed successfully and `mongodb`, `redis`, `neo4j` and `influxdb` are healthy.
-5. `backend` starts when `foundation` and `essential-references` completed successfully and all six services of step 1 are healthy.
-6. `frontend` starts when `backend` is healthy.
+1. `mongodb`, `neo4j`, `influxdb`, `redis`, `tsa`, `witness` start and must turn healthy (section 6). `mongodb` runs as the single-node replica set `rs0`, with `MONGO_REPLICA_SET_KEY` as its key file, so a write and its outbox event commit in one transaction (RF023 AC3).
+2. `mongo-rs-init` starts when `mongodb` is healthy. It initiates the replica set (a set already initiated passes), waits for the member to become primary and exits 0.
+3. `foundation` starts when `mongodb` is healthy and `mongo-rs-init` completed successfully. It runs `node scripts/seed-essential-reference-data.js` (the image's form of `npm run seed:essential`): the Foundation Data Pipeline's dry-run, apply and verify. It writes a ReadinessReport and exits non-zero when that report is blocked.
+4. `essential-references` starts when `foundation` completed successfully. It runs `node scripts/load-essential-references.js` (`npm run reference:load:essential`), the essential reference set, and exits 1 without a ready ReadinessReport.
+5. `worker` and `neo4j-projection-worker` start when `foundation` and `mongo-rs-init` completed successfully and `mongodb`, `redis`, `neo4j` and `influxdb` are healthy.
+6. `backend` starts when `foundation`, `essential-references` and `mongo-rs-init` completed successfully and all six services of step 1 are healthy.
+7. `frontend` starts when `backend` is healthy.
 
-A `foundation` that exits non-zero stops steps 3 to 6: `service_completed_successfully` is not met.
+A `mongo-rs-init` that exits non-zero stops steps 3 to 7, and a `foundation` that exits non-zero stops steps 4 to 7: `service_completed_successfully` is not met.
 
 ### 4.3 The readiness gate
 

@@ -29,7 +29,7 @@ Nothing moves between the layers: no env variable is a configuration-release key
 - `api/backend/server.js` (`startServer`) exits 1 when `MONGO_URI`, `JWT_SECRET`, `USER_ANON_SALT` or `CONSENT_SECRET` is blank, in every environment.
 - `validateEncryptionAndHalt` (`validateEnv.js`), called from `startServer`, stops a `NODE_ENV=production` start when `ENCRYPTION_KEY` is blank or `ALLOW_UNENCRYPTED_FILE_STORAGE` or `ALLOW_UNENCRYPTED_FIELD_STORAGE` is `true`; elsewhere it only warns.
 - `validateRedisEnv` (`validateEnv.js`) rejects a blank `REDIS_PASSWORD` outside `development` and `test` when the Redis host is not local; `compose.prod.yml` records that the worker treats that rejection as fatal.
-- `compose.prod.yml` interpolates with `${NAME:?...}`, so `compose` itself refuses to start when any of `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `INFLUXDB_INIT_USERNAME`, `INFLUXDB_INIT_PASSWORD`, `INFLUXDB_ORG`, `INFLUXDB_BUCKET`, `INFLUXDB_TOKEN` or `REDIS_PASSWORD` is blank.
+- `compose.prod.yml` interpolates with `${NAME:?...}`, so `compose` itself refuses to start when any of `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `INFLUXDB_INIT_USERNAME`, `INFLUXDB_INIT_PASSWORD`, `INFLUXDB_ORG`, `INFLUXDB_BUCKET`, `INFLUXDB_TOKEN`, `REDIS_PASSWORD` or `MONGO_REPLICA_SET_KEY` is blank.
 - `validateAuditSigningAndWarn` (`validateEnv.js`) only warns when `AUDIT_MERKLE_SIGN_KEY_ID` or the signing key cannot be used; it does not stop the start.
 
 ### 2.3 By group
@@ -46,6 +46,7 @@ Nothing moves between the layers: no env variable is a configuration-release key
 | MongoDB | `MONGO_DB` | no | none | yes | `env.js`, `api/backend/src/database/mongo.js` |
 | MongoDB | `MONGO_DB_NOVO` | no; "only scripts and reference-imports use it" | none | generated | `env.js` |
 | MongoDB | `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD` | yes (`compose.prod.yml`) | none | username set, password generated | `compose.prod.yml` (`mongodb` init and healthcheck) |
+| MongoDB | `MONGO_REPLICA_SET_KEY` | yes (`compose.prod.yml`) | none | generated | `compose.prod.yml` (`mongodb`, the replica set's key file) |
 | MongoDB | `COLL_*` | no | the collection name in `env.js` | no | `env.js`, `api/backend/src/config/collections.js` |
 | Neo4j | `NEO4J_URI` | no, but without it the graph is off (example comment) | none | yes | `env.js` |
 | Neo4j | `NEO4J_USERNAME`, `NEO4J_PASSWORD` | yes (`compose.prod.yml`) | none | username set, password generated | `env.js`, `compose.prod.yml` |
