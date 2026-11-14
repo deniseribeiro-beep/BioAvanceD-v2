@@ -107,13 +107,11 @@ const EXEMPT = new Map([
   ['routes/eConsent.js POST /consent-tokens/revoke', 'participant link: the patient consent token is the credential'],
   ['routes/eConsent.js POST /consent-tokens/signed-tcle', 'participant link: the patient consent token is the credential'],
 
-  // Terminology reads mounted bare in app.js, and one router app.js never
-  // mounts. The code states no reason for either.
+  // Terminology reads mounted bare in app.js. The code states no reason.
   ['routes/hpo.js GET /search', UNJUDGED],
   ['routes/hpo.js GET /:id', UNJUDGED],
   ['routes/orphanet.js GET /search', UNJUDGED],
   ['interface/routes/terminologies.routes.js GET /', UNJUDGED],
-  ['routes/orphanet-count.js GET /count', UNJUDGED],
 ]);
 
 /** The first reading: each `router.<verb>(` by exact text, keyed by its opening parenthesis. */

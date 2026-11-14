@@ -11,8 +11,7 @@ const logger = require2('../../../src/utils/logger');
 // (a shared connection set up once at server startup, not a per-request
 // MongoClient) -- see git history of the file, commit e9fc064c switched
 // it from `new MongoClient(MONGO_URI)` per request to `req.app.locals.db`.
-// So tests here set app.locals.db directly, mirroring
-// tests/unit/routes/orphanet-count.test.js's pattern for the sibling route.
+// So tests here set app.locals.db directly.
 
 function emptyFind() {
   return vi.fn(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }));
