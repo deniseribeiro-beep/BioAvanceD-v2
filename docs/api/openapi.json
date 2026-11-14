@@ -9,6 +9,7 @@
     "/api/auth",
     "/api/audit",
     "/api/monitoring",
+    "/api/availability",
     "/api/backup",
     "/api/backup-policy",
     "/api/ingestion",
@@ -111,6 +112,10 @@
     {
       "name": "monitoring",
       "description": "/api/monitoring: run history and request and queue metrics."
+    },
+    {
+      "name": "availability",
+      "description": "/api/availability: outage and maintenance records and the monthly availability report."
     },
     {
       "name": "backup",
@@ -2443,6 +2448,411 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/availability/records": {
+      "get": {
+        "tags": [
+          "availability"
+        ],
+        "summary": "The outage and maintenance records overlapping a month",
+        "description": "Gate: requireRole(4). Sorted by startedAt, at most 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "description": "The calendar month, YYYY-MM (UTC).",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "recordId": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "outage",
+                                  "maintenance"
+                                ]
+                              },
+                              "startedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "endedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "cause": {
+                                "type": "string",
+                                "maxLength": 500
+                              },
+                              "impact": {
+                                "type": "string",
+                                "maxLength": 500
+                              },
+                              "announcedAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "Only on maintenance."
+                              },
+                              "createdBy": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "availability"
+        ],
+        "summary": "Record an outage or an announced maintenance window (RNF003 C2)",
+        "description": "Gate: requireRole(4). Dates are ISO-8601 with Z or an offset, and none may be later than now plus 5 minutes. A maintenance needs announcedAt before startedAt; an outage takes none. Unknown keys are ignored.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "outage",
+                      "maintenance"
+                    ]
+                  },
+                  "startedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "endedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "After startedAt."
+                  },
+                  "cause": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "impact": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "announcedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required for maintenance and before startedAt; refused for outage."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "startedAt",
+                  "endedAt",
+                  "cause",
+                  "impact"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "recordId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "outage",
+                                "maintenance"
+                              ]
+                            },
+                            "startedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "endedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "cause": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "impact": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "announcedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "Only on maintenance."
+                            },
+                            "createdBy": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/availability/report": {
+      "get": {
+        "tags": [
+          "availability"
+        ],
+        "summary": "The monthly availability report (RNF003 C1, C4)",
+        "description": "Gate: requireRole(4). Maintenance time is left out of the period; outage time inside a maintenance window is not counted. A month still running is measured up to now and answers partial: true. A month that has not started yet answers 422.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "description": "The calendar month, YYYY-MM (UTC).",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "month": {
+                              "type": "string"
+                            },
+                            "partial": {
+                              "type": "boolean",
+                              "description": "True while the month is still running."
+                            },
+                            "asOf": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "The instant the period is measured to: now for a running month, else the first instant of the next month."
+                            },
+                            "periodMinutes": {
+                              "type": "number"
+                            },
+                            "maintenanceMinutes": {
+                              "type": "number"
+                            },
+                            "maintenanceLimitMinutes": {
+                              "type": "number",
+                              "description": "240."
+                            },
+                            "maintenanceWithinLimit": {
+                              "type": "boolean"
+                            },
+                            "outageMinutes": {
+                              "type": "number"
+                            },
+                            "availabilityPercent": {
+                              "type": "number",
+                              "nullable": true,
+                              "description": "Rounded to 4 decimals. Null when evaluable is false."
+                            },
+                            "targetPercent": {
+                              "type": "number",
+                              "description": "99.5."
+                            },
+                            "met": {
+                              "type": "boolean",
+                              "description": "False when evaluable is false."
+                            },
+                            "evaluable": {
+                              "type": "boolean",
+                              "description": "False when the period has no minutes left once maintenance is taken out."
+                            },
+                            "records": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "recordId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "outage",
+                                      "maintenance"
+                                    ]
+                                  },
+                                  "startedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "endedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "cause": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "impact": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "announcedAt": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "description": "Only on maintenance."
+                                  },
+                                  "createdBy": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"

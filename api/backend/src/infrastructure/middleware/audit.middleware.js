@@ -181,6 +181,8 @@ const ENTITY_MAP = {
   'analysis-types': 'AnalysisType',
   'assays': 'Assay',
   'audit': 'AuditEvent',
+  // RNF003 C2 (#1468): a POST records an outage or a maintenance window.
+  'availability': 'AvailabilityRecord',
   'backup': 'Backup',
   'backup-policy': 'BackupPolicy',
   'biobanks': 'Biobank',

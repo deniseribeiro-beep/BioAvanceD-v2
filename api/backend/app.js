@@ -570,6 +570,8 @@ app.use("/api/access-requests", require("./src/routes/accessRequest.js"));
 app.use("/api/access-policies", require("./src/routes/accessPolicy.js"));
 app.use("/api/reference-releases", require("./src/interface/routes/referenceRelease.routes"));
 app.use("/api/monitoring", require("./src/interface/routes/monitoring.routes"));
+// RNF003 C1, C2, C4 (#1468): outage and maintenance records and the monthly availability report.
+app.use("/api/availability", require("./src/interface/routes/availability.routes"));
 app.use("/api/notification-rules", require("./src/routes/notificationRule.js"));
 app.use("/api/notifications", require("./src/routes/notification.js"));
 app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));
