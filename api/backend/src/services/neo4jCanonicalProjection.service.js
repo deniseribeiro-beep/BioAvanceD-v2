@@ -89,6 +89,18 @@ class Neo4jCanonicalProjectionService {
     if (type === 'STORAGE_POSITION_RELEASED') {
       return this.applyStoragePositionRelease(session, event);
     }
+    // #1550 RF029 AC6: the event carries ids only and names no second node, so
+    // it has no relation to draw; a target with relations appends its own graph
+    // events (SPECIMEN_UPSERTED, LINEAGE_REGISTERED, CONSENT_UPSERTED).
+    if (type === 'INGESTION_RECORD_PERSISTED') {
+      return {
+        skipped: true,
+        eventType: type,
+        aggregateType: normalizeText(event?.aggregateType),
+        eventId: normalizeText(event?.eventId),
+        reason: 'no graph relation: the ingested target appends its own graph events',
+      };
+    }
 
     return {
       skipped: true,

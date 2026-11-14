@@ -154,6 +154,20 @@ describe('neo4jCanonicalProjection.service', () => {
       expect(session.run).not.toHaveBeenCalled();
     });
 
+    it('INGESTION_RECORD_PERSISTED is skipped as an event with no graph relation, without calling session.run', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'INGESTION_RECORD_PERSISTED', aggregateType: 'Dataset', eventId: 'e-ing' });
+      expect(result).toEqual({
+        skipped: true,
+        eventType: 'INGESTION_RECORD_PERSISTED',
+        aggregateType: 'Dataset',
+        eventId: 'e-ing',
+        reason: 'no graph relation: the ingested target appends its own graph events',
+      });
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
     it('handles a missing event gracefully via optional chaining', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
