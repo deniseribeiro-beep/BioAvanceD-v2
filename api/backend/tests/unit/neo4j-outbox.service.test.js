@@ -283,8 +283,10 @@ describe('Neo4jOutboxService', () => {
     expect(updateManyCalls).toHaveLength(3);
     expect(updateManyCalls[0][1].$set.status).toBe('DEAD_LETTER');
     expect(updateManyCalls[1][0]).toMatchObject({ status: 'PROCESSING' });
-    expect(updateManyCalls[2][0]).toEqual({ eventId: { $in: ['evt-1', 'evt-2'] } });
+    // #1550: the claim re-checks the find's selector.
+    expect(updateManyCalls[2][0]).toEqual({ eventId: { $in: ['evt-1', 'evt-2'] }, ...findCalls[0] });
     expect(updateManyCalls[2][1].$set.status).toBe('PROCESSING');
+    expect(typeof updateManyCalls[2][1].$set.leaseId).toBe('string');
   });
 
   it('returns an empty array from leaseNextBatch when there is nothing to lease', async () => {
@@ -794,6 +796,91 @@ describe('Neo4jOutboxService', () => {
 
       expect(doc.status).toBe('PROCESSING');
       expect(doc.attempts).toBe(2);
+    });
+  });
+
+  // #1550: the claim re-checks what the find selected, so two leases that
+  // read the same batch never both claim an event, nor claim one another
+  // lease has since put into backoff.
+  describe('#1550 atomic lease', () => {
+    const matches = (doc, query) => Object.entries(query).every(([key, cond]) => {
+      if (key === '$or') return cond.some((sub) => matches(doc, sub));
+      const value = doc[key];
+      if (cond === null) return value == null;
+      if (cond instanceof Date) return value instanceof Date && value.getTime() === cond.getTime();
+      if (cond && typeof cond === 'object') {
+        if ('$in' in cond) return cond.$in.includes(value);
+        if ('$lt' in cond) return value != null && value < cond.$lt;
+        if ('$gte' in cond) return value != null && value >= cond.$gte;
+        if ('$lte' in cond) return value != null && value <= cond.$lte;
+      }
+      return value === cond;
+    });
+
+    const makeFakeDb = (docs, { beforeUpdate } = {}) => {
+      const collection = {
+        updateMany: async (q, u) => {
+          if (beforeUpdate) beforeUpdate(q, u);
+          let modifiedCount = 0;
+          for (const d of docs) {
+            if (!matches(d, q)) continue;
+            if (u.$set) Object.assign(d, u.$set);
+            if (u.$inc) {
+              for (const [field, by] of Object.entries(u.$inc)) d[field] = (d[field] || 0) + by;
+            }
+            modifiedCount += 1;
+          }
+          return { modifiedCount };
+        },
+        find: (q) => {
+          const found = () => docs.filter((d) => matches(d, q)).map((d) => ({ ...d }));
+          const chain = {
+            sort: () => chain,
+            limit: () => chain,
+            toArray: async () => found(),
+          };
+          return chain;
+        },
+      };
+      return { collection: () => collection };
+    };
+
+    const pending = (eventId) => ({ eventId, status: 'PENDING', attempts: 0, nextAttemptAt: null, updatedAt: new Date() });
+
+    it('two leases that read the same batch claim each event once and count its try once', async () => {
+      const docs = [pending('evt-1'), pending('evt-2')];
+      const db = makeFakeDb(docs);
+      const service = new Neo4jOutboxService();
+
+      const [a, b] = await Promise.all([
+        service.leaseNextBatch(db, { batchSize: 5, leaseMs: 60000 }),
+        service.leaseNextBatch(db, { batchSize: 5, leaseMs: 60000 }),
+      ]);
+
+      const idsA = a.map((event) => event.eventId);
+      const idsB = b.map((event) => event.eventId);
+      expect(idsA.filter((id) => idsB.includes(id))).toEqual([]);
+      expect([...idsA, ...idsB].sort()).toEqual(['evt-1', 'evt-2']);
+      expect(docs.map((d) => d.attempts)).toEqual([1, 1]);
+    });
+
+    it('a claim skips an event another lease put into backoff after the find', async () => {
+      const doc = pending('evt-1');
+      let raced = false;
+      const db = makeFakeDb([doc], {
+        beforeUpdate: (q, u) => {
+          if (raced || !u.$set || u.$set.status !== 'PROCESSING' || !('eventId' in q)) return;
+          raced = true;
+          Object.assign(doc, { status: 'RETRYING', attempts: 1, nextAttemptAt: new Date(Date.now() + 60 * 1000) });
+        },
+      });
+
+      const leased = await new Neo4jOutboxService().leaseNextBatch(db, { batchSize: 5, leaseMs: 60000 });
+
+      expect(raced).toBe(true);
+      expect(leased).toEqual([]);
+      expect(doc.attempts).toBe(1);
+      expect(doc.status).toBe('RETRYING');
     });
   });
 });

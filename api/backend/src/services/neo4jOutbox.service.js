@@ -250,13 +250,17 @@ class Neo4jOutboxService {
       }
     );
 
+    // #1550: the claim re-checks what the find selected, under this lease's
+    // own id, so two leases that read the same batch never both claim an
+    // event, nor claim one another lease has since put into backoff.
+    const claimable = {
+      status: { $in: ['PENDING', 'RETRYING'] },
+      attempts: { $lt: maxAttempts },
+      // #1313 (RNF019 C5): a retry waits out its backoff.
+      $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: now } }]
+    };
     const events = await collection
-      .find({
-        status: { $in: ['PENDING', 'RETRYING'] },
-        attempts: { $lt: maxAttempts },
-        // #1313 (RNF019 C5): a retry waits out its backoff.
-        $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: now } }]
-      })
+      .find(claimable)
       .sort({ aggregateType: 1, aggregateId: 1, aggregateVersion: 1, occurredAt: 1, _id: 1 })
       .limit(batchSize)
       .toArray();
@@ -266,11 +270,13 @@ class Neo4jOutboxService {
     }
 
     const eventIds = events.map((event) => event.eventId);
+    const leaseId = crypto.randomUUID();
     await collection.updateMany(
-      { eventId: { $in: eventIds } },
+      { eventId: { $in: eventIds }, ...claimable },
       {
         $set: {
           status: 'PROCESSING',
+          leaseId,
           leaseUntil: new Date(now.getTime() + Number(options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000)),
           updatedAt: now
         },
@@ -278,7 +284,7 @@ class Neo4jOutboxService {
       }
     );
 
-    return collection.find({ eventId: { $in: eventIds } }).toArray();
+    return collection.find({ eventId: { $in: eventIds }, leaseId }).toArray();
   }
 
   async rescheduleStaleProcessing(db, options = {}) {
