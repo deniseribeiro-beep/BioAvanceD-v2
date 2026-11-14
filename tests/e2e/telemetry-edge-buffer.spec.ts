@@ -1,10 +1,13 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
+import path from 'path';
 import { createHash } from 'crypto';
 import { createEdgeBuffer, httpSender, canonicalJson } from '../../api/backend/scripts/telemetry-edge-buffer';
 import { bindSensor, unbindSensor, closeSeedSensorDb } from './helpers/seedSensor';
 import { queryFreezerReadingIds, queryTemperaturePointFields, queryTemperatureRevisions } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
+import { generateValidCpf } from './helpers/cpf';
+import { findTelemetryIngestionEvent, closeIngestionDb } from './helpers/queryIngestion';
 
 // Real-backend proof of RNF004 C1/C2 (#1392): the device's durable edge
 // buffer keeps each reading on disk until the backend confirms it, and a
@@ -18,6 +21,8 @@ import { realLogin } from './helpers/realAuth';
 // A late correction of a stored reading is kept beside it, never over it,
 // the history reads the correction alone and the original stays readable
 // by its id; an identical resend is no correction (RNF025 C8).
+// A reading carrying personal data never enters the buffer, so none reaches
+// the device's disk or the server (RNF004 C7).
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
@@ -27,13 +32,16 @@ test.describe('Telemetry edge buffer (#1392, RNF004 C1/C2) — real backend', ()
   const orderSensorId = `rnf004-order-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const correctionSensorId = `rnf025-correction-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const resendSensorId = `rnf025-resend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const piiSensorId = `rnf004-pii-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   test.afterAll(async () => {
     await unbindSensor(sensorId).catch(() => {});
     await unbindSensor(orderSensorId).catch(() => {});
     await unbindSensor(correctionSensorId).catch(() => {});
     await unbindSensor(resendSensorId).catch(() => {});
+    await unbindSensor(piiSensorId).catch(() => {});
     await closeSeedSensorDb().catch(() => {});
+    await closeIngestionDb().catch(() => {});
   });
 
   test('a reading whose answer was lost stays buffered, and the next drain persists all three exactly once', async ({}, testInfo) => {
@@ -270,5 +278,68 @@ test.describe('Telemetry edge buffer (#1392, RNF004 C1/C2) — real backend', ()
     expect(points).toHaveLength(1);
     expect(points[0]).toMatchObject({ revision: null, supersedesTelemetryReadingId: null, value: 4 });
     expect(answers.map((answer) => answer.telemetryReadingId)).toContain(points[0].telemetryReadingId);
+  });
+
+  test('a reading carrying personal data never enters the buffer, and the clean reading drains to the server unflagged (RNF004 C7)', async ({}, testInfo) => {
+    await bindSensor(piiSensorId);
+
+    const dir = testInfo.outputPath('edge-pii');
+    const buffer = createEdgeBuffer({ dir, deviceId: piiSensorId });
+    const patientName = `Paciente Sintetico ${piiSensorId}`;
+    const cpf = generateValidCpf();
+
+    // Every file under the buffer directory, read whole.
+    const readDisk = (root: string): string[] => fs.readdirSync(root, { withFileTypes: true }).flatMap((dirent) => {
+      const full = path.join(root, dirent.name);
+      return dirent.isDirectory() ? readDisk(full) : [fs.readFileSync(full, 'utf8')];
+    });
+    const expectNoPersonalData = () => {
+      for (const content of readDisk(dir)) {
+        expect(content).not.toContain(patientName);
+        expect(content).not.toContain(cpf);
+      }
+    };
+
+    // The device refuses the reading before it writes anything.
+    expect(() => buffer.enqueue({
+      sensorId: piiSensorId, temperature: -75, timestamp: new Date(Date.now() - 1_000).toISOString(), patientName, cpf,
+    })).toThrow(/Campos não permitidos no buffer: patientName, cpf/);
+    expect(buffer.pending()).toEqual([]);
+    expect(buffer.deadLetters()).toEqual([]);
+    expectNoPersonalData();
+
+    // The refused reading used no sequence number.
+    const entry = buffer.enqueue({ sensorId: piiSensorId, temperature: -75, timestamp: new Date(Date.now() - 1_000).toISOString() });
+    expect(entry.sequenceNumber).toBe(0);
+    expect(Object.keys(entry.body).sort()).toEqual(['idempotencyKey', 'sensorId', 'sequenceNumber', 'sourceEventId', 'temperature', 'timestamp']);
+    expectNoPersonalData();
+
+    const sent: any[] = [];
+    const answers: any[] = [];
+    const send = httpSender({
+      endpoint: `${apiBaseURL}/api/iot/telemetry`,
+      secret: process.env.TELEMETRY_INGEST_SECRET,
+      fetchImpl: async (url: string, init: RequestInit) => {
+        sent.push(JSON.parse(init.body as string));
+        const response = await fetch(url, init);
+        answers.push(await response.clone().json());
+        return response;
+      },
+    });
+
+    expect(await buffer.drain(send)).toEqual({ acked: 1, deadLettered: 0, retained: 0, stoppedOn: null });
+    expect(answers).toHaveLength(1);
+    const [answer] = answers;
+    expect(answer).toMatchObject({ success: true, accepted: true, clockStatus: 'synchronized' });
+    expect(JSON.stringify(sent)).not.toContain(patientName);
+    expect(JSON.stringify(sent)).not.toContain(cpf);
+
+    // Every body field is a contract field, so the server stripped and
+    // flagged nothing: no ingestion event for this reading.
+    expect(await findTelemetryIngestionEvent({ sourceEventId: entry.sourceEventId })).toBeNull();
+
+    await expect
+      .poll(async () => (await queryFreezerReadingIds(piiSensorId, 10, 'temperature')).map((point) => point.telemetryReadingId), { timeout: 15_000 })
+      .toEqual([answer.telemetryReadingId]);
   });
 });
