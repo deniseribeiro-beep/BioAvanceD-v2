@@ -296,6 +296,34 @@ function personalDataDraftsOf(strippedFields = []) {
 }
 
 /**
+ * RNF004 C4 (#1521): whether the payloadHash a client sent matches the
+ * reading's own (identity.payloadHash, the SHA-256 of the canonical contract
+ * fields received). `absent` when it sent none (null counts as none),
+ * `match` only for a text equal to it (case-insensitive hex, trimmed), and
+ * `mismatch` for every other value, a number or an empty text included.
+ */
+function payloadHashCheckOf(clientPayloadHash, identity) {
+  if (clientPayloadHash === undefined || clientPayloadHash === null) return 'absent';
+  if (typeof clientPayloadHash === 'string' && typeof identity?.payloadHash === 'string'
+    && clientPayloadHash.trim().toLowerCase() === identity.payloadHash) return 'match';
+  return 'mismatch';
+}
+
+// RNF004 C4 (#1521): a message whose payloadHash does not match is corrupted,
+// so it is refused, as an implausible value is. Only `absent` and `match`
+// add no issue.
+function payloadHashDraftsOf(payloadHashCheck) {
+  if (payloadHashCheck === 'absent' || payloadHashCheck === 'match') return [];
+  return [{
+    issueCode: 'payload_hash_mismatch',
+    severity: 'error',
+    fieldPath: 'payloadHash',
+    details: 'payloadHash enviado não confere com o SHA-256 do payload canônico recebido: mensagem corrompida (RNF004 C4)',
+    disposition: 'rejected',
+  }];
+}
+
+/**
  * RF009 AC7 (#1317): the TelemetryValidationIssues a reading carries, as
  * drafts without their ingestion event.
  *
@@ -450,7 +478,7 @@ async function readingBindingOf(storeOf, identity, payload = {}) {
  * quarantined one returns its issues and goes on to be stored. A failed
  * issue write is logged and does not change the reading's fate.
  */
-async function screenReading(db, identity, payload = {}, { strippedFields = [] } = {}) {
+async function screenReading(db, identity, payload = {}, { strippedFields = [], payloadHashCheck = 'absent' } = {}) {
   // `db` may be a function resolving it, so a path that opens its
   // connection lazily opens it once, here.
   let store;
@@ -470,7 +498,7 @@ async function screenReading(db, identity, payload = {}, { strippedFields = [] }
     clockDriftLimitMs = await resolveClockDriftLimitMs(storeOf);
     identity.clockStatus = clockStatusOf(identity.observedAt, identity.receivedAt, clockDriftLimitMs);
   }
-  const drafts = [...validationIssuesOf(identity, payload, { clockDriftLimitMs }), ...binding.drafts, ...personalDataDraftsOf(strippedFields)];
+  const drafts = [...payloadHashDraftsOf(payloadHashCheck), ...validationIssuesOf(identity, payload, { clockDriftLimitMs }), ...binding.drafts, ...personalDataDraftsOf(strippedFields)];
   if (!drafts.length) return [];
 
   const rejected = drafts.filter((draft) => draft.disposition === 'rejected');
@@ -497,8 +525,9 @@ async function screenReading(db, identity, payload = {}, { strippedFields = [] }
 
   if (rejected.length) {
     const error = validationError(rejected.map((issue) => issue.details).join('; '));
-    // The first rejecting issue's code: `invalid_value`, `unbound_datastream`,
-    // `device_not_registered` or `device_unusable`.
+    // The first rejecting issue's code: `payload_hash_mismatch` (#1521, drafted
+    // first), `invalid_value`, `unbound_datastream`, `device_not_registered`
+    // or `device_unusable`.
     error.auditReason = rejected[0].issueCode;
     error.details = rejected.map((issue) => issue.details);
     throw error;
@@ -514,6 +543,7 @@ module.exports = {
   clientContractFieldsOf,
   splitContractFields,
   IOT_API_READING_FIELDS,
+  payloadHashCheckOf,
   validationIssuesOf,
   screenReading,
   canonicalJson,

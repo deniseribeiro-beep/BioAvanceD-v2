@@ -506,6 +506,72 @@ describe('iot.controller', () => {
     expect(JSON.stringify([events, issues, saveTelemetryPointMock.mock.calls])).not.toContain('Maria');
   }, 15000);
 
+  // RNF004 C4 (#1521): a client payloadHash is checked against the hash of
+  // the canonical contract fields received. A mismatch is a corrupted
+  // message, refused 422 and recorded, never stored; a match is accepted and
+  // the payloadHash field is neither hashed nor stripped.
+  describe('client payloadHash (#1521, RNF004 C4)', () => {
+    const { createHash } = require('crypto');
+    const { canonicalJson } = require('../../src/services/telemetryReadingContract');
+    const reading = { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-1521' };
+    const readingHash = createHash('sha256').update(canonicalJson(reading)).digest('hex');
+
+    async function captureWrites() {
+      const base = await connectMongoDBMock();
+      const events = [];
+      const issues = [];
+      connectMongoDBMock.mockResolvedValue({
+        collection: (name) => {
+          if (name === 'telemetryIngestionEvents') return { insertOne: async (doc) => { events.push(doc); return {}; } };
+          if (name === 'telemetryValidationIssues') return { insertMany: async (docs) => { issues.push(...docs); return {}; } };
+          return base.collection(name);
+        },
+      });
+      return { events, issues };
+    }
+
+    it('refuses a reading whose payloadHash does not match with 422, records it as corrupted and stores nothing', async () => {
+      const { events, issues } = await captureWrites();
+      const req = { body: { ...reading, payloadHash: '0'.repeat(64) } };
+      const res = createResponse();
+
+      await ingestTelemetry(req, res);
+
+      expect(res.statusCode).toBe(422);
+      expect(res.body).toEqual(expect.objectContaining({ success: false, error: expect.stringMatching(/corrompida/) }));
+      expect(res.locals.auditReason).toBe('payload_hash_mismatch');
+      expect(saveTelemetryPointMock).not.toHaveBeenCalled();
+      expect(events).toEqual([expect.objectContaining({ validationStatus: 'rejected', telemetryReadingId: null, payloadHash: readingHash })]);
+      expect(issues.map((issue) => issue.issueCode)).toEqual(['payload_hash_mismatch']);
+    }, 15000);
+
+    it('a corrupted resend of an accepted client key is refused 422, never answered as a replay', async () => {
+      const first = createResponse();
+      const second = createResponse();
+
+      await ingestTelemetry({ body: { ...reading } }, first);
+      await ingestTelemetry({ body: { ...reading, payloadHash: '0'.repeat(64) } }, second);
+
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(422);
+      expect(second.body.replayed).toBeUndefined();
+      expect(saveTelemetryPointMock).toHaveBeenCalledTimes(1);
+    }, 15000);
+
+    it('control: a matching payloadHash is accepted, hashed out of the reading and not stripped', async () => {
+      const { events, issues } = await captureWrites();
+      const req = { body: { ...reading, payloadHash: readingHash } };
+      const res = createResponse();
+
+      await ingestTelemetry(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(saveTelemetryPointMock.mock.calls[0][3].payloadHash).toBe(readingHash);
+      expect(events).toEqual([]);
+      expect(issues).toEqual([]);
+    }, 15000);
+  });
+
   it('usa notificationEmail como fallback quando alertEmail não está presente', async () => {
     sensorMetadataLeanMock.mockResolvedValueOnce({
       sensorId: 'sensor-2',

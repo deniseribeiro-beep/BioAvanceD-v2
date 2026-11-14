@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { createHash } from 'crypto';
 import {
   seedSensorWithPolicy,
   findTemperatureIncident,
@@ -2668,6 +2669,69 @@ test.describe('Telemetry personal data stripped and flagged (#1540, RF009 AC8, R
       } finally {
         await unbindSensor(sensorId);
       }
+    }
+  });
+});
+
+// #1521 (RNF004 C4): a reading whose client payloadHash does not match the
+// SHA-256 of its canonical contract fields is a corrupted message, refused
+// 422 and recorded as a rejected TelemetryIngestionEvent with one
+// payload_hash_mismatch TelemetryValidationIssue; nothing is stored. A
+// matching payloadHash is accepted as a reading without one is.
+test.describe('Telemetry corrupted payload (#1521, RNF004 C4) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+    await closeIngestionDb();
+  });
+
+  // The contract's canonical form for a flat body: keys sorted, no spaces.
+  const canonicalHashOf = (body: Record<string, string | number>) => createHash('sha256')
+    .update(JSON.stringify(Object.fromEntries(Object.keys(body).sort().map((key) => [key, body[key]]))))
+    .digest('hex');
+
+  test('a reading whose payloadHash does not match is refused 422 as corrupted and recorded, and a matching one is accepted', async ({ request }) => {
+    const sensorId = `rf009-corrupted-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timestamp = new Date().toISOString();
+    const sound = { sensorId, temperature: -72, timestamp, sourceEventId: `${sensorId}-sound` };
+    // The device hashed -72; the value arrived as -73, as a flipped bit would.
+    const corrupted = { sensorId, temperature: -73, timestamp, sourceEventId: `${sensorId}-corrupted` };
+
+    await bindSensor(sensorId);
+    try {
+      const refused = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { ...corrupted, payloadHash: canonicalHashOf({ ...corrupted, temperature: -72 }) },
+      });
+      expect(refused.status(), await refused.text()).toBe(422);
+      const refusedBody = await refused.json();
+      expect(refusedBody.success).toBe(false);
+      expect(refusedBody.error).toMatch(/corrompida/);
+
+      const event = await findTelemetryIngestionEvent({ sourceEventId: `${sensorId}-corrupted` });
+      // The event carries the hash the server computed, not the client's.
+      expect(event).toMatchObject({ protocol: 'https', validationStatus: 'rejected', telemetryReadingId: null, payloadHash: canonicalHashOf(corrupted) });
+      const issues = await findTelemetryValidationIssues(event.telemetryIngestionEventId);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ issueCode: 'payload_hash_mismatch', severity: 'error', fieldPath: 'payloadHash', disposition: 'rejected' });
+
+      // Control: the same reading with its own hash is accepted and screened clean.
+      const accepted = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { ...sound, payloadHash: canonicalHashOf(sound) },
+      });
+      expect(accepted.status(), await accepted.text()).toBe(200);
+      const acceptedBody = await accepted.json();
+      expect(await findTelemetryIngestionEvent({ sourceEventId: `${sensorId}-sound` })).toBeNull();
+
+      // Only the sound point is in InfluxDB: the corrupted -73 never is.
+      await expect
+        .poll(async () => (await queryTelemetryReadingPoints(sensorId, 10)).map((point) => ({
+          value: point.value,
+          telemetryReadingId: point.telemetryReadingId,
+        })), { timeout: 15_000 })
+        .toEqual([{ value: -72, telemetryReadingId: acceptedBody.telemetryReadingId }]);
+    } finally {
+      await unbindSensor(sensorId);
     }
   });
 });

@@ -17,11 +17,13 @@ const crypto = require('crypto');
 //   not registered, not homologated or retired), RF017 AC8;
 //   `personal_data_stripped` (fields outside the reading contract were
 //   dropped before anything was stored, since they may carry personal
-//   data), RF009 AC8, #1540;
+//   data), RF009 AC8, #1540; `payload_hash_mismatch` (the payloadHash the
+//   client sent does not match the canonical payload received, so the
+//   message is corrupted), RNF004 C4, #1521;
 // - severity: `error`, the dictionary's own value for a clock drift;
 // - disposition: `quarantined` (the reading is kept, flagged by this issue)
 //   and `rejected` (the reading is refused), RF009 AC7's two outcomes.
-const ISSUE_CODE_VALUES = ['clock_drift', 'invalid_value', 'unbound_datastream', 'device_not_registered', 'device_unusable', 'personal_data_stripped'];
+const ISSUE_CODE_VALUES = ['clock_drift', 'invalid_value', 'unbound_datastream', 'device_not_registered', 'device_unusable', 'personal_data_stripped', 'payload_hash_mismatch'];
 const SEVERITY_VALUES = ['error'];
 const DISPOSITION_VALUES = ['quarantined', 'rejected'];
 const REQUIRED = ['ingestionEventId', 'issueCode', 'severity', 'details', 'disposition'];

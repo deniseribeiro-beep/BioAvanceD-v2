@@ -13,7 +13,9 @@ require('../models/TemperaturePolicy.schema');
 // throws "Schema hasn't been registered for model \"Device\"" otherwise.
 require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
-const { readingIdentityOf, screenReading, splitContractFields, IOT_API_READING_FIELDS } = require('../services/telemetryReadingContract');
+const {
+  readingIdentityOf, screenReading, splitContractFields, IOT_API_READING_FIELDS, payloadHashCheckOf,
+} = require('../services/telemetryReadingContract');
 const { getDatastream } = require('../services/telemetryBinding.service');
 const { datastreamEquipmentIdsBySensor } = require('../services/sensorDatastream.service');
 const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
@@ -300,7 +302,11 @@ async function ingestTelemetry(req, res) {
     // carry personal data. They are stripped here, before the reading is
     // hashed, screened or stored, and the reading is kept and flagged by a
     // personal_data_stripped issue, never refused.
-    const { reading: contractBody, strippedFields } = splitContractFields(req.body || {}, IOT_API_READING_FIELDS);
+    // RNF004 C4 (#1521): a client payloadHash is taken out before the split,
+    // so it is neither hashed nor stripped as a non-contract field, and is
+    // checked against the reading's own payloadHash below.
+    const { payloadHash: clientPayloadHash, ...sentBody } = req.body || {};
+    const { reading: contractBody, strippedFields } = splitContractFields(sentBody, IOT_API_READING_FIELDS);
     let identity;
     try {
       identity = readingIdentityOf(contractBody, new Date(), { ingestionService: 'iot-api' });
@@ -308,6 +314,10 @@ async function ingestTelemetry(req, res) {
       res.locals.auditReason = error.auditReason || 'invalid_payload';
       return res.status(error.statusCode || 422).json({ success: false, error: error.message });
     }
+    // RNF004 C4 (#1521): a mismatched payloadHash is a corrupted message. It
+    // is never answered as a replay, since its idempotencyKey is as
+    // untrusted as the rest of it; screenReading records it and refuses 422.
+    const payloadHashCheck = payloadHashCheckOf(clientPayloadHash, identity);
 
     // RF009 AC7 (#1317): a client idempotencyKey already accepted for this
     // sensor is a replay. It answers 200 with the first reading, and writes,
@@ -323,7 +333,7 @@ async function ingestTelemetry(req, res) {
     // ensureIdempotencyKeyIndex creates when a key is recorded, keeps one key
     // row (#1391).
     let replayScope = null;
-    if (identity.idempotencyKeySource === 'client') {
+    if (identity.idempotencyKeySource === 'client' && payloadHashCheck !== 'mismatch') {
       replayScope = `TelemetryReading:${normalizedSensorId}`;
       let resultRef = null;
       try {
@@ -339,7 +349,7 @@ async function ingestTelemetry(req, res) {
     try {
       // RF009 AC7: a drift or an implausible value is recorded as a
       // TelemetryValidationIssue; an implausible value is a 422 here.
-      await screenReading(connectMongoDB, identity, contractBody, { strippedFields });
+      await screenReading(connectMongoDB, identity, contractBody, { strippedFields, payloadHashCheck });
     } catch (error) {
       res.locals.auditReason = error.auditReason || 'invalid_payload';
       return res.status(error.statusCode || 422).json({ success: false, error: error.message });
