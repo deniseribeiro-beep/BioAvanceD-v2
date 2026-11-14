@@ -32,15 +32,27 @@ const GATE = /\b(requirePermission|requireRole)\s*\(/g;
 const PERMISSION_LITERAL = /^\s*(['"])([^'"]+)\1\s*(?:,\s*(['"])([^'"]+)\3\s*)?$/;
 const ROLE_LITERALS = /^\s*\d+(?:\s*,\s*\d+)*\s*$/;
 
-function routeFiles() {
+// Every .js file under the given directories, subdirectories included
+// (#1553: a route file in a subdirectory is still a route file). A symbolic
+// link is refused, never followed or skipped.
+function routeFilesIn(dirs) {
   const files = [];
-  for (const dir of ROUTE_DIRS) {
-    if (!fs.existsSync(dir)) continue;
+  const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isFile() && /\.js$/.test(entry.name)) files.push(path.join(dir, entry.name));
+      const full = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`route-gate-sites: symbolic link under a route directory: ${full}`);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && /\.js$/.test(entry.name)) files.push(full);
     }
+  };
+  for (const dir of dirs) {
+    if (fs.existsSync(dir)) walk(dir);
   }
   return files;
+}
+
+function routeFiles() {
+  return routeFilesIn(ROUTE_DIRS);
 }
 
 function relative(file) {
@@ -123,4 +135,4 @@ function gateSites() {
   return routeFiles().flatMap((file) => gateSitesIn(readStripped(fs, file), file));
 }
 
-module.exports = { BACKEND_SRC, ROUTE_DIRS, routeFiles, relative, argsAt, gateSitesIn, gateSites };
+module.exports = { BACKEND_SRC, ROUTE_DIRS, routeFiles, routeFilesIn, relative, argsAt, gateSitesIn, gateSites };
