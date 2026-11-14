@@ -2042,6 +2042,74 @@
         }
       }
     },
+    "/api/monitoring/frontend-timings": {
+      "post": {
+        "tags": [
+          "monitoring"
+        ],
+        "summary": "Record the request timings the browser measured",
+        "description": "Gate: authenticate. Any signed-in user. The batch is taken whole or refused whole; a refused batch records nothing. The timings are kept in memory and served under data.frontend by GET /api/monitoring/metrics.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "timings"
+                ],
+                "properties": {
+                  "timings": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "ms"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "maxLength": 200,
+                          "pattern": "^(GET|POST|PUT|PATCH|DELETE) /[A-Za-z0-9/_:.-]*$",
+                          "description": "The method and the URL path, query dropped, each identifier segment written as :id."
+                        },
+                        "ms": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 600000,
+                          "description": "Milliseconds from the request's start to its response."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Every timing recorded."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          }
+        }
+      }
+    },
     "/api/monitoring/metrics": {
       "get": {
         "tags": [

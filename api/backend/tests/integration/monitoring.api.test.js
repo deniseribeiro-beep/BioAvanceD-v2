@@ -192,6 +192,54 @@ describe('GET /api/monitoring/metrics', () => {
   });
 });
 
+// RNF001 C4 and RNF015 C1 (#1469): any signed-in user posts the browser's
+// request timings; the Administrador reads them under data.frontend.
+describe('POST /api/monitoring/frontend-timings', () => {
+  const TIMINGS = '/api/monitoring/frontend-timings';
+  const METRICS = '/api/monitoring/metrics';
+  const rbacCollectionsBoth = buildRbacCollections([
+    { userAccountId: 'qa-1', accessType: 4 },
+    { userAccountId: 'qa-3', accessType: 3 },
+  ]);
+
+  // Required here, so the cases above load whatever this module's state.
+  beforeEach(() => { require('../../src/infrastructure/metrics/frontendTimings').reset(); });
+
+  it('answers 204 to a Coordenador with a valid batch, and the metrics then show the name', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsBoth });
+
+    const res = await asCoordinator(request(app).post(TIMINGS)).send({ timings: [{ name: 'GET /api/patients/:id', ms: 180 }] });
+
+    expect(res.status).toBe(204);
+    expect(res.text).toBe('');
+    const metrics = await asAdmin(request(app).get(METRICS));
+    expect(metrics.status).toBe(200);
+    expect(metrics.body.data.frontend.totals.count).toBe(1);
+    expect(metrics.body.data.frontend.routes).toEqual([expect.objectContaining({ name: 'GET /api/patients/:id', count: 1 })]);
+  });
+
+  it('answers 422 with a details list to a bad batch, and records nothing', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsBoth });
+
+    const res = await asCoordinator(request(app).post(TIMINGS)).send({ timings: [{ name: 'GET /api/patients', ms: 10 }, { name: 'GET /api/patients', ms: -5 }] });
+
+    expect(res.status).toBe(422);
+    expect(res.body.success).toBe(false);
+    expect(Array.isArray(res.body.details)).toBe(true);
+    expect(res.body.details[0].startsWith('timings[1].ms')).toBe(true);
+    const metrics = await asAdmin(request(app).get(METRICS));
+    expect(metrics.body.data.frontend.totals.count).toBe(0);
+  });
+
+  it('answers 401 without a token', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsAdmin });
+
+    const res = await request(app).post(TIMINGS).send({ timings: [{ name: 'GET /api/patients', ms: 10 }] });
+
+    expect(res.status).toBe(401);
+  });
+});
+
 // RNF015 C2 (#1323): GET /api/monitoring/alerts gives the Administrador the
 // last platform alert evaluation and the active episodes.
 describe('GET /api/monitoring/alerts', () => {

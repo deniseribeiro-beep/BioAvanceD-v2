@@ -7,6 +7,7 @@ const runMonitoring = require('../../services/runMonitoring.service');
 const httpMetrics = require('../../infrastructure/metrics/httpMetrics');
 const queueDepth = require('../../infrastructure/metrics/queueDepth');
 const { readJobMetrics } = require('../../infrastructure/metrics/jobMetrics');
+const frontendTimings = require('../../infrastructure/metrics/frontendTimings');
 const { renderPrometheus, CONTENT_TYPE } = require('../../infrastructure/metrics/prometheusText');
 const platformAlert = require('../../services/platformAlert.service');
 
@@ -51,11 +52,24 @@ router.get('/metrics', authenticate, requireRole(4), async (req, res) => {
       // and moves it ahead of version=0.0.4.
       return res.status(200).set('Content-Type', CONTENT_TYPE).send(Buffer.from(renderPrometheus({ http, queues, jobs }), 'utf8'));
     }
-    return res.status(200).json({ success: true, data: { http, queues, jobs } });
+    return res.status(200).json({ success: true, data: { http, queues, jobs, frontend: frontendTimings.snapshot() } });
   } catch (error) {
     logger.error('Erro ao ler as métricas', { error: error.message, stack: error.stack });
     return res.status(500).json({ success: false, error: 'Erro interno', message: 'Erro ao ler as métricas' });
   }
+});
+
+// RNF001 C4 and RNF015 C1 (#1469): the request timings the browser measured,
+// kept in memory for GET /metrics. Any signed-in user, since the reporter runs
+// for every role. RNF018 C2: a batch with any bad item is refused whole with
+// 422 and nothing recorded.
+router.post('/frontend-timings', authenticate, (req, res) => {
+  const parsed = frontendTimings.parseFrontendTimings(req.body);
+  if (!parsed.ok) {
+    return res.status(422).json({ success: false, error: 'Validação falhou', message: parsed.reason, details: [parsed.reason] });
+  }
+  frontendTimings.recordAll(parsed.value);
+  return res.status(204).end();
 });
 
 // RNF015 C2 (#1323): the last platform alert evaluation and the active episodes.
