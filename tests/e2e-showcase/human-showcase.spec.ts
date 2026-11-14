@@ -2,6 +2,8 @@ import { type Page } from '@playwright/test';
 import { test, expect } from './showcaseFixtures';
 import { MongoClient, Db, ObjectId } from 'mongodb';
 import { randomBytes, createHash } from 'crypto';
+import { readFile } from 'fs/promises';
+import { deleteOrganizations } from '../e2e/helpers/listOrganizations';
 import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
 import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, seedStudy, seedProtocol, seedCollectionEntity, seedActiveConsent, seedDuoConcept, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
 import { seedSensorWithPolicy, findTemperatureIncident, removeSeededSensor, closeSeedSensorDb, type SeededSensor } from '../e2e/helpers/seedSensor';
@@ -28,12 +30,12 @@ import {
 //
 // Wave 2 reel (#331): demonstrates what's provably working end-to-end
 // through the real UI against the real backend for RF003 (login/session),
-// RF020 (Organizations/Collections CRUD, #606-608). RF007 (scientific
-// files, including this session's Assay/Dataset linkage, #641/#643) and
-// RF011 (FHIR interop) are proven real-backend but API-only today -- no UI
-// exists for either yet, so per this skill's own "reuse proven flows, don't
-// improvise a new one" guidance, this reel doesn't fabricate a UI path for
-// them rather than risk demoing an unproven flow live.
+// RF020 (Organizations/Collections CRUD, #606-608). RF011 (FHIR interop)
+// was proven real-backend but API-only when this reel was recorded, so it
+// doesn't fabricate a UI path for it rather than risk demoing an unproven
+// flow live. RF007's scientific files were API-only then too; the sample
+// page's Arquivos section has since carried their upload, download and
+// delete (#647), and the W10 reel below records the upload and a replace.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker against the real stack');
 
@@ -2013,5 +2015,258 @@ test.describe('Human-paced e2e showcase reel — W5 security, LGPD and RBAC', ()
     await page.getByTestId('security-permission-role-auditor').scrollIntoViewIfNeeded();
     await expect(page.getByTestId('security-permission-toggle-auditor-viewAuditLogs')).toBeChecked();
     await beat(page, LARGE);
+  });
+});
+
+// W10 reel (#1483): a sample's scientific files, an ingestion result and the
+// MIABIS export. RF007's upload is the sample page's own Arquivos section,
+// driven by the selectors sample-files-section-ui.spec.ts proves. The
+// replace has no UI: the new version goes through PUT .../replace off
+// camera, as a client system sends it, and the page, reloaded, lists the
+// file under its new name in the same row, whose download carries the
+// replacement. RF029's ingestion is a machine endpoint, as the W9 readings
+// are: a Specimen record goes through POST /api/ingestion/records off
+// camera and the operator finds the accepted specimen in the inventory.
+// RF020 AC5's MIABIS export has no page either: the browser opens the
+// export endpoint itself, on the record of a collection registered off
+// camera.
+test.describe('Human-paced e2e showcase reel — W10 files, ingestion and MIABIS export', () => {
+  const boxes: SeededStorageBox[] = [];
+  const organizationIds: string[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w10-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
+  test.afterAll(async ({ request }) => {
+    await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
+    await closeSeedDb();
+  });
+
+  test('RF007 an operator uploads a scientific file on the sample page, and its replacement is listed and downloaded in its place', async ({ page, request }) => {
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+
+    // Off camera: a stored specimen, registered as sample-files-section-ui.spec.ts does.
+    const participant = await createRealParticipant(request, apiBaseURL!, session.token);
+    const box = await seedStorageBoxLocation();
+    boxes.push(box);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers,
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'Coorte Doenças Raras',
+        registeredAt: new Date().toISOString(),
+        boxId: box.boxId,
+        positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
+      },
+    });
+    expect([201, 202], await create.text()).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId as string;
+    const original = Buffer.from('specimen_id,analyte,value\nS-1,glucose,92\n');
+    // The names reach the screen, so they read as a lab's; the specimen is new each run, so its file list holds only these.
+    const fileName = 'perfil-metabolico.csv';
+
+    // 1. The sample's page and its Arquivos section.
+    await page.goto(`/samples/${specimenId}`);
+    await expect(page.getByTestId('sample-detail-page-title')).toBeVisible();
+    await beat(page, LARGE);
+    await page.getByTestId('sample-files-open-upload-button').scrollIntoViewIfNeeded();
+    await beat(page, MEDIUM);
+
+    // 2. The upload, through the section's own form. (RF007)
+    await page.getByTestId('sample-files-open-upload-button').click();
+    await beat(page, SMALL);
+    await page.getByTestId('file-upload-input').setInputFiles({ name: fileName, mimeType: 'text/csv', buffer: original });
+    await beat(page, SMALL);
+    await page.getByTestId('sample-files-upload-submit').click();
+    await expect(page.getByTestId('sample-files-upload-submit')).not.toBeVisible();
+    await expect(page.getByText(fileName, { exact: true })).toBeVisible();
+    await beat(page, LARGE);
+
+    // Off camera: the stored row, then its replacement, sent as a client system sends it. (RF007 AC4)
+    const list = await request.get(`${apiBaseURL}/api/samples/${specimenId}/files`, { headers });
+    expect(list.ok(), await list.text()).toBeTruthy();
+    const uploaded = (await list.json()).data.find((file: { fileName: string }) => file.fileName === fileName);
+    expect(uploaded, `${fileName} listed`).toBeTruthy();
+    const fileID = String(uploaded._id);
+    const replacement = Buffer.from('specimen_id,analyte,value\nS-1,glucose,94\nS-1,lactate,1.1\n');
+    const replacementName = 'perfil-metabolico-v2.csv';
+    const replace = await request.put(`${apiBaseURL}/api/samples/${specimenId}/files/${fileID}/replace`, {
+      headers,
+      multipart: {
+        changeReason: 'Correção do valor de glicose',
+        file: { name: replacementName, mimeType: 'text/csv', buffer: replacement },
+      },
+    });
+    expect(replace.status(), await replace.text()).toBe(200);
+    expect((await replace.json()).data.versionNumber).toBe(2);
+
+    // 3. Reloaded, the page lists the file under its new name, in the same row. (RF007 AC4)
+    await page.reload();
+    const row = page.getByTestId(`sample-file-row-${fileID}`);
+    await row.scrollIntoViewIfNeeded();
+    await expect(row.getByText(replacementName, { exact: true })).toBeVisible();
+    await expect(page.getByText(fileName, { exact: true })).toHaveCount(0);
+    await beat(page, LARGE);
+
+    // 4. The download, clicked on camera, carries the replacement's bytes.
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId(`sample-file-download-button-${fileID}`).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(replacementName);
+    const downloaded = await readFile((await download.path())!);
+    expect(downloaded.equals(replacement)).toBe(true);
+    await beat(page, MEDIUM);
+  });
+
+  test('RF029 a specimen record a client system sends is accepted by ingestion and the operator finds it in the inventory', async ({ page, request }) => {
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    // Off camera: the record's references, as ingestion-records.spec.ts seeds
+    // them -- a participant with an active consent and a collection site.
+    // The ingested specimen references the site, so its delete is refused
+    // and the site stays; the name is never drawn, and the stamp keeps the
+    // next run's create a 201 rather than a reuse.
+    const participant = await createRealParticipant(request, apiBaseURL!, session.token);
+    await seedActiveConsent(participant.participantId);
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: `Hospital Parceiro ${stamp}`, acronym: 'HPAR', organizationType: 'biobank', countryCode: 'BR' },
+    });
+    expect(org.status(), await org.text()).toBe(201);
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+
+    // Off camera: the record arrives through the ingestion endpoint. (RF029)
+    const ingest = await request.post(`${apiBaseURL}/api/ingestion/records`, {
+      headers,
+      data: {
+        entityType: 'Specimen',
+        payload: {
+          specimenId: 'client-claimed',
+          participantId: participant.participantId,
+          sampleType: 'PLASMA',
+          sampleOrigin: 'VENOUS_BLOOD',
+          extractionProtocol: 'TUBE_EDTA',
+          quantity: 5,
+          registeredAt: new Date().toISOString(),
+          collectionSite: organizationId,
+          collectionId: governed!.collectionId,
+        },
+        provenance: {
+          sourceSystem: 'urn:system:showcase-w10',
+          retrievedAt: new Date().toISOString(),
+          purpose: 'e2e_proof',
+          sourceRecordId: `showcase-w10-${stamp}`,
+        },
+      },
+    });
+    expect(ingest.status(), await ingest.text()).toBe(201);
+    const outcome = await ingest.json();
+    expect(outcome).toMatchObject({ success: true, status: 'accepted', entityType: 'Specimen' });
+    const specimenId = outcome.entityId as string;
+
+    // 1. The inventory, searched by the server's specimen id.
+    await page.goto('/samples');
+    await expect(page.getByTestId('samples-page-title')).toBeVisible();
+    await beat(page, LARGE);
+    const rows = page.locator('[data-testid^="sample-row-"]');
+    await page.getByTestId('samples-search-input').scrollIntoViewIfNeeded();
+    await page.getByTestId('samples-search-input').fill(specimenId);
+    await beat(page, SMALL);
+    await page.getByTestId('samples-search-button').click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.filter({ has: page.getByText(specimenId, { exact: true }) })).toBeVisible();
+    await beat(page, MEDIUM);
+
+    // 2. The ingested specimen's own page.
+    await page.locator('[data-testid^="sample-edit-button-"]').first().click();
+    await page.waitForURL(/\/samples\/[^/]+$/);
+    await expect(page.getByText('Status Atual:', { exact: true })).toBeVisible();
+    await beat(page, LARGE);
+  });
+
+  test('RF020 AC5 the MIABIS export carries a collection registered in the biobank', async ({ page, request }) => {
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    // The collection id is the text the shot highlights, so it reads as a
+    // lab's; a run cut off before its finally left these rows behind, and
+    // the deletes clear them (the deletes are hard) before they are entered.
+    const biobankId = 'bb-doencas-raras';
+    const collectionId = 'col-doencas-raras';
+    await request.delete(`${apiBaseURL}/api/collections/${collectionId}`, { headers }).catch(() => {});
+    await request.delete(`${apiBaseURL}/api/biobanks/${biobankId}`, { headers }).catch(() => {});
+
+    // Off camera: a biobank and a collection, entered as miabis-export.spec.ts enters them.
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: 'Biobanco de Doenças Raras', countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    try {
+      const biobank = await request.post(`${apiBaseURL}/api/biobanks`, {
+        headers,
+        data: {
+          biobankId,
+          biobankName: 'Biobanco de Doenças Raras',
+          biobankDescription: 'Biobanco da demonstração da exportação MIABIS',
+          legalEntityId: organizationId,
+          biobankStatus: 'active',
+          countryCode: 'BR',
+          contactInformation: { email: 'contato@example.org' },
+        },
+      });
+      expect(biobank.ok(), await biobank.text()).toBeTruthy();
+      const collection = await request.post(`${apiBaseURL}/api/collections`, {
+        headers,
+        data: { collectionId, collectionName: 'Coleção Doenças Raras', governanceRegime: 'biorepository' },
+      });
+      expect(collection.ok(), await collection.text()).toBeTruthy();
+
+      // Off camera: the export's record for that collection. (RF020 AC5)
+      const res = await request.get(`${apiBaseURL}/api/biobanks/miabis/export`, { headers });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const data = (await res.json()).data;
+      const record = data.collections.find((entry: { miabis: { id: string } }) => entry.miabis.id === collectionId);
+      expect(record, `collection ${collectionId} in the export`).toBeTruthy();
+      expect(record.nationalExtensions.governanceRegime).toBe('biorepository');
+      expect(data.conformanceClaimed).toBe(false);
+
+      // 1. The export itself, opened in the browser, on that collection's record.
+      await page.setExtraHTTPHeaders(headers);
+      await page.goto(`${apiBaseURL}/api/biobanks/miabis/export`);
+      await expect(page.getByText(collectionId).first()).toBeVisible();
+      await beat(page, LARGE);
+      await page.evaluate((id) => (window as unknown as { find: (text: string) => boolean }).find(id), collectionId);
+      await beat(page, LARGE);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/collections/${collectionId}`, { headers }).catch(() => {});
+      await request.delete(`${apiBaseURL}/api/biobanks/${biobankId}`, { headers }).catch(() => {});
+    }
   });
 });

@@ -24,6 +24,9 @@ const CAPTIONS: Array<[RegExp, string, string]> = [
   [/RF003\/RNF008/, 'Gestão de usuários', 'Cadastro, troca de papel que encerra a sessão e inativação'],
   [/RNF021 AC6/, 'Sessões, auditoria e permissões', 'O usuário encerra suas sessões; o administrador consulta os Logs e as permissões'],
   [/Inventário de Amostras/, 'Login e inventário de amostras', 'Acesso real, as amostras registradas, uma busca e o detalhe do espécime'],
+  [/RF007 an operator/, 'Arquivos científicos da amostra', 'O envio pela página da amostra e a nova versão no lugar'],
+  [/RF029 a specimen/, 'Ingestão de registros', 'Um registro enviado por outro sistema entra no inventário'],
+  [/RF020 AC5/, 'Exportação MIABIS', 'A coleção cadastrada sai no formato do diretório MIABIS'],
   [/Cadastro integrado/, 'Cadastro integrado de amostras', 'Três passos, análise de qualidade e alocação no freezer'],
 ];
 
