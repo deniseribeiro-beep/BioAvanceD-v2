@@ -352,6 +352,7 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     // RF017 AC4: a specimen is in one container at a time, checked
     // half-open: the open reload and the closed first load each refuse a
     // second container; an interval ending where the first load starts fits.
+    // RNF025 C4: SpecimenContainerAssignment and ContainerPositionAssignment run over [from,to).
     const L = load.loadedAt as string;
     const U = unload.unloadedAt as string;
     const twice = await post(`/containers/${secondContainerId}/specimens`, techA, { specimenId });

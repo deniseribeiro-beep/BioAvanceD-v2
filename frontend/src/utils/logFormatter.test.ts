@@ -56,6 +56,7 @@ describe('formatLogValue', () => {
   });
 
   it('prints a Date with its ISO value and the Sao Paulo local time', () => {
+    // RNF025 C2: the stored UTC instant is shown in the institution's zone, America/Sao_Paulo.
     expect(formatLogValue(SAMPLE_DATE)).toBe('Date("2026-01-15T15:30:45.000Z") // 15/01/2026, 12:30:45');
   });
 

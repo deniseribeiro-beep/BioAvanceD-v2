@@ -161,6 +161,7 @@ test.describe('Telemetry edge buffer (#1392, RNF004 C1/C2) — real backend', ()
       expect(new Date(answers[index].receivedAt).getTime()).toBeGreaterThanOrEqual(new Date(answers[index - 1].receivedAt).getTime());
     }
 
+    // RNF025 C3: the server's receivedAt is kept apart from the device's observedAt, the point's time.
     // RNF025 C7: InfluxDB keeps the sequence and the server's receipt time
     // beside the device time.
     await expect

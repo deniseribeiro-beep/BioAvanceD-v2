@@ -2087,6 +2087,7 @@ test.describe('Telemetry reading identity and replay (#1317, RF009) — real bac
       expect(stored.traceId).toBeTruthy();
       // RF009 AC1: acknowledged only after InfluxDB holds the point, at observedAt.
       expect(stored.persistedAt).toBeTruthy();
+      // RNF004 C5, RNF025 C3: the stored reading carries the server's receivedAt and persistedAt beside the device's observedAt.
       const points = await queryFreezerReadingIds(sensorId);
       expect(points.map((p) => ({ time: new Date(p.time).toISOString(), id: p.telemetryReadingId })))
         .toEqual([{ time: timestamp, id: stored.telemetryReadingId }]);

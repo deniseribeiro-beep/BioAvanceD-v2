@@ -329,7 +329,7 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     expect(cpAfter!.updatedAt).toEqual(cpBefore!.updatedAt);
   });
 
-  // #1500 (RF023 AC5): a placement projects as a STORED_AT edge carrying
+  // #1500 (RF023 AC5, RNF025 C4): a placement projects as a STORED_AT edge carrying
   // validTime [validFrom, validTo) and the projection's transactionTime; the
   // next placement closes the open edge at its own validFrom instead of
   // deleting it. Each edge is read by the box it points into, since the

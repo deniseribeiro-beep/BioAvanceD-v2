@@ -48,6 +48,7 @@ describe('SpecimenContainerAssignmentModel', () => {
   });
 
   it('treats intervals as half-open: [10,12) and [12,14) do not overlap, an open one runs on', () => {
+    // RNF025 C4: a SpecimenContainerAssignment runs over [from,to).
     const overlaps = (a, b) => SpecimenContainerAssignmentModel.overlaps(a, b);
     const interval = (from, to) => ({ loadedAt: at(from), unloadedAt: to === null ? null : at(to) });
     expect(overlaps(interval(10, 12), interval(12, 14))).toBe(false);
@@ -94,6 +95,7 @@ describe('ContainerPositionAssignmentModel', () => {
   });
 
   it('frees the position at the removal instant, never before the placement', () => {
+    // RNF025 C4: a ContainerPositionAssignment runs over [from,to).
     const occupied = place('cont-1', 'pos-A01', 10);
     const removed = ContainerPositionAssignmentModel.remove(occupied, at(11));
     expect(removed).toMatchObject({ assignmentStatus: 'ended', removedAt: at(11) });
@@ -117,6 +119,7 @@ describe('RackLocationAssignmentModel', () => {
   });
 
   it('refuses a rack in two locations at once, and lets two racks share a location (RULE-035)', () => {
+    // RNF025 C4: a RackLocationAssignment runs over [from,to); a move ends one where the next starts.
     const current = locate('rack-1', 'loc-1', 10);
     expect(() => RackLocationAssignmentModel.assertNoOverlap(locate('rack-1', 'loc-2', 11), [current])).toThrow('loc-1');
     expect(() => RackLocationAssignmentModel.assertNoOverlap(locate('rack-2', 'loc-1', 11), [current])).not.toThrow();
