@@ -108,7 +108,7 @@ test.afterAll(async () => {
 });
 
 test.describe('Scientific files (RF007) — real backend', () => {
-  test('uploads a scientific file, recording checksum/URI/encryption and auditing it (AC#3/4/5/6/7, RNF029)', async ({
+  test('uploads a scientific file, recording checksum/URI/encryption and auditing it (AC#2/3/5/6, RNF029)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -133,19 +133,19 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(upload.status()).toBe(201);
     const uploadBody = await upload.json();
 
-    // AC#5/RNF029 - URI, checksum and encryption metadata recorded.
+    // RF007 AC3, RNF029 C2 - URI, checksum and encryption metadata recorded.
     expect(uploadBody.data.uri).toMatch(/^objstore:\/\/samples\//);
     expect(uploadBody.data.checksum).toBe(expectedChecksum);
     expect(uploadBody.data.checksumAlgorithm).toBe('sha256');
     expect(uploadBody.data.encryption.encrypted).toBe(true);
     expect(uploadBody.data.encryption.algorithm).toBe('aes-256-gcm');
-    // AC#5 - access restrictions recorded alongside the file.
+    // RF007 AC3 - access restrictions recorded alongside the file.
     expect(uploadBody.data.accessPolicy).toMatchObject({ view: 'authenticated' });
-    // AC#5 ("formato")/dict-02 ELM-0317/ELM-0319 (#679) - format and
+    // dict-02 ELM-0317/ELM-0319 (#679) - format and
     // default pipeline-stage role recorded alongside the file.
     expect(uploadBody.data.fileFormat).toBe('text/csv');
     expect(uploadBody.data.fileRole).toBe('raw');
-    // AC#6 - linked to the specimen it was uploaded against.
+    // RF007 AC5 - linked to the specimen it was uploaded against.
     expect(uploadBody.data.specimenId).toBeTruthy();
     // RF007 AC2/AC3, RNF016 C4 (#1419) - the binary went to the S3 store this
     // stack runs: the URI is the content address, and the row records no local
@@ -161,7 +161,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
       storagePath: null,
     });
 
-    // AC#7 - upload is audited.
+    // RF007 AC6 - upload is audited.
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
 
     // RNF029 round-trip - decrypting on download reproduces the original
@@ -176,7 +176,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
     const downloadedChecksum = crypto.createHash('sha256').update(downloadedBytes).digest('hex');
     expect(downloadedChecksum).toBe(expectedChecksum);
 
-    // AC#7 - list (access) is also audited.
+    // RF007 AC6 - list (access) is also audited.
     const listWatch = await watchAuditTrail(request, apiBaseURL!, admin.token);
     const list = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -316,7 +316,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(upload.status()).toBe(400);
   });
 
-  test('replaces a scientific file, recomputing checksum/encryption and auditing the substitution (AC#7, #334)', async ({
+  test('replaces a scientific file, recomputing checksum/encryption and auditing the substitution (AC#2/6, #334)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -363,7 +363,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(replaceBody.data.encryption.encrypted).toBe(true);
     expect(replaceBody.data.uri).toMatch(/^objstore:\/\/samples\//);
 
-    // AC#7 - substituição is audited, same as upload/access/removal.
+    // AC#6 - the substitution (a new version) is audited, same as upload/access/removal.
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
 
     // Round-trip proof: downloading now serves the NEW content, decrypted

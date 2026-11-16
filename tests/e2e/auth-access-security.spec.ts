@@ -688,11 +688,11 @@ test.describe('User management (RF003) — real backend', () => {
 // (security.routes.js's GET/PUT /api/security/config) -- product-side
 // foundation already existed (confirmed by reading the service, not
 // assumed from the issue's own "likely" framing), this file just never
-// proved it against the real backend. AC#4 (force a user's password reset)
-// and AC#8 (revoke sessions when a policy change requires it) are NOT
-// implemented anywhere in the backend -- filed as gaps rather than built
-// here, since AC#8 in particular needs a design call (which policy
-// changes require revocation?) bigger than this slice.
+// proved it against the real backend. That list, superseded by v2.0.0,
+// also asked to force a user's password reset (#648, built later in this
+// file) and to revoke sessions when a policy change requires it (#649,
+// pinned in security.service.unit.test.js), which v2.0.0 moves out of
+// RF014.
 test.describe('Security policy management (RF014) — real backend', () => {
   // security_config is a single global singleton document ('main') shared
   // by the whole stack, not a per-test fixture -- capture and restore it so

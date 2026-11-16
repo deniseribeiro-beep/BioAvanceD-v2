@@ -230,9 +230,10 @@ describe('every route declared in App.tsx is covered by the allow-list', () => {
   });
 });
 
-// #1110: the assistant feature was deleted in 5e571099, and RF012 AC#10
-// excludes IA/Assistente from the current scope outright ("Nao introduzir
-// IA, Assistente Inteligente ou XAI no escopo atual"). This copy went on
+// #1110: the assistant feature was deleted in 5e571099, and section 10 of the
+// v2.0.0 requirements excludes it from the current scope outright (no
+// "requisito funcional vigente de Assistente Inteligente, XAI ou apoio à
+// decisão clínica"). This copy went on
 // telling Usuario Externo they had assistant access, and security.service.js's
 // useAssistant default -- the only thing that could have backed the claim --
 // granted nothing and is removed in the same change. getRoleDescription had

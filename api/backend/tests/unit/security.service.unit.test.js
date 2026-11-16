@@ -689,7 +689,7 @@ it('#1149: the permission write methods no longer exist', () => {
   expect(securityService.validatePermissions).toBeUndefined();
 });
 
-// #649 / RF014 AC#8: "Revogar sessoes quando a alteracao exigir." The predicate is
+// #649 / RNF008 C7: "Invalidar cache/sessão quando papéis ou políticas exigirem." The predicate is
 // tightening-only and, today, single-entry -- session.timeoutMinutes is the one
 // SecurityConfiguration key any code path enforces (#914). These three cases pin
 // the predicate itself, which is the part that will be wrong if anyone widens the

@@ -747,7 +747,7 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real Neo4j propa
 // RF011 (#324): the FHIR bundle staging pipeline (stage -> validate ->
 // commit, see fhir-import-staging.service.js) already exists — this
 // proves it end-to-end against the real backend rather than building a
-// new surface. RNF024 (FHIR boundary side-effect-free, criterion 7) is
+// new surface. RNF024 (FHIR as a side-effect-free boundary) is
 // enforced separately by api/backend/tests/architecture/fhir-boundary.arch.test.js,
 // not re-asserted here.
 function buildFhirBundle(suffix: string) {
@@ -1433,7 +1433,7 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
     await closeNotificationWritesDb();
   });
 
-  test('a real environmental excursion creates a rule-driven, versioned, event-linked notification within SLA (criteria 1,2,3,6,7)', async ({
+  test('a real environmental excursion creates a rule-driven, versioned, event-linked notification within SLA (criteria 1,2,5,6)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -1482,20 +1482,20 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
     // Criterion 2 - delivered via an enabled channel.
     expect(notification.status).toBe('delivered');
     expect(notification.deliveredChannel).toBe('in_app');
-    // Criterion 3 - the attempt is recorded (channel, timestamp, result).
+    // Criterion 2 - the attempt is recorded (channel, timestamp, result).
     expect(notification.attempts).toEqual([
       expect.objectContaining({ channel: 'in_app', result: 'success' }),
     ]);
-    // Criterion 6 - linked to the originating event.
+    // Criterion 5 - linked to the originating event.
     expect(notification.sourceEventType).toBe('EnvironmentalExcursion');
     expect(notification.sourceEventId).toBe(String(excursion._id));
     expect(notification.payload).toEqual({ sensorId: sensor.sensorId, temperatureValue: 25 });
-    // Criterion 7 / RNF026 AC#1 - delivered well within the SLA window (the
+    // Criterion 6 / RNF026 AC#1 - delivered well within the SLA window (the
     // rule's own maxDeliveryMinutes, itself inside RNF026's 2-minute p95).
     expect(notification.withinSla).toBe(true);
     expect(notification.deliveryDurationMs).toBeLessThan(2 * 60000);
 
-    // Criterion 3 "confirmação" - an explicit read receipt.
+    // Criterion 2 "confirmação" - an explicit read receipt.
     const confirmRes = await request.put(`${apiBaseURL}/api/notifications/${notification._id}/confirm`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });

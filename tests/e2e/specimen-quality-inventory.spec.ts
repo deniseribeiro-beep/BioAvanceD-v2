@@ -1450,7 +1450,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect(body.message).toMatch(/quarantined/);
   });
 
-  test('release requires an authorized actor and is audited with an evidence trail (criteria 7, 8)', async ({ request }) => {
+  test('release requires an authorized actor and is audited with an evidence trail (criteria 5, 6)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedQuarantinableSample(request, admin);
     // RF019 AC2: quarantine and its release move specimenStatus only; the

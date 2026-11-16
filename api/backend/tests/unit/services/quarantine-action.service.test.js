@@ -195,7 +195,7 @@ describe('quarantine-action.service', () => {
   });
 
   describe('releaseActiveAction', () => {
-    it('releases the most recent still-active action, RF019 AC#7/AC#8 (authorized actor, audited)', async () => {
+    it('releases the most recent still-active action and records who released it, RF019 AC#5', async () => {
       const db = createFakeDb();
       await recordAction(db, { specimenIds: ['SPEC-1'], authorizedBy: 'user-1' });
 

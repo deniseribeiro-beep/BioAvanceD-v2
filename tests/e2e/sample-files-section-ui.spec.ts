@@ -17,7 +17,7 @@ import {
 
 // Real-backend proof for #647: SampleFilesSection.tsx (RF007's file-upload
 // UI) existed but was never imported/mounted anywhere in the app --
-// scientific-data-access.spec.ts already proves RF007 AC#3-7 at the API
+// scientific-data-access.spec.ts already proves RF007 AC2-AC6 at the API
 // layer, but there was no path proving an operator can actually reach this
 // through the running app. This mirrors organization-collection-management-
 // ui.spec.ts's shape (#608): drive the real component, against the real
