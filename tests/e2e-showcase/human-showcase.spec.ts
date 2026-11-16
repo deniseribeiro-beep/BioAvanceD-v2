@@ -6,7 +6,7 @@ import { readFile } from 'fs/promises';
 import { deleteOrganizations } from '../e2e/helpers/listOrganizations';
 import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
 import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, seedStudy, seedProtocol, seedCollectionEntity, seedActiveConsent, seedDuoConcept, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
-import { seedSensorWithPolicy, findTemperatureIncident, removeSeededSensor, closeSeedSensorDb, type SeededSensor } from '../e2e/helpers/seedSensor';
+import { seedSensorWithPolicy, findTemperatureIncident, removeSeededSensor, closeSeedSensorDb, type SeededSensor, seedSensorOnFreezer, removeSensorOnFreezer, type SeededFreezerSensor } from '../e2e/helpers/seedSensor';
 import { queryTemperaturePoints } from '../e2e/helpers/queryInflux';
 import { completeFirstLoginMfa } from '../e2e/helpers/completeFirstLoginMfa';
 import { computeTotp } from '../e2e/helpers/totp';
@@ -25,7 +25,7 @@ import {
   cleanupActiveTerminologyConcepts,
   seedLegacyDiagnosisTerminology,
 } from '../e2e/helpers/seedParticipant';
-import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver } from '../e2e/helpers/queryNeo4j';
+import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver, waitForDerivedFrom, readSampleStatus } from '../e2e/helpers/queryNeo4j';
 import { generateValidCpf } from '../e2e/helpers/cpf';
 import { waitForIntakeWizardReady } from '../e2e/helpers/waitForIntakeWizardReady';
 
@@ -1632,11 +1632,14 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
 // is registered through the same wizard first, briskly, for the participant
 // whose consent was signed off camera (the #1371 path), so it is available and
 // may be derived from (RF019 AC3). The derivative's stored parent and its
-// LINEAGE_REGISTERED outbox event are asserted off camera. Deliberately not
-// demoed: the lineage and the compromise status themselves, because no page
-// draws them (the sample page shows neither parentSpecimenIds nor the graph's
-// COMPROMISED mark); tests/e2e/intake-wizard.spec.ts and
-// tests/e2e/specimen-lineage.spec.ts cover them at the API and in Neo4j.
+// LINEAGE_REGISTERED outbox event are asserted off camera. The derivative's
+// page then shows its parent link (RF023), and a breach in the parent's
+// freezer marks the derivative compromised through its lineage, with the
+// breach's freezer and since-time, and the parent too (RF019 AC1/AC4, #1559).
+// The parent is first moved off camera into a freezer of its own, so that
+// only DERIVED_FROM carries the breach to the derivative. Deliberately not
+// demoed: a control sample beside the derivative that stays clear, which
+// tests/e2e/specimen-lineage.spec.ts covers.
 test.describe('Human-paced e2e showcase reel — W7 derivative lineage', () => {
   const patientName = 'Ana Beatriz Lima';
   // The intake wizard scene's disease and codes, seeded the same guarded way.
@@ -1652,6 +1655,8 @@ test.describe('Human-paced e2e showcase reel — W7 derivative lineage', () => {
   let box: SeededStorageBox | null = null;
   let governed: GovernedCollection | null = null;
   let consentTemplateId = '';
+  let parentFreezer: SeededStorageBox | null = null;
+  let breachSensor: SeededFreezerSensor | null = null;
 
   test.beforeAll(async () => {
     mongo = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
@@ -1676,6 +1681,9 @@ test.describe('Human-paced e2e showcase reel — W7 derivative lineage', () => {
   test.afterAll(async () => {
     await removeOrphaPhenotypeGraph(orphaNumeric).catch(() => {});
     await closeNeo4jDriver();
+    if (breachSensor) await removeSensorOnFreezer(breachSensor).catch(() => {});
+    if (parentFreezer) await cleanupStorageBoxLocation(parentFreezer).catch(() => {});
+    await closeSeedSensorDb();
     await cleanupActiveTerminologyConcepts();
     if (box) await cleanupStorageBoxLocation(box).catch(() => {});
     await cleanupGovernedCollection(governed);
@@ -1819,6 +1827,69 @@ test.describe('Human-paced e2e showcase reel — W7 derivative lineage', () => {
     const idRow = page.getByText('ID da Amostra:', { exact: true }).locator('xpath=..');
     await expect(idRow).toContainText(derivative.specimenId);
     await idRow.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // 4. The lineage card links the parent specimen (RF023).
+    await expect(page.getByTestId(`sample-lineage-parent-link-${parent.specimenId}`)).toBeVisible();
+    await page.getByTestId('sample-lineage-card').scrollIntoViewIfNeeded();
+    await caption('Linhagem', `Derivada de ${parent.specimenId}`);
+    await beat(page, LARGE);
+
+    // Off camera: the parent moves into a freezer of its own, so it is the only
+    // sample there and the breach reaches the derivative only through DERIVED_FROM.
+    await waitForDerivedFrom(derivative.mongoId, parent.mongoId);
+    parentFreezer = await seedStorageBoxLocation();
+    const move = await request.post(`${apiBaseURL}/api/storage/move`, {
+      headers,
+      data: {
+        sampleId: parent.specimenId,
+        targetBoxId: parentFreezer.boxId,
+        targetPosition: parentFreezer.positionCode,
+        reason: 'Amostra de origem em freezer próprio',
+      },
+    });
+    expect(move.status(), await move.text()).toBe(200);
+    breachSensor = await seedSensorOnFreezer(parentFreezer.freezerId, 2, 8);
+    const now = Date.now();
+    for (const minutesAgo of [3, 2, 1, 0]) {
+      const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: { 'x-telemetry-ingest-secret': process.env.TELEMETRY_INGEST_SECRET ?? '' },
+        data: { sensorId: breachSensor.sensorId, temperature: -50, timestamp: new Date(now - minutesAgo * 60_000).toISOString() },
+      });
+      expect(reading.status()).toBe(200);
+    }
+    const sensorId = breachSensor.sensorId;
+    await expect
+      .poll(async () => (await queryTemperaturePoints(sensorId, 10)).length, { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(4);
+    const cycle = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/run-cycle-full`, {
+      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+      data: { criticalDurationHours: 2 / 60, expectedReadingIntervalMinutes: 5 },
+    });
+    expect(cycle.status()).toBe(200);
+    await expect.poll(() => readSampleStatus(parent.mongoId), { timeout: 15_000 }).toBe('COMPROMISED');
+    await expect.poll(() => readSampleStatus(derivative.mongoId), { timeout: 15_000 }).toBe('COMPROMISED');
+
+    // 5. The derivative's page again: compromised through its lineage, with the breach's freezer and since-time (RF019 AC1/AC4).
+    await page.goto(`/samples/${encodeURIComponent(derivative.specimenId)}`);
+    await expect(page.getByTestId('sample-detail-root')).toBeVisible({ timeout: 20_000 });
+    const graphStatus = page.getByTestId('sample-graph-status');
+    await expect(graphStatus).toHaveAttribute('data-state', 'compromised', { timeout: 10_000 });
+    await expect(page.getByTestId('sample-compromise-freezer')).toHaveText(sensorId);
+    const breachedSince = page.getByTestId('sample-compromise-breached-since');
+    await expect(breachedSince).toHaveText(/\S/);
+    await expect(breachedSince).not.toHaveText('N/A');
+    await graphStatus.scrollIntoViewIfNeeded();
+    await caption('Cadeia de frio comprometida', 'A falha no freezer da amostra de origem alcança a derivada pela linhagem');
+    await beat(page, LARGE);
+
+    // 6. The parent's page, through the lineage link.
+    await page.getByTestId(`sample-lineage-parent-link-${parent.specimenId}`).click();
+    await expect(page).toHaveURL(new RegExp(`/samples/${encodeURIComponent(parent.specimenId)}$`));
+    await expect(page.getByTestId('sample-detail-page-title')).toContainText(parent.specimenId);
+    await expect(graphStatus).toHaveAttribute('data-state', 'compromised', { timeout: 10_000 });
+    await graphStatus.scrollIntoViewIfNeeded();
+    await caption('A amostra de origem', 'Comprometida pela mesma falha, em seu próprio freezer');
     await beat(page, LARGE);
   });
 });
