@@ -8,6 +8,7 @@ const { Neo4jCanonicalProjectionService } = require('../services/neo4jCanonicalP
 const requestContext = require('../utils/requestContext');
 const jobMetrics = require('../infrastructure/metrics/jobMetrics');
 const { assertReadiness } = require('../foundation/readiness');
+const { applyNeo4jSchema } = require('../infrastructure/database/neo4j/schema/applySchema');
 
 // #992: heartbeat file probed by the container healthcheck (mtime-based).
 // Not a new env var -- a module-level constant, per #992's decision to avoid
@@ -186,6 +187,10 @@ async function runProjectionWorker(options = {}) {
     const report = await assertReadiness(readinessDb, { environment: env.NODE_ENV });
     logger.info(`[RF022] ReadinessReport ${report.readinessReportId} ready (${report.canonicalModelReleaseId})`);
   }
+
+  // #1557 (RNF016 C7): the declared constraints and indexes, before the first lease.
+  const schema = await applyNeo4jSchema(options.neo4jDriver || await connectNeo4j(), { database: env.NEO4J_DATABASE || 'neo4j' });
+  logger.info(`[GRAPH_OUTBOX] Neo4j schema applied (${schema.applied} statements)`);
 
   do {
     const result = await runProjectionOnce(options);

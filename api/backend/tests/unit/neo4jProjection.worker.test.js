@@ -21,6 +21,14 @@ const requestContext = require('../../src/utils/requestContext');
 
 vi.spyOn(jobMetrics, 'recordJob').mockResolvedValue(undefined);
 
+// #1557: runProjectionWorker applies the Neo4j schema before its first lease;
+// the cases' fake sessions have no `run`, so the apply is spied here, before
+// the worker destructures it. Its own behaviour is proven in
+// tests/unit/neo4j-apply-schema.test.js.
+const neo4jSchema = require('../../src/infrastructure/database/neo4j/schema/applySchema');
+
+vi.spyOn(neo4jSchema, 'applyNeo4jSchema').mockResolvedValue({ applied: 18 });
+
 beforeEach(() => {
   jobMetrics.recordJob.mockReset().mockResolvedValue(undefined);
 });
@@ -555,5 +563,46 @@ describe('#1551 runProjectionWorker Foundation readiness gate', () => {
 
     await expect(run(await dbWithReport(null))).resolves.toMatchObject({ processed: 0 });
     expect(outboxService.leaseNextBatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// RNF016 C7: the worker applies the declared constraints and indexes before
+// it leases any outbox event, and a failed apply leases nothing.
+describe('#1557 runProjectionWorker applies the Neo4j schema first', () => {
+  const env = require('../../src/config/env');
+  const projector = { applyEvent: async () => ({ projected: true }) };
+  const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+  let outboxService;
+
+  beforeEach(() => {
+    neo4jSchema.applyNeo4jSchema.mockClear();
+    outboxService = {
+      rescheduleStaleProcessing: vi.fn().mockResolvedValue(0),
+      leaseNextBatch: vi.fn().mockResolvedValue([]),
+      markProjected: async () => undefined,
+      markRetrying: async () => undefined,
+      markDeadLetter: async () => undefined,
+    };
+  });
+
+  function run() {
+    return runProjectionWorker({ db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8, once: true });
+  }
+
+  it('applies the schema with the passed driver before the first lease', async () => {
+    await expect(run()).resolves.toMatchObject({ processed: 0 });
+
+    expect(neo4jSchema.applyNeo4jSchema).toHaveBeenCalledTimes(1);
+    expect(neo4jSchema.applyNeo4jSchema).toHaveBeenCalledWith(neo4jDriver, { database: env.NEO4J_DATABASE || 'neo4j' });
+    expect(outboxService.leaseNextBatch).toHaveBeenCalledTimes(1);
+    expect(neo4jSchema.applyNeo4jSchema.mock.invocationCallOrder[0])
+      .toBeLessThan(outboxService.leaseNextBatch.mock.invocationCallOrder[0]);
+  });
+
+  it('rejects and leases nothing when the apply fails', async () => {
+    neo4jSchema.applyNeo4jSchema.mockRejectedValueOnce(new Error('ConstraintCreationFailed'));
+
+    await expect(run()).rejects.toThrow('ConstraintCreationFailed');
+    expect(outboxService.leaseNextBatch).not.toHaveBeenCalled();
   });
 });

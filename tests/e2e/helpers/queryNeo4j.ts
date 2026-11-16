@@ -508,3 +508,23 @@ export async function countGraph(): Promise<{ nodes: number; relationships: numb
     await session.close();
   }
 }
+
+export interface SchemaEntry { name: string; labelsOrTypes: string[]; properties: string[] }
+
+/** #1557 (RNF016 C7): the database's constraints and indexes. */
+export async function readSchemaCatalog(): Promise<{ constraints: SchemaEntry[]; indexes: SchemaEntry[] }> {
+  const session = getDriver().session({ database });
+  try {
+    // No `type` column: its values changed across Neo4j 5 minors.
+    const toEntry = (r: { get: (k: string) => unknown }): SchemaEntry => ({
+      name: r.get('name') as string,
+      labelsOrTypes: (r.get('labelsOrTypes') as string[] | null) ?? [],
+      properties: (r.get('properties') as string[] | null) ?? [],
+    });
+    const constraints = await session.run('SHOW CONSTRAINTS YIELD name, labelsOrTypes, properties');
+    const indexes = await session.run('SHOW INDEXES YIELD name, labelsOrTypes, properties');
+    return { constraints: constraints.records.map(toEntry), indexes: indexes.records.map(toEntry) };
+  } finally {
+    await session.close();
+  }
+}

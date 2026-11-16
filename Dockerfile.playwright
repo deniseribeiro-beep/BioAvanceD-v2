@@ -10,6 +10,8 @@ COPY tests/e2e ./tests/e2e
 # #1392: the edge-buffer spec drives the real device-side buffer module, which
 # needs only Node built-ins, so this one file is copied, not the api/ tree.
 COPY api/backend/scripts/telemetry-edge-buffer.js ./api/backend/scripts/telemetry-edge-buffer.js
+# RNF016 C7 (#1557): the Neo4j schema spec reads the declared constraints.
+COPY api/backend/src/infrastructure/database/neo4j/schema ./api/backend/src/infrastructure/database/neo4j/schema
 # RNF001 C1 (#1469): the e2e gate runs the UI p95 script in this image.
 COPY scripts/rnf001-ui-p95.mjs ./scripts/rnf001-ui-p95.mjs
 
