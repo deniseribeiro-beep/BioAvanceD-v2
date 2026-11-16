@@ -2386,3 +2386,275 @@ test.describe('Human-paced e2e showcase reel — W11 keyboard navigation and bac
     await beat(page, LARGE);
   });
 });
+
+// W6 reel: a consent term's revision and a collection's regime conversion.
+//  - RF010 AC1/AC5/AC8: an operator publishes a new version of a term from
+//    the builder at /admin/tcle/edit/:id, which supersedes the earlier one.
+//    The builder reports the invitation sweep to the participant still pending
+//    on the old version, and /consents shows the policy change notice sent to
+//    the holder of a consent in force under it, as
+//    tcle-publication-sweep.spec.ts and consent-policy-change-notice.spec.ts
+//    prove.
+//  - RF020 AC4: an operator converts a biorepository collection to a biobank
+//    from its governance panel, with the biobank's context, an approval in
+//    force and a justification, and the decision history records the
+//    regime_change event, as specimen-quality-inventory.spec.ts proves
+//    through the API.
+//
+// Deliberately not demoed: the emails themselves, which the test stack's SMTP
+// catcher accepts and no screen shows; the invitation's token is asserted off
+// camera. The term's first version, its pending participant and its holder are
+// seeded, as both e2e specs do. The collection's approval and its first
+// biorepository context are recorded off camera through the API, since the W6
+// collection governance case above already shows both on screen, and the
+// access policy the biobank names is created through the API because
+// AccessPolicy has no UI.
+test.describe('Human-paced e2e showcase reel — W6 term revision and regime conversion', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('RF010 AC1/AC5/AC8 an operator publishes a revised term, inviting the pending participant and notifying the holder in force', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const title = `0 Showcase TCLE revisão ${stamp}`;
+    const versionGroupId = `showcase-tcle-revision-${stamp}`;
+    const permissionKey = 'showcase-research';
+    // Eight-digit participant ids, the form the patient lookup reads directly.
+    const pending = String(86_000_000 + Math.floor(Math.random() * 1_000_000));
+    const holder = String(87_000_000 + Math.floor(Math.random() * 1_000_000));
+    const participantIds = [pending, holder];
+    const holderConsentId = `showcase-tcle-holder-${stamp}`;
+
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+
+    try {
+      const inserted = await db.collection('consent_templates').insertOne({
+        title,
+        content: '<p>Versão 1 do termo de consentimento para pesquisa com amostras.</p>',
+        htmlContent: '<p>Versão 1 do termo de consentimento para pesquisa com amostras.</p>',
+        version: 'v1',
+        versionGroupId,
+        caae: '',
+        active: true,
+        permissions: [{ key: permissionKey, label: 'Uso das amostras em pesquisa', required: true }],
+        validFrom: new Date('2026-01-01T00:00:00.000Z'),
+        validTo: new Date('2027-12-31T23:59:59.000Z'),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const v1Id = inserted.insertedId;
+      // One participant still pending on v1, one holding a consent in force under it.
+      await db.collection('patients').insertMany([
+        { participantId: pending, status: 'PENDING_CONSENT', consentTemplateId: v1Id.toString(), createdAt: new Date(), updatedAt: new Date() },
+        { participantId: holder, status: 'ACTIVE', consentTemplateId: v1Id.toString(), createdAt: new Date(), updatedAt: new Date() },
+      ]);
+      await db.collection('participantIdentities').insertMany(participantIds.map((participantId) => ({
+        participantId,
+        email: `showcase-tcle-${participantId}@example.test`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })));
+      await db.collection('patientConsents').insertOne({
+        consentId: holderConsentId,
+        participantId: holder,
+        consentTemplateId: v1Id.toString(),
+        consentVersion: 'v1',
+        responses: { [permissionKey]: true },
+        status: 'ACTIVE',
+        signedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      // 1. The builder opens the term in force and the operator revises its text.
+      await page.goto(`/admin/tcle/edit/${v1Id.toString()}`);
+      const editor = page.getByRole('textbox', { name: 'Editor do corpo do TCLE' });
+      await expect(editor).toContainText('Versão 1 do termo', { timeout: 15_000 });
+      await beat(page, LARGE);
+      await editor.fill('Versão 2 do termo de consentimento para pesquisa com amostras, revisada pelo operador.');
+      await beat(page, SMALL);
+      // RF010 AC1: the revision records the modality chosen in the builder.
+      await page.getByLabel('Modalidade de Consentimento').selectOption('dynamic');
+      await beat(page, MEDIUM);
+
+      // 2. Saved as a new version: the builder reports the invitation sweep.
+      await page.getByRole('button', { name: 'Salvar nova versão do TCLE' }).click();
+      const published = page.getByRole('alert').filter({ hasText: 'Nova versão criada' });
+      await expect(published).toContainText('1 de 1 participantes pendentes', { timeout: 15_000 });
+      await published.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // Off camera: v2 supersedes v1, the pending participant holds a fresh
+      // invitation token, and the holder's notice is recorded as delivered.
+      const v2 = await db.collection('consent_templates').findOne({ versionGroupId, _id: { $ne: v1Id } });
+      expect(v2?.version).toBe('v2');
+      expect(v2?.previousPolicyId).toBe(v1Id.toString());
+      expect(v2?.consentModel).toBe('dynamic');
+      const invited = await db.collection('patients').findOne({ participantId: pending });
+      expect(invited?.consentTokenHash).toMatch(/^[0-9a-f]{64}$/);
+      const notice = await db.collection('consentCommunicationEvents').findOne({ consentId: holderConsentId });
+      expect(notice).toMatchObject({
+        communicationType: 'policy_change_notice',
+        contentTemplateId: 'consent.policy_change_notice.v1',
+        sourceEventType: 'ConsentTemplate',
+        sourceEventId: String(v2?._id),
+        deliveryStatus: 'delivered',
+      });
+
+      // 3. The holder's consent history lists the policy change notice.
+      await page.goto(`/consents?participantId=${holder}`);
+      const noticeRow = page.getByTestId('consent-communication-consent.policy_change_notice.v1');
+      await expect(noticeRow).toContainText('Atualização do termo', { timeout: 15_000 });
+      await expect(noticeRow).toContainText('delivered');
+      await noticeRow.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+    } finally {
+      await db.collection('consentCommunicationEvents').deleteMany({ consentId: holderConsentId });
+      await db.collection('patientConsents').deleteMany({ participantId: { $in: participantIds } });
+      await db.collection('participantIdentities').deleteMany({ participantId: { $in: participantIds } });
+      await db.collection('patients').deleteMany({ participantId: { $in: participantIds } });
+      await db.collection('consent_templates').deleteMany({ versionGroupId });
+      await client.close();
+    }
+  });
+
+  test('RF020 AC4 an operator converts a biorepository collection to a biobank with its justification', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+    const headers = { Authorization: `Bearer ${session.token}` };
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `showcase-regime-${stamp}`, studyId: `showcase-regime-study-${stamp}`, protocolId: `showcase-regime-protocol-${stamp}` };
+    const justification = 'Ampliação para uso futuro em pesquisas compatíveis com o consentimento';
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    // The organization pickers read the first page sorted by name.
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: `0 Showcase Regime ${stamp}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+    let accessPolicyId = '';
+
+    try {
+      // Off camera: an approval in force and the biorepository's first context.
+      const approval = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/approvals`, {
+        headers,
+        data: {
+          authority: 'CEP Hospital Universitário',
+          caae: '00000000.0.0000.0000',
+          documentUri: 'https://docs.example.org/parecer-cep.pdf',
+          documentChecksum: `sha256:${'e'.repeat(64)}`,
+          effectivePeriod: { start: '2026-01-01', end: '2030-12-31' },
+          status: 'active',
+          responsibleOrganizationId: organizationId,
+        },
+      });
+      expect(approval.status(), await approval.text()).toBe(201);
+      const approvalId = (await approval.json()).data.approvalId as string;
+      const created = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
+        headers,
+        data: {
+          justification: 'Contexto inicial do biorrepositório aprovado pelo CEP',
+          governanceContext: {
+            studyId: ids.studyId,
+            protocolId: ids.protocolId,
+            protocolVersion: '1.0',
+            caae: '00000000.0.0000.0000',
+            responsibleOrganizationId: organizationId,
+            responsibleInvestigatorId: 'Dra. Pesquisadora Responsável',
+            ethicsApprovalId: approvalId,
+            validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+            plannedEndDate: '2030-12-31',
+          },
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      // Off camera: the biobank's access policy, which has no UI.
+      const policy = await request.post(`${apiBaseURL}/api/access-policies`, {
+        headers,
+        data: {
+          policyName: `Showcase biobanco ${stamp}`,
+          policyVersion: '1.0.0',
+          applicableEntityTypes: ['AccessRequest'],
+          decisionEffect: 'review_required',
+          ruleExpression: 'all-conditions',
+          effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+          roleCodes: ['researcher'],
+          organizationScopeIds: [organizationId],
+          resourceScopes: ['Specimen'],
+          conditions: [{ consent: 'compatible' }],
+          decisionReasonsRequired: true,
+        },
+      });
+      expect(policy.status(), await policy.text()).toBe(201);
+      accessPolicyId = (await policy.json()).data.accessPolicyId as string;
+
+      // 1. The collection's governance: a biorepository with its first decision.
+      await page.goto('/system-management?tab=collections');
+      await beat(page, LARGE);
+      await page.getByTestId(`governance-collection-button-${ids.collectionId}`).click();
+      await expect(page.getByTestId('collection-governance-panel')).toBeVisible();
+      await expect(page.getByTestId('collection-governance-regime')).toContainText('Biorrepositório');
+      await beat(page, MEDIUM);
+
+      // 2. The conversion: the biobank's context, the approval it rests on, and why.
+      const regime = page.getByTestId('governance-event-regime-select');
+      await regime.scrollIntoViewIfNeeded();
+      await regime.selectOption('biobank');
+      await beat(page, SMALL);
+      await page.getByTestId('governance-context-broad-purpose-input').fill('Pesquisa em saúde com amostras do biobanco');
+      await page.getByTestId('governance-context-policy-input').fill(accessPolicyId);
+      await page.getByTestId('governance-context-committee-input').fill('Comitê de Acesso do Biobanco');
+      await page.getByTestId('governance-context-custodian-select').selectOption(organizationId);
+      await page.getByTestId('governance-context-future-use-input').fill('Uso compatível com o consentimento');
+      await page.getByTestId('governance-context-consent-model-broad').check();
+      await page.getByTestId('governance-context-ethics-rule-select').selectOption('when_required_by_policy');
+      await page.getByTestId(`governance-event-approval-${approvalId}`).check();
+      await beat(page, SMALL);
+      await page.getByTestId('governance-event-justification-input').fill(justification);
+      await beat(page, SMALL);
+      await page.getByTestId('governance-event-submit').click();
+
+      // 3. The history records the conversion with its justification.
+      const events = page.getByTestId('collection-governance-events');
+      await expect(events).toContainText('Conversão de regime');
+      await expect(events).toContainText(justification);
+      await expect(page.getByTestId('collection-governance-regime')).toContainText('Biobanco');
+      await events.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // Off camera: the regime_change event follows the created one.
+      const governance = await request.get(`${apiBaseURL}/api/collections/${ids.collectionId}/governance`, { headers });
+      expect(governance.status(), await governance.text()).toBe(200);
+      const recorded = (await governance.json()).data;
+      expect(recorded.governanceRegime).toBe('biobank');
+      expect(recorded.events.map((e: { decisionType: string; previousRegime: string | null; newRegime: string }) => [e.decisionType, e.previousRegime, e.newRegime])).toEqual([
+        ['created', null, 'biorepository'],
+        ['regime_change', 'biorepository', 'biobank'],
+      ]);
+      expect(recorded.events[1]).toMatchObject({ justification, approvalIds: [approvalId] });
+    } finally {
+      await request.delete(`${apiBaseURL}/api/collections/${ids.collectionId}`, { headers }).catch(() => {});
+      await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, { headers }).catch(() => {});
+      if (accessPolicyId) await db.collection('accessPolicies').deleteMany({ accessPolicyId });
+      await client.close();
+    }
+  });
+});
