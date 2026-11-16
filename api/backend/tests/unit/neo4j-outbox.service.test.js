@@ -458,6 +458,70 @@ describe('Neo4jOutboxService', () => {
     });
   });
 
+  // #1561: a batch of distinct aggregates in three writes, all in the
+  // caller's transaction.
+  describe('#1561 appendEvents', () => {
+    function makeBatchDb(startingVersions = {}) {
+      const versions = new Map(Object.entries(startingVersions));
+      const calls = [];
+      const collection = {
+        createIndex: async () => {},
+        bulkWrite: async (operations, options) => {
+          calls.push({ method: 'bulkWrite', operations, options });
+          for (const { updateOne: { filter, update } } of operations) {
+            if (update.$inc) versions.set(filter._id, (versions.get(filter._id) || 0) + update.$inc.version);
+          }
+          return { ok: 1 };
+        },
+        find: (filter, options) => {
+          calls.push({ method: 'find', filter, options });
+          return { toArray: async () => filter._id.$in.filter((id) => versions.has(id)).map((id) => ({ _id: id, version: versions.get(id) })) };
+        },
+        updateOne: async () => { calls.push({ method: 'updateOne' }); },
+        findOneAndUpdate: async () => { calls.push({ method: 'findOneAndUpdate' }); return { version: 1 }; },
+      };
+      return { db: { collection: () => collection }, calls };
+    }
+    const event = (aggregateId) => ({ eventType: 'T', aggregateType: 'A', aggregateId, payload: { aggregateId } });
+
+    it('takes each aggregate its next version and upserts every event by eventId, in the caller session', async () => {
+      const { db, calls } = makeBatchDb({ 'A:2': 4 });
+      const service = new Neo4jOutboxService({ collectionName: '1561_batch' });
+      const session = { id: 'tx-batch' };
+
+      const docs = await service.appendEvents(db, [event('1'), event('2'), event('3')], { session });
+
+      expect(docs.map((doc) => doc.aggregateVersion)).toEqual([1, 5, 1]);
+      expect(calls.map((call) => call.method)).toEqual(['bulkWrite', 'find', 'bulkWrite']);
+      expect(calls.every((call) => call.options?.session === session)).toBe(true);
+      expect(calls[0].operations.map((op) => op.updateOne.filter._id)).toEqual(['A:1', 'A:2', 'A:3']);
+      expect(calls[0].operations.every((op) => op.updateOne.upsert === true)).toBe(true);
+      const upserts = calls[2].operations.map((op) => op.updateOne);
+      expect(upserts.map((op) => op.filter.eventId)).toEqual(docs.map((doc) => doc.eventId));
+      expect(upserts.every((op) => op.upsert === true && op.update.$setOnInsert.status === 'PENDING')).toBe(true);
+      expect(docs[1].idempotencyKey).toBe(buildIdempotencyKey({
+        aggregateType: 'A', aggregateId: '2', aggregateVersion: 5, eventType: 'T', eventTypeVersion: '1', payloadHash: hashPayload({ aggregateId: '2' }),
+      }));
+    });
+
+    it('refuses an aggregate named twice, or a caller-supplied aggregateVersion, writing nothing', async () => {
+      const { db, calls } = makeBatchDb();
+      const service = new Neo4jOutboxService({ collectionName: '1561_batch_refused' });
+
+      await expect(service.appendEvents(db, [event('1'), event('1')])).rejects.toThrow('agregados distintos');
+      await expect(service.appendEvents(db, [{ ...event('1'), aggregateVersion: 3 }])).rejects.toThrow('aggregateVersion');
+      expect(calls).toEqual([]);
+    });
+
+    it('writes nothing for an empty batch', async () => {
+      const { db, calls } = makeBatchDb();
+      const service = new Neo4jOutboxService({ collectionName: '1561_batch_empty' });
+
+      expect(await service.appendEvents(db, [])).toEqual([]);
+      expect(calls).toEqual([]);
+    });
+  });
+
   // #1313 (RNF019 C5): exponential backoff between attempts.
   describe('#1313 retry backoff', () => {
     it('doubles the delay per attempt from the base and caps it', () => {

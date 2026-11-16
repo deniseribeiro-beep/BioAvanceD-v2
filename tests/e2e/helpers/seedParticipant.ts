@@ -631,6 +631,11 @@ export async function seedActiveTerminologyConcept(
     updatedAt: new Date(),
   });
 
+  // #1561: terminologyConcepts is unique on (systemUri, code, version), so
+  // the fixture's own row for this key (version 'e2e-696' is the fixture's)
+  // that a crashed run left behind is replaced, not duplicated. It stays an
+  // insertOne literal so the #886 model-fidelity guard still validates it.
+  await db.collection('terminologyConcepts').deleteMany({ systemUri, code, version: 'e2e-696' });
   await db.collection('terminologyConcepts').insertOne({
     terminologyConceptId: `e2e-696-${code}-${Date.now()}`,
     systemUri,

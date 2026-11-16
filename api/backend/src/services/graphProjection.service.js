@@ -9,6 +9,45 @@ function stableHash(payload) {
   return crypto.createHash('sha256').update(ordered).digest('hex');
 }
 
+function terminologyConceptEvent(payload) {
+  return {
+    eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
+    aggregateType: 'TerminologyConcept',
+    aggregateId: String(payload.terminologyConceptId || payload.aggregateId || ''),
+    payload: {
+      terminologyConceptId: payload.terminologyConceptId || null,
+      systemUri: payload.systemUri || null,
+      code: payload.code || null,
+      version: payload.version || null,
+      display: payload.display || null,
+      conceptStatus: payload.conceptStatus || 'active',
+      referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+    },
+    sourceService: payload.sourceService || 'graph-projection-service',
+    traceId: payload.traceId || null,
+    schemaVersion: 1,
+  };
+}
+
+function terminologyRelationEvent(payload) {
+  return {
+    eventType: 'TERMINOLOGY_RELATION_PROMOTED',
+    aggregateType: 'TerminologyRelation',
+    aggregateId: String(payload.terminologyRelationId || payload.aggregateId || ''),
+    payload: {
+      terminologyRelationId: payload.terminologyRelationId || null,
+      sourceConceptId: payload.sourceConceptId || null,
+      targetConceptId: payload.targetConceptId || null,
+      relationType: payload.relationType || null,
+      relationVersion: payload.relationVersion || null,
+      referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+    },
+    sourceService: payload.sourceService || 'graph-projection-service',
+    traceId: payload.traceId || null,
+    schemaVersion: 1,
+  };
+}
+
 // #1313 (RF023 AC3): each append takes `options.session`, the aggregate
 // write's transaction, and the outbox appends the event inside it.
 class GraphProjectionService {
@@ -236,42 +275,22 @@ class GraphProjectionService {
   // promoteRelease on the same write that inserts a TerminologyConcept, same
   // outbox pattern RF023 uses for consent/lineage/quality/telemetry.
   async appendTerminologyConceptEvent(db, payload, options = {}) {
-    return this.outbox.appendEvent(db, {
-      eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
-      aggregateType: 'TerminologyConcept',
-      aggregateId: String(payload.terminologyConceptId || payload.aggregateId || ''),
-      payload: {
-        terminologyConceptId: payload.terminologyConceptId || null,
-        systemUri: payload.systemUri || null,
-        code: payload.code || null,
-        version: payload.version || null,
-        display: payload.display || null,
-        conceptStatus: payload.conceptStatus || 'active',
-        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
-      },
-      sourceService: payload.sourceService || 'graph-projection-service',
-      traceId: payload.traceId || null,
-      schemaVersion: 1,
-    }, options);
+    return this.outbox.appendEvent(db, terminologyConceptEvent(payload), options);
   }
 
   async appendTerminologyRelationEvent(db, payload, options = {}) {
-    return this.outbox.appendEvent(db, {
-      eventType: 'TERMINOLOGY_RELATION_PROMOTED',
-      aggregateType: 'TerminologyRelation',
-      aggregateId: String(payload.terminologyRelationId || payload.aggregateId || ''),
-      payload: {
-        terminologyRelationId: payload.terminologyRelationId || null,
-        sourceConceptId: payload.sourceConceptId || null,
-        targetConceptId: payload.targetConceptId || null,
-        relationType: payload.relationType || null,
-        relationVersion: payload.relationVersion || null,
-        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
-      },
-      sourceService: payload.sourceService || 'graph-projection-service',
-      traceId: payload.traceId || null,
-      schemaVersion: 1,
-    }, options);
+    return this.outbox.appendEvent(db, terminologyRelationEvent(payload), options);
+  }
+
+  // #1561: one batch of promoted records, each its own aggregate, appended
+  // in the batch's transaction (`options.session`), as the single appends
+  // above are in their record's.
+  async appendTerminologyConceptEvents(db, payloads, options = {}) {
+    return this.outbox.appendEvents(db, payloads.map(terminologyConceptEvent), options);
+  }
+
+  async appendTerminologyRelationEvents(db, payloads, options = {}) {
+    return this.outbox.appendEvents(db, payloads.map(terminologyRelationEvent), options);
   }
 }
 

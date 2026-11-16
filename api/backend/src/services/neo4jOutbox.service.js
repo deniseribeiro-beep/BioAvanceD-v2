@@ -157,6 +157,22 @@ class Neo4jOutboxService {
     };
   }
 
+  // #941: once per collection name per process, logged rather than thrown
+  // (appendEvent's comment says why).
+  async ensureIndexesOnce(db) {
+    if (!ensuredOutboxIndexCollections.has(this.collectionName)) {
+      ensuredOutboxIndexCollections.add(this.collectionName);
+      try {
+        await this.ensureIndexes(db);
+      } catch (error) {
+        logger.warn(
+          `[NEO4J_OUTBOX] Falha ao criar indices de ${this.collectionName}: ${error.message}. ` +
+          ('A entrega continua, mas sem a garantia de idempotencia do indice unico em eventId (#941).')
+        );
+      }
+    }
+  }
+
   async appendEvent(db, event, options = {}) {
     const collection = this.getCollection(db);
 
@@ -176,17 +192,7 @@ class Neo4jOutboxService {
     //
     // Latched BEFORE the await so a persistent failure cannot retry per
     // append; that matches utils/collectionResolver.js:46-48.
-    if (!ensuredOutboxIndexCollections.has(this.collectionName)) {
-      ensuredOutboxIndexCollections.add(this.collectionName);
-      try {
-        await this.ensureIndexes(db);
-      } catch (error) {
-        logger.warn(
-          `[NEO4J_OUTBOX] Falha ao criar indices de ${this.collectionName}: ${error.message}. ` +
-          ('A entrega continua, mas sem a garantia de idempotencia do indice unico em eventId (#941).')
-        );
-      }
-    }
+    await this.ensureIndexesOnce(db);
 
     const aggregateVersion = event.aggregateVersion || await this.nextAggregateVersion(
       db,
@@ -217,6 +223,63 @@ class Neo4jOutboxService {
     );
 
     return doc;
+  }
+
+  // #1561: appendEvent for a batch of distinct aggregates, in three writes
+  // whatever the batch size: one bulk $inc of the version counters, one read
+  // of them back, one bulk upsert of the events by eventId. `options.session`
+  // is the aggregates' own transaction, as in appendEvent (#1313), and the
+  // read-back runs in it. An aggregate named twice in one call, or an event
+  // carrying its own aggregateVersion, is refused: appendEvent takes those.
+  async appendEvents(db, events, options = {}) {
+    const collection = this.getCollection(db);
+    if (!Array.isArray(events) || events.length === 0) return [];
+
+    const keys = events.map((event) => {
+      if (event.aggregateVersion) {
+        throw new Error('appendEvents não aceita aggregateVersion do chamador; use appendEvent');
+      }
+      return `${normalizeText(event.aggregateType)}:${normalizeText(event.aggregateId)}`;
+    });
+    if (new Set(keys).size !== keys.length) {
+      throw new Error('appendEvents exige agregados distintos no mesmo lote; use appendEvent');
+    }
+
+    await this.ensureIndexesOnce(db);
+
+    const sessionOption = options.session ? { session: options.session } : {};
+    const now = new Date();
+    const versions = db.collection(this.versionCollectionName);
+    await versions.bulkWrite(events.map((event, index) => ({
+      updateOne: {
+        filter: { _id: keys[index] },
+        update: {
+          $inc: { version: 1 },
+          $set: { aggregateType: normalizeText(event.aggregateType), aggregateId: normalizeText(event.aggregateId), updatedAt: now },
+        },
+        upsert: true,
+      },
+    })), { ordered: true, ...sessionOption });
+    const counters = await versions.find({ _id: { $in: keys } }, sessionOption).toArray();
+    const versionByKey = new Map(counters.map((counter) => [counter._id, Number(counter.version || 1)]));
+
+    const docs = events.map((event, index) => this.buildEvent({
+      ...event,
+      aggregateVersion: versionByKey.get(keys[index]) || 1,
+      projectionState: event.projectionState || options.projectionState || {},
+    }));
+    await collection.bulkWrite(docs.map((doc) => {
+      const { updatedAt, ...docWithoutUpdatedAt } = doc;
+      return {
+        updateOne: {
+          filter: { eventId: doc.eventId },
+          update: { $setOnInsert: docWithoutUpdatedAt, $set: { updatedAt: new Date() } },
+          upsert: true,
+        },
+      };
+    }), { ordered: true, ...sessionOption });
+
+    return docs;
   }
 
   async leaseNextBatch(db, options = {}) {
