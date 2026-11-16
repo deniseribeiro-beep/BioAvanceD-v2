@@ -15,8 +15,8 @@ RNF001 C4 asks that "O resultado é verificado por testes E2E e telemetria do fr
 3. **The Administrador reads them under `data.frontend` of `GET /api/monitoring/metrics`:** `since`, `totals` and `routes`, each route `{ name, buckets, count, sumMs, maxMs, p95UpperBoundMs }`.
 4. **Limits, RNF018 C2.** The body is an object with only `timings`, a list of 1 to 50 items; each item has exactly `name` and `ms`. `name` is a string of at most 200 characters matching `^(GET|POST|PUT|PATCH|DELETE) /[A-Za-z0-9/_:.-]*$`; `ms` is a number from 0 to 600000. A batch with any bad item is refused whole with 422, `details` naming the field path that failed (`timings[3].ms`), and nothing is recorded. Past 200 distinct names, a new name is counted under `__other__`, as the HTTP metrics cap their routes.
 5. **The label rule the frontend reporter follows.** The name is the method, a space and the URL path with the query dropped; each path segment that is not made of lower-case letters, hyphens and underscores, and is not `v` followed by digits, is written as `:id`. `GET /api/patients/6650f1c2a9e1/consent?x=1` is sent as `GET /api/patients/:id/consent`. No identifier reaches the metrics.
+6. **The Prometheus rendering.** `?format=prometheus` carries the timings as the histogram `bioavanced_frontend_request_duration_milliseconds`, one series per name, with the labels `method` and `route` split at the name's first space; the `__other__` series has `method=""`. No totals series: it is a sum over the routes in PromQL. Added 2026-11-16, `[inference]` from the HTTP histogram's `method` and `route` labels.
 
 ## Not decided here
 
-- **The Prometheus rendering.** `?format=prometheus` does not carry the frontend timings yet; the JSON does.
 - **Page-navigation timings** (route changes and first render), as opposed to the API request timings above.

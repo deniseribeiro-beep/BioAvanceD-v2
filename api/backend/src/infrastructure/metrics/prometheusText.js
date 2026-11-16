@@ -30,6 +30,20 @@ function family(lines, name, type, help, samples) {
   for (const sample of samples) lines.push(sample);
 }
 
+// One histogram's samples from a latency view: cumulative buckets, +Inf, sum, count.
+function histogramSamples(samples, name, base, latency) {
+  const view = latency || {};
+  const buckets = view.buckets || {};
+  let cumulative = 0;
+  for (const bound of LATENCY_BUCKETS_MS) {
+    cumulative += Number(buckets[bound]) || 0;
+    samples.push(`${name}_bucket${labels({ ...base, le: String(bound) })} ${num(cumulative)}`);
+  }
+  samples.push(`${name}_bucket${labels({ ...base, le: '+Inf' })} ${num(view.count)}`);
+  samples.push(`${name}_sum${labels(base)} ${num(view.sumMs)}`);
+  samples.push(`${name}_count${labels(base)} ${num(view.count)}`);
+}
+
 function httpFamilies(lines, http) {
   const routes = (http && Array.isArray(http.routes)) ? http.routes : [];
   family(lines, 'bioavanced_http_requests_total', 'counter', 'HTTP requests per method and route template.',
@@ -39,20 +53,24 @@ function httpFamilies(lines, http) {
 
   const name = 'bioavanced_http_request_duration_milliseconds';
   const samples = [];
-  for (const r of routes) {
-    const latency = r.latency || {};
-    const buckets = latency.buckets || {};
-    const base = { method: r.method, route: r.route };
-    let cumulative = 0;
-    for (const bound of LATENCY_BUCKETS_MS) {
-      cumulative += Number(buckets[bound]) || 0;
-      samples.push(`${name}_bucket${labels({ ...base, le: String(bound) })} ${num(cumulative)}`);
-    }
-    samples.push(`${name}_bucket${labels({ ...base, le: '+Inf' })} ${num(latency.count)}`);
-    samples.push(`${name}_sum${labels(base)} ${num(latency.sumMs)}`);
-    samples.push(`${name}_count${labels(base)} ${num(latency.count)}`);
-  }
+  for (const r of routes) histogramSamples(samples, name, { method: r.method, route: r.route }, r.latency);
   family(lines, name, 'histogram', 'HTTP request latency in milliseconds per method and route template.', samples);
+}
+
+// RNF001 C4 (#1469): the request timings the browser measured, one series per
+// name, its method and route split at the name's first space; the __other__
+// series takes an empty method.
+function frontendFamilies(lines, frontend) {
+  const routes = (frontend && Array.isArray(frontend.routes)) ? frontend.routes : [];
+  const name = 'bioavanced_frontend_request_duration_milliseconds';
+  const samples = [];
+  for (const r of routes) {
+    const text = String(r.name ?? '');
+    const space = text.indexOf(' ');
+    const base = space > 0 ? { method: text.slice(0, space), route: text.slice(space + 1) } : { method: '', route: text };
+    histogramSamples(samples, name, base, r);
+  }
+  family(lines, name, 'histogram', 'Request latency in milliseconds as the browser measured it, per method and route.', samples);
 }
 
 function queueFamilies(lines, queues) {
@@ -85,9 +103,10 @@ function jobFamilies(lines, jobs) {
   family(lines, 'bioavanced_worker_job_duration_milliseconds_total', 'counter', 'Total worker job run time in milliseconds per worker and job.', durations);
 }
 
-function renderPrometheus({ http, queues, jobs } = {}) {
+function renderPrometheus({ http, queues, jobs, frontend } = {}) {
   const lines = [];
   httpFamilies(lines, http);
+  frontendFamilies(lines, frontend);
   queueFamilies(lines, queues);
   jobFamilies(lines, jobs);
   return `${lines.join('\n')}\n`;

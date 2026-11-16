@@ -218,6 +218,21 @@ describe('POST /api/monitoring/frontend-timings', () => {
     expect(metrics.body.data.frontend.routes).toEqual([expect.objectContaining({ name: 'GET /api/patients/:id', count: 1 })]);
   });
 
+  it('serves the posted timings under ?format=prometheus to an Administrador', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsBoth });
+
+    const posted = await asCoordinator(request(app).post(TIMINGS)).send({ timings: [{ name: 'GET /api/patients/:id', ms: 180 }] });
+    expect(posted.status).toBe(204);
+
+    const res = await asAdmin(request(app).get(METRICS).query({ format: 'prometheus' }));
+
+    expect(res.status).toBe(200);
+    // 180 ms falls in the 250 bucket.
+    expect(res.text).toContain('bioavanced_frontend_request_duration_milliseconds_bucket{method="GET",route="/api/patients/:id",le="100"} 0\n');
+    expect(res.text).toContain('bioavanced_frontend_request_duration_milliseconds_bucket{method="GET",route="/api/patients/:id",le="250"} 1\n');
+    expect(res.text).toContain('bioavanced_frontend_request_duration_milliseconds_count{method="GET",route="/api/patients/:id"} 1\n');
+  });
+
   it('answers 422 with a details list to a bad batch, and records nothing', async () => {
     app.locals.db = createDbMock({ ...rbacCollectionsBoth });
 

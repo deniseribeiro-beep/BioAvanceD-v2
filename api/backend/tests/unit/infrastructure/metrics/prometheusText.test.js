@@ -27,9 +27,10 @@ function route(overrides = {}) {
 const UP_QUEUE = { name: 'import-queue', status: 'up', counts: { waiting: 2, delayed: 0, active: 1, failed: 3, paused: 0 } };
 const DOWN_QUEUE = { name: 'notification-queue', status: 'unavailable', reason: 'timeout' };
 const JOB = { worker: 'neo4j-projection', job: 'project-event', completed: 7, failed: 2, durationMsSum: 41.5, durationMsMax: 9 };
+const FRONTEND = { routes: [{ name: 'GET /api/patients/:id', buckets: bucketsWith({ 10: 1, 250: 1 }), count: 2, sumMs: 187 }] };
 
 function render(overrides = {}) {
-  return renderPrometheus({ http: { routes: [route()] }, queues: [UP_QUEUE, DOWN_QUEUE], jobs: [JOB], ...overrides });
+  return renderPrometheus({ http: { routes: [route()] }, queues: [UP_QUEUE, DOWN_QUEUE], jobs: [JOB], frontend: FRONTEND, ...overrides });
 }
 
 function sampleLines(text) {
@@ -113,5 +114,33 @@ describe('#1468: renderPrometheus', () => {
       expect(typed.get(familyName).index).toBeLessThan(lines.indexOf(sample));
       if (familyName !== metric) expect(typed.get(familyName).type).toBe('histogram');
     }
+  });
+});
+
+// RNF001 C4 (#1469): the browser's request timings as a histogram, labelled
+// like the HTTP one, the name split at its first space.
+describe('#1469: renderPrometheus frontend timings', () => {
+  const FAMILY = 'bioavanced_frontend_request_duration_milliseconds';
+  const LABELS = 'method="GET",route="/api/patients/:id"';
+
+  it('writes the frontend timings as a histogram per method and route, cumulative', () => {
+    const text = render();
+    expect(text).toContain(`${FAMILY}_bucket{${LABELS},le="5"} 0\n`);
+    expect(text).toContain(`${FAMILY}_bucket{${LABELS},le="10"} 1\n`);
+    expect(text).toContain(`${FAMILY}_bucket{${LABELS},le="250"} 2\n`);
+    expect(text).toContain(`${FAMILY}_bucket{${LABELS},le="+Inf"} 2\n`);
+    expect(text).toContain(`${FAMILY}_sum{${LABELS}} 187\n`);
+    expect(text).toContain(`${FAMILY}_count{${LABELS}} 2\n`);
+  });
+
+  it('writes the __other__ frontend series with an empty method', () => {
+    const text = render({ frontend: { routes: [{ name: '__other__', buckets: bucketsWith({ 5000: 1 }), count: 1, sumMs: 3000 }] } });
+    expect(text).toContain(`${FAMILY}_count{method="",route="__other__"} 1\n`);
+  });
+
+  it('writes the frontend family with no sample when there is no frontend snapshot', () => {
+    const text = render({ frontend: undefined });
+    expect(text).toContain(`# TYPE ${FAMILY} histogram\n`);
+    expect(text.split('\n').filter((line) => line.startsWith(`${FAMILY}_`))).toEqual([]);
   });
 });

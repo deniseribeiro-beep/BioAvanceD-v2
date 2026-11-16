@@ -35,7 +35,8 @@ router.get('/runs', authenticate, requireRole(4), async (req, res) => {
 // Behind the same Administrador gate as /runs; the unauthenticated /api/health
 // keeps no such detail. RNF015 C7 (#1468): ?format=prometheus serves the same
 // metrics in the Prometheus text format for an equivalent tool to scrape;
-// absent or ?format=json keeps the JSON.
+// absent or ?format=json keeps the JSON. RNF001 C4 (#1469): ?format=prometheus
+// carries the frontend timings too.
 router.get('/metrics', authenticate, requireRole(4), async (req, res) => {
   const format = req.query.format === undefined ? 'json' : req.query.format;
   if (format !== 'json' && format !== 'prometheus') {
@@ -50,7 +51,7 @@ router.get('/metrics', authenticate, requireRole(4), async (req, res) => {
     if (format === 'prometheus') {
       // A Buffer, because send() on a string rewrites the charset parameter
       // and moves it ahead of version=0.0.4.
-      return res.status(200).set('Content-Type', CONTENT_TYPE).send(Buffer.from(renderPrometheus({ http, queues, jobs }), 'utf8'));
+      return res.status(200).set('Content-Type', CONTENT_TYPE).send(Buffer.from(renderPrometheus({ http, queues, jobs, frontend: frontendTimings.snapshot() }), 'utf8'));
     }
     return res.status(200).json({ success: true, data: { http, queues, jobs, frontend: frontendTimings.snapshot() } });
   } catch (error) {
