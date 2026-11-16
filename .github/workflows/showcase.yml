@@ -1,0 +1,208 @@
+name: Showcase recording
+
+# #1564: records the human-paced showcase reel (playwright.showcase.config.ts,
+# tests/e2e-showcase/) on a GitHub-hosted runner and uploads it as mp4, so a
+# recording needs no free disk on a developer machine.
+#
+# The stack is compose.test.yml with compose.test.images.yml: the backend,
+# worker and frontend images are pulled from GHCR, tagged with the commit SHA
+# (published by publish-images.yml once ci-pipeline.yml is green on a push to
+# the integration branch, #1563), never rebuilt here. Only tsa-test and
+# witness-test, which are not published, are built. A SHA whose images were
+# never published, or were pruned (publish-images.yml keeps the newest 5),
+# fails at the pull step.
+#
+# Dispatch it for the integration branch's head once that head's CI run has
+# published its images:
+#
+#   gh workflow run showcase.yml --ref feature/docker-e2e-backend-integration
+#
+# or for an earlier published commit with -f sha=<40-character SHA>.
+#
+# Reference data: the run loads what the e2e gate loads (the essential
+# references the API waits for, the admin bootstrap and the
+# reference-data-bootstrap-*-test chain). #1562 replaces that step with a
+# restore of the full-lab reference snapshot.
+#
+# The push trigger only registers this workflow from the integration branch,
+# so it can be dispatched before it reaches the default branch; the job runs
+# on a dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA whose published images to run (40 hex characters); empty for the dispatched ref's commit"
+        required: false
+        default: ""
+  push:
+    branches:
+      - feature/docker-e2e-backend-integration
+    paths:
+      - .github/workflows/showcase.yml
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: bioavanced-showcase-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  showcase:
+    name: Record the showcase reel
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      IMAGE_TAG: ${{ inputs.sha || github.sha }}
+
+    steps:
+      - name: Check the image tag
+        run: |
+          case "$IMAGE_TAG" in
+            *[!0-9a-f]*|'') echo "::error::sha must be a 40-character lowercase hex commit SHA, given '$IMAGE_TAG'"; exit 1 ;;
+          esac
+          [ "${#IMAGE_TAG}" -eq 40 ] || { echo "::error::sha must be 40 characters, given ${#IMAGE_TAG}"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.IMAGE_TAG }}
+
+      - name: Free runner disk
+        run: |
+          df -h
+          docker system prune -af --volumes || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost || true
+          df -h
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the published images
+        run: |
+          docker pull "ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG}"
+          docker pull "ghcr.io/deniseribeiro-beep/bioavanced-frontend-test:${IMAGE_TAG}"
+
+      - name: Build the unpublished services
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.images.yml \
+            build tsa-test witness-test
+
+      # The stack-up of scripts/e2e-gate.sh, up to its projection-worker
+      # check, with the published images and no build; the showcase runs with
+      # the projection worker up. A change to that part of the gate script is
+      # made here too. The admin bootstrap's `up --wait` exits 1 on success,
+      # so this step does not stop on a failed command; every one-shot is
+      # checked below instead.
+      - name: Start the stack and load reference data
+        run: |
+          set +e
+          mkdir -p showcase-out
+          DC="docker compose --env-file .env.test.example -f compose.test.yml -f compose.test.images.yml"
+          $DC up -d --wait --no-build mongodb-test neo4j-test redis-test mqtt-test influxdb-test smtp-test \
+            tsa-test witness-test backend-app-test trusted-hop-test worker-test \
+            frontend-app-test neo4j-projection-worker-test > showcase-out/up.txt 2>&1 \
+            || { cat showcase-out/up.txt; echo "::error::the stack did not come up"; exit 4; }
+          $DC up -d --wait --no-build --no-deps admin-bootstrap-test > showcase-out/boot.txt 2>&1
+          CHAIN=$($DC config --services | grep -E '^reference-data-bootstrap.*-test$' | tr '\n' ' ')
+          $DC up -d --no-build --no-deps $CHAIN > showcase-out/chain.txt 2>&1
+          for i in $(seq 1 60); do
+            [ "$(docker ps --format '{{.Names}}' | grep -c bootstrap)" -eq 0 ] && break
+            sleep 5
+          done
+          docker ps -a --format '{{.Names}} {{.Status}}' | grep -E 'bootstrap|projection-worker' > showcase-out/oneshots.txt
+          cat showcase-out/oneshots.txt
+          if grep bootstrap showcase-out/oneshots.txt | grep -vq 'Exited (0)'; then
+            echo "::error::a bootstrap one-shot did not exit 0"; exit 5
+          fi
+          grep -qE 'neo4j-projection-worker-test-[0-9]+ Up' showcase-out/oneshots.txt \
+            || { echo "::error::the projection worker is not up"; exit 6; }
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Playwright
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      # The env of package.json's test:e2e:docker; the spec's helpers reach
+      # MongoDB, Neo4j, InfluxDB and MQTT on the ports compose.test.yml
+      # publishes on localhost.
+      - name: Record the showcase reel
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:5173
+          PLAYWRIGHT_API_BASE_URL: http://localhost:3000
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          TEST_SUPPORT_SECRET: e2e-test-support-secret
+          TELEMETRY_INGEST_SECRET: e2e-telemetry-ingest-secret
+        run: npx playwright test --config=playwright.showcase.config.ts --output showcase-out/results
+
+      - name: Convert the videos to mp4
+        if: always()
+        run: |
+          test -d showcase-out/results || exit 0
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg
+          mkdir -p showcase-out/mp4
+          find showcase-out/results -name '*.webm' -print0 | while IFS= read -r -d '' webm; do
+            name="$(basename "$(dirname "$webm")")"
+            ffmpeg -nostdin -y -loglevel error -i "$webm" -c:v libx264 -pix_fmt yuv420p -movflags +faststart \
+              "showcase-out/mp4/${name}.mp4"
+          done
+          ls -l showcase-out/mp4
+
+      - name: Upload the showcase videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bioavanced-showcase-${{ env.IMAGE_TAG }}
+          path: showcase-out/mp4/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Collect Compose logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          mkdir -p showcase-out
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.images.yml \
+            logs --no-color > showcase-out/compose-test.log
+
+      - name: Upload the stack logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bioavanced-showcase-logs-${{ env.IMAGE_TAG }}
+          path: |
+            showcase-out/*.txt
+            showcase-out/compose-test.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove containers and isolated volumes
+        if: always()
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            -f compose.test.images.yml \
+            down --volumes --remove-orphans
