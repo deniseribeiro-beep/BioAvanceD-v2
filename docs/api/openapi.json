@@ -18225,6 +18225,102 @@
         }
       }
     },
+    "/api/samples/{id}/graph-status": {
+      "get": {
+        "tags": [
+          "samples"
+        ],
+        "summary": "Read the projected graph status of a sample",
+        "description": "Gates: authenticate, requireOrganizationScope. Reads the sample's :Sample node in a READ session and writes nothing: the projector is the only graph writer. A COMPROMISED status carries the cold-chain compromise fields (RF019). A sample the projector has not reached answers projected false with null fields. A sample of another organization answers 403, an unknown sample 404. The 503 comes from authenticate and from the handler: without the database, without the graph driver, or when the graph is unreachable (a ServiceUnavailable or SessionExpired driver error). Any other read failure answers 500 with a generic error and no driver message.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The sample: its _id or its specimenId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The projected graph status, keyed by the sample's _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "sampleId": {
+                              "type": "string"
+                            },
+                            "projected": {
+                              "type": "boolean"
+                            },
+                            "status": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "compromisedAt": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "compromiseFreezerKey": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "compromiseBreachedSince": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "sampleId",
+                            "projected",
+                            "status",
+                            "compromisedAt",
+                            "compromiseFreezerKey",
+                            "compromiseBreachedSince"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/samples": {
       "post": {
         "tags": [

@@ -1857,6 +1857,120 @@ describe('sample.routes', () => {
     });
   });
 
+  describe('GET /:id/graph-status (#1559)', () => {
+    function fakeGraphDriver(run) {
+      const session = { run: vi.fn(run), close: vi.fn().mockResolvedValue(undefined) };
+      return { session: vi.fn(() => session), fakeSession: session };
+    }
+
+    it('graph-status returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ success: false, error: 'Banco de dados não disponível' });
+    });
+
+    it('graph-status returns 404 when the sample is unknown', async () => {
+      const getSample = vi.fn().mockResolvedValue(null);
+      const driver = fakeGraphDriver(async () => ({ records: [] }));
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+      app.locals.neo4jDriver = driver;
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ success: false, error: 'Amostra não encontrada' });
+      expect(driver.session).not.toHaveBeenCalled();
+    });
+
+    it('graph-status returns 403 out of scope and never reads the graph', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1', collectionSite: 'org-other' });
+      const driver = fakeGraphDriver(async () => ({ records: [] }));
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+      app.locals.neo4jDriver = driver;
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(403);
+      expect(driver.session).not.toHaveBeenCalled();
+    });
+
+    it('graph-status returns 503 when the graph driver is absent', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1' });
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ success: false, error: 'Grafo indisponível' });
+    });
+
+    it('graph-status returns the projected compromise of the Mongo _id', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1' });
+      const fields = {
+        status: 'COMPROMISED',
+        compromisedAt: '2026-11-16T10:00:00Z',
+        compromiseFreezerKey: 'freezer-7',
+        compromiseBreachedSince: '2026-11-16T09:30:00Z',
+      };
+      const driver = fakeGraphDriver(async () => ({ records: [{ get: (key) => fields[key] }] }));
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+      app.locals.neo4jDriver = driver;
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(200);
+      expect(driver.fakeSession.run.mock.calls[0][1]).toEqual({ sampleId: 'oid-1' });
+      expect(res.body).toEqual({
+        success: true,
+        data: { sampleId: 'oid-1', projected: true, ...fields },
+      });
+    });
+
+    it('graph-status returns 500 when the graph read throws', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1' });
+      const driver = fakeGraphDriver(async () => { throw new Error('graph down'); });
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+      app.locals.neo4jDriver = driver;
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ success: false, error: 'Erro ao ler o estado projetado da amostra' });
+    });
+
+    for (const code of ['ServiceUnavailable', 'SessionExpired']) {
+      it(`graph-status returns 503 without the driver text when the graph read fails with ${code}`, async () => {
+        const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1' });
+        const driver = fakeGraphDriver(async () => {
+          throw Object.assign(new Error('Failed to connect to server. Caused by: connect ECONNREFUSED 127.0.0.1:7687'), { code });
+        });
+        const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+        const app = buildApp(router, {});
+        app.locals.neo4jDriver = driver;
+
+        const res = await request(app).get('/api/samples/s1/graph-status');
+
+        expect(res.status).toBe(503);
+        expect(res.body).toEqual({ success: false, error: 'Grafo indisponível' });
+      });
+    }
+  });
+
   describe('GET /', () => {
     it('returns 503 when db is unavailable', async () => {
       const { router } = loadRoute();
@@ -3558,7 +3672,9 @@ describe('sample.routes authorization gates (issue #921)', () => {
   });
 
   describe('requireOrganizationScope presence pinning', () => {
-    // 25 of the file's 27 routes wire in requireOrganizationScope.
+    // All 32 of the file's routes wire in requireOrganizationScope; 30 are
+    // pinned here (POST /:id/quarantine/release and GET /:id/state-decisions
+    // are not).
     const GATED_CASES = [
       // #1185: the create stamps the caller's organization, so it needs the scope.
       { label: 'POST /', method: 'post', path: '/' },
@@ -3567,6 +3683,7 @@ describe('sample.routes authorization gates (issue #921)', () => {
       { label: 'GET /by-barcode/:barcode', method: 'get', path: '/by-barcode/BC1' },
       { label: 'GET /:id/miabis-compliance', method: 'get', path: '/s1/miabis-compliance' },
       { label: 'GET /:id/compliance-graph', method: 'get', path: '/s1/compliance-graph' },
+      { label: 'GET /:id/graph-status', method: 'get', path: '/s1/graph-status' },
       { label: 'GET /', method: 'get', path: '/' },
       { label: 'GET /:id/label', method: 'get', path: '/s1/label' },
       { label: 'GET /:id/label/print-job', method: 'get', path: '/s1/label/print-job' },

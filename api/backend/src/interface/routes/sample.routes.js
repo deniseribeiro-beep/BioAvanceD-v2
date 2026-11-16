@@ -14,6 +14,7 @@ const { resolveCallerCreateOrganization } = require('../../services/callerCreate
 const { isSampleInOrganizationScope, applySampleOrganizationScope } = require('../../services/sampleTenancy.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
+const { readSampleGraphStatus } = require('../../services/sampleGraphStatus.service');
 const { qualificationContextErrors } = require('../../services/quality-domain.service');
 
 // GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
@@ -86,6 +87,49 @@ router.get('/:id/compliance-graph', authenticate, requireOrganizationScope, asyn
       success: false,
       error: 'Erro ao validar grafo de conformidade da amostra',
       message: error.message,
+    });
+  }
+});
+
+// #1559: the sample's projected graph status (RF019 cold-chain compromise), read in a READ session; the projector is the only graph writer.
+router.get('/:id/graph-status', authenticate, requireOrganizationScope, async (req, res) => {
+  try {
+    const graphDb = req.app.locals.db;
+    if (!graphDb) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const graphSample = await sampleService.getSample(graphDb, req.params.id);
+    if (graphSample && !isSampleInOrganizationScope(graphSample, req.organizationScope)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
+    if (!graphSample) {
+      return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
+    }
+
+    const graphDriver = req.app.locals.neo4jDriver;
+    if (!graphDriver) {
+      return res.status(503).json({ success: false, error: 'Grafo indisponível' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: await readSampleGraphStatus(graphDriver, String(graphSample._id)),
+    });
+  } catch (error) {
+    logger.error('[SAMPLE_GRAPH_STATUS] Falha ao ler o estado projetado da amostra:', error.message);
+    // A graph unreachable after boot is the same outage as an absent driver;
+    // the driver's text (host and port) stays in the log, never in the body.
+    if (error.code === 'ServiceUnavailable' || error.code === 'SessionExpired') {
+      return res.status(503).json({ success: false, error: 'Grafo indisponível' });
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao ler o estado projetado da amostra',
     });
   }
 });
