@@ -11,6 +11,8 @@
  *   SEPARATE_N   samples per separate measurement (default 5, minimum 1).
  *   IMPORT_ROWS  synthetic CSV rows posted to /api/import/validate (default
  *                100000, RNF002's reference volume of 100,000 records).
+ *   OUTAGE       a stopped external service (only `influxdb`): measures only the
+ *                outage, with no browser, and writes that result to OUT.
  * The run fails when either of them could not be measured on every sample.
  */
 import { chromium } from 'playwright';
@@ -93,6 +95,96 @@ async function waitStackReady(page, attempts = 12) {
     }
   }
   throw lastErr || new Error('stack not ready for /login');
+}
+
+// RNF001 C3 (#1469): with OUTAGE=influxdb the run measures only the
+// external-service outage, apart from the 2 s budget and record-only: the gate
+// stops influxdb-test first. GET /api/health must report checks.influxdb down,
+// then SEPARATE_N samples of the temperature report preview, which reads
+// InfluxDB (RF009 AC1), are timed whatever status they answer. The run passes
+// only on that health reading and a response to every sample.
+const OUTAGE = process.env.OUTAGE || '';
+const OUTAGE_SERVICES = { influxdb: 'POST /api/reports/temperature/preview' };
+
+async function measureOutage() {
+  const result = {
+    protocol: 'CT-RNF001-LOAD-01',
+    measuredAt: new Date().toISOString(),
+    excludedFromBudget: ['external-service-unavailable'],
+    service: OUTAGE,
+    route: OUTAGE_SERVICES[OUTAGE] || null,
+    serviceDown: false,
+    measured: false,
+  };
+  if (!result.route) {
+    result.reason = 'unknown_outage_service';
+    return result;
+  }
+  let session = null;
+  try {
+    session = await apiLogin();
+  } catch (err) {
+    result.loginError = String(err?.message || err);
+  }
+  if (!session) {
+    result.reason = 'auth_required_but_login_failed';
+    return result;
+  }
+  try {
+    const res = await fetch(`${API_URL}/api/health`);
+    const body = await res.json();
+    result.health = { status: res.status, check: body?.checks?.[OUTAGE] ?? null };
+    result.serviceDown = body?.checks?.[OUTAGE]?.status === 'down';
+  } catch (err) {
+    result.health = { error: String(err?.message || err) };
+  }
+  if (!result.serviceDown) {
+    result.reason = 'service_not_down';
+    return result;
+  }
+  const samples = [];
+  const statuses = [];
+  const errors = [];
+  for (let i = 0; i < SEPARATE_N; i += 1) {
+    try {
+      const t0 = Date.now();
+      const res = await fetch(`${API_URL}/api/reports/temperature/preview`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filters: {} }),
+      });
+      await res.arrayBuffer();
+      const ms = Date.now() - t0;
+      samples.push(ms);
+      statuses.push(res.status);
+      console.error(`[rnf001] outage ${OUTAGE} ${result.route} sample ${i + 1}/${SEPARATE_N}: ${ms}ms HTTP ${res.status}`);
+    } catch (err) {
+      errors.push(String(err?.message || err));
+      console.error(`[rnf001] outage ${OUTAGE} ${result.route} sample ${i + 1}/${SEPARATE_N} FAIL: ${errors[errors.length - 1]}`);
+    }
+  }
+  const sorted = [...samples].sort((a, b) => a - b).concat(errors.map(() => Infinity));
+  const finite = (v) => (Number.isFinite(v) ? v : null);
+  Object.assign(result, {
+    samples,
+    statuses,
+    p50: finite(percentile(sorted, 50)),
+    p95: finite(percentile(sorted, 95)),
+    max: finite(sorted[sorted.length - 1]),
+    failedSamples: errors.length,
+    measured: samples.length === SEPARATE_N && errors.length === 0,
+  });
+  if (errors.length) result.errors = errors;
+  return result;
+}
+
+if (OUTAGE) {
+  const result = await measureOutage();
+  result.overallPass = result.measured === true;
+  mkdirSync(dirname(OUT), { recursive: true });
+  writeFileSync(OUT, `${JSON.stringify(result, null, 2)}\n`);
+  console.log(JSON.stringify(result, null, 2));
+  process.exit(result.overallPass ? 0 : 2);
 }
 
 const browser = await chromium.launch({ headless: true });
@@ -185,9 +277,9 @@ const routesPass = routes.every((r) => results.routes[r.path]?.pass === true);
 
 // RNF001 C3 (#1469): downloads, large imports and external-service outage are
 // measured apart from the 2 s budget. The download and the import are timed
-// here, record-only, with no budget of their own; the outage is not yet.
+// here, record-only, with no budget of their own; the outage is measured by
+// the OUTAGE=influxdb run of this script, with InfluxDB stopped.
 results.excludedFromBudget = ['download', 'import', 'external-service-unavailable'];
-results.notYetMeasured = ['external-service-unavailable'];
 
 function buildImportCsv(rows) {
   // Synthetic rows only, no personal data.
