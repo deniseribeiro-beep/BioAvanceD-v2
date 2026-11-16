@@ -240,6 +240,8 @@ export interface Sample {
   // #1216: the canonical business id the API names every specimen by. The
   // legacy sampleID field is prohibited on the wire and no writer sets it.
   specimenId?: string;
+  // #1559: a derivative names the specimens it was derived from.
+  parentSpecimenIds?: string[];
   sampleType: string;
   sampleOrigin?: string;
   extractionProtocol?: string;

@@ -67,6 +67,7 @@ const rows: Row[] = [
   ['sampleService.getAll', () => sampleService.getAll(), 'get', ['/samples']],
   ['sampleService.getById', () => sampleService.getById(3), 'get', ['/samples/3']],
   ['sampleService.getComplianceGraph', () => sampleService.getComplianceGraph('S1'), 'get', ['/samples/S1/compliance-graph']],
+  ['sampleService.getGraphStatus', () => sampleService.getGraphStatus('S1'), 'get', ['/samples/S1/graph-status']],
   ['sampleService.getByBarcode', () => sampleService.getByBarcode('A/1'), 'get', ['/samples/by-barcode/A%2F1']],
   ['sampleService.getResults', () => sampleService.getResults(3), 'get', ['/samples/3/results']],
   ['sampleService.getMovements', () => sampleService.getMovements('S1'), 'get', ['/samples/S1/movements']],

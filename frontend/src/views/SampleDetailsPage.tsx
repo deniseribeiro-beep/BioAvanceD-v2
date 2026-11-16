@@ -14,6 +14,8 @@ import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import SampleFilesSection from '../components/SampleFilesSection';
 import InlineStorageMovementPanel from '../components/samples/InlineStorageMovementPanel';
 import CloseSpecimenAction from '../components/samples/CloseSpecimenAction';
+import SampleCompromiseCard from '../components/samples/SampleCompromiseCard';
+import SampleLineageCard from '../components/samples/SampleLineageCard';
 import { buildSprecAxisSummary, buildSprecSummary } from '../components/samples/sampleListFormatters';
 import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
@@ -619,6 +621,9 @@ export default function SampleDetailsPage() {
             <p style={{ color: 'var(--text-light)' }}>{t('samples.detail.noComplianceReport', 'Sem relatório de conformidade disponível.')}</p>
           )}
         </Card>
+
+        <SampleCompromiseCard sampleId={String(sample._id || sample.specimenId || id)} t={t} locale={locale} />
+        <SampleLineageCard parentSpecimenIds={sample.parentSpecimenIds} t={t} />
 
         {/* Informações Básicas */}
         <Card>

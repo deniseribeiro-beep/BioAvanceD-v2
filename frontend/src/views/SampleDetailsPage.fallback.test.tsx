@@ -38,6 +38,7 @@ vi.mock('../services/api', async (importOriginal) => ({
   sampleService: {
     getById: vi.fn(),
     getComplianceGraph: vi.fn().mockResolvedValue({ data: null }),
+    getGraphStatus: vi.fn().mockResolvedValue({ data: { success: true, data: { sampleId: 'oid-1', projected: false, status: null, compromisedAt: null, compromiseFreezerKey: null, compromiseBreachedSince: null } } }),
   },
   resultService: { download: vi.fn() },
 }));

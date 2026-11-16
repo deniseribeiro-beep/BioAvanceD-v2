@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { MongoClient, ObjectId } from 'mongodb';
-import { realLogin } from './helpers/realAuth';
+import { realLogin, seedRealAuth } from './helpers/realAuth';
 import {
   createRealParticipant,
   seedStorageBoxLocation,
@@ -234,6 +234,80 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
     const derivativeCompromise = (await sampleOutboxEvents(derivative.mongoId))
       .filter((event) => event.eventType === 'SPECIMEN_COMPROMISED');
     expect(derivativeCompromise).toHaveLength(0);
+  });
+
+  // #1559: the sample page reads GET /api/samples/:id/graph-status, so a
+  // derivative compromised through DERIVED_FROM shows the breach's freezer and
+  // since-time, and links its parent, whose page shows the compromise too.
+  test('#1559: the derivative\'s page links its parent and shows the cold-chain compromise with its freezer and since-time', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const parentFreezer = await seedStorageBoxLocation();
+    seededBoxes.push(parentFreezer);
+    const derivativeFreezer = await seedStorageBoxLocation();
+    seededBoxes.push(derivativeFreezer);
+
+    const parent = await createSample(request, admin.token, participant.participantId, parentFreezer);
+    const derivative = await createSample(request, admin.token, participant.participantId, derivativeFreezer, {
+      parentSpecimenIds: [parent.specimenId],
+    });
+    const control = await createSample(request, admin.token, participant.participantId, derivativeFreezer, {
+      positionCode: 'A2',
+    });
+
+    await waitForDerivedFrom(derivative.mongoId, parent.mongoId);
+
+    const sensor = await seedSensorOnFreezer(parentFreezer.freezerId, 2, 8);
+    seededSensors.push(sensor);
+
+    const now = Date.now();
+    const timestamps = [3, 2, 1, 0].map((minutesAgo) => new Date(now - minutesAgo * 60_000));
+    for (const timestamp of timestamps) {
+      await postReadingAt(request, sensor.sensorId, -50, timestamp);
+    }
+    await expect
+      .poll(async () => {
+        const points = await queryTemperaturePoints(sensor.sensorId, 10);
+        return points.length;
+      }, { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(timestamps.length);
+
+    await runCycleFull(request, {
+      criticalDurationHours: 2 / 60,
+      expectedReadingIntervalMinutes: 5,
+    });
+
+    await expect
+      .poll(async () => readSampleStatus(parent.mongoId), { timeout: 15_000 })
+      .toBe('COMPROMISED');
+    await expect
+      .poll(async () => readSampleStatus(derivative.mongoId), { timeout: 15_000 })
+      .toBe('COMPROMISED');
+
+    await seedRealAuth(page, admin);
+    await page.goto(`/samples/${derivative.specimenId}`);
+    await expect(page.getByTestId('sample-detail-page-title')).toBeVisible();
+    await expect(page.getByTestId('sample-graph-status')).toHaveAttribute('data-state', 'compromised');
+    await expect(page.getByTestId('sample-compromise-freezer')).toHaveText(sensor.sensorId);
+    const breachedSince = page.getByTestId('sample-compromise-breached-since');
+    await expect(breachedSince).toHaveText(/\S/);
+    await expect(breachedSince).not.toHaveText('N/A');
+
+    const parentLink = page.getByTestId(`sample-lineage-parent-link-${parent.specimenId}`);
+    await expect(parentLink).toBeVisible();
+    await parentLink.click();
+    await expect(page).toHaveURL(new RegExp(`/samples/${parent.specimenId}$`));
+    await expect(page.getByTestId('sample-detail-page-title')).toContainText(parent.specimenId);
+    await expect(page.getByTestId('sample-graph-status')).toHaveAttribute('data-state', 'compromised');
+
+    await page.goto(`/samples/${control.specimenId}`);
+    await expect(page.getByTestId('sample-detail-page-title')).toContainText(control.specimenId);
+    await expect(page.getByTestId('sample-graph-status')).toHaveAttribute('data-state', 'clear');
+    await expect(page.getByTestId('sample-lineage-card')).toHaveCount(0);
   });
 
   // #1502 (RF023 AC6, RNF016 C2, RNF019 C6 C7): the reconciliation runs

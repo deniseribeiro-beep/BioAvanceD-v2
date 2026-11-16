@@ -77,6 +77,16 @@ export type SpecimenCloseResult = {
   triggerEventId: string;
 };
 
+// GET /samples/:id/graph-status's 200 body `data` (#1559).
+export type SampleGraphStatus = {
+  sampleId: string;
+  projected: boolean;
+  status: string | null;
+  compromisedAt: string | null;
+  compromiseFreezerKey: string | null;
+  compromiseBreachedSince: string | null;
+};
+
 const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
 const TOKEN_OPTIONAL_ROUTES = [
   '/auth/login',
@@ -349,6 +359,8 @@ export const sampleService = {
   getAll: () => api.get<ApiEnvelope<Sample[]>>('/samples'),
   getById: (id: number | string) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
+  // #1559: the sample's projected graph status and cold-chain compromise.
+  getGraphStatus: (id: number | string) => api.get<ApiEnvelope<SampleGraphStatus>>(`/samples/${id}/graph-status`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
   getResults: (id: number) => api.get<ApiEnvelope<Result[]>>(`/samples/${id}/results`), // Implementa Sample.getResults()
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
