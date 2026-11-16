@@ -76,6 +76,31 @@ async function openPanelForSample(page: import('@playwright/test').Page, sample:
     await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ success: false }) });
   });
 
+  // #1567: since #1559 SampleDetailsPage mounts SampleCompromiseCard, whose
+  // mount effect reads GET /api/samples/:id/graph-status. Unmocked, it 401s
+  // against a real backend on mockLogin's unsigned token and the global
+  // response interceptor force-logs-out mid-test -- the #611 mechanism, as
+  // with #744's files route below. Answered with the "clear" status (not
+  // projected, no compromise), and scoped to the graph-status sub-route
+  // only, for the same reason the bare '**/api/samples' route above is.
+  await page.route('**/api/samples/*/graph-status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: {
+          sampleId: sample._id,
+          projected: false,
+          status: null,
+          compromisedAt: null,
+          compromiseFreezerKey: null,
+          compromiseBreachedSince: null,
+        },
+      }),
+    });
+  });
+
   // SampleDetailsPage also mounts useResults()/useEquipment(), which fire
   // real GET /results and GET /equipment on mount regardless of this test's
   // own focus — unmocked, they hit the real backend with mockLogin's
