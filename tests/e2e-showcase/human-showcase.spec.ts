@@ -17,6 +17,17 @@ import {
   assignGovernedCustody,
   type GovernedCollection,
 } from '../e2e/helpers/seedGovernedCollection';
+// W7 derivative lineage reel's intake fixtures (#1506).
+import { SIGNATURE_PNG_DATA_URL } from '../e2e/helpers/consentSignature';
+import {
+  seedActiveConsentTemplate,
+  seedActiveTerminologyConcept,
+  cleanupActiveTerminologyConcepts,
+  seedLegacyDiagnosisTerminology,
+} from '../e2e/helpers/seedParticipant';
+import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver } from '../e2e/helpers/queryNeo4j';
+import { generateValidCpf } from '../e2e/helpers/cpf';
+import { waitForIntakeWizardReady } from '../e2e/helpers/waitForIntakeWizardReady';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -1613,6 +1624,202 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
     const closedBody = (await closed.json()).data;
     expect(closedBody.specimenStatus).toBe('closed');
     expect(closedBody.quantityStatus).toBe('depleted');
+  });
+});
+
+// W7 reel (#1506): a derivative registered through the intake wizard names
+// its parent specimen (RF023, dict-02 ELM-0120 parentSpecimenIds). The parent
+// is registered through the same wizard first, briskly, for the participant
+// whose consent was signed off camera (the #1371 path), so it is available and
+// may be derived from (RF019 AC3). The derivative's stored parent and its
+// LINEAGE_REGISTERED outbox event are asserted off camera. Deliberately not
+// demoed: the lineage and the compromise status themselves, because no page
+// draws them (the sample page shows neither parentSpecimenIds nor the graph's
+// COMPROMISED mark); tests/e2e/intake-wizard.spec.ts and
+// tests/e2e/specimen-lineage.spec.ts cover them at the API and in Neo4j.
+test.describe('Human-paced e2e showcase reel — W7 derivative lineage', () => {
+  const patientName = 'Ana Beatriz Lima';
+  // The intake wizard scene's disease and codes, seeded the same guarded way.
+  const diseaseLabel = 'Doença de Pompe';
+  const diseaseSearch = 'Pompe';
+  const orphaCode = 'ORPHA:365';
+  const orphaNumeric = '365';
+  const cidCode = 'E74.0';
+  const omimCode = '232300';
+  const hpoCode = 'HP:0003198';
+  const phenotypeLabel = 'Miopatia';
+  let mongo: MongoClient | null = null;
+  let box: SeededStorageBox | null = null;
+  let governed: GovernedCollection | null = null;
+  let consentTemplateId = '';
+
+  test.beforeAll(async () => {
+    mongo = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await mongo.connect();
+    const db = mongo.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+    // RF004 AC2 (#1497): every specimen names a governed collection.
+    governed = await seedGovernedCollection(`showcase-w7-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    consentTemplateId = await seedActiveConsentTemplate(db);
+    // The wizard allocates a free position automatically, so a freezer with room must exist.
+    box = await seedStorageBoxLocation();
+    const legacy = await db.collection('terminologies').findOne({ codigo: orphaCode, descricao: diseaseLabel });
+    if (!legacy) {
+      await seedLegacyDiagnosisTerminology({ orphaCode, cidCode, omimCode: `OMIM:${omimCode}`, description: diseaseLabel });
+    }
+    await seedOrphaPhenotypeGraph(orphaNumeric, diseaseLabel, [{ hpoCode, label: phenotypeLabel }]);
+    await seedActiveTerminologyConcept('http://www.orpha.net', orphaCode, diseaseLabel, { datasetCode: 'ORPHA' });
+    await seedActiveTerminologyConcept('http://hl7.org/fhir/sid/icd-10', cidCode, diseaseLabel, { datasetCode: 'ICD10' });
+    await seedActiveTerminologyConcept('https://www.omim.org', omimCode, diseaseLabel, { datasetCode: 'OMIM' });
+    await seedActiveTerminologyConcept('http://purl.obolibrary.org/obo/hp.owl', hpoCode, phenotypeLabel, { datasetCode: 'HPO' });
+  });
+
+  test.afterAll(async () => {
+    await removeOrphaPhenotypeGraph(orphaNumeric).catch(() => {});
+    await closeNeo4jDriver();
+    await cleanupActiveTerminologyConcepts();
+    if (box) await cleanupStorageBoxLocation(box).catch(() => {});
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
+    await closeSeedDb();
+    await mongo?.close();
+  });
+
+  test('RF023 an operator registers a derivative through the intake wizard, naming its parent specimen', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    const db = mongo!.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+
+    // Rewrites the lower-third caption showcaseFixtures mounts, one per stage.
+    const caption = async (heading: string, sub: string) => {
+      await page.evaluate(([h, s]) => {
+        const el = document.getElementById('__sc_caption');
+        if (!el) return;
+        el.textContent = h;
+        const small = document.createElement('small');
+        small.textContent = s;
+        el.appendChild(small);
+      }, [heading, sub]);
+    };
+
+    // The birth date carries the run's uniqueness: the intake matches a participant by name and birth date.
+    const stamp = Date.now();
+    const birthIso = new Date(Date.UTC(1950, 0, 1) + (stamp % 18_000) * 86_400_000).toISOString().slice(0, 10);
+    const birthBr = `${birthIso.slice(8, 10)}/${birthIso.slice(5, 7)}/${birthIso.slice(0, 4)}`;
+    const email = `ana.lima.${String(stamp).slice(-4)}@exemplo.com.br`;
+    const cpf = generateValidCpf();
+
+    // Off camera: the participant and her signed consent (the #1371 path).
+    const created = await request.post(`${apiBaseURL}/api/patients`, {
+      headers,
+      data: { participantId: 'placeholder', patientName, birthDate: birthIso, sex: 'F', consentTemplateId },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const participantId = String((await created.json())?.data?.participantId || '');
+    expect(participantId).toBeTruthy();
+    const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers,
+      data: { participantId, consentTemplateId, responses: {}, signatureName: patientName, signatureImageBase64: SIGNATURE_PNG_DATA_URL },
+    });
+    expect(signed.ok(), await signed.text()).toBe(true);
+
+    // One intake through the wizard; `paced` holds the beats the derivative's take shows.
+    const registerThroughWizard = async (project: string, parentSpecimenId: string | null, paced: boolean, stage: [string, string]) => {
+      const pause = (ms: number) => (paced ? beat(page, ms) : Promise.resolve());
+      await page.goto('/next/intake');
+      await waitForIntakeWizardReady(page);
+      await caption(...stage);
+      await page.getByTestId('wizard-full-name').fill(patientName);
+      await page.getByTestId('wizard-birth-date').fill(birthBr);
+      await expect(page.getByTestId('wizard-patient-match-alert')).toBeVisible({ timeout: 10_000 });
+      await pause(MEDIUM);
+      await page.getByTestId('wizard-gender').selectOption('F');
+      await page.getByTestId('wizard-email').fill(email);
+      await page.getByTestId('wizard-document').fill(cpf);
+      await page.getByTestId('wizard-next-button').click();
+
+      // Known processing on every SPREC axis (index 1 each), never "processing
+      // unknown", which forces axes 3-6 to X and fails quality governance.
+      await expect(page.getByTestId('wizard-sprec-axis-1')).toBeVisible();
+      await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+      for (const field of ['wizard-sample-type', 'wizard-sample-origin', 'wizard-extraction-protocol']) {
+        await page.getByTestId(field).selectOption({ index: 1 });
+      }
+      for (const axis of [1, 2, 3, 4, 5, 6, 7]) {
+        await page.getByTestId(`wizard-sprec-axis-${axis}`).selectOption({ index: 1 });
+      }
+      await page.getByTestId('wizard-quantity').fill('5');
+      await page.getByTestId('wizard-collection').selectOption(governed!.collectionId);
+      await page.getByTestId('wizard-linked-project').fill(project);
+      if (parentSpecimenId) {
+        const parentField = page.getByTestId('wizard-parent-specimen-ids');
+        await parentField.scrollIntoViewIfNeeded();
+        await caption('Derivado da amostra de origem', `A nova amostra nomeia sua origem: ${parentSpecimenId}`);
+        await pause(MEDIUM);
+        await parentField.pressSequentially(parentSpecimenId, { delay: 80 });
+        await pause(LARGE);
+      }
+      await page.getByTestId('wizard-institution-name').fill('Hospital Universitário');
+      await page.getByTestId('wizard-next-button').click();
+
+      await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
+      await page.getByTestId('wizard-diagnosis-search').fill(diseaseSearch);
+      const diagnosis = page.getByTestId('wizard-diagnosis-results').getByRole('button', { name: diseaseLabel }).first();
+      await expect(diagnosis).toBeVisible({ timeout: 10_000 });
+      await diagnosis.click();
+      await expect(page.locator('.phenotype-card', { hasText: phenotypeLabel })).toBeVisible({ timeout: 10_000 });
+      await page.getByTestId('wizard-treatment-status').selectOption('NAIVE');
+      await pause(SMALL);
+
+      const submission = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
+      await page.getByTestId('wizard-submit-button').click();
+      const response = await submission;
+      const raw = await response.text();
+      expect(response.ok(), `POST /intake-wizard (${project}) -> ${response.status()}: ${raw.slice(0, 500)}`).toBe(true);
+      const body = JSON.parse(raw);
+      expect(String(body?.patientMatch?.patientID || '')).toBe(participantId);
+      expect(body?.consent?.active, `${project}: the intake reads the signed consent`).toBe(true);
+      expect(body?.qualityAssessment?.governance_status, `${project}: quality governance`).toBe(1);
+      const sample = { mongoId: String(body?.sample?._id || ''), specimenId: String(body?.sample?.specimenId || '') };
+      expect(sample.mongoId, `${project} sample _id`).toBeTruthy();
+      expect(sample.specimenId, `${project} sample specimenId`).toBeTruthy();
+      return sample;
+    };
+
+    // 1. The parent specimen, registered briskly: it is available, so it may be derived from (RF019 AC3).
+    const parent = await registerThroughWizard('Projeto Doenças Raras', null, false, ['Amostra de origem', 'Registrada pelo cadastro integrado, com o TCLE já assinado']);
+    expect((await db.collection('samples').findOne({ _id: new ObjectId(parent.mongoId) }))?.specimenStatus).toBe('available');
+
+    // 2. The derivative names the parent's specimenId on step 2.
+    const derivative = await registerThroughWizard('Projeto Doenças Raras · alíquota', parent.specimenId, true, ['Amostra derivada', 'O mesmo cadastro integrado, para a mesma participante']);
+    await expect(page.getByTestId('sample-label')).toBeVisible();
+    await expect(page.getByTestId('sample-label-sample-id')).toContainText(derivative.specimenId);
+    await page.getByTestId('sample-label').scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // Off camera: the lineage is stored on the derivative and emitted to the graph's outbox.
+    const stored = await db.collection('samples').findOne({ _id: new ObjectId(derivative.mongoId) });
+    expect(stored?.parentSpecimenIds).toEqual([parent.specimenId]);
+    const lineageEvents = await db.collection('graph_projection_outbox').find({
+      eventType: 'LINEAGE_REGISTERED',
+      aggregateType: 'Sample',
+      aggregateId: derivative.mongoId,
+    }).toArray();
+    expect(lineageEvents).toHaveLength(1);
+    expect(lineageEvents[0].payload).toEqual({ specimenId: derivative.mongoId, parentSpecimenId: parent.mongoId });
+
+    // 3. The derivative's own page.
+    await page.goto(`/samples/${encodeURIComponent(derivative.specimenId)}`);
+    await expect(page.getByTestId('sample-detail-root')).toBeVisible({ timeout: 20_000 });
+    await caption('A amostra derivada', 'Registrada com sua origem, na mesma participante e coleção');
+    await beat(page, LARGE);
+    const idRow = page.getByText('ID da Amostra:', { exact: true }).locator('xpath=..');
+    await expect(idRow).toContainText(derivative.specimenId);
+    await idRow.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
   });
 });
 

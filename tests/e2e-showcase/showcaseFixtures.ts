@@ -32,6 +32,7 @@ const CAPTIONS: Array<[RegExp, string, string]> = [
   [/RNF010 an administrator/, 'Backup e teste de restauração', 'MongoDB, Neo4j e InfluxDB copiados, e a cópia verificada'],
   [/RF010 AC1\/AC5\/AC8/, 'Nova versão do termo', 'Pendentes convidados e titulares avisados da mudança'],
   [/RF020 AC4/, 'Conversão de regime', 'Biorrepositório convertido em biobanco, com justificativa registrada'],
+  [/RF023 an operator/, 'Linhagem da amostra', 'Uma amostra derivada registrada pelo cadastro integrado nomeia sua origem'],
 ];
 
 function captionFor(title: string): [string, string] {
