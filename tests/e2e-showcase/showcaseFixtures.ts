@@ -28,6 +28,8 @@ const CAPTIONS: Array<[RegExp, string, string]> = [
   [/RF029 a specimen/, 'Ingestão de registros', 'Um registro enviado por outro sistema entra no inventário'],
   [/RF020 AC5/, 'Exportação MIABIS', 'A coleção cadastrada sai no formato do diretório MIABIS'],
   [/Cadastro integrado/, 'Cadastro integrado de amostras', 'Três passos, análise de qualidade e alocação no freezer'],
+  [/RNF027 an administrator/, 'Navegação por teclado', 'Login e menu lateral só com o teclado, cada foco visível'],
+  [/RNF010 an administrator/, 'Backup e teste de restauração', 'MongoDB, Neo4j e InfluxDB copiados, e a cópia verificada'],
 ];
 
 function captionFor(title: string): [string, string] {

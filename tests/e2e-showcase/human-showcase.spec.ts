@@ -2270,3 +2270,119 @@ test.describe('Human-paced e2e showcase reel — W10 files, ingestion and MIABIS
     }
   });
 });
+
+// W11 reel (#1474): the two W11 flows an operator sees in the UI.
+//
+//  - RNF027 C1/C2: an administrator signs in and reaches the Backup page by
+//    keyboard alone, every stop showing its focus, as rnf027-interface.spec.ts
+//    proves in three browsers.
+//  - RNF010 C1/C5: a backup run from the Backup page exports MongoDB, Neo4j
+//    and InfluxDB, and its restore test verifies every store. The page then
+//    shows the RPO and RTO the policy holds (RNF010 C2/C3).
+//
+// Deliberately not demoed: the request metrics, the platform alerts, the
+// monitoring runs, the availability record and the deep health route. They
+// are the Administrador's API (/api/monitoring/*, /api/availability,
+// /api/health) and no screen shows them, so the reel does not fabricate one.
+// The restore test has no UI either: it runs off camera through
+// POST /api/backup/restore-test on the backup the reel created, and its result
+// is asserted. The page's Restaurar button replaces the live database, so it
+// is never clicked.
+test.describe('Human-paced e2e showcase reel — W11 keyboard navigation and backup restore test', () => {
+  test('RNF027 an administrator signs in and reaches the Backup page by keyboard alone', async ({ page }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    // 1. The login form by keyboard: the username field takes focus on load,
+    // Tab moves to the password, Enter submits.
+    await page.goto('/login');
+    await expect(page.getByTestId('login-username-input')).toBeFocused();
+    await beat(page, MEDIUM);
+    await page.keyboard.type(testUser, { delay: 80 });
+    await beat(page, SMALL);
+    await page.keyboard.press('Tab');
+    await expect(page.getByTestId('login-password-input')).toBeFocused();
+    await page.keyboard.type(testPass, { delay: 60 });
+    await beat(page, SMALL);
+    await page.keyboard.press('Enter');
+    await page.waitForURL('**/system-management');
+    await expect(page.getByTestId('system-management-page')).toBeVisible();
+    await beat(page, LARGE);
+
+    // 2. The sidebar by keyboard, from its first link down to Backup, as
+    // rnf027-interface.spec.ts walks it. Each stop is centred so the caption
+    // never hides the focused link.
+    const backupLink = page.locator('aside#app-sidebar nav.sidebar-nav a[href="/backup"]');
+    await expect(backupLink).toBeVisible();
+    const firstNav = page.locator('aside#app-sidebar nav.sidebar-nav a').first();
+    await firstNav.focus();
+    await expect(firstNav).toBeFocused();
+    await beat(page, MEDIUM);
+    let reached = false;
+    for (let i = 0; i < 40; i += 1) {
+      await page.keyboard.press('Tab');
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.scrollIntoView({ block: 'center' }));
+      await beat(page, SMALL / 2);
+      if (await backupLink.evaluate((el) => el === document.activeElement)) {
+        reached = true;
+        break;
+      }
+    }
+    expect(reached).toBe(true);
+    await beat(page, MEDIUM);
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/\/backup$/);
+    await expect(page.getByRole('heading', { name: 'Gerenciamento de Backup' })).toBeVisible();
+    await beat(page, LARGE);
+  });
+
+  test('RNF010 an administrator runs a backup of every store and its restore test verifies it', async ({ page, request }) => {
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+
+    // 1. The backup run from the page.
+    await page.goto('/backup');
+    await expect(page.getByRole('heading', { name: 'Gerenciamento de Backup' })).toBeVisible();
+    await beat(page, LARGE);
+    const performed = page.waitForResponse((res) => res.url().includes('/api/backup/perform') && res.request().method() === 'POST');
+    await page.locator('.create-backup-button').click();
+    const run = (await (await performed).json()).data;
+    // The run names its folder by path; the table lists it by that folder's name.
+    const fileName = String(run.path).split(/[\\/]/).pop()!;
+    await expect(page.locator('.status-message.success')).toBeVisible({ timeout: 15_000 });
+    await beat(page, MEDIUM);
+
+    // 2. The run is listed with its state and checksum.
+    const row = page.locator('.backups-table tbody tr', { hasText: fileName });
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await expect(row.locator('.backup-status-badge')).toHaveAttribute('data-status', 'success');
+    await row.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // Off camera: the run exported every store, and its restore test verifies
+    // the checksum and each store's counts. No screen shows the restore test.
+    expect(run.stores.neo4j.status).toBe('exported');
+    expect(run.stores.influxdb.status).toBe('exported');
+    const restoreTest = await request.post(`${apiBaseURL}/api/backup/restore-test/${fileName}`, { headers });
+    expect(restoreTest.status(), await restoreTest.text()).toBe(200);
+    const result = (await restoreTest.json()).data;
+    expect(result.success, result.error).toBe(true);
+    expect(result.checksumVerified).toBe(true);
+    expect(result.stores.neo4j.status, result.stores.neo4j.error).toBe('verified');
+    expect(result.stores.influxdb.status, result.stores.influxdb.error).toBe('verified');
+
+    // 3. The policy's recovery targets, RPO and RTO, on the same page.
+    const rpo = page.locator('#backup-policy-rpo');
+    await rpo.scrollIntoViewIfNeeded();
+    await expect(rpo).toBeVisible();
+    await expect(page.locator('#backup-policy-rto')).toBeVisible();
+    await beat(page, LARGE);
+  });
+});
