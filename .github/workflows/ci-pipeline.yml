@@ -459,3 +459,22 @@ jobs:
           path: rnf002-out/
           if-no-files-found: ignore
           retention-days: 7
+
+  # #1563: once every job above is green on a push to the integration
+  # branch, publish the backend, worker and frontend images to GHCR tagged
+  # with the commit SHA (publish-images.yml). A pull request, a dispatch or
+  # a push to main publishes nothing.
+  publish-images:
+    name: Publish images to GHCR
+    needs:
+      - current-state-validation
+      - frontend-unit-tests
+      - backend-unit-tests
+      - dependency-audit
+      - e2e-tests
+      - identifier-lookup-budget
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/docker-e2e-backend-integration'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-images.yml
