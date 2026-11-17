@@ -1,5 +1,7 @@
 # Canonical Active Surface
 
+Superseded on 2026-11-17 by legacy-surface-inventory.md; kept as the 2026-07-08 record.
+
 Branch: `refactor/canonical-data-contracts`
 Date: `2026-07-08`
 
