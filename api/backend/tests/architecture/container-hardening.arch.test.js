@@ -638,3 +638,29 @@ test('RNF014 refuses bypass 8: a one-shot exemption without restart: "no" and a 
   }
   assert.throws(() => checkAll(fixture(REDIS, APP, job('    restart: "no"\n')), fixtureTree()), /job: healthcheck is missing/);
 });
+
+test('RNF014 refuses bypass 9: a secret build arg, ARG or ENV, a COPY of secret material, or a whole-context COPY without the .env exclusion', () => {
+  const withArgs = (args) => `  app:\n    build:\n      context: ./app\n      args:\n${args}${HARDENED}${LIMITS}${HEALTH}`;
+  checkAll(fixture(REDIS, withArgs('        NODE_ENV: production\n')), fixtureTree());
+  for (const args of ['        API_TOKEN: abc\n', '        - DB_PASSWORD=abc\n']) {
+    assert.throws(() => checkAll(fixture(REDIS, withArgs(args)), fixtureTree()), /app: a build arg must not carry a secret/, args);
+  }
+  const stage = (body) => ({ 'app/Dockerfile': `FROM node:22.23.4-alpine\nRUN addgroup -S app && adduser -S app -G app\nWORKDIR /app\n${body}USER app\n` });
+  for (const [body, error] of [
+    ['ARG NPM_TOKEN\n', /app\/Dockerfile: ARG NPM_TOKEN must not carry a secret/],
+    ['ENV JWT_SECRET=abc\n', /app\/Dockerfile: ENV JWT_SECRET must not carry a secret/],
+    ['COPY .env ./\n', /app\/Dockerfile: COPY \.env copies secret material/],
+    ['COPY --chown=app certs/server.pem ./\n', /app\/Dockerfile: COPY certs\/server\.pem copies secret material/],
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree(stage(body))), error, body);
+  }
+  const whole = (ignore) => ({ ...stage('COPY . .\n'), ...(ignore === null ? {} : { 'app/.dockerignore': ignore }) });
+  checkAll(fixture(REDIS, APP), fixtureTree(whole('node_modules\n.env\n.env.*\n')));
+  for (const [ignore, error] of [
+    [null, /app\/Dockerfile copies its whole context, so app\/\.dockerignore must exist/],
+    ['node_modules\n.env.*\n', /app\/\.dockerignore must exclude \.env: /],
+    ['node_modules\n.env\n', /app\/\.dockerignore must exclude \.env\.\*: /],
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree(whole(ignore))), error, String(ignore));
+  }
+});
