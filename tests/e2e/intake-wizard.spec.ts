@@ -268,6 +268,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   // consent in the graph). Neither the outbox payloads nor the consent node
   // and every node within two hops of it carry an identity key, nor the name
   // or birth date createRealParticipant wrote.
+  // RF023 AC9: no civil identity or PII reaches the outbox or the graph.
   test('AC#3: no participant identity fields appear in the Neo4j-facing outbox payload', async ({ request }) => {
     const admin = await realLogin(request);
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
@@ -324,6 +325,7 @@ test.describe('Participant identity segregation (RF005/RNF007) — real backend 
   // through the ingest endpoint appends no outbox event and reaches no graph
   // node. The consent signed after it, once ACTIVE in Neo4j, shows the worker
   // drained the outbox past the reading, so the zero counts are not a race.
+  // RF023 AC9: no raw TelemetryReading is projected.
   test('AC#3 (RNF019 C8): a raw telemetry reading reaches neither the outbox nor Neo4j', async ({ request }) => {
     const sensorId = `rnf019-c8-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     await bindSensor(sensorId);

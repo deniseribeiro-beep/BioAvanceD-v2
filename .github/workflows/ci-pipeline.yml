@@ -58,6 +58,8 @@ jobs:
       - name: Backend lint
         run: npm --prefix api/backend run lint
 
+      # RNF028 C4: CI runs the architecture tests here; the e2e gate runs and
+      # reads back each ConfigurationValidationRun (auth-access-security.spec.ts).
       - name: Backend architecture tests
         run: npm --prefix api/backend run test:architecture
 

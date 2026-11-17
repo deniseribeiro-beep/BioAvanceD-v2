@@ -698,6 +698,10 @@ test.describe('Security policy management (RF014) — real backend', () => {
   // by the whole stack, not a per-test fixture -- capture and restore it so
   // this test doesn't leave the live policy mutated for every other spec/
   // session sharing the same compose.test.yml stack.
+  // RF022 AC6, RNF023 C6, RNF028 C4, RNF031 C5: every candidate gets a
+  // ConfigurationValidationRun before activation and a refused one stays a
+  // draft; each change and the rollback record a ConfigurationChangeEvent;
+  // and this e2e gate reads each ConfigurationValidationRun back on CI.
   test('admin updates session/login/password/MFA policy — versioned, validated, and audited as critical (criteria 1,2,3,5,6,7)', async ({
     request,
   }) => {

@@ -774,6 +774,7 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     }
   });
 
+  // RNF031 C5: the bootstrap registers its FoundationDataRun.
   test('the bootstrap records an idempotent FoundationDataRun, not just ad-hoc upserts', async () => {
     const runs = await countFoundationDataRuns();
     expect(runs).toBeGreaterThan(0);
@@ -819,6 +820,7 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
   // ready ReadinessReport for that run. backend-app-test starts only on it
   // (FOUNDATION_READINESS_REQUIRED), so this suite running at all is the API
   // having passed that gate.
+  // RNF031 C5: the bootstrap registers its ReadinessReport.
   test('a ready ReadinessReport for the bootstrap run gates the API', async () => {
     const run = await latestFoundationDataRun();
     const report = await latestReadinessReport('test');
@@ -862,6 +864,7 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
 
   // #1304, plano §4 F1.2: the job registered the release this build follows,
   // once, with the invariant catalog bound to it (RF014 AC6, CFG-003).
+  // RNF031 C5: the bootstrap registers its CanonicalModelRelease.
   test('the bootstrap registered the CanonicalModelRelease and its invariant catalog', async () => {
     const { release, catalogs } = await governanceRegistry('release-2.0.0');
     expect(release).toMatchObject({ semanticVersion: '2.0.0', releaseStatus: 'active' });

@@ -46,6 +46,8 @@ test.afterAll(async () => {
   await mongoClient?.close();
 });
 
+// RNF018 C7: neither case relies on the client alone; the backend refuses
+// each quantity the UI refuses and nothing is written.
 test.describe('RNF018 AC1: each quantity check the UI makes, the backend makes too (#1525)', () => {
   // #1497 (RF004 AC2): the collection these specimens enter.
   let governed: GovernedCollection | null = null;
