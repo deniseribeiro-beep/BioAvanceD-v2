@@ -263,6 +263,28 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect((await resolved.json()).data).toMatchObject({ resolved: true, specimenId, containerId });
     expect(await countScanEvents(specimenId)).toBe(1);
 
+    // RNF018 C6: a resolved scan authorizes nothing. With the approval
+    // suspended the scan still resolves, yet the load it would feed is
+    // refused; presenting the scan's ScanEvent grants no custody and no
+    // other organization's load.
+    await setApprovalStatus(fixture.approvalId, 'suspended');
+    const suspendedScan = await post('/scan', techA, scan);
+    expect(suspendedScan.status(), await suspendedScan.text()).toBe(200);
+    const suspendedRead = (await suspendedScan.json()).data;
+    expect(suspendedRead).toMatchObject({ resolved: true, specimenId, containerId });
+    const evidence = { scanEventId: suspendedRead.scanEvent.scanEventId, correlationId: suspendedRead.scanEvent.correlationId };
+    expect(evidence.scanEventId).toBeTruthy();
+    const scannedLoad = await post(`/containers/${secondContainerId}/specimens`, techA, { specimenId, ...evidence });
+    expect(scannedLoad.status(), await scannedLoad.text()).toBe(422);
+    expect((await scannedLoad.json()).error).toBe('CUSTODY_INACTIVE');
+    await setApprovalStatus(fixture.approvalId, 'active');
+    const scannedCustody = await post('/custody', techA, { ...custodyBody, ...evidence });
+    expect(scannedCustody.status(), await scannedCustody.text()).toBe(403);
+    const scannedForeignLoad = await post(`/containers/${secondContainerId}/specimens`, techB, { specimenId, ...evidence });
+    expect(scannedForeignLoad.status(), await scannedForeignLoad.text()).toBe(403);
+    expect((await scannedForeignLoad.json()).error).toBe('SPECIMEN_OUT_OF_SCOPE');
+    expect(await countScanEvents(specimenId)).toBe(2);
+
     // RF016 AC5: code_128 and qr_code labels on the tube resolve like its
     // Data Matrix, another symbology is refused, and a rack's linear code
     // reads as a rack, not a container, leaving no ScanEvent.
@@ -282,7 +304,7 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
       expect(read.status(), await read.text()).toBe(200);
       expect((await read.json()).data).toMatchObject({ resolved: true, specimenId, containerId });
     }
-    expect(await countScanEvents(specimenId)).toBe(3);
+    expect(await countScanEvents(specimenId)).toBe(4);
     // #1528: the rack's code is issued through its own route, in code_128
     // only, and a container's id is not a rack.
     const rackLabelBody = { ...labelBody, encodedValue: rackCode, symbology: 'code_128', carrierPlacement: 'front', printBatchId: `batch-rack-${suffix}` };
@@ -300,7 +322,7 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     const rackRead = (await rackScan.json()).data;
     expect(rackRead).toMatchObject({ resolved: false, reason: 'NOT_A_CONTAINER' });
     expect(rackRead.label).toMatchObject({ targetType: 'storage_rack', targetId: rackId, symbology: 'code_128' });
-    expect(await countScanEvents(specimenId)).toBe(3);
+    expect(await countScanEvents(specimenId)).toBe(4);
 
     // RF017 AC6/AC8: the scanner is moved, then retired; its history keeps
     // all four events in order, and a retired scanner is refused.
@@ -319,7 +341,7 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     const afterRetire = await post('/scan', techA, scan);
     expect(afterRetire.status(), await afterRetire.text()).toBe(422);
     expect((await afterRetire.json()).error).toBe('DEVICE_UNUSABLE');
-    expect(await countScanEvents(specimenId)).toBe(3);
+    expect(await countScanEvents(specimenId)).toBe(4);
 
     // RF021 AC6: with the approval suspended, the specimen cannot be loaded
     // again; restored, it can.
