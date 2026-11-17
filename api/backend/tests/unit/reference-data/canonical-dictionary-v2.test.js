@@ -32,6 +32,7 @@ describe('canonical-dictionary catalog v2.0.0 (docs/extracted-v2.0.0/dict-DICION
       missingRequiredFieldIds: [],
       unknownChangeStatusIds: [],
       missingHistoricalIds: [],
+      reassignedHistoricalIds: [],
       verified: true,
     });
     for (const element of v1.loadCanonicalDictionary()) {
@@ -58,6 +59,21 @@ describe('canonical-dictionary catalog v2.0.0 (docs/extracted-v2.0.0/dict-DICION
     expect(result.duplicateIds).toEqual([catalog[0].elementId]);
     expect(result.unknownChangeStatusIds).toEqual([catalog[0].elementId]);
     expect(result.verified).toBe(false);
+  });
+
+  it('reports a historical id given a new meaning, and passes a rename (RNF023 C3)', () => {
+    const catalog = v2.loadCanonicalDictionary();
+    const reused = catalog.map((el) => (el.elementId === 'ELM-0357' ? { ...el, field: 'otherField' } : el));
+    const result = v2.checkCompleteness(reused);
+    expect(result.reassignedHistoricalIds).toEqual(['ELM-0357']);
+    expect(result.verified).toBe(false);
+
+    const renamed = catalog.map((el) => (
+      el.elementId === 'ELM-0357' ? { ...el, field: 'otherField', changeStatus: 'renamed' } : el
+    ));
+    const renamedResult = v2.checkCompleteness(renamed);
+    expect(renamedResult.reassignedHistoricalIds).toEqual([]);
+    expect(renamedResult.verified).toBe(true);
   });
 
   it('keeps the v2.0.0 columns: an element reads as the dictionary row it came from', () => {

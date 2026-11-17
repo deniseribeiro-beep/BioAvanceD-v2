@@ -783,6 +783,7 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
   // RF022 AC1 (Requisitos v4.0.0): Foundation validates the approved v2.0.0
   // dictionary, 1644 elements including the 929 historical ones, in the 146
   // entities/artefacts of plano F1.3 (RNF031 AC1).
+  // RNF023 C3: no historical id is reused for a new meaning (each keeps its v1.3.0 entity and field).
   test('the bootstrap run validated the v2.0.0 dictionary: 1644 elements in 146 entities, 929 historical', async () => {
     const run = await latestFoundationDataRun();
     expect(run).not.toBeNull();
@@ -795,6 +796,7 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       expectedEntityTotal: 146,
       entityTotal: 146,
       missingHistoricalIds: [],
+      reassignedHistoricalIds: [],
       verified: true,
     });
   });

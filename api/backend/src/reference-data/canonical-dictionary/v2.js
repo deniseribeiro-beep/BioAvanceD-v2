@@ -47,6 +47,17 @@ function checkCompleteness(elements = catalog, historical = historicalCatalog) {
   const missingHistoricalIds = historical
     .map((element) => element.elementId)
     .filter((id) => !uniqueIds.has(id));
+  // RNF023 C3: a historical id keeps its meaning, the same entity and the same
+  // field unless its row is marked renamed; one absent is in missingHistoricalIds.
+  const byId = new Map(elements.map((element) => [element.elementId, element]));
+  const reassignedHistoricalIds = historical
+    .filter((old) => {
+      const current = byId.get(old.elementId);
+      return Boolean(current)
+        && (current.entity !== old.entity
+          || (current.field !== old.field && current.changeStatus !== 'renamed'));
+    })
+    .map((old) => old.elementId);
   const entityTotal = new Set(elements.map((element) => element.entity).filter(Boolean)).size;
 
   return {
@@ -62,6 +73,7 @@ function checkCompleteness(elements = catalog, historical = historicalCatalog) {
     missingRequiredFieldIds,
     unknownChangeStatusIds,
     missingHistoricalIds,
+    reassignedHistoricalIds,
     verified: uniqueIds.size === EXPECTED_TOTAL_ELEMENTS
       && elements.length === EXPECTED_TOTAL_ELEMENTS
       && historical.length === EXPECTED_HISTORICAL_ELEMENTS
@@ -69,6 +81,7 @@ function checkCompleteness(elements = catalog, historical = historicalCatalog) {
       && missingRequiredFieldIds.length === 0
       && unknownChangeStatusIds.length === 0
       && missingHistoricalIds.length === 0
+      && reassignedHistoricalIds.length === 0
       && entityTotal === EXPECTED_ENTITY_TOTAL,
   };
 }
