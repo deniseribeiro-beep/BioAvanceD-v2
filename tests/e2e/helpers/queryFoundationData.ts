@@ -180,6 +180,12 @@ export async function countReferenceImportStagingForRun(referenceImportRunId: st
   return db.collection('referenceImportStaging').countDocuments({ referenceImportRunId });
 }
 
+/** The staging rows one import run wrote, as documents (entityType and candidate). */
+export async function referenceImportStagingForRun(referenceImportRunId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('referenceImportStaging').find({ referenceImportRunId }).toArray();
+}
+
 export async function findReferenceCoverageManifest(referenceCoverageManifestId: string): Promise<Record<string, any> | null> {
   const db = await getDb();
   return db.collection('referenceCoverageManifests').findOne({ referenceCoverageManifestId });

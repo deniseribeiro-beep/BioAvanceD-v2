@@ -1184,6 +1184,38 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows[0].payload.configurationReleaseId).toBeNull();
   });
 
+  // The v2.0.0 release defines Specimen, not Sample (a v1.3.0 name).
+  test('RNF028 C7: an entityType outside the approved release (Sample, a v1.3.0 name) is refused 422, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
+    const sourceRecordId = `rnf028-c7-${Date.now()}-sample`;
+    // The name is fixed, so the stack's persistent logs may already hold rows
+    // for it: the new row is counted by difference.
+    const before = await findIngestionRefusalRows('Sample');
+
+    const res = await ingest(request, {
+      entityType: 'Sample',
+      payload: { sampleId: sourceRecordId, specimenType: 'blood' },
+      provenance: provenance(sourceRecordId),
+    });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_TARGET_UNSUPPORTED');
+    expect(body.details).toEqual(expect.arrayContaining([expect.stringContaining('Sample')]));
+    expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+    // The route awaits this row before it answers. Refused before the
+    // releases are read, so the row names none.
+    const after = await findIngestionRefusalRows('Sample');
+    expect(after).toHaveLength(before.length + 1);
+    const known = new Set(before.map((row) => String(row._id)));
+    const fresh = after.filter((row) => !known.has(String(row._id)));
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]).toMatchObject({ status: 'warning', severity: 'warning' });
+    expect(fresh[0].payload.canonicalModelReleaseId).toBeNull();
+    expect(fresh[0].payload.configurationReleaseId).toBeNull();
+  });
+
   test('RF029 AC10: a Técnico is refused 403, persists nothing, and the denial is audited as FORBIDDEN', async ({ request }) => {
     const sourceRecordId = `rf029-e2e-${Date.now()}-forbidden`;
     const username = `tecnico.rf029.${Date.now()}`;

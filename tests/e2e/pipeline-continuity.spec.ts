@@ -66,6 +66,7 @@ import {
   referenceImportRunsForRelease,
   referenceImportIssuesForRun,
   countReferenceImportStagingForRun,
+  referenceImportStagingForRun,
   findReferenceCoverageManifest,
   findDataQualityAssessment,
   terminologyConceptsBySystemUri,
@@ -1492,6 +1493,56 @@ test.describe('Reference release lifecycle (RF028 AC1-9, RNF032 AC1-9) — real 
     expect((await promoted.json()).error).toBe('coverage_incomplete');
     expect((await findReferenceRelease(data.releaseId))!.releaseStatus).toBe('approved');
     expect(await countTerminologyConceptsBySystemUri(gapSystemUri)).toBe(0);
+  });
+});
+
+// RNF028 C7 (#1574): an importer creates no entity or field outside the
+// approved release. Own describe, own dataset, no state shared with the
+// serial lifecycle describe above.
+test.describe('Reference importer refuses an entity outside the approved release (RNF028 C7) — real backend', () => {
+  test.afterAll(async () => {
+    await closeFoundationDb();
+  });
+
+  const datasetCode = `E2E_RNF028_C7_${Date.now()}`;
+
+  test('a record of an entity outside the release is refused as an issue and only TerminologyConcept and TerminologyRelation rows are staged, none carrying its fields (RNF028 C7)', async ({ request }) => {
+    const records: Record<string, unknown>[] = [
+      { id: 'HP:0000001', lbl: 'All', is_a: [], synonyms: [], obsolete: false },
+      // A release term carrying a field outside the release.
+      { id: 'HP:0000118', lbl: 'Phenotypic abnormality', is_a: ['HP:0000001'], synonyms: [], obsolete: false, sampleId: 'E2E-RNF028-C7-S1' },
+      // A record of an entity outside the release.
+      { entityType: 'Sample', sampleId: 'E2E-RNF028-C7-S1', patientId: 'E2E-RNF028-C7-P1' },
+    ];
+    const response = await postReferenceImportSupport(request, 'run', { datasetCode, datasetVersion: 'e2e-v1', records });
+    expect(response.status(), await response.text()).toBe(200);
+    const { data } = await response.json();
+    expect(data.run.runStatus).toBe('completed');
+    expect(data.approved).toBe(true);
+
+    const runs = await referenceImportRunsForRelease(data.releaseId);
+    const run = runs.find((candidate) => candidate.referenceImportRunId === data.run.referenceImportRunId);
+    expect(run).toBeDefined();
+    expect(run!.recordsRead).toBe(3);
+    expect(run!.recordsValidated).toBe(2);
+    expect(run!.recordsRejected).toBe(1);
+
+    const issues = await referenceImportIssuesForRun(run!.referenceImportRunId);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].errorCode).toBe('MISSING_CODE');
+    expect(issues[0].rawValue.entityType).toBe('Sample');
+
+    // Two concepts and one is_a relation; the Sample record stages nothing.
+    const staged = await referenceImportStagingForRun(run!.referenceImportRunId);
+    expect(staged).toHaveLength(3);
+    expect([...new Set(staged.map((row) => row.entityType))].sort()).toEqual(['TerminologyConcept', 'TerminologyRelation']);
+    for (const row of staged) {
+      for (const field of ['sampleId', 'patientId', 'entityType']) {
+        expect(Object.keys(row.candidate), `${row.entityType} candidate`).not.toContain(field);
+      }
+    }
+
+    expect(await countTerminologyConceptsBySystemUri(`urn:bioavanced:e2e:${datasetCode}`)).toBe(0);
   });
 });
 
