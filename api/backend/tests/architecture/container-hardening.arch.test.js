@@ -8,9 +8,10 @@
 //   C2  no secret is baked into an image: a build context that copies the
 //       whole tree excludes .env files, and no build arg, ENV or COPY names
 //       a secret;
-//   C3  every service has CPU and memory limits, and every service but the
+//   C3  every service has CPU and memory limits, every service but the
 //       four official-image data stores runs read_only, with cap_drop ALL
-//       and a non-root user;
+//       and a non-root user, and every service but a one-shot job declares
+//       a health check that runs a command;
 //   C7  the backend refuses to start without a ready ReadinessReport, and
 //       the API and both workers start only after the Foundation job
 //       completes. The refusal itself is proven in
@@ -54,6 +55,12 @@ const OFFICIAL_IMAGE_SERVICES = ['mongodb', 'neo4j', 'influxdb', 'redis'];
 const TOP_LEVEL_KEYS = ['name', 'services', 'volumes'];
 const SERVICE_KEYS = ['image', 'build', 'restart', 'init', 'user', 'deploy', 'environment', 'volumes', 'healthcheck', 'command', 'env_file', 'depends_on', 'read_only', 'cap_drop', 'tmpfs', 'ports'];
 const BUILD_KEYS = ['context', 'dockerfile', 'args'];
+
+// The keys a healthcheck block may hold. disable, or any other key, refuses.
+const HEALTHCHECK_KEYS = ['test', 'interval', 'timeout', 'retries', 'start_period'];
+// A health check test in exec form that runs a command: ["CMD", "<cmd>", ...]
+// or ["CMD-SHELL", "<cmd>"]. ["NONE"], a bare string or an empty list refuses.
+const HEALTHCHECK_TEST = /^\["(CMD|CMD-SHELL)",[ ]*"[^"].*\]$/;
 
 // An exact x.y.z version (with an optional suffix such as -alpine), or a
 // sha256 digest, or both.
@@ -251,6 +258,41 @@ function checkLimits(text) {
   }
 }
 
+// The services another service waits for with condition:
+// service_completed_successfully, which compose starts only after they
+// exit 0.
+function awaitedToComplete(all) {
+  const awaited = new Set();
+  for (const { name, keys } of all) {
+    if (!keys.has('depends_on')) continue;
+    const deps = mapping(block(keys.get('depends_on'), `${name}: depends_on`), 6, `${name}: depends_on`);
+    for (const [dep, entry] of deps) {
+      const condition = mapping(block(entry, `${name}: depends_on.${dep}`), 8, `${name}: depends_on.${dep}`).get('condition');
+      if (dep !== name && condition?.value === 'service_completed_successfully') awaited.add(dep);
+    }
+  }
+  return awaited;
+}
+
+// A one-shot job is exempt by its shape, never its name: it says restart:
+// "no" and another service waits for it to complete successfully. Every
+// other service declares a healthcheck block whose test runs a command.
+// Returns the services it checked.
+function checkHealth(text) {
+  const all = services(text);
+  const awaited = awaitedToComplete(all);
+  const checked = [];
+  for (const { name, keys } of all) {
+    if (unquote(keys.get('restart')?.value ?? '') === 'no' && awaited.has(name)) continue;
+    const health = mapping(block(keys.get('healthcheck'), `${name}: healthcheck`), 6, `${name}: healthcheck`);
+    for (const k of health.keys()) assert.ok(HEALTHCHECK_KEYS.includes(k), `${name}: healthcheck key ${k} is not modelled by this test`);
+    assert.ok(health.has('test'), `${name}: healthcheck.test is missing`);
+    assert.match(health.get('test').value, HEALTHCHECK_TEST, `${name}: healthcheck.test must run a command as ["CMD", ...] or ["CMD-SHELL", ...]`);
+    checked.push(name);
+  }
+  return checked;
+}
+
 // True when the arguments of an adduser/useradd name a uid that is not a
 // plain non-zero number, or allow a non-unique uid (-o), in any spelling:
 // separate words, a combined short-flag cluster (-Du0, -ou 0), quotes or
@@ -379,6 +421,7 @@ function checkAll(text, tree) {
   checkSecrets(text, tree);
   checkLimits(text);
   checkPrivilege(text, tree);
+  checkHealth(text);
 }
 
 test('RNF014 C1: every compose.prod.yml image is pinned by version or digest', () => {
@@ -403,6 +446,10 @@ test('RNF014 C3: every service but the official-image data stores runs read_only
     assert.ok(parsed.has(name), `${name} is listed as an official-image service but compose.prod.yml has none`);
   }
   checkPrivilege(read(COMPOSE_PROD), repoTree);
+});
+
+test('RNF014 C3: every compose.prod.yml service but a one-shot job declares a health check that runs a command', () => {
+  assert.ok(checkHealth(read(COMPOSE_PROD)).length > 0, 'compose.prod.yml must run at least one long-running service');
 });
 
 test('RNF014 C7: the backend and both workers require a ready ReadinessReport and wait for the Foundation job', () => {
@@ -459,13 +506,14 @@ function fixtureTree(files = {}) {
 }
 const LIMITS = '    deploy:\n      resources:\n        limits:\n          cpus: "1"\n          memory: 1g\n';
 const HARDENED = '    read_only: true\n    cap_drop: ["ALL"]\n';
-const REDIS = `  redis:\n    image: redis:7.4.11-alpine\n${LIMITS}`;
-const APP = `  app:\n    build:\n      context: ./app\n      dockerfile: Dockerfile\n${HARDENED}${LIMITS}`;
+const HEALTH = '    healthcheck:\n      test: ["CMD", "true"]\n';
+const REDIS = `  redis:\n    image: redis:7.4.11-alpine\n${LIMITS}${HEALTH}`;
+const APP = `  app:\n    build:\n      context: ./app\n      dockerfile: Dockerfile\n${HARDENED}${LIMITS}${HEALTH}`;
 const fixture = (...services) => `name: fixture\n\nservices:\n${services.join('\n')}\nvolumes:\n  data:\n`;
 
 test('RNF014 fixtures: the minimal hardened stack passes every check', () => {
   checkAll(fixture(REDIS, APP), fixtureTree());
-  checkAll(fixture(REDIS, `  app:\n    image: example/app:1.2.3\n    user: "10001:10001"\n${HARDENED}${LIMITS}`), fixtureTree());
+  checkAll(fixture(REDIS, `  app:\n    image: example/app:1.2.3\n    user: "10001:10001"\n${HARDENED}${LIMITS}${HEALTH}`), fixtureTree());
 });
 
 test('RNF014 refuses bypass 1: a service name with an underscore, dot, capital, quote or trailing comment', () => {
@@ -554,8 +602,39 @@ test('RNF014 refuses bypass 5: an image-only service outside the exempt data sto
 });
 
 test('RNF014 refuses bypass 6: the short form build: ./dir', () => {
-  const short = `  app:\n    build: ./app\n${HARDENED}${LIMITS}`;
+  const short = `  app:\n    build: ./app\n${HARDENED}${LIMITS}${HEALTH}`;
   checkAll(fixture(REDIS, short), fixtureTree());
   assert.throws(() => checkAll(fixture(REDIS, short), fixtureTree({ 'app/Dockerfile': 'FROM node:latest\nRUN adduser -S app\nUSER app\n' })), /FROM node:latest must carry/);
   assert.throws(() => checkAll(fixture(REDIS, short), fixtureTree({ 'app/Dockerfile': 'FROM node:22.23.4-alpine\n' })), /sets a user, so it runs as root/);
+});
+
+test('RNF014 refuses bypass 7: a long-running service with no health check, or one that runs nothing or is turned off', () => {
+  const app = (health) => `  app:\n    build: ./app\n${HARDENED}${LIMITS}${health}`;
+  for (const [health, error] of [
+    ['', /app: healthcheck is missing/],
+    ['    healthcheck: {}\n', /app: healthcheck must be a block/],
+    ['    healthcheck:\n      interval: 10s\n', /app: healthcheck\.test is missing/],
+    ['    healthcheck:\n      test: ["NONE"]\n', /app: healthcheck\.test must run a command/],
+    ['    healthcheck:\n      test: ["CMD"]\n', /app: healthcheck\.test must run a command/],
+    ['    healthcheck:\n      test: curl -f http://localhost/\n', /app: healthcheck\.test must run a command/],
+    ['    healthcheck:\n      test: ["CMD", "true"] # a comment\n', /app: healthcheck\.test must run a command/],
+    ['    healthcheck:\n      test: ["CMD", "true"]\n      disable: true\n', /app: healthcheck key disable is not modelled/],
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, app(health)), fixtureTree()), error, health);
+  }
+});
+
+test('RNF014 refuses bypass 8: a one-shot exemption without restart: "no" and a service waiting for it to complete', () => {
+  const job = (restart) => `  job:\n    build: ./app\n${restart}${HARDENED}${LIMITS}`;
+  const waitsFor = (condition) => `  app:\n    build: ./app\n${HARDENED}${LIMITS}${HEALTH}    depends_on:\n      job:\n        condition: ${condition}\n`;
+  checkAll(fixture(REDIS, waitsFor('service_completed_successfully'), job('    restart: "no"\n')), fixtureTree());
+  for (const [restart, condition] of [
+    ['    restart: "no"\n', 'service_started'],
+    ['    restart: "no"\n', 'service_healthy'],
+    ['    restart: unless-stopped\n', 'service_completed_successfully'],
+    ['', 'service_completed_successfully'],
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, waitsFor(condition), job(restart)), fixtureTree()), /job: healthcheck is missing/, `${restart} ${condition}`);
+  }
+  assert.throws(() => checkAll(fixture(REDIS, APP, job('    restart: "no"\n')), fixtureTree()), /job: healthcheck is missing/);
 });
