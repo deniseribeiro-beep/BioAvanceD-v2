@@ -23,11 +23,22 @@
  * inexistente como no-op, então uma segunda execução não altera nada — mesma
  * convenção de migrateRoleAssignmentScopes.js, sem flag de "já migrado".
  *
+ * Rollback: `npm run migrate:security-config-keys -- --rollback`
+ * (rollbackSecurityConfigCanonicalKeys) aplica o $rename inverso de cada
+ * chave e recria o grupo metadata. Uma chave cujas duas grafias estão
+ * gravadas fica como está e é listada em conflicts. O inverso é exato
+ * salvo onde o documento já guardava as duas grafias antes da migração:
+ * o $rename da migração manteve só o valor da antiga. Só faz sentido junto
+ * com o código anterior ao #953, que lia as chaves antigas; com o código
+ * atual o próximo save volta a gravar as canônicas. Idempotente: uma
+ * segunda execução não encontra chave canônica e não escreve nada.
+ *
  * Nota: o documento é o singleton { _id: 'main' } e só existe onde a tela de
  * Segurança já foi salva alguma vez (getConfig o cria sob demanda). Não
  * encontrá-lo é o resultado esperado num ambiente novo, não um erro.
  *
  * Uso: node api/backend/src/scripts/migrateSecurityConfigCanonicalKeys.js
+ * Uso: node api/backend/src/scripts/migrateSecurityConfigCanonicalKeys.js --rollback
  */
 
 const { MongoClient } = require('mongodb');
@@ -43,7 +54,23 @@ const RENAMES = {
   'metadata.lastUpdatedBy': 'lastUpdatedBy'
 };
 
-async function migrateSecurityConfigCanonicalKeys() {
+// Caminho pontuado presente como propriedade própria em cada nível.
+function has(doc, dotted) {
+  let node = doc;
+  for (const part of dotted.split('.')) {
+    if (!node || typeof node !== 'object' || !Object.prototype.hasOwnProperty.call(node, part)) return false;
+    node = node[part];
+  }
+  return true;
+}
+
+// Com um db injetado, usa a coleção dele sem conectar nem fechar; sem db,
+// conecta pelo .env, executa e fecha a conexão.
+async function withSecurityConfig(db, fn) {
+  if (db) {
+    return fn(db.collection('security_config'));
+  }
+
   let client;
 
   try {
@@ -61,7 +88,20 @@ async function migrateSecurityConfigCanonicalKeys() {
     await client.connect();
     console.log('Conectado ao MongoDB');
 
-    const configCollection = client.db(dbName).collection('security_config');
+    return await fn(client.db(dbName).collection('security_config'));
+  } catch (error) {
+    console.error('Erro na migração:', error);
+    throw error;
+  } finally {
+    if (client) {
+      await client.close();
+      console.log('Conexão fechada');
+    }
+  }
+}
+
+async function migrateSecurityConfigCanonicalKeys({ db } = {}) {
+  return withSecurityConfig(db, async (configCollection) => {
     const current = await configCollection.findOne({ _id: 'main' });
 
     if (!current) {
@@ -106,27 +146,61 @@ async function migrateSecurityConfigCanonicalKeys() {
 
     console.log(`\nMigração concluída! ${pending.length} chave(s) renomeada(s), metadata ${metadataRemoved ? 'removido' : 'não removido'}`);
     return { documentFound: true, keysRenamed: pending.length, metadataRemoved };
-  } catch (error) {
-    console.error('Erro na migração:', error);
-    throw error;
-  } finally {
-    if (client) {
-      await client.close();
-      console.log('Conexão fechada');
+  });
+}
+
+async function rollbackSecurityConfigCanonicalKeys({ db } = {}) {
+  return withSecurityConfig(db, async (configCollection) => {
+    const current = await configCollection.findOne({ _id: 'main' });
+
+    if (!current) {
+      console.log('Nenhum documento security_config { _id: "main" } encontrado — nada a reverter.');
+      return { documentFound: false, keysRestored: 0, conflicts: [] };
     }
-  }
+
+    const conflicts = [];
+    const pending = [];
+    for (const [from, to] of Object.entries(RENAMES)) {
+      if (!has(current, to)) continue;
+      // As duas grafias gravadas: o $rename inverso sobrescreveria a antiga.
+      if (has(current, from)) { conflicts.push(to); continue; }
+      pending.push([to, from]);
+    }
+
+    for (const key of conflicts) {
+      console.warn(`Conflito: ${key} e a grafia antiga estão gravadas — preservado para inspeção manual.`);
+    }
+
+    if (pending.length === 0) {
+      console.log('Nenhuma chave canônica a reverter.');
+    } else {
+      // O $rename recria o grupo metadata removido pela migração.
+      await configCollection.updateOne(
+        { _id: 'main' },
+        { $rename: Object.fromEntries(pending) }
+      );
+      for (const [to, from] of pending) {
+        console.log(`  ${to} -> ${from}`);
+      }
+    }
+
+    console.log(`\nRollback concluído! ${pending.length} chave(s) restaurada(s), ${conflicts.length} conflito(s)`);
+    return { documentFound: true, keysRestored: pending.length, conflicts };
+  });
 }
 
 if (require.main === module) {
-  migrateSecurityConfigCanonicalKeys()
+  const rollback = process.argv.includes('--rollback');
+  const run = rollback ? rollbackSecurityConfigCanonicalKeys : migrateSecurityConfigCanonicalKeys;
+  run()
     .then(() => {
-      console.log('Migração finalizada com sucesso');
+      console.log(rollback ? 'Rollback finalizado com sucesso' : 'Migração finalizada com sucesso');
       process.exit(0);
     })
     .catch((error) => {
-      console.error('Erro na migração:', error);
+      console.error(rollback ? 'Erro no rollback:' : 'Erro na migração:', error);
       process.exit(1);
     });
 }
 
-module.exports = { migrateSecurityConfigCanonicalKeys, RENAMES };
+module.exports = { migrateSecurityConfigCanonicalKeys, rollbackSecurityConfigCanonicalKeys, RENAMES };
