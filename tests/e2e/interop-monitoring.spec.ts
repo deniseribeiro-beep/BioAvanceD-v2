@@ -31,6 +31,7 @@ import {
   findFhirImportAuditLogs,
   removeFhirImportFixtures,
   closeFhirImportDb,
+  listFhirNamedCollections,
 } from './helpers/queryFhirImport';
 import { queryTelemetryReadingPoints } from './helpers/queryInflux';
 import { findTelemetryIngestionEvent, findTelemetryValidationIssues, closeIngestionDb } from './helpers/queryIngestion';
@@ -1331,6 +1332,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
 
   // #1478, RNF024 AC1-AC3: the FHIR export carries each record's canonical
   // identifier, validates as R4 under its mapping, and writes nothing back.
+  // RNF031 C8 (FHIR is the boundary): the export writes nothing back, and the stack's database holds no FHIR copy of a record.
   test('exports a Study and a WorkflowRun as FHIR R4 carrying their canonical identifiers, writing neither (RNF024 AC1, AC2, AC3)', async ({
     request,
   }) => {
@@ -1409,6 +1411,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       const lineageData = (await lineageExport.json()).data;
       expect(lineageData.lineage.workflowRunId).toBe(workflowRunId);
       expect(lineageData.bundle.entry[0].resource.id).toBe(workflowRunId);
+      expect((await listFhirNamedCollections()).filter((name) => name !== 'fhirProfileRegistries')).toEqual([]);
     } finally {
       await request.delete(`${apiBaseURL}/api/studies/${studyId}`, { headers });
       if (workflowRunId) await request.delete(`${apiBaseURL}/api/workflow-runs/${workflowRunId}`, { headers });
