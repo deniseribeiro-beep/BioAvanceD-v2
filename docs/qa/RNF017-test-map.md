@@ -67,7 +67,7 @@ The release lists no negative governance cases either; this set is an inference,
 | Quantity | RF006 AC3, AC4 | `tests/e2e/specimen-quality-inventory.spec.ts` | `moves quantityStatus to partial then depleted while specimenStatus stays available, then closes on validated consumption (criteria 2, 3)` | proved |
 | Destination | RF006 AC5; RF026 AC1, AC3, AC4 | `tests/e2e/specimen-quality-inventory.spec.ts` | `records a disposition action linked to a real retention policy, with method/date/responsible/affected items preserved (criteria 1, 3, 4)` | proved |
 | Labels | RF016 AC8 | `tests/e2e/rnf007-identity-minimization.spec.ts` | `system-generated labels and print jobs carry only opaque codes, never civil identity (RNF007 AC4, RNF022 AC6, RF016 AC8)` | proved |
-| PII | RF005 AC3; RF023 AC9 | `tests/e2e/intake-wizard.spec.ts` | `AC#3: no participant identity fields appear in the Neo4j-facing outbox payload` | proved |
+| PII | RF005 AC3; RF023 AC9 | `tests/e2e/participant-identity-segregation.spec.ts` | `AC#3: no participant identity fields appear in the Neo4j-facing outbox payload` | proved |
 
 ## C8: idempotence, checkpoint, quarantine, outbox, reconciliation, promotion, rollback
 
