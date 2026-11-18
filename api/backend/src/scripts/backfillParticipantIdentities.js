@@ -1,3 +1,16 @@
+/**
+ * Creates a ParticipantIdentity for each Patient that has none, then moves
+ * the Patient's contact fields onto its identity and checks parity.
+ *
+ * One-way: no rollback. The contact move covers email, phone and the
+ * representative name, email, identity document and phone; it overwrites an
+ * identity's differing value with the Patient's (also unsetting the old
+ * `<field>Encrypted` envelope), unsets the Patient copy (and the Patient's
+ * representativeIdentityDocumentEncrypted) and re-encrypts
+ * plaintext contacts on the identities; no old value is kept. The identities
+ * it inserts cannot be told from those patient.service.js has written since.
+ * Undo is restoring patients and participantIdentities from a backup.
+ */
 const { connectDB, closeConnection } = require('../database/mongo');
 const {
   backfillParticipantIdentities,
