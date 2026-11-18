@@ -664,3 +664,358 @@ test('RNF014 refuses bypass 9: a secret build arg, ARG or ENV, a COPY of secret 
     assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree(whole(ignore))), error, String(ignore));
   }
 });
+
+// RNF014 C4 and C5 (#1569). Both checks are regression guards over the forms
+// listed here, not a proof that no other form exists.
+//
+// C4, one family of artifacts for every environment. Read in every root
+// compose file, a name compose*.yml, compose*.yaml, docker-compose*.yml or
+// docker-compose*.yaml (COMPOSE_FILE): each service's image: line and its build context, dockerfile
+// and target (the block form, or the short form build: <dir>); in each
+// Dockerfile those builds name, its FROM lines; and in
+// .github/workflows/publish-images.yml, each matrix entry's image, context,
+// file and target. It holds that
+//   - a deployable component (a build context compose.prod.yml builds) is
+//     built in every environment from a Dockerfile in that same context whose
+//     base images are among the ones compose.prod.yml's Dockerfile for that
+//     context uses, and no other context is built, but for the listed test
+//     tooling in compose.test.yml;
+//   - every third-party image repository, compose image: and Dockerfile FROM
+//     alike, carries one and the same version in every file;
+//   - each published-image overlay (<base>.images.yml or <base>.images.yaml)
+//     points a service only at an image that publish-images.yml builds from
+//     that service's own build context, dockerfile and target in <base>.yml
+//     or <base>.yaml.
+//
+// C5, Kubernetes stays optional. Read in the root compose files and
+// Dockerfile*, the Dockerfiles under api/backend and frontend, the three
+// package.json files, and every file under scripts/, infra/ and
+// .github/workflows/: the words kubectl, kubernetes, k8s, helm, kustomize,
+// kustomization and minikube (whole words, any case), a line that opens with
+// apiVersion:, and a file named Chart.yaml or kustomization.yaml. Any hit
+// fails: nothing the stack is built, tested or deployed with may need
+// Kubernetes. The compose stack itself runs without it, as the checks above
+// read.
+
+const COMPOSE_FILE = /^(docker-)?compose[A-Za-z0-9_.-]*\.ya?ml$/;
+// A UTF-8 byte order mark some editors write at a file's start.
+const stripBom = (text) => text.replace(/^﻿/, '');
+const PUBLISH_IMAGES = '.github/workflows/publish-images.yml';
+const PUBLISHED_IMAGE = /^ghcr\.io\/deniseribeiro-beep\/(bioavanced-[a-z-]+):\$\{IMAGE_TAG:\?[^}]*\}$/;
+// The only builds outside a deployable context: test tooling, by file, by
+// service, by context and dockerfile.
+const TEST_TOOLING = [{ file: 'compose.test.yml', service: 'playwright-runner', dir: '.', dockerfile: 'Dockerfile.playwright' }];
+
+const KUBERNETES_WORD = /\b(kubectl|kubernetes|k8s|helm|kustomize|kustomization|minikube)\b/i;
+const KUBERNETES_MANIFEST_LINE = /^apiVersion:/m;
+const KUBERNETES_FILE = /^(Chart\.yaml|kustomization\.ya?ml)$/i;
+
+// The root tree for C4 and C5, as the checks read it; a fixture passes its own.
+const deployTree = {
+  read: repoTree.read,
+  exists: repoTree.exists,
+  // The files directly in a directory, '.' for the repo root.
+  files: (dir) => fs.readdirSync(path.resolve(REPO_ROOT, dir), { withFileTypes: true }).filter((e) => e.isFile())
+    .map((e) => (dir === '.' ? e.name : path.posix.join(dir, e.name))),
+  walk: (rel) => {
+    const out = [];
+    const visit = (dir) => {
+      const abs = path.resolve(REPO_ROOT, dir);
+      if (!fs.existsSync(abs)) return;
+      for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+        const child = path.posix.join(dir, e.name);
+        if (e.isDirectory()) visit(child);
+        else if (e.isFile()) out.push(child);
+      }
+    };
+    visit(rel);
+    return out;
+  },
+};
+
+// A lenient line scan of any compose file, base or overlay: services at two
+// spaces under services:, each one's image: and build: at four, and a build
+// block's context, dockerfile and target at six. A service line it cannot
+// read refuses.
+function composeServices(text, where) {
+  const out = [];
+  let inServices = false;
+  let svc = null;
+  let inBuild = false;
+  for (const raw of stripBom(text).replace(/\r\n/g, '\n').split('\n')) {
+    if (/^\s*(#.*)?$/.test(raw)) continue;
+    const line = stripComment(raw);
+    if (line.trim() === '') continue;
+    const n = indentOf(line);
+    if (n === 0) {
+      inServices = /^services:[ ]*$/.test(line);
+      svc = null;
+      continue;
+    }
+    if (!inServices) continue;
+    if (n === 2) {
+      const m = /^ {2}([a-z0-9][a-z0-9-]*):[ ]*$/.exec(line);
+      assert.ok(m, `${where}: unreadable service line ${JSON.stringify(line)}`);
+      svc = { name: m[1], image: null, build: null };
+      out.push(svc);
+      inBuild = false;
+      continue;
+    }
+    assert.ok(svc, `${where}: a line outside any service: ${JSON.stringify(line)}`);
+    const m = KEY_LINE.exec(line.slice(n));
+    if (n === 4) {
+      inBuild = false;
+      if (!m) continue;
+      if (m[1] === 'image') svc.image = unquote(m[2] ?? '');
+      if (m[1] === 'build') {
+        svc.build = { context: m[2] ? unquote(m[2]) : null, dockerfile: 'Dockerfile', target: null };
+        inBuild = !m[2];
+      }
+      continue;
+    }
+    if (n === 6 && inBuild && m) {
+      if (m[1] === 'context') svc.build.context = unquote(m[2] ?? '');
+      if (m[1] === 'dockerfile') svc.build.dockerfile = unquote(m[2] ?? '');
+      if (m[1] === 'target') svc.build.target = unquote(m[2] ?? '');
+    }
+  }
+  return out;
+}
+
+// The non-stage FROM images of a Dockerfile.
+function baseImages(text, file) {
+  const stages = [];
+  const bases = new Set();
+  for (const { op, rest } of instructions(text)) {
+    if (op !== 'FROM') continue;
+    const m = /^(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?$/i.exec(rest);
+    assert.ok(m, `${file}: unreadable FROM ${rest}`);
+    if (!stages.includes(m[1].toLowerCase())) bases.add(m[1]);
+    if (m[2]) stages.push(m[2].toLowerCase());
+  }
+  return bases;
+}
+
+function rootComposeFiles(tree) {
+  return tree.files('.').filter((f) => COMPOSE_FILE.test(f)).sort();
+}
+
+function builtDockerfile(file, svc) {
+  assert.ok(svc.build.context, `${file}: ${svc.name}: build names no context`);
+  assert.match(svc.build.context, /^\.(\/[A-Za-z0-9_.-]+)*\/?$/, `${file}: ${svc.name}: build context ${svc.build.context} must be a ./ path in this repo`);
+  assert.match(svc.build.dockerfile, /^[A-Za-z0-9_.-]+$/, `${file}: ${svc.name}: dockerfile ${svc.build.dockerfile} must be a file name in the context`);
+  const dir = path.posix.normalize(svc.build.context).replace(/\/$/, '') || '.';
+  assert.ok(!dir.startsWith('..'), `${file}: ${svc.name}: build context leaves the repo`);
+  return { dir, dockerfile: path.posix.join(dir, svc.build.dockerfile), target: svc.build.target };
+}
+
+// Returns the number of builds it read.
+function checkBuildFamily(tree) {
+  const prodBases = new Map();
+  for (const svc of composeServices(tree.read('compose.prod.yml'), 'compose.prod.yml')) {
+    if (!svc.build) continue;
+    const b = builtDockerfile('compose.prod.yml', svc);
+    const bases = prodBases.get(b.dir) ?? new Set();
+    for (const base of baseImages(tree.read(b.dockerfile), b.dockerfile)) bases.add(base);
+    prodBases.set(b.dir, bases);
+  }
+  assert.ok(prodBases.size > 0, 'compose.prod.yml must build at least one component');
+  let builds = 0;
+  for (const file of rootComposeFiles(tree)) {
+    for (const svc of composeServices(tree.read(file), file)) {
+      if (!svc.build) continue;
+      const b = builtDockerfile(file, svc);
+      builds += 1;
+      if (!prodBases.has(b.dir)) {
+        assert.ok(TEST_TOOLING.some((t) => t.file === file && t.service === svc.name && t.dir === b.dir && path.posix.join(t.dir, t.dockerfile) === b.dockerfile),
+          `${file}: ${svc.name} builds ${b.dockerfile}, outside every context compose.prod.yml builds and not listed test tooling`);
+        continue;
+      }
+      assert.ok(tree.exists(b.dockerfile), `${file}: ${svc.name}: ${b.dockerfile} does not exist`);
+      for (const base of baseImages(tree.read(b.dockerfile), b.dockerfile)) {
+        assert.ok(prodBases.get(b.dir).has(base),
+          `${file}: ${svc.name}: ${b.dockerfile} starts from ${base}, which no production Dockerfile in ${b.dir} uses`);
+      }
+    }
+  }
+  return builds;
+}
+
+// Returns the repositories it read, each with its one reference.
+function checkOneVersionPerImage(tree) {
+  const refs = new Map();
+  const note = (ref, where) => {
+    if (PUBLISHED_IMAGE.test(ref)) return;
+    const m = /^([^:@]+(?::\d+(?=\/))?[^:@]*)([:@].+)?$/.exec(ref);
+    assert.ok(m && m[2], `${where}: image ${ref} names no version or digest`);
+    const seen = refs.get(m[1]);
+    assert.ok(!seen || seen.ref === ref, `${where}: ${ref}, but ${seen?.where} uses ${seen?.ref}: one repository, one version in every environment`);
+    refs.set(m[1], seen ?? { ref, where });
+  };
+  for (const file of rootComposeFiles(tree)) {
+    for (const svc of composeServices(tree.read(file), file)) {
+      if (svc.image !== null) note(svc.image, `${file}: ${svc.name}`);
+      if (svc.build && svc.build.context) {
+        const b = builtDockerfile(file, svc);
+        if (tree.exists(b.dockerfile)) for (const base of baseImages(tree.read(b.dockerfile), b.dockerfile)) note(base, b.dockerfile);
+      }
+    }
+  }
+  return refs;
+}
+
+// publish-images.yml's matrix: image -> { dir, dockerfile, target }.
+function publishedBuilds(tree) {
+  const text = tree.read(PUBLISH_IMAGES).replace(/\r\n/g, '\n');
+  const out = new Map();
+  const entry = /^ +- image: (\S+)\n +context: (\S+)\n +file: (\S+)\n +target: "?([^"\n]*)"?$/gm;
+  for (const m of text.matchAll(entry)) {
+    assert.ok(!out.has(m[1]), `${PUBLISH_IMAGES}: ${m[1]} is published twice`);
+    out.set(m[1], { dir: path.posix.normalize(m[2]), dockerfile: m[3], target: m[4] || null });
+  }
+  assert.ok(out.size > 0, `${PUBLISH_IMAGES}: no matrix entry read`);
+  return out;
+}
+
+// Returns the overlay services it read.
+function checkPublishedOverlays(tree) {
+  const published = publishedBuilds(tree);
+  let read = 0;
+  for (const overlay of rootComposeFiles(tree).filter((f) => /\.images\.ya?ml$/.test(f))) {
+    const base = overlay.replace(/\.images(\.ya?ml)$/, '$1');
+    assert.ok(tree.exists(base), `${overlay}: its base file ${base} does not exist`);
+    const baseServices = new Map(composeServices(tree.read(base), base).map((s) => [s.name, s]));
+    for (const svc of composeServices(tree.read(overlay), overlay)) {
+      const m = PUBLISHED_IMAGE.exec(svc.image ?? '');
+      assert.ok(m, `${overlay}: ${svc.name}: image ${svc.image} is not a published bioavanced image tagged by IMAGE_TAG`);
+      const own = baseServices.get(svc.name);
+      assert.ok(own && own.build, `${overlay}: ${svc.name} is not a service ${base} builds`);
+      const b = builtDockerfile(base, own);
+      const p = published.get(m[1]);
+      assert.ok(p, `${overlay}: ${svc.name}: ${m[1]} is not built by ${PUBLISH_IMAGES}`);
+      assert.deepEqual(p, b, `${overlay}: ${svc.name}: ${m[1]} is published from ${JSON.stringify(p)}, but ${base} builds it from ${JSON.stringify(b)}`);
+      read += 1;
+    }
+  }
+  return read;
+}
+
+// The deployment surface C5 reads.
+function deploymentFiles(tree) {
+  const root = tree.files('.').filter((f) => COMPOSE_FILE.test(f) || /^Dockerfile/.test(f) || f === 'package.json');
+  const nested = ['api/backend', 'frontend'].flatMap((d) => tree.files(d).filter((f) => /^(Dockerfile.*|package\.json)$/.test(path.posix.basename(f))));
+  return [...root, ...nested, ...tree.walk('scripts'), ...tree.walk('infra'), ...tree.walk('.github/workflows')];
+}
+
+// Returns the files it read.
+function checkNoKubernetes(tree) {
+  const files = deploymentFiles(tree);
+  for (const file of files) {
+    assert.doesNotMatch(path.posix.basename(file), KUBERNETES_FILE, `${file} is a Kubernetes file: RNF014 C5 keeps Kubernetes optional`);
+    const text = stripBom(tree.read(file));
+    const word = KUBERNETES_WORD.exec(text);
+    assert.ok(!word, `${file} names ${word?.[0]}: RNF014 C5 keeps Kubernetes optional`);
+    assert.doesNotMatch(text, KUBERNETES_MANIFEST_LINE, `${file} holds a Kubernetes manifest (apiVersion:): RNF014 C5 keeps Kubernetes optional`);
+  }
+  return files;
+}
+
+test('RNF014 C4: every environment builds each deployable component from its production context and base images', () => {
+  assert.ok(checkBuildFamily(deployTree) > 0, 'no build read in the root compose files');
+});
+
+test('RNF014 C4: every third-party image carries one version in every compose file and Dockerfile', () => {
+  assert.ok(checkOneVersionPerImage(deployTree).size > 0, 'no image read in the root compose files');
+});
+
+test('RNF014 C4: each published-image overlay runs the image built from its own service\'s build', () => {
+  assert.ok(checkPublishedOverlays(deployTree) > 0, 'no published-image overlay service read');
+});
+
+test('RNF014 C5: no compose file, Dockerfile, package.json, script, infra file or workflow needs Kubernetes', () => {
+  const files = checkNoKubernetes(deployTree);
+  for (const f of ['compose.prod.yml', 'api/backend/Dockerfile.prod', 'frontend/Dockerfile.prod', '.github/workflows/ci-pipeline.yml']) {
+    assert.ok(files.includes(f), `the scan must read ${f}`);
+  }
+});
+
+// A fixture tree for C4 and C5: root files and walked directories from a map.
+function deployFixture(files) {
+  return {
+    read: (rel) => { assert.ok(rel in files, `fixture has no ${rel}`); return files[rel]; },
+    exists: (rel) => rel in files,
+    files: (dir) => Object.keys(files).filter((f) => path.posix.dirname(f) === dir),
+    walk: (dir) => Object.keys(files).filter((f) => f.startsWith(`${dir}/`)),
+  };
+}
+const FIX_PROD = 'services:\n  app:\n    build:\n      context: ./app\n      dockerfile: Dockerfile.prod\n  db:\n    image: mongo:7.0.45\n';
+const FIX_TEST = 'services:\n  app-test:\n    build:\n      context: ./app\n      dockerfile: Dockerfile.dev\n  db-test:\n    image: mongo:7.0.45\n';
+const FIX_PUBLISH = 'jobs:\n  publish:\n    strategy:\n      matrix:\n        include:\n          - image: bioavanced-app\n            context: app\n            file: app/Dockerfile.prod\n            target: ""\n';
+const FIX_IMAGES = 'services:\n  app:\n    image: ghcr.io/deniseribeiro-beep/bioavanced-app:${IMAGE_TAG:?set IMAGE_TAG}\n';
+const deployFiles = (over = {}) => ({
+  'compose.prod.yml': FIX_PROD,
+  'compose.test.yml': FIX_TEST,
+  'compose.prod.images.yml': FIX_IMAGES,
+  'app/Dockerfile.prod': 'FROM node:22.23.4-alpine AS deps\nFROM node:22.23.4-alpine\n',
+  'app/Dockerfile.dev': 'FROM node:22.23.4-alpine\n',
+  [PUBLISH_IMAGES]: FIX_PUBLISH,
+  'scripts/deploy.sh': 'docker compose -f compose.prod.yml up -d\n',
+  'package.json': '{"dependencies":{"helmet":"7.2.0"}}\n',
+  ...over,
+});
+
+test('RNF014 C4 and C5 fixtures: the minimal one-family, compose-only tree passes every check', () => {
+  const tree = deployFixture(deployFiles());
+  assert.equal(checkBuildFamily(tree), 2);
+  assert.equal(checkOneVersionPerImage(tree).size, 2);
+  assert.equal(checkPublishedOverlays(tree), 1);
+  assert.equal(checkNoKubernetes(tree).length, 6);
+});
+
+test('RNF014 C4 refuses: a test build from another base image, or from a context production does not build', () => {
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'app/Dockerfile.dev': 'FROM node:20.0.0-alpine\n' }))), /starts from node:20\.0\.0-alpine/);
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.test.yml': FIX_TEST.replace('./app', './app-copy') }))), /outside every context compose\.prod\.yml builds/);
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.test.yml': `${FIX_TEST}  playwright-runner:\n    build:\n      context: ./other\n      dockerfile: Dockerfile.playwright\n` }))), /not listed test tooling/);
+});
+
+test('RNF014 C4 refuses: one image repository at two versions, across compose files or a Dockerfile FROM', () => {
+  assert.throws(() => checkOneVersionPerImage(deployFixture(deployFiles({ 'compose.test.yml': FIX_TEST.replace('mongo:7.0.45', 'mongo:7.0.44') }))), /one repository, one version/);
+  assert.throws(() => checkOneVersionPerImage(deployFixture(deployFiles({ 'app/Dockerfile.dev': 'FROM node:22.23.3-alpine\n' }))), /one repository, one version/);
+});
+
+test('RNF014 C4 refuses: a published image built from another dockerfile or target than its service', () => {
+  assert.throws(() => checkPublishedOverlays(deployFixture(deployFiles({ [PUBLISH_IMAGES]: FIX_PUBLISH.replace('app/Dockerfile.prod', 'app/Dockerfile.dev') }))), /is published from/);
+  assert.throws(() => checkPublishedOverlays(deployFixture(deployFiles({ [PUBLISH_IMAGES]: FIX_PUBLISH.replace('target: ""', 'target: preview') }))), /is published from/);
+  assert.throws(() => checkPublishedOverlays(deployFixture(deployFiles({ 'compose.prod.images.yml': FIX_IMAGES.replace('bioavanced-app:', 'bioavanced-other:') }))), /is not built by/);
+});
+
+test('RNF014 C5 refuses: a script that runs kubectl or helm, a manifest, or a Chart.yaml', () => {
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'scripts/deploy.sh': 'kubectl apply -f deploy/\n' }))), /names kubectl/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'scripts/deploy.sh': 'Helm upgrade --install app ./chart\n' }))), /names Helm/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'infra/app.yml': 'apiVersion: apps/v1\nkind: Deployment\n' }))), /Kubernetes manifest/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'infra/chart/Chart.yaml': 'name: app\n' }))), /is a Kubernetes file/);
+});
+
+const FIX_FOREIGN = 'services:\n  app-e2e:\n    build:\n      context: ./app-copy\n      dockerfile: Dockerfile.dev\n';
+
+test('RNF014 C4 and C5 refuses: a root compose file whose name holds a digit or a hyphen is read like any other', () => {
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.e2e.yml': FIX_FOREIGN }))), /compose\.e2e\.yml: app-e2e builds app-copy\/Dockerfile\.dev, outside every context/);
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.ci-test.yml': FIX_FOREIGN }))), /compose\.ci-test\.yml: app-e2e builds/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'compose.e2e.yml': '# deploy with kubectl apply\nservices: {}\n' }))), /compose\.e2e\.yml names kubectl/);
+});
+
+test('RNF014 C4 and C5 refuses: a root compose file named compose-<name>, compose.yaml or docker-compose.yml is read like any other', () => {
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose-e2e.yml': FIX_FOREIGN }))), /compose-e2e\.yml: app-e2e builds app-copy\/Dockerfile\.dev, outside every context/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'compose-e2e.yml': '# deploy with kubectl apply\nservices: {}\n' }))), /compose-e2e\.yml names kubectl/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'compose.yaml': '# deploy with kubectl apply\nservices: {}\n' }))), /compose\.yaml names kubectl/);
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'docker-compose.yml': FIX_FOREIGN }))), /docker-compose\.yml: app-e2e builds/);
+});
+
+test('RNF014 C4 and C5 refuses: a compose file or manifest that opens with a byte order mark', () => {
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.test.yml': `\uFEFF${FIX_TEST.replace('./app', './app-copy')}` }))), /outside every context compose\.prod\.yml builds/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'infra/app.yml': '\uFEFFapiVersion: apps/v1\nkind: Deployment\n' }))), /Kubernetes manifest/);
+});
+
+test('RNF014 C4 fixtures: a build context written with a trailing slash is the same context', () => {
+  assert.equal(checkBuildFamily(deployFixture(deployFiles({ 'compose.test.yml': FIX_TEST.replace('./app', './app/') }))), 2);
+});
