@@ -94,6 +94,7 @@ One line per file under `docs/decisions/`: its date, what it decided, and the fi
 - 2026-10-21: a specimen's temperature exposure is a TelemetryExposureSummary per piece of its assignment path. [telemetry-exposure-summary](../decisions/2026-10-21-telemetry-exposure-summary.md)
 - 2026-10-21: the MongoDB `temperatures` copy of a telemetry reading is retired; its existing data is left in place. [telemetry-temperatures-copy-retired](../decisions/2026-10-21-telemetry-temperatures-copy-retired.md)
 - 2026-11-12: a telemetry reading carrying fields outside its contract is stored with them stripped and flagged, never refused. [telemetry-personal-data-stripped](../decisions/2026-11-12-telemetry-personal-data-stripped.md)
+- 2026-11-18: RULE-025 aligned to the gold standard — strip/refuse PII persistence, keep a trustworthy contract measurement, quarantine and security audit (supersedes the 2026-11-12 record on #1547). [telemetry-rule-025-gold-standard](../decisions/2026-11-18-telemetry-rule-025-gold-standard.md)
 
 ### 3.7 Files
 

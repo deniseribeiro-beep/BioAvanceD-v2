@@ -1,5 +1,7 @@
 # 2026-11-12: a telemetry reading carrying fields outside its contract is stored with them stripped and flagged, never refused
 
+> **Superseded on 2026-11-18** by `2026-11-18-telemetry-rule-025-gold-standard.md` (owner ruling on #1547): RULE-025 now requires stripping PII / non-contract fields, persisting the trustworthy contract measurement, quarantine + security audit — not rejecting the whole temperature when only forbidden fields are the defect. Keep this record for history of #1540.
+
 Requirements RF009 AC8, RNF004 C7; rule RULE-025. Issue #1540. Follows `2026-10-17-telemetry-threshold-from-datastream.md`.
 
 ## The question
