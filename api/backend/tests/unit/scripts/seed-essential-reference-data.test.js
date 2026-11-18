@@ -204,6 +204,32 @@ describe('Foundation job: apply', () => {
     expect(report.blockers).toContain('gate:zero-operational-data');
   });
 
+  it('counts telemetry, file, study, assay and workflow-run collections in the zero-operational-data gate (AC8, RNF031 C7)', async () => {
+    const added = [
+      'telemetryIngestionEvents', 'telemetryValidationIssues',
+      CANONICAL_COLLECTIONS.telemetryExposureSummaries, CANONICAL_COLLECTIONS.telemetryDatastreams,
+      'sample_files', 'assayFiles', 'datasetFiles', 'AnalysisFile', CANONICAL_COLLECTIONS.dataFileVersions,
+      'studies', 'assays', 'workflowRuns',
+    ];
+    expect(OPERATIONAL_COLLECTIONS).toEqual(expect.arrayContaining(added));
+
+    const { report } = await apply(createFakeDb());
+    const gate = gateOf(report, 'zero-operational-data');
+    expect(gate.result).toBe('pass');
+    expect(Object.keys(gate.evidence.before)).toEqual(expect.arrayContaining(added));
+  });
+
+  it.each(['telemetryIngestionEvents', 'sample_files', 'studies'])('blocks readiness when apply creates a record in %s (AC8, RNF031 C7)', async (name) => {
+    const db = createFakeDb();
+    const configurationSeeds = [{ step: 'leaky-seed', seed: async (fakeDb) => fakeDb.collection(name).insertOne({ _id: `leaked-${name}` }), count: () => ({}) }];
+    const { report } = await runSeed({ db, args: parseArgs([]), ...quiet, configurationSeeds });
+
+    // A replaced configurationSeeds also fails governance-registry, so the
+    // status alone would read blocked whether or not this gate counts name.
+    expect(report.blockers).toContain('gate:zero-operational-data');
+    expect(gateOf(report, 'zero-operational-data').evidence).toMatchObject({ before: { [name]: 0 }, after: { [name]: 1 } });
+  });
+
   it('registers the CanonicalModelRelease and its invariant catalog once, and a re-run writes neither again (#1304, F1.2)', async () => {
     const db = createFakeDb();
     const first = await apply(db);

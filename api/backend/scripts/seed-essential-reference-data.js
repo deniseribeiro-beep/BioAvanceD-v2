@@ -68,7 +68,11 @@ const CONFIGURATION_SEEDS = [
 ];
 
 // Operational collections the Foundation must leave untouched (RF022 AC8,
-// RNF031 C7): it counts them before and after apply.
+// RNF031 C7): it counts them before and after apply. AC8 names participants,
+// identities, consents, specimens, telemetry, files, studies, assays and
+// operational workflows. Telemetry readings themselves live in InfluxDB and
+// file binaries in the object store: the job loads no client for either,
+// which tests/architecture/foundation-job-stores.arch.test.js checks.
 const OPERATIONAL_COLLECTIONS = [
   CANONICAL_COLLECTIONS.patients,
   CANONICAL_COLLECTIONS.participantIdentities,
@@ -78,6 +82,23 @@ const OPERATIONAL_COLLECTIONS = [
   CANONICAL_COLLECTIONS.encounters,
   CANONICAL_COLLECTIONS.rcsAssessments,
   CANONICAL_COLLECTIONS.accessRequests,
+  // Telemetry: each reading's receipt and its validation issues (written by
+  // src/services/telemetryReadingContract.js), the exposure summaries and
+  // the datastreams a device's readings bind to.
+  'telemetryIngestionEvents',
+  'telemetryValidationIssues',
+  CANONICAL_COLLECTIONS.telemetryExposureSummaries,
+  CANONICAL_COLLECTIONS.telemetryDatastreams,
+  // Files: each uploaded file's metadata and its versions.
+  'sample_files',
+  'assayFiles',
+  'datasetFiles',
+  'AnalysisFile',
+  CANONICAL_COLLECTIONS.dataFileVersions,
+  // Studies, assays and workflow runs.
+  'studies',
+  'assays',
+  'workflowRuns',
 ];
 
 function parseArgs(argv) {

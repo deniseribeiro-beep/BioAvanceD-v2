@@ -824,6 +824,8 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
   // (FOUNDATION_READINESS_REQUIRED), so this suite running at all is the API
   // having passed that gate.
   // RNF031 C5: the bootstrap registers its ReadinessReport.
+  // RF022 AC8: its zero-operational-data gate counted participants, identities, consents, specimens, telemetry, files, studies, assays and workflow runs before and after apply, and none was created.
+  // RNF031 C7: the same gate confirms the bootstrap created no operational data.
   test('a ready ReadinessReport for the bootstrap run gates the API', async () => {
     const run = await latestFoundationDataRun();
     const report = await latestReadinessReport('test');
@@ -845,6 +847,12 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       configuration: 'pass',
       rcs: 'pass',
     });
+    const zeroOperational = report!.gateResults.find((gate: any) => gate.gate === 'zero-operational-data');
+    expect(Object.keys(zeroOperational.evidence.after)).toEqual(expect.arrayContaining([
+      'telemetryIngestionEvents', 'telemetryValidationIssues', 'telemetryExposureSummaries', 'telemetryDatastreams',
+      'sample_files', 'assayFiles', 'datasetFiles', 'AnalysisFile', 'dataFileVersions', 'studies', 'assays', 'workflowRuns',
+    ]));
+    expect(zeroOperational.evidence.after).toEqual(zeroOperational.evidence.before);
     expect(report!.p0Coverage).toBeGreaterThan(0);
     expect(report!.p0Coverage).toBeLessThan(1);
   });
