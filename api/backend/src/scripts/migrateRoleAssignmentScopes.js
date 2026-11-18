@@ -12,6 +12,13 @@
  * no-op for it — same convention as migrateUserOrganizations.js's
  * $unset-driven idempotency, no explicit "already migrated" flag.
  *
+ * One-way: no rollback. The run sets scopeType 'organization' and a scopeId
+ * on each non-Administrador assignment that was global, without storing that
+ * it was global (the console line per assignmentId is not kept), so an
+ * assignment granted organization-scoped since cannot be told apart, and
+ * setting them back to global would widen each user's access to every
+ * organization. Undo is restoring userRoleAssignments from a backup.
+ *
  * Uso: node backend/src/scripts/migrateRoleAssignmentScopes.js
  */
 

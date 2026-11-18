@@ -28,6 +28,14 @@
  * Run `npm run migrate:storage-assignments-to-chain` first, so a placed
  * legacy sample keeps the container its placement was adopted into.
  *
+ * One-way: no rollback. The sample document is never modified and each label
+ * issued carries migratedFrom, so the labels can be found; but issuing one
+ * first ensures the sample's container, and for a sample with no open load
+ * and no adopted legacy placement that creates a container and loads the
+ * sample into it on the physical chain, whose assignments are append-only, so
+ * retiring the labels does not take back the placement. Undo is restoring the
+ * label and physical-chain collections from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:sample-barcode-labels               applies
  *   npm run migrate:sample-barcode-labels -- --dry-run  counts, writes nothing
