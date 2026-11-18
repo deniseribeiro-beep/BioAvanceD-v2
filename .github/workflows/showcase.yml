@@ -102,7 +102,7 @@ jobs:
       # The stack-up of scripts/e2e-gate.sh, up to its projection-worker
       # check, with the published images and no build; the showcase runs with
       # the projection worker up. A change to that part of the gate script is
-      # made here too. The admin bootstrap's `up --wait` exits 1 on success,
+      # made here too, and in scripts/gcp-spot-showcase/on-vm.sh (#1565). The admin bootstrap's `up --wait` exits 1 on success,
       # so this step does not stop on a failed command; every one-shot is
       # checked below instead.
       - name: Start the stack and load reference data
