@@ -671,7 +671,8 @@ describe('workers/import-worker', () => {
 
       expect(fakeIotStreamingService.processTemperatureData).toHaveBeenCalledWith(
         fakeDb,
-        { sensorId: 's1', value: 4.2 }
+        { sensorId: 's1', value: 4.2 },
+        { strippedFields: [] }
       );
       expect(fakeTemperatureWorker.process).not.toHaveBeenCalled();
       expect(result).toEqual({
@@ -683,6 +684,60 @@ describe('workers/import-worker', () => {
         fhirResourcesUpdated: 0,
         fhirResources: [],
       });
+    });
+
+    // RULE-025 (#1582): the queued job carries the names of the fields the
+    // socket handler stripped, so processTemperatureData audits and flags them.
+    it("passes the queued job's stripped field names on and drops non-text entries", async () => {
+      const processor = await getProcessor();
+      const job = {
+        id: 'j6b',
+        name: 'import',
+        data: {
+          jobID: 'j6b',
+          userID: 'u1',
+          dataType: 'temperature-iot',
+          fileName: 'iot.json',
+          temperatureData: { sensorId: 's1', value: 4.2 },
+          strippedFields: ['cpf', 7, 'patientName'],
+        },
+      };
+
+      await processor(job);
+
+      expect(fakeIotStreamingService.processTemperatureData).toHaveBeenCalledWith(
+        fakeDb,
+        { sensorId: 's1', value: 4.2 },
+        { strippedFields: ['cpf', 'patientName'] }
+      );
+    });
+
+    // RULE-025 (#1582): a non-listable name is queued only as a count; the
+    // worker passes one unnamed entry per such field, so the reading's issue
+    // counts it without naming it.
+    it("rebuilds one unnamed entry per counted non-listable field and ignores a bad count", async () => {
+      const processor = await getProcessor();
+      const jobOf = (id, unlistedFieldCount) => ({
+        id,
+        name: 'import',
+        data: {
+          jobID: id,
+          userID: 'u1',
+          dataType: 'temperature-iot',
+          fileName: 'iot.json',
+          temperatureData: { sensorId: 's1', value: 4.2 },
+          strippedFields: ['patientName'],
+          unlistedFieldCount,
+        },
+      });
+
+      await processor(jobOf('j6c', 2));
+      await processor(jobOf('j6d', '3'));
+
+      expect(fakeIotStreamingService.processTemperatureData.mock.calls.map((call) => call[2])).toEqual([
+        { strippedFields: ['patientName', '', ''] },
+        { strippedFields: ['patientName'] },
+      ]);
     });
 
     it('on success: updates job status to completed, saves metrics, logs import, and notifies completion', async () => {

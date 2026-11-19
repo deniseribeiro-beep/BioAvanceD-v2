@@ -1,10 +1,13 @@
 const fs = require('fs');
+const { createHash } = require('crypto');
 const logger = require('../../src/utils/logger');
 const iotStreamingService = require('../../src/services/iot-streaming.service');
 const mqttSignatureService = require('../../src/services/mqtt-signature.service');
 const mqttIngestionAuditService = require('../../src/services/mqtt-ingestion-audit.service');
 const mqttTelemetryService = require('../../src/services/mqtt-telemetry.service');
 const influxTelemetryWriteRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const auditLogger = require('../../src/utils/auditLogger');
+const { canonicalJson } = require('../../src/services/telemetryReadingContract');
 
 function makeFakeClient() {
   const handlers = {};
@@ -383,6 +386,86 @@ describe('mqtt-telemetry.service', () => {
 
       expect(errorSpy).toHaveBeenCalled();
       expect(auditSpy).not.toHaveBeenCalled();
+      expect(processSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // RULE-025, RF009 AC8 (#1582): a message's fields outside the MQTT reading
+  // contract are stripped before the hash, the screening and the store, the
+  // reading is kept and flagged, and one security audit names the stripped
+  // fields, never a value.
+  describe('RULE-025 on MQTT (#1582)', () => {
+    const db = {};
+    const PII_VALUE = 'Maria da Silva 123.456.789-09';
+    const strippedAudits = (spy) => spy.mock.calls.filter(([entry]) => entry.action === 'TELEMETRY_PII_STRIPPED');
+
+    it('(a) passes a valid reading on without its extra fields and audits it once', async () => {
+      const auditSpy = vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue('id-1582');
+      const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+      const contract = { sensorId: 'S1', temperatureValue: 4.5, timestamp: '2026-11-18T12:00:00.000Z', sourceEventId: 'e-1' };
+      const payload = { ...contract, patientName: PII_VALUE, cpf: '123.456.789-09' };
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify(payload), 'utf8'), false);
+
+      expect(processSpy).toHaveBeenCalledTimes(1);
+      const [, temperatureData, options] = processSpy.mock.calls[0];
+      expect(options).toEqual({ strippedFields: ['cpf', 'patientName'] });
+      expect(temperatureData).toMatchObject({ sensorId: 'S1', temperatureValue: 4.5, sourceEventId: 'e-1' });
+      expect(JSON.stringify(temperatureData)).not.toContain('Maria');
+      expect(JSON.stringify(temperatureData)).not.toContain('123.456');
+
+      const audits = strippedAudits(logSpy);
+      expect(audits).toHaveLength(1);
+      expect(audits[0][0]).toMatchObject({ source: 'mqtt', resourceId: 'S1', payload: { ingestionService: 'mqtt', fieldNames: ['cpf', 'patientName'], unlistedFieldCount: 0 } });
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain('123.456');
+
+      const [, trailRow] = auditSpy.mock.calls.find(([, row]) => row.status === 'processed');
+      expect(trailRow.payloadHash).toBe(createHash('sha256').update(canonicalJson(contract)).digest('hex'));
+      expect(JSON.stringify(auditSpy.mock.calls)).not.toContain('123.456');
+    });
+
+    it('(b) refuses a non-finite temperature whole and still audits its extra fields', async () => {
+      const auditSpy = vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue();
+      const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+      vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      const payload = { sensorId: 'S1', temperatureValue: 'not-a-number', patientName: PII_VALUE, cpf: '123.456.789-09' };
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify(payload), 'utf8'), false);
+
+      expect(processSpy).not.toHaveBeenCalled();
+      expect(auditSpy).toHaveBeenCalledWith(db, expect.objectContaining({ status: 'rejected', reason: 'invalid_payload' }));
+      expect(strippedAudits(logSpy)).toHaveLength(1);
+      expect(JSON.stringify(auditSpy.mock.calls)).not.toContain('123.456');
+    });
+
+    it('(c) a contract-only message writes no security audit', async () => {
+      vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue('id');
+      const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+
+      const payload = { sensorId: 'S1', temperatureValue: 4.5 };
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify(payload), 'utf8'), false);
+
+      expect(processSpy).toHaveBeenCalledWith(db, expect.objectContaining({ sensorId: 'S1' }), { strippedFields: [] });
+      expect(strippedAudits(logSpy)).toHaveLength(0);
+    });
+
+    it('(d) a malformed message never logs its text', async () => {
+      const logged = ['error', 'warn', 'info', 'debug'].map((level) => vi.spyOn(logger, level).mockImplementation(() => {}));
+      const auditSpy = vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue();
+
+      await expect(
+        mqttTelemetryService.handleMessage(db, 'topic', Buffer.from('{"cpf":"123.456.789-09" bad', 'utf8'), false)
+      ).resolves.toBeUndefined();
+
+      expect(logged[0]).toHaveBeenCalled();
+      for (const spy of logged) {
+        expect(JSON.stringify(spy.mock.calls)).not.toContain('123.456');
+      }
+      expect(JSON.stringify(auditSpy.mock.calls)).not.toContain('123.456');
       expect(processSpy).not.toHaveBeenCalled();
     });
   });

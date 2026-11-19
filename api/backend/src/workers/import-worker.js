@@ -224,7 +224,13 @@ async function initWorker() {
               // Processa dados de IoT streaming
               const iotStreamingService = require('../services/iot-streaming.service');
               const temperatureData = job.data.temperatureData;
-              await iotStreamingService.processTemperatureData(db, temperatureData);
+              // RULE-025 (#1582): the listable names of the fields stripped at
+              // receipt, and one unlisted entry ('') per other field, so the
+              // reading's issue counts them without naming them.
+              const listedFields = Array.isArray(job.data.strippedFields) ? job.data.strippedFields.filter((field) => typeof field === 'string') : [];
+              const unlistedFieldCount = Number.isInteger(job.data.unlistedFieldCount) && job.data.unlistedFieldCount > 0 ? job.data.unlistedFieldCount : 0;
+              const strippedFields = [...listedFields, ...Array(unlistedFieldCount).fill('')];
+              await iotStreamingService.processTemperatureData(db, temperatureData, { strippedFields });
               result = {
                 total: 1,
                 success: 1,

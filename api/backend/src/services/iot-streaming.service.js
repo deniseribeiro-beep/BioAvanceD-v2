@@ -1,13 +1,28 @@
 const logger = require('../utils/logger');
 const { getQueue } = require('../config/queue');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const mongoConnection = require('../infrastructure/database/mongodb/connection');
 const {
   readingIdentityOf,
   screenReading,
   findClientReplay,
   recordClientReplay,
   clientContractFieldsOf,
+  splitContractFields,
+  auditStrippedFields,
 } = require('./telemetryReadingContract');
+
+// RULE-025, RF009 AC8 (#1582): every top-level field handleTemperatureData
+// reads, and organizationId (V2E-0561). Any other field is stripped before the
+// reading is queued, and its name alone goes on with the job.
+const IOT_QUEUE_READING_FIELDS = [
+  'deviceId', 'temperature', 'timestamp', 'batteryLevel', 'signalQuality',
+  'idempotencyKey', 'sourceEventId', 'deviceMessageId', 'traceId', 'sequenceNumber', 'organizationId',
+];
+// RULE-025 (#1582): a stripped field name the queued job may carry, the same
+// rule the TelemetryValidationIssue and the security audit list names by. Any
+// other name may itself be personal data, so the job carries only its count.
+const QUEUEABLE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 /**
  * Serviço de IoT Streaming para Temperature Control
@@ -99,7 +114,13 @@ class IoTStreamingService {
    */
   async handleTemperatureData(socket, data) {
     try {
-      const { deviceId, temperature, timestamp, batteryLevel, signalQuality } = data;
+      const { reading, strippedFields } = splitContractFields(data, IOT_QUEUE_READING_FIELDS);
+      const { deviceId, temperature, timestamp, batteryLevel, signalQuality } = reading;
+      // RULE-025, RF009 AC8 (#1582): the socket receipt is the queue path's
+      // receipt, so its security audit is written here once, before any
+      // refusal, and never again on a worker attempt or its retries.
+      const auditSensorId = this.activeStreams.get(deviceId)?.sensorId || deviceId || null;
+      await auditStrippedFields(() => mongoConnection.connectMongoDB(), { ingestionService: 'iot-queue', strippedFields, sensorId: auditSensorId });
 
       if (!deviceId || temperature === undefined) {
         socket.emit('error', { message: 'deviceId e temperature são obrigatórios' });
@@ -126,7 +147,7 @@ class IoTStreamingService {
         facility: streamInfo.facility,
         zone: streamInfo.zone,
         // RF009 AC7 (#1317): the client's idempotencyKey and provenance.
-        ...clientContractFieldsOf(data),
+        ...clientContractFieldsOf(reading),
         source: 'iot-streaming',
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -142,6 +163,10 @@ class IoTStreamingService {
           jobID: jobId,
           dataType: 'temperature-iot',
           temperatureData,
+          // RULE-025 (#1582): the listable stripped field names and a count
+          // of the others, never a value.
+          strippedFields: strippedFields.filter((field) => QUEUEABLE_FIELD_NAME.test(field)),
+          unlistedFieldCount: strippedFields.filter((field) => !QUEUEABLE_FIELD_NAME.test(field)).length,
           deviceId,
         },
         {
@@ -182,13 +207,17 @@ class IoTStreamingService {
    * Processa dados de temperatura (chamado pelo worker)
    */
   async processTemperatureData(db, temperatureData, { strippedFields = [] } = {}) {
+    const ingestionService = temperatureData.source === 'mqtt' ? 'mqtt' : 'iot-queue';
     try {
+      // RULE-025 (#1582): the stripped fields were audited at receipt (the
+      // socket handler, or MQTT's handleMessage); here they only flag the
+      // reading, so a retried job writes no second audit.
       // #1317 (RF009 AC1-AC3): the same reading contract as the temperature
       // route. The fields the server adds are not part of the received
       // payload's hash; InfluxDB is the reading's only store (#1391), and a
       // failed write throws with nothing stored.
       const { source: _source, createdAt: _createdAt, updatedAt: _updatedAt, ...received } = temperatureData;
-      const identity = readingIdentityOf(received, new Date(), { ingestionService: temperatureData.source === 'mqtt' ? 'mqtt' : 'iot-queue' });
+      const identity = readingIdentityOf(received, new Date(), { ingestionService });
       // RF009 AC7 (#1317, #1391): a client key already recorded for this
       // sensor in RF029's key store is a replay, as on the temperature route;
       // it returns the first reading's telemetryReadingId and writes nothing.

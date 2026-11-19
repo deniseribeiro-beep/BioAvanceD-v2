@@ -4,7 +4,9 @@ const logger = require('../utils/logger');
 const iotStreamingService = require('./iot-streaming.service');
 const mqttSignatureService = require('./mqtt-signature.service');
 const mqttIngestionAuditService = require('./mqtt-ingestion-audit.service');
-const { clientContractFieldsOf, splitContractFields } = require('./telemetryReadingContract');
+const {
+  clientContractFieldsOf, splitContractFields, canonicalJson, auditStrippedFields,
+} = require('./telemetryReadingContract');
 
 // RF009 AC8, RNF004 C7 (#1540): every top-level field handleMessage reads,
 // and organizationId (V2E-0561). Any other field is stripped and flags the
@@ -126,9 +128,28 @@ class MqttTelemetryService {
         return;
       }
 
-      const payload = JSON.parse(raw);
-      const payloadHash = mqttSignatureService.hashPayload(raw);
-      const payloadSignature = payload.signature || payload.hmac || payload.payloadSignature || null;
+      // RULE-025 (#1582): JSON.parse's message quotes the input, so a
+      // malformed message is logged without it.
+      let payload;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        logger.error('[ISO20387][MQTT] Payload MQTT descartado: JSON inválido');
+        return;
+      }
+
+      // RULE-025, RF009 AC8 (#1540, #1582): the fields outside the MQTT
+      // reading contract are stripped before the hash, the screening and the
+      // store; the trail's payloadHash covers the contract fields only. The
+      // HMAC below is still verified over the raw message the device signed,
+      // and the device's signature is kept in the trail as received.
+      const { reading: contractPayload, strippedFields } = splitContractFields(payload, MQTT_READING_FIELDS);
+      const payloadHash = mqttSignatureService.hashPayload(canonicalJson(contractPayload));
+      // Audited once at receipt, before any exit, whatever the reading's fate.
+      const auditSensorId = contractPayload.sensorId || contractPayload.sensorID || contractPayload.deviceId || null;
+      await auditStrippedFields(db, { ingestionService: 'mqtt', strippedFields, sensorId: auditSensorId });
+
+      const payloadSignature = contractPayload.signature || contractPayload.hmac || contractPayload.payloadSignature || null;
       const signatureVerified = payloadSignature ? mqttSignatureService.verifyHmac(raw, payloadSignature) : false;
 
       if (signatureRequired && !payloadSignature) {
@@ -160,26 +181,26 @@ class MqttTelemetryService {
       }
 
       const temperatureData = {
-        sensorId: payload.sensorId || payload.sensorID || payload.deviceId || null,
-        temperatureValue: Number(payload.temperatureValue ?? payload.temperature ?? payload.value),
-        temperatureUnit: payload.temperatureUnit || '°C',
+        sensorId: contractPayload.sensorId || contractPayload.sensorID || contractPayload.deviceId || null,
+        temperatureValue: Number(contractPayload.temperatureValue ?? contractPayload.temperature ?? contractPayload.value),
+        temperatureUnit: contractPayload.temperatureUnit || '°C',
         // #1317: no device time stays null, so the reading's clockStatus is
         // unknown and its observedAt the receipt time, not a trusted guess.
-        timestamp: payload.timestamp ? new Date(payload.timestamp) : null,
-        readingStatus: payload.readingStatus || 'valid',
-        sensorStatus: payload.sensorStatus || 'normal',
-        signalQuality: payload.signalQuality || null,
-        batteryLevel: payload.batteryLevel !== undefined && payload.batteryLevel !== null
-          ? Number(payload.batteryLevel)
+        timestamp: contractPayload.timestamp ? new Date(contractPayload.timestamp) : null,
+        readingStatus: contractPayload.readingStatus || 'valid',
+        sensorStatus: contractPayload.sensorStatus || 'normal',
+        signalQuality: contractPayload.signalQuality || null,
+        batteryLevel: contractPayload.batteryLevel !== undefined && contractPayload.batteryLevel !== null
+          ? Number(contractPayload.batteryLevel)
           : null,
-        locationId: payload.locationId || payload.locationID || null,
-        facility: payload.facility || null,
-        zone: payload.zone || null,
+        locationId: contractPayload.locationId || contractPayload.locationID || null,
+        facility: contractPayload.facility || null,
+        zone: contractPayload.zone || null,
         // RF009 AC7 (#1317): the client's idempotencyKey and provenance, so a
         // resent message replays the stored reading. On a replay the audit
         // row below records `processed` with the stored id, which shows the
         // duplicate.
-        ...clientContractFieldsOf(payload),
+        ...clientContractFieldsOf(contractPayload),
         source: 'mqtt',
         createdAt: new Date(),
         updatedAt: new Date()
@@ -199,7 +220,6 @@ class MqttTelemetryService {
         return;
       }
 
-      const { strippedFields } = splitContractFields(payload, MQTT_READING_FIELDS);
       const insertedId = await iotStreamingService.processTemperatureData(db, temperatureData, { strippedFields });
 
       await mqttIngestionAuditService.append(db, {
