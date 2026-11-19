@@ -14,7 +14,7 @@ require('../models/TemperaturePolicy.schema');
 require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
 const {
-  readingIdentityOf, screenReading, splitContractFields, IOT_API_READING_FIELDS, payloadHashCheckOf,
+  readingIdentityOf, screenReading, splitContractFields, IOT_API_READING_FIELDS, payloadHashCheckOf, auditStrippedFields,
 } = require('../services/telemetryReadingContract');
 const { getDatastream } = require('../services/telemetryBinding.service');
 const { datastreamEquipmentIdsBySensor } = require('../services/sensorDatastream.service');
@@ -277,9 +277,22 @@ async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, norma
 
 async function ingestTelemetry(req, res) {
   try {
-    const { sensorId, temperature } = req.body || {};
+    // RF009 AC8, RNF004 C7 (#1540): fields outside the reading contract may
+    // carry personal data. They are stripped here, before the reading is
+    // hashed, screened or stored, and the reading is kept and flagged by a
+    // personal_data_stripped issue, never refused.
+    // RNF004 C4 (#1521): a client payloadHash is taken out before the split,
+    // so it is neither hashed nor stripped as a non-contract field, and is
+    // checked against the reading's own payloadHash below.
+    // RULE-025 (#1582): the split is the first read of the body, and the
+    // stripped fields' security audit is written at receipt, before any
+    // exit, so a refused body is audited too.
+    const { payloadHash: clientPayloadHash, ...sentBody } = req.body || {};
+    const { reading: contractBody, strippedFields } = splitContractFields(sentBody, IOT_API_READING_FIELDS);
+    const { sensorId, temperature } = contractBody;
     const normalizedSensorId = String(sensorId || '').trim();
     const normalizedTemperature = Number(temperature);
+    await auditStrippedFields(connectMongoDB, { ingestionService: 'iot-api', strippedFields, sensorId: normalizedSensorId || null });
 
     if (!normalizedSensorId || !Number.isFinite(normalizedTemperature)) {
       // #1120 (Axis E E3): the audit row names which condition refused the
@@ -298,15 +311,6 @@ async function ingestTelemetry(req, res) {
     // refusing a reading (the Axis E decision on the audit below), so an
     // InfluxDB outage never silences an excursion. A timestamp that is not a
     // date is a 422.
-    // RF009 AC8, RNF004 C7 (#1540): fields outside the reading contract may
-    // carry personal data. They are stripped here, before the reading is
-    // hashed, screened or stored, and the reading is kept and flagged by a
-    // personal_data_stripped issue, never refused.
-    // RNF004 C4 (#1521): a client payloadHash is taken out before the split,
-    // so it is neither hashed nor stripped as a non-contract field, and is
-    // checked against the reading's own payloadHash below.
-    const { payloadHash: clientPayloadHash, ...sentBody } = req.body || {};
-    const { reading: contractBody, strippedFields } = splitContractFields(sentBody, IOT_API_READING_FIELDS);
     let identity;
     try {
       identity = readingIdentityOf(contractBody, new Date(), { ingestionService: 'iot-api' });

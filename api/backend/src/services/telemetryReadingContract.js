@@ -47,6 +47,7 @@ const TemperatureModel = require('../models/Temperature');
 const TelemetryIngestionEventModel = require('../models/TelemetryIngestionEvent');
 const TelemetryValidationIssueModel = require('../models/TelemetryValidationIssue');
 const logger = require('../utils/logger');
+const auditLogger = require('../utils/auditLogger');
 const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
 
 const { DEFAULT_CLOCK_DRIFT_LIMIT_MS, resolveClockDriftLimitMs } = require('./clockDriftLimit');
@@ -276,6 +277,46 @@ function splitContractFields(payload, contractFields) {
     else if (value !== undefined && value !== null) strippedFields.push(field);
   }
   return { reading, strippedFields: strippedFields.sort() };
+}
+
+// RULE-025, RF009 AC8 (#1582): the AuditEvent source (P1X-0331's closed
+// vocabulary) of each ingestion path. `[inference]` the queue and the import
+// run off the request, as auditLogger's own note says of worker callers.
+const AUDIT_SOURCE_BY_SERVICE = {
+  'iot-api': 'api', 'temperature-api': 'api', mqtt: 'mqtt', 'iot-queue': 'worker', 'temperature-import': 'worker',
+};
+
+/**
+ * RULE-025, RF009 AC8 (#1582): the security audit of a received payload that
+ * carried fields outside its path's reading contract, written once at
+ * receipt, whatever the reading's fate. It names the listable field names
+ * and counts the rest, never a value. `db` may be a function resolving it.
+ * Returns true once written; false for no stripped field or a failed write,
+ * which is logged and never changes the reading's fate.
+ */
+async function auditStrippedFields(db, { ingestionService, strippedFields = [], sensorId = null } = {}) {
+  if (!Array.isArray(strippedFields) || !strippedFields.length) return false;
+  const fieldNames = strippedFields.filter((field) => typeof field === 'string' && LISTABLE_FIELD_NAME.test(field));
+  const unlistedFieldCount = strippedFields.length - fieldNames.length;
+  try {
+    const store = typeof db === 'function' ? await db() : db;
+    auditLogger.init(store);
+    await auditLogger.log({
+      action: 'TELEMETRY_PII_STRIPPED',
+      resourceType: 'TelemetryReading',
+      resourceId: sensorId ? String(sensorId) : null,
+      status: 'warning',
+      severity: 'warning',
+      module: 'Segurança',
+      source: AUDIT_SOURCE_BY_SERVICE[ingestionService] || 'system',
+      message: `Leitura de telemetria recebida com ${strippedFields.length} campo(s) fora do contrato, removidos antes de hash, triagem e armazenamento (RULE-025, RF009 AC8)`,
+      payload: { ingestionService: ingestionService || null, fieldNames, unlistedFieldCount },
+    });
+    return true;
+  } catch (error) {
+    logger.error(`[ISO20387][TELEMETRY] Falha ao registrar a auditoria de segurança dos campos removidos: ${error.message || error}`);
+    return false;
+  }
 }
 
 // RF009 AC8 (#1540): the issue that flags a reading whose non-contract
@@ -542,6 +583,7 @@ module.exports = {
   recordClientReplay,
   clientContractFieldsOf,
   splitContractFields,
+  auditStrippedFields,
   IOT_API_READING_FIELDS,
   payloadHashCheckOf,
   validationIssuesOf,
