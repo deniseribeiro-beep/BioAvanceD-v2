@@ -8,7 +8,7 @@ const SampleModule = require('../models/Sample');
 const SampleModel = SampleModule.SampleModel || SampleModule;
 const TemperatureModel = require('../models/Temperature');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
-const { readingIdentityOf, screenReading } = require('./telemetryReadingContract');
+const { readingIdentityOf, screenReading, splitContractFields, auditStrippedFields } = require('./telemetryReadingContract');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
@@ -33,6 +33,13 @@ const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { hashConsentToken } = require('../utils/consentTokenHash');
+
+// RULE-025, RF009 AC8 (#1582): the temperature import's reading contract, the
+// columns parseTemperatureCSV reads. Any other column is stripped per row.
+const TEMPERATURE_IMPORT_READING_FIELDS = Object.freeze([
+  'sensorId', 'sensorID', 'temperatureValue', 'temperatureUnit', 'timestamp', 'readingStatus', 'sensorStatus',
+  'signalQuality', 'batteryLevel', 'locationId', 'locationID', 'facility', 'zone',
+]);
 
 /**
  * Service de Importação de Dados
@@ -823,6 +830,11 @@ class ImportService {
 
   /**
    * Processa importação de temperatura
+   * RULE-025, RF009 AC8 (#1582): each row's cells outside
+   * TEMPERATURE_IMPORT_READING_FIELDS are stripped before hash, screen and
+   * store, flag the reading and write one security audit per row, naming the
+   * columns and never a value. A blank extra cell carries no value and is not
+   * counted; a contract cell reaches parseTemperatureCSV as received.
    */
   async importTemperature(db, file) {
     try {
@@ -840,7 +852,13 @@ class ImportService {
 
       for (const row of rows) {
         try {
-          const tempData = this.parseTemperatureCSV(row);
+          // The contract cells reach the parser as received, so a blank one is
+          // refused or defaulted exactly as before; only an extra column's
+          // blank cell carries no value and goes uncounted.
+          const { reading: contractRow, strippedFields: extraColumns } = splitContractFields(row, TEMPERATURE_IMPORT_READING_FIELDS);
+          const strippedFields = extraColumns.filter((field) => !(typeof row[field] === 'string' && row[field].trim() === ''));
+          await auditStrippedFields(db, { ingestionService: 'temperature-import', strippedFields, sensorId: contractRow.sensorId || contractRow.sensorID || null });
+          const tempData = this.parseTemperatureCSV(contractRow);
           const validation = TemperatureModel.validate(tempData);
           
           if (!validation.isValid) {
@@ -858,7 +876,7 @@ class ImportService {
             // a file carries readings taken long before it was uploaded, so the clock is
             // `unknown` (V2E-0556, the origin clock's known condition), not `drift`.
             identity.clockStatus = 'unknown';
-            await screenReading(db, identity, tempData);
+            await screenReading(db, identity, tempData, { strippedFields });
             const temperature = { ...TemperatureModel.create(tempData), ...identity, timestamp: identity.observedAt };
             try {
               temperature.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(temperature);
