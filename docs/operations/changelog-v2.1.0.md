@@ -2,7 +2,7 @@
 
 ## Summary
 
-Release comercial **2.1.0**: tenant invite, Runbook + Termos/Privacidade, busca única de inventário + drawer, etiquetas Code128/DataMatrix, crosswalk MarkerDB→ORPHA/MONDO (híbrido), SIGTAP typeahead, hygiene sem mocks de runtime no aceite, ADRs G3/G10/G11.
+Release comercial **2.1.0** (tag 2026-11-26; tip RC `24ea19f0`; RF016 PASS): tenant invite, Runbook + Termos/Privacidade, busca única de inventário + drawer, etiquetas Code128/DataMatrix, crosswalk MarkerDB→ORPHA/MONDO (híbrido), SIGTAP typeahead, hygiene sem mocks de runtime no aceite, ADRs G3/G10/G11 + Option B (G4-09 out of tag).
 
 ## Added
 

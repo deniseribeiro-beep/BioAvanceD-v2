@@ -1,0 +1,12 @@
+[loopback-forward] localhost:5173 -> frontend-app-test:5173
+[loopback-forward] localhost:3000 -> backend-app-test:3000
+
+Running 4 tests using 1 worker
+
+  ✓  1 [chromium] › tests/e2e/physical-chain.spec.ts:85:7 › Physical chain and custody (#1314, #1316) — real backend › custody bounds who may load, place, read and scan a specimen, and an approval out of force stops it (9.4s)
+  ✓  2 [chromium] › tests/e2e/physical-chain.spec.ts:394:7 › Physical chain and custody (#1314, #1316) — real backend › an empty tube is placed and labelled by the holder of its rack's location only (3.8s)
+  ✓  3 [chromium] › tests/e2e/physical-chain.spec.ts:464:7 › Physical chain and custody (#1314, #1316) — real backend › an ex ante protocol runs only once approved_for_execution (RF016 AC7, RULE-037) (2.0s)
+  ✓  4 [chromium] › tests/e2e/physical-chain.spec.ts:535:7 › Disposition compatibility (#1363, RF026 AC6) — real backend › a specimen destruction waits for custody and the collection's ethics approval, and a transfer without consent is refused (1.5s)
+
+  4 passed (20.1s)
+[loopback-forward] 2026-11-26T20:09:18.097Z summary: 5 connections, max upstream connect 7 ms, 0 at or over 1000 ms, 0 upstream errors

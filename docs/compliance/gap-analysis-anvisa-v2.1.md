@@ -7,7 +7,7 @@
 | Identificação UDI / rotulagem SaMD | Não formalizado | Classificação ANVISA pendente | Dono regulatório classifica software |
 | QMS (ISO 13485-like) | ADRs + changelog + matriz | SOPs formais incompletos | Expandir SOPs pós-tag |
 | Vigilância / incidentes | `docs/security/incident-and-continuity.md` | Amarrar a canal cliente | Revisar com SLA |
-| Validação clínica / ex ante | RF016 pack | Ensaio tip 2.1.0-rc pendente | W7 |
+| Validação clínica / ex ante | RF016 pack | Ensaio tip 2.1.0-rc **PASS** (`RF016-ex-ante-v2.1.0-rc.md`) | Fechado W7; material real fora de escopo |
 | LGPD | Termos/Privacidade + TCLE | DPIA formal por tenant | Template DPIA pós-2.1 |
 | Rastreabilidade req→test | Matriz comercial 2.1 | Manter a cada patch | Compliance owner |
 | Alegação marketing | Proibida certificação | — | Enforcement comercial |

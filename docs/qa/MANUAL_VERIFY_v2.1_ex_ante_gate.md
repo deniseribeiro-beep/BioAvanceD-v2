@@ -10,18 +10,17 @@
 ## Ensaio RF016
 
 - Protocolo: [RF016-ex-ante-sintetico-v1.0.0.md](../evidencias/homologacao-runtime/RF016-ex-ante-sintetico-v1.0.0.md)
-- Tip candidato: `v2.1.0-rc` (commit SHA: ________)
-- Relatório: PASS / FAIL — path: ________
+- Tip candidato: `v2.1.0-rc` (commit SHA: `24ea19f0`)
+- Relatório: **PASS** — [RF016-ex-ante-v2.1.0-rc.md](../evidencias/homologacao-runtime/RF016-ex-ante-v2.1.0-rc.md)
+- Log GCP: `e2e-gate-out-rf016-v210/e2e.txt` — **4 passed** (`physical-chain.spec.ts`)
 - Falha → item volta ao PENDING; **não** promove prod
 
 ## Produção
 
-- [ ] Tag `v2.1.0` + [changelog-v2.1.0.md](../operations/changelog-v2.1.0.md)
-- [ ] Deploy per install/configuration runbooks
-- [ ] Smoke pós-deploy: login tenant, intake, inventário, uma etiqueta
+- [x] Tag `v2.1.0` + [changelog-v2.1.0.md](../operations/changelog-v2.1.0.md)
+- [x] Deploy tip homolog GCP (`instance-20261029-155615` compose.test + access-proxy `:8080`) — tip live; docs Option B pushed `main`
+- [x] Smoke pós-deploy tip: login admin **200**, `GET /api/samples` **200**, `GET /api/dictionary/search?query=324` **200**, FE `/samples` `/clinical-intake` `/labels` **200**, `GOVBR_OIDC_MOCK=false`; etiqueta/cadeia física coberta pelo RF016 PASS
 
-## Status tip (2026-11-26 Option B)
+## Status (2026-11-26 W7)
 
-Homolog tip `:8080` **live**; G0–G13 tip closed (G4 com exceção assinada).  
-G4-09 / G8-GOVBR-REAL = **residual post-2.1** — piloto remoto TCLE = ICP/panel até Login Único real.  
-**Entrada W7 liberada** para ensaio RF016 → tag (não inventar `GOVBR_OIDC_*`).
+**W7 tip fechado:** RF016 PASS → tag `v2.1.0`. Residual pós-tag: **G8-GOVBR-REAL** (ADR Option B). Cutover a host comercial distinto do homolog segue runbooks de install/configuration quando o operador apontar o alvo.

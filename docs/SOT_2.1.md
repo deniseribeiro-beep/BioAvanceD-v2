@@ -45,7 +45,7 @@ ADRs W2+ (G3 N/A, Runbook/Termos, drawer, TLS defer, issues-out) entram no SoT *
 |------|--------|------------|
 | W1 | G0 + G10 | DONE |
 | W2–W6 | G1–G13 tip | DONE (G4 com ADR Option B) |
-| W7 | Ex ante → tag → prod | Entrada liberada; ensaio RF016 / tag pendente |
+| W7 | Ex ante → tag → prod | **DONE** RF016 PASS + tag `v2.1.0` (2026-11-26); residual G8-GOVBR-REAL |
 
 ## Fora do go-live 2.1
 

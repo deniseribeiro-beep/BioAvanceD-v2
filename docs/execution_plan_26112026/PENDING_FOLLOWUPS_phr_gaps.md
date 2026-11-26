@@ -248,11 +248,11 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 **Ensaio / produção:** checklist `docs/qa/MANUAL_VERIFY_v2.1_ex_ante_gate.md`
 
-- [ ] Protocolo RF016 no tip `v2.1.0-rc`
-- [ ] Relatório PASS
-- [ ] Tag `v2.1.0` + deploy + smoke pós-deploy
+- [x] Protocolo RF016 no tip `v2.1.0-rc` (`24ea19f0`) — GCP `physical-chain` **4 passed**
+- [x] Relatório PASS — `docs/evidencias/homologacao-runtime/RF016-ex-ante-v2.1.0-rc.md`
+- [x] Tag `v2.1.0` + deploy tip homolog + smoke pós-deploy (login/samples/dictionary/FE; mock off)
 
-**Gate G4-09:** desbloqueado por ADR `2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md`. Piloto remoto = ICP/panel até G8-GOVBR-REAL PASS.
+**Gate G4-09:** ADR Option B. Residual pós-tag: **G8-GOVBR-REAL**. Piloto remoto = ICP/panel.
 
 ---
 
@@ -270,7 +270,7 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 1. Executar na ordem das waves (§2); não pular G10 antes de G8/G9.  
 2. Cada `[x]`: evidência inline ou link.  
-3. Residual tip→homolog: G1/G2/G4 tip DONE (G4-09 out ADR); W7 ensaio/tag; G8-GOVBR-REAL post-2.1.  
+3. Residual pós-`v2.1.0`: G8-GOVBR-REAL (ADR Option B); cutover host comercial se ≠ homolog.  
 4. Zenodo DOI: archive; não misturar com go-live.
 
 ---
@@ -287,4 +287,4 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 | Runbook + Termos | Ausente | DONE |
 | Ex ante porta | Ausente | Protocolo; promote blocked |
 | ANVISA apto | Ausente | Matriz + gap rascunho |
-| Residual | — | W7 RF016/tag/prod; G8-GOVBR-REAL post-2.1 (ADR Option B) |
+| Residual | — | G8-GOVBR-REAL post-2.1 (ADR Option B); cutover prod se alvo ≠ homolog |
