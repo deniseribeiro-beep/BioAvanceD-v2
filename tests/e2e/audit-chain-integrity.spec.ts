@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
-import { closeAuditEventsDb, latestChainEvents, rewriteEventField } from './helpers/queryAuditEvents';
+import {
+  closeAuditEventsDb,
+  latestChainEvents,
+  restoreTamperedAuditResults,
+  rewriteEventField,
+} from './helpers/queryAuditEvents';
 import { closeIngestionDb, findIngestionAuditRows } from './helpers/queryIngestion';
 
 /**
@@ -28,11 +33,19 @@ test.describe('RF012 audit event chain (real backend)', () => {
   test.skip(!apiBaseURL, 'needs the real backend (PLAYWRIGHT_API_BASE_URL)');
 
   test.afterAll(async () => {
-    await closeAuditEventsDb();
-    await closeIngestionDb();
+    // Close helpers can race a timed-out worker that still holds a cursor;
+    // never fail the suite on teardown of the shared Mongo clients.
+    await closeAuditEventsDb().catch(() => undefined);
+    await closeIngestionDb().catch(() => undefined);
   });
 
   test('chains audited actions, seals them, verifies an event and detects a rewritten one', async ({ request }) => {
+    // verify walks the whole live chain; homolog stacks accumulate tens of
+    // thousands of events, so the default 30s budget leaves a mid-tamper
+    // rewrite unrestored and poisons later runs (chainValid:false forever).
+    test.setTimeout(180_000);
+    // Undo any unrestored rewrite left by a previous timed-out attempt.
+    await restoreTamperedAuditResults(CHAIN);
     const { token } = await realLogin(request);
     const auth = { Authorization: `Bearer ${token}` };
 
