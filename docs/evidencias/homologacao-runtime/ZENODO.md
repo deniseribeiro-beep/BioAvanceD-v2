@@ -1,5 +1,7 @@
 # Zenodo — BioAvanceD ex-ante evaluation v1.0.3
 
+> **v2.1:** DOI Zenodo **não** é gate de go-live. Pack acadêmico/histórico; ver `docs/SOT_2.1.md` e archive `docs/_archive/pre-2.1/`.
+
 | Campo | Valor |
 |---|---|
 | Concept DOI | [10.5281/zenodo.23890206](https://doi.org/10.5281/zenodo.23890206) |

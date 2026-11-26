@@ -1,0 +1,53 @@
+# Source of Truth — BioAvanceD v2.1
+
+Índice canônico do tip comercial **2.1.0**. Waves posteriores só entram aqui quando mergeadas em `main` com evidência.
+
+## Go-live
+
+| Artefato | Path |
+|----------|------|
+| Scorecard G0–G13 + waves | [execution_plan_26112026/PENDING_FOLLOWUPS_phr_gaps.md](execution_plan_26112026/PENDING_FOLLOWUPS_phr_gaps.md) |
+| Este índice | [SOT_2.1.md](SOT_2.1.md) |
+| Archive pré-2.1 | [_archive/pre-2.1/INVENTORY.md](_archive/pre-2.1/INVENTORY.md) |
+
+## ADRs no tip (`main`)
+
+| Tema | Path | Wave |
+|------|------|------|
+| Acesso + identidade (G10) | [decisions/2026-11-26-access-tenant-only-identity.md](decisions/2026-11-26-access-tenant-only-identity.md) | **W1** |
+| TCLE gov.br / ICP | [decisions/2026-11-26-tcle-govbr-icp-identity.md](decisions/2026-11-26-tcle-govbr-icp-identity.md) | pré-2.1 |
+| MarkerDB provisional | [decisions/2026-11-26-biomarker-condition-markerdb-provisional.md](decisions/2026-11-26-biomarker-condition-markerdb-provisional.md) | pré-2.1 |
+| Outbox biomarcador | [decisions/2026-11-26-biomarker-association-neo4j-outbox.md](decisions/2026-11-26-biomarker-association-neo4j-outbox.md) | pré-2.1 |
+| Import oficial biomarcador | [decisions/2026-11-25-biomarker-association-official-import.md](decisions/2026-11-25-biomarker-association-official-import.md) | pré-2.1 |
+
+ADRs W2+ (G3 N/A, Runbook/Termos, drawer, TLS defer, issues-out) entram no SoT **somente** após merge da wave correspondente.
+
+## QA / evidência tip
+
+| Artefato | Path |
+|----------|------|
+| TRACE Achados 1–6 | [qa/TRACE_20261125_intake_cpf_mask_human_qa.md](qa/TRACE_20261125_intake_cpf_mask_human_qa.md) |
+| MANUAL_VERIFY tip | [qa/MANUAL_VERIFY_20261106.md](qa/MANUAL_VERIFY_20261106.md) |
+| Ex ante RF016 | [evidencias/homologacao-runtime/RF016-ex-ante-sintetico-v1.0.0.md](evidencias/homologacao-runtime/RF016-ex-ante-sintetico-v1.0.0.md) |
+
+## Operação
+
+| Artefato | Path |
+|----------|------|
+| Install | [operations/install-runbook.md](operations/install-runbook.md) |
+| Configuration | [operations/configuration-runbook.md](operations/configuration-runbook.md) |
+| IAP (**ops-interna apenas**, ≠ auth produto) | [runbooks/bioadvanced-iap-access.md](runbooks/bioadvanced-iap-access.md) |
+
+## Wave status (auditoria)
+
+| Wave | Escopo | Tip `main` |
+|------|--------|------------|
+| W1 | G0 + G10 | Em curso / merge desta wave |
+| W2–W7 | G1–G13 restante | Pendente auditoria + merge sequencial |
+
+## Fora do go-live 2.1
+
+- DOI Zenodo e packs acadêmicos → archive / evidências históricas; **não** bloqueiam tag.
+- Mocks de runtime (`GOVBR_OIDC_MOCK`) → só CI; **proibidos** no aceite comercial.
+- Corpus `docs/mestrado/*` → keep acadêmico; não é SoT de produto.
+- Packs Zenodo sob `_archive/pre-2.1/zenodo-stages/` podem existir só no filesystem; tip git mantém inventário + `ZENODO.md` movido (binários/ui-live não precisam entrar no git).

@@ -1,11 +1,15 @@
 # Acesso HTTPS + IAP — bioadvanced.dev
 
+> **v2.1 / G10 — OPS-INTERNA OPCIONAL.** IAP Google **não** é autenticação de produto.
+> Auth comercial = tenant invite/ativação (ADR `docs/decisions/2026-11-26-access-tenant-only-identity.md`).
+> Clientes e onboarding comercial **não** devem depender deste runbook. Mantido só para edge de lab/homolog.
+
 ## URL
 - Canônica: https://bioadvanced.dev/login
 - Alias: https://www.bioadvanced.dev/login
 
 ## Arquitetura
-Browser → Google HTTPS Load Balancer (IAP) → VM `:8080` (`bioavanced-access-proxy`) → `frontend-app-test` / `backend-app-test` (loopback via rede Docker).
+Browser → Google HTTPS Load Balancer (IAP, ops) → VM `:8080` (`bioavanced-access-proxy`) → `frontend-app-test` / `backend-app-test` (loopback via rede Docker).
 
 | Recurso GCP | Nome |
 |---|---|
@@ -16,9 +20,9 @@ Browser → Google HTTPS Load Balancer (IAP) → VM `:8080` (`bioavanced-access-
 | Instance group | `bioavanced-access-ig` (VM `instance-20261029-155615`) |
 | Proxy container | `bioavanced-access-proxy` |
 
-## Login
-1. **IAP (Google):** conta autorizada (ex. `denise.ribeiro@mail.usf.edu.br`) — tela Google antes do app.
-2. **BioAvanceD (app):** usuário `admin`, senha `BOOTSTRAP_ADMIN_TEMP_PASSWORD` de `compose.test.yml` (lab; sem OAuth no produto).
+## Login (ops / lab — não é onboarding comercial)
+1. **IAP (Google) — só edge ops:** conta autorizada (ex. `denise.ribeiro@mail.usf.edu.br`) — tela Google antes do app. Clientes 2.1 **não** usam este passo (ADR G10: tenant invite).
+2. **BioAvanceD (app):** usuário `admin` bootstrap ou conta ativada por convite; senha lab `BOOTSTRAP_ADMIN_TEMP_PASSWORD` de `compose.test.yml` (sem OAuth Google no produto).
 
 ### Conceder acesso IAP (manual — IAM)
 A conta CLI atual (`deniser.contato@gmail.com`) não tem `setIamPolicy`. No Console GCP (projeto `fundamental-run-494721-e2`), com uma conta Owner/Admin:
