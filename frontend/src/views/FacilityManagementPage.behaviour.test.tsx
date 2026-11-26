@@ -144,14 +144,14 @@ describe('FacilityManagementPage tabs', () => {
   it('opens on equipment, with or without an unknown tab in the URL', () => {
     renderPage('bogus');
     expect(screen.getByText('Gerenciamento de Instalações')).toBeInTheDocument();
-    expect(screen.getByTestId('facility-tab-equipment')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('facility-tab-equipment')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('equipment-new-button')).toBeInTheDocument();
   });
 
   it('switches section on each tab click', () => {
     renderPage();
     fireEvent.click(screen.getByTestId('facility-tab-sensors'));
-    expect(screen.getByTestId('facility-tab-sensors')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('facility-tab-sensors')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('new-sensor-button')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('facility-tab-incidents'));

@@ -1264,7 +1264,7 @@ class PatientService {
     // here, and the recorder is the only thing taken from it.
     const consentService = require('./consent.service');
 
-    const { consentTemplateId, responses, ipAddress, userAgent } = manifestation || {};
+    const { consentTemplateId, responses, ipAddress, userAgent, location, identityProof } = manifestation || {};
     if (!consentTemplateId || !responses || typeof responses !== 'object' || Array.isArray(responses)) {
       throw consentManifestationRejection('consentTemplateId e responses são obrigatórios');
     }
@@ -1284,17 +1284,24 @@ class PatientService {
       throw consentManifestationRejection(validationError.message);
     }
 
+    const authenticationLevel = identityProof?.provider === 'govbr'
+      ? 'govbr'
+      : identityProof?.provider === 'icp-brasil' || identityProof?.provider === 'icp_brasil'
+        ? 'icp-brasil'
+        : 'token';
     const consent = await consentService.createPatientConsent(db, {
       participantId,
       consentTemplateId: String(consentTemplateId),
       responses,
       ipAddress,
-      userAgent
+      userAgent,
+      location,
+      identityProof: identityProof || null,
     }, {
       // RF010 AC4: the participant's own acceptance through the token link.
       channel: 'electronic_link',
       signerRole: 'participant',
-      authenticationLevel: 'token'
+      authenticationLevel,
     });
 
     const patientsCollection = await this.getPatientsCollection(db);

@@ -43,11 +43,13 @@ export function useSamples() {
   // before a previous in-flight call resolves.
   const requestSeq = useRequestSequence();
 
-  const loadSamples = async () => {
+  const loadSamples = async (params?: { specimenId?: string; participantId?: string; limit?: number }) => {
     const seq = requestSeq.next();
     try {
       setLoading(true);
-      const response = await samplesApi.getAll();
+      // Default newest-first page is 50 server-side; when searching by
+      // specimenId, ask the API so the row is not lost behind that cap.
+      const response = await samplesApi.getAll(params);
       if (!requestSeq.isCurrent(seq)) return;
       const samplesData = extractSamples(response.data);
       setSamples(samplesData);

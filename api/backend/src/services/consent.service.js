@@ -1090,6 +1090,8 @@ class ConsentService {
       // refuses rather than recording a consent with no evidence.
       const consentId = crypto.randomUUID();
       const signedAt = new Date();
+      const { normalizeRevocationLocation } = require('./consentHistory.service');
+      const collectionLocation = normalizeRevocationLocation(normalizedPayload.location);
       const evidence = consentEvidence.storeConsentEvidence({
         consentId,
         participantId,
@@ -1101,6 +1103,8 @@ class ConsentService {
         collectionPlace: typeof normalizedPayload.collectionPlace === 'string'
           ? normalizedPayload.collectionPlace.trim()
           : null,
+        location: collectionLocation,
+        identityProof: normalizedPayload.identityProof || null,
         ipAddress: normalizedPayload.ipAddress,
         userAgent: normalizedPayload.userAgent
       });
@@ -1113,6 +1117,7 @@ class ConsentService {
         consentVersion: template.version != null ? String(template.version) : null,
         // RF010 AC1/ELM-0095: the modality of the term signed, as it offers it.
         consentModel: template.consentModel || null,
+        location: collectionLocation,
         ...evidence,
         status: 'ACTIVE'
       });

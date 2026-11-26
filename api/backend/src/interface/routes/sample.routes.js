@@ -130,6 +130,7 @@ const NON_CANONICAL_SAMPLE_ALIASES = Object.freeze([
 const RECOGNIZED_SAMPLE_QUERY_KEYS = Object.freeze([
   'participantId',
   'sampleType',
+  'specimenId',
   'limit',
   'skip',
 ]);
@@ -612,6 +613,7 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
     const filters = {
       participantId: req.query.participantId,
       sampleType: req.query.sampleType,
+      specimenId: req.query.specimenId,
       limit: parseInt(req.query.limit) || 50,
       skip: parseInt(req.query.skip) || 0,
       organizationScope: req.organizationScope

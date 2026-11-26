@@ -944,6 +944,8 @@ class ConsentController {
       const result = await patientService.acceptConsentToken(db, String(patientId), String(token), {
         consentTemplateId: req.body.consentTemplateId,
         responses: req.body.responses,
+        location: req.body.location,
+        identityProof: req.body.identityProof,
         ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
         userAgent: req.headers['user-agent']
       });

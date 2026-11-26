@@ -1006,9 +1006,16 @@ router.get('/patient-match', async (req, res) => {
   const patientName = normalizeString(req.query?.patientName || req.query?.name);
   const birthDate = parseBirthDateDay(req.query?.birthDate);
   const participantIdQuery = normalizeString(req.query?.patientID || req.query?.patientId);
+  const identityDocument = participantIdentityService.normalizeIdentityDocument(
+    req.query?.identityDocument || req.query?.documento || req.query?.cpf || ''
+  );
+  const matchByDocument = Boolean(identityDocument && String(identityDocument).length >= 5);
 
-  if (!participantIdQuery && (!patientName || !birthDate)) {
-    return res.status(400).json({ success: false, error: 'Informe patientID ou (patientName + birthDate).' });
+  if (!participantIdQuery && !matchByDocument && (!patientName || !birthDate)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Informe identityDocument, patientID ou (patientName + birthDate).',
+    });
   }
 
   try {
@@ -1033,6 +1040,25 @@ router.get('/patient-match', async (req, res) => {
       ? await identityCollection.findOne({ participantId: participantIdQuery })
       : null;
     let identity = rawIdentityById ? participantIdentityService.decryptIdentity(rawIdentityById) : null;
+    let matchType = identity ? 'participantId' : null;
+
+    // Document-first intake: blind-index lookup on identityDocumentHash
+    // (same canonical digits-only form as encryptIdentityFields / #1109).
+    if (!identity && matchByDocument) {
+      const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates(
+        'identityDocument',
+        identityDocument
+      );
+      const documentOrConditions = identityDocumentHashes.length
+        ? [{ identityDocumentHash: { $in: identityDocumentHashes } }]
+        : [{ identityDocument }];
+      const documentCandidates = await identityCollection.find({ $or: documentOrConditions }).toArray();
+      const rawDocumentMatch = (documentCandidates || [])[0] || null;
+      if (rawDocumentMatch) {
+        identity = participantIdentityService.decryptIdentity(rawDocumentMatch);
+        matchType = 'identityDocument';
+      }
+    }
 
     if (!identity && patientNameNormalized && birthDate) {
       const { start: startOfDay, end: endOfDay } = birthDateDayRange(birthDate);
@@ -1060,6 +1086,7 @@ router.get('/patient-match', async (req, res) => {
           .replace(/\s+/g, ' ');
         return candidateNormalized === patientNameNormalized;
       }) || null;
+      if (identity) matchType = 'name+birthDate';
     }
 
     let patientStatus = 'ACTIVE';
@@ -1068,7 +1095,7 @@ router.get('/patient-match', async (req, res) => {
       const patientsCollection = await getCollection(db, 'patients');
       patientRecord = await patientsCollection.findOne(
         { participantId: identity.participantId },
-        { projection: { status: 1, clinicalUnitId: 1 } }
+        { projection: { status: 1, clinicalUnitId: 1, sex: 1 } }
       );
       patientStatus = normalizeString(patientRecord?.status) || 'ACTIVE';
     }
@@ -1080,6 +1107,45 @@ router.get('/patient-match', async (req, res) => {
     const outOfScope = Boolean(identity)
       && !isRecordInOrganizationScope(patientRecord, req.organizationScope, 'clinicalUnitId');
     const matched = Boolean(identity) && !outOfScope;
+
+    let samples = [];
+    if (matched && identity?.participantId) {
+      try {
+        const samplesCollection = await getCollection(db, 'samples');
+        const sampleRows = await samplesCollection
+          .find(
+            { participantId: String(identity.participantId) },
+            {
+              projection: {
+                specimenId: 1,
+                sampleType: 1,
+                sampleOrigin: 1,
+                matrixType: 1,
+                registeredAt: 1,
+                quantity: 1,
+                unit: 1,
+              },
+            }
+          )
+          .sort({ registeredAt: -1 })
+          .limit(30)
+          .toArray();
+        samples = sampleRows
+          .map((row) => ({
+            specimenId: normalizeString(row.specimenId),
+            sampleType: normalizeString(row.sampleType) || null,
+            sampleOrigin: normalizeString(row.sampleOrigin) || null,
+            matrixType: normalizeString(row.matrixType) || null,
+            registeredAt: row.registeredAt || null,
+            quantity: row.quantity ?? null,
+            unit: normalizeString(row.unit) || null,
+          }))
+          .filter((row) => row.specimenId);
+      } catch (sampleError) {
+        logger.warn('patient-match: falha ao listar amostras do participante:', sampleError?.message || sampleError);
+        samples = [];
+      }
+    }
 
     auditLogger.init(db);
     await auditLogger.log({
@@ -1094,11 +1160,13 @@ router.get('/patient-match', async (req, res) => {
       payload: {
         endpoint: '/patient-match',
         matched,
+        matchType: matched ? matchType : null,
         ...(outOfScope ? { outOfScope: true } : {}),
         query: {
           patientID: participantIdQuery || null,
           patientName: patientName || null,
           birthDate: birthDate ? birthDate.toISOString().slice(0, 10) : null,
+          identityDocument: matchByDocument ? '[provided]' : null,
         },
       },
       req,
@@ -1108,14 +1176,20 @@ router.get('/patient-match', async (req, res) => {
     return res.json({
       success: true,
       matched,
+      matchType: matched ? matchType : null,
       patient: matched
         ? {
           patientID: normalizeString(identity.participantId),
           patientName: normalizeString(identity.patientName),
           birthDate: identity.birthDate || null,
+          identityDocument: normalizeString(identity.identityDocument) || identityDocument || null,
+          email: normalizeString(identity.email) || null,
+          phone: normalizeString(identity.phone) || null,
+          sex: normalizeString(patientRecord?.sex) || null,
           status: patientStatus,
         }
         : null,
+      samples: matched ? samples : [],
       message: matched
         ? 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.'
         : '',

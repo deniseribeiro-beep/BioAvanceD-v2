@@ -62,9 +62,8 @@ export default function FacilityManagementPage() {
         <p className="page-subtitle">{t('facility.subtitle', 'Gerenciamento integrado de equipamentos, temperatura, sensores e políticas')}</p>
       </div>
 
-      <div
+      <nav
         className="facility-tabs relative z-0 flex shrink-0 flex-wrap gap-1 rounded-xl border border-border bg-card p-1"
-        role="tablist"
         aria-label={t('facility.tabsLabel', 'Seções do gerenciamento de instalações')}
       >
         {tabs.map((tab) => {
@@ -74,8 +73,8 @@ export default function FacilityManagementPage() {
             <button
               key={tab.id}
               type="button"
-              role="tab"
-              aria-selected={active}
+              aria-current={active ? 'page' : undefined}
+              aria-pressed={active}
               data-testid={`facility-tab-${tab.id}`}
               className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                 active
@@ -87,12 +86,12 @@ export default function FacilityManagementPage() {
                 setSearchParams({ tab: tab.id });
               }}
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-4 w-4" aria-hidden="true" />
               <span>{tab.label}</span>
             </button>
           );
         })}
-      </div>
+      </nav>
 
       <div className="facility-tab-content relative z-0 min-w-0 flex-1">
         {activeTab === 'equipment' && <EquipmentSection />}

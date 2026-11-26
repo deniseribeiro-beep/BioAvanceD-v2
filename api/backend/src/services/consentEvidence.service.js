@@ -33,7 +33,50 @@ function sha256Hex(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
 }
 
-function buildConsentEvidenceDocument({ consentId, participantId, template, responses, decisionDateTime, signatureHash, signerRole, ipAddress, userAgent, collectionPlace }) {
+function normalizeIdentityProof(identityProof) {
+  if (!identityProof || typeof identityProof !== 'object') return null;
+  const provider = String(identityProof.provider || '').toLowerCase();
+  if (provider === 'govbr') {
+    return {
+      identityProvider: 'govbr',
+      govbrSub: identityProof.sub ? String(identityProof.sub) : null,
+      email: identityProof.email || null,
+      name: identityProof.name || null,
+      mock: Boolean(identityProof.mock),
+      verifiedAt: identityProof.verifiedAt || null,
+    };
+  }
+  if (provider === 'icp-brasil' || provider === 'icp_brasil') {
+    return {
+      identityProvider: 'icp-brasil',
+      certificateThumbprint: identityProof.certificateThumbprint
+        ? String(identityProof.certificateThumbprint)
+        : null,
+      signedTermHash: identityProof.signedTermHash ? String(identityProof.signedTermHash) : null,
+      subjectDn: identityProof.subjectDn || null,
+      verifiedAt: identityProof.verifiedAt || null,
+    };
+  }
+  if (provider === 'panel') {
+    return { identityProvider: 'panel' };
+  }
+  return null;
+}
+
+function buildConsentEvidenceDocument({
+  consentId,
+  participantId,
+  template,
+  responses,
+  decisionDateTime,
+  signatureHash,
+  signerRole,
+  ipAddress,
+  userAgent,
+  collectionPlace,
+  location,
+  identityProof,
+}) {
   const termText = template.htmlContent || template.content || '';
   const place = typeof collectionPlace === 'string' ? collectionPlace.trim() : '';
   const origin = {
@@ -41,6 +84,8 @@ function buildConsentEvidenceDocument({ consentId, participantId, template, resp
     userAgent: userAgent || null,
   };
   if (place) origin.collectionPlace = place;
+  if (location && typeof location === 'object') origin.location = location;
+  const identity = normalizeIdentityProof(identityProof) || { identityProvider: 'panel' };
   return {
     evidenceSchema: 'bioavanced.consent-evidence/v1',
     consentId,
@@ -54,6 +99,7 @@ function buildConsentEvidenceDocument({ consentId, participantId, template, resp
     decisionDateTime: new Date(decisionDateTime).toISOString(),
     signerRole: signerRole || 'participant',
     signatureHash: signatureHash || null,
+    identity,
     origin,
   };
 }

@@ -779,6 +779,10 @@ class SampleService {
         query.participantId = filters.participantId;
       }
 
+      if (filters.specimenId) {
+        query.specimenId = String(filters.specimenId).trim();
+      }
+
       // RF006 AC2/AC3: a v1.3.0 quantity value (partial, depleted) asked of
       // specimenStatus is a quantityStatus filter now.
       if (filters.specimenStatus) {

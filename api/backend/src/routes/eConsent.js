@@ -338,5 +338,8 @@ router.post('/consent-tokens/accept', consentController.acceptConsentToken.bind(
 router.post('/consent-tokens/revoke', consentController.revokeConsentToken.bind(consentController));
 router.post('/consent-tokens/signed-tcle', consentController.getSignedTcleByToken.bind(consentController));
 
+// gov.br OIDC for remote TCLE (ADR 2026-11-26) — public, token still required at accept
+router.use('/govbr', require('./govbrConsent'));
+
 module.exports = router;
 

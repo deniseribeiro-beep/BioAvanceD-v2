@@ -226,6 +226,34 @@ class GraphProjectionService {
       schemaVersion: 1,
     }, options);
   }
+
+  // PHR-003 / ADR 2026-11-26: one event per disease↔analyte pair.
+  async appendBiomarkerAssociationEvent(db, payload, options = {}) {
+    const analyte = payload.analyte || {};
+    const aggregateId = String(
+      payload.eventAggregateId
+      || `${payload.biomarkerId || 'ba'}|${payload.orphaCode || ''}|${analyte.code || ''}`,
+    );
+    return this.outbox.appendEvent(db, {
+      eventType: 'BIOMARKER_ASSOCIATION_UPSERTED',
+      aggregateType: 'BiomarkerAssociation',
+      aggregateId,
+      payload: {
+        biomarkerId: payload.biomarkerId || null,
+        orphaCode: payload.orphaCode || null,
+        analyte: {
+          systemUri: analyte.systemUri || null,
+          code: analyte.code || null,
+          display: analyte.display || null,
+        },
+        biomarkerRole: payload.biomarkerRole || null,
+        contextOfUse: payload.contextOfUse || null,
+      },
+      sourceService: payload.sourceService || 'biomarker-association-import',
+      traceId: payload.traceId || null,
+      schemaVersion: 1,
+    }, options);
+  }
 }
 
 // #1225: called right after a sample's Mongo insert. Logged, not thrown: the

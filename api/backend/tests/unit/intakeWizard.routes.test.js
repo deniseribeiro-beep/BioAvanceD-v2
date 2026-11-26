@@ -1205,13 +1205,14 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.status).toBe(503);
     });
 
-    it('returns 400 when neither patientID nor patientName+birthDate are provided', async () => {
+    it('returns 400 when neither identityDocument, patientID nor patientName+birthDate are provided', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/intake-wizard/patient-match');
 
       expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/identityDocument/i);
     });
 
     // #562: matching resolves via ParticipantIdentity (identityFindOne for
@@ -1219,17 +1220,31 @@ function defaultStorageContainersFindOne({ _id }) {
     // Patient's own patientNameNormalized/birthDateKey fields — same pattern
     // #561 applied to PatientIdentityService.js. A second `patients` lookup
     // (by the resolved participantId) fills in `status`.
-    function makeIdentityCollectionRouter({ identityFindOne = vi.fn().mockResolvedValue(null), identityCandidates = [], patientRecord = null } = {}) {
+    function makeIdentityCollectionRouter({
+      identityFindOne = vi.fn().mockResolvedValue(null),
+      identityCandidates = [],
+      patientRecord = null,
+      sampleRows = [],
+    } = {}) {
       const identityFind = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(identityCandidates) });
       const patientsFindOne = vi.fn().mockResolvedValue(patientRecord);
-      const getCollectionImpl = vi.fn((db, key) =>
-        Promise.resolve(
-          key === 'participantIdentities'
-            ? { findOne: identityFindOne, find: identityFind }
-            : { findOne: patientsFindOne }
-        )
-      );
-      return { getCollectionImpl, identityFindOne, identityFind, patientsFindOne };
+      const samplesFind = vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          limit: vi.fn().mockReturnValue({
+            toArray: vi.fn().mockResolvedValue(sampleRows),
+          }),
+        }),
+      });
+      const getCollectionImpl = vi.fn((db, key) => {
+        if (key === 'participantIdentities') {
+          return Promise.resolve({ findOne: identityFindOne, find: identityFind });
+        }
+        if (key === 'samples') {
+          return Promise.resolve({ find: samplesFind });
+        }
+        return Promise.resolve({ findOne: patientsFindOne });
+      });
+      return { getCollectionImpl, identityFindOne, identityFind, patientsFindOne, samplesFind };
     }
 
     it('returns matched:false when no patient is found by patientID', async () => {
@@ -1289,6 +1304,60 @@ function defaultStorageContainersFindOne({ _id }) {
         expect.objectContaining({ patientID: '12345678', patientName: 'Paciente Teste', status: 'ACTIVE' })
       );
       expect(res.body.patient.birthDate).toBeTruthy();
+    });
+
+    it('matches by identityDocument blind index and returns parent-sample candidates', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '11223344',
+        patientName: 'Maria Documento',
+        birthDate: new Date(1990, 4, 15),
+        identityDocument: '11144477735',
+        email: 'maria@example.com',
+      });
+      const { getCollectionImpl, identityFind, samplesFind } = makeIdentityCollectionRouter({
+        identityCandidates: [{ ...encrypted, participantId: '11223344' }],
+        patientRecord: { status: 'ACTIVE', sex: 'F', clinicalUnitId: null },
+        sampleRows: [
+          {
+            specimenId: 'SP-PRIM-1',
+            sampleType: 'PLASMA',
+            sampleOrigin: 'VENOUS_BLOOD',
+            matrixType: 'fluid',
+            registeredAt: new Date('2026-01-10T12:00:00Z'),
+            quantity: 2,
+            unit: 'mL',
+          },
+        ],
+      });
+      const { router } = loadRoute({ getCollectionImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .get('/api/intake-wizard/patient-match')
+        .query({ identityDocument: '111.444.777-35' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.matched).toBe(true);
+      expect(res.body.matchType).toBe('identityDocument');
+      expect(res.body.patient).toEqual(
+        expect.objectContaining({
+          patientID: '11223344',
+          patientName: 'Maria Documento',
+          sex: 'F',
+        })
+      );
+      expect(res.body.samples).toEqual([
+        expect.objectContaining({ specimenId: 'SP-PRIM-1', sampleType: 'PLASMA' }),
+      ]);
+      expect(identityFind).toHaveBeenCalledWith(
+        expect.objectContaining({
+          $or: expect.arrayContaining([
+            expect.objectContaining({ identityDocumentHash: expect.objectContaining({ $in: expect.any(Array) }) }),
+          ]),
+        })
+      );
+      expect(samplesFind).toHaveBeenCalled();
     });
 
     it('matches by normalized name + birthDate when patientID is absent', async () => {

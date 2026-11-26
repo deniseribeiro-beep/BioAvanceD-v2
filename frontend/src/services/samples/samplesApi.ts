@@ -4,7 +4,8 @@ import { Sample } from '@/types/models';
 export type TemplateFormat = 'csv' | 'xlsx';
 
 export const samplesApi = {
-  getAll: () => sampleService.getAll(),
+  getAll: (params?: { limit?: number; skip?: number; specimenId?: string; participantId?: string; sampleType?: string }) =>
+    sampleService.getAll(params),
   getResults: (id: number) => sampleService.getResults(id),
   create: (data: Partial<Sample>) => sampleService.create(data),
   update: (id: number | string, data: Partial<Sample>) => sampleService.update(id, data),

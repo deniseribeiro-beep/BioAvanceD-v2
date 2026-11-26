@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import Button from '../../components/UI/Button';
-import { consentTokenService } from '../../services/api';
+import {
+  consentTokenService,
+  govbrConsentService,
+  type ConsentIdentityProof,
+} from '../../services/api';
 import {
   ConsentTokenTemplate,
   initialConsentResponses,
@@ -52,6 +56,8 @@ export default function ConsentTokenPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [govbrEnabled, setGovbrEnabled] = useState(false);
+  const [identityProof, setIdentityProof] = useState<ConsentIdentityProof | null>(null);
 
   const loadPanel = useCallback(async () => {
     if (!params.ok) {
@@ -85,6 +91,12 @@ export default function ConsentTokenPage() {
     async function run() {
       try {
         await loadPanel();
+        try {
+          const status = await govbrConsentService.status();
+          if (!cancelled) setGovbrEnabled(Boolean(status.data?.enabled));
+        } catch {
+          if (!cancelled) setGovbrEnabled(false);
+        }
       } catch (err: unknown) {
         if (!cancelled) setError(mapConsentTokenRequestError(err));
       } finally {
@@ -97,14 +109,54 @@ export default function ConsentTokenPage() {
     };
   }, [loadPanel]);
 
+  useEffect(() => {
+    const code = searchParams.get('code');
+    const state = searchParams.get('state');
+    if (!code || !state) return;
+    let cancelled = false;
+    async function resumeGovbr() {
+      try {
+        const resp = await govbrConsentService.callback(code!, state!);
+        if (!cancelled && resp.data?.identityProof) {
+          setIdentityProof(resp.data.identityProof);
+          setNotice('Identidade gov.br verificada. Confirme o aceite do termo.');
+        }
+      } catch {
+        if (!cancelled) setError('Não foi possível concluir a autenticação gov.br.');
+      }
+    }
+    void resumeGovbr();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams]);
+
+  async function startGovbr() {
+    if (!params.ok) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const resp = await govbrConsentService.start(params.participantId, params.token);
+      const url = resp.data?.authorizationUrl;
+      if (!url) throw new Error('authorizationUrl ausente');
+      window.location.assign(url);
+    } catch (err: unknown) {
+      setError(mapConsentTokenRequestError(err));
+      setSubmitting(false);
+    }
+  }
+
   async function acceptConsent() {
     if (!params.ok || !template) return;
     setSubmitting(true);
     setError('');
     try {
+      const location = await readPanelLocation();
       await consentTokenService.accept(params.participantId, params.token, {
         consentTemplateId: template.id,
         responses,
+        location,
+        identityProof: identityProof || { provider: 'panel' },
       });
       await loadPanel();
       setNotice('Aceite registrado. Este mesmo link continua disponível para revogar o termo inteiro ou algumas permissões.');
@@ -278,6 +330,17 @@ export default function ConsentTokenPage() {
         )}
         {panel === 'pending' && template && (
           <div className="form-actions">
+            {govbrEnabled && (
+              <Button
+                type="button"
+                variant="secondary"
+                data-testid="consent-token-govbr"
+                onClick={() => { void startGovbr(); }}
+                disabled={submitting}
+              >
+                {identityProof?.provider === 'govbr' ? 'gov.br verificado' : 'Identificar com gov.br'}
+              </Button>
+            )}
             <Button
               type="button"
               data-testid="consent-token-accept"

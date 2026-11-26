@@ -273,6 +273,7 @@ if (!isTest) {
   app.use("/api/e-consent/update", consentLimiter);
   app.use("/api/e-consent/consent-tokens", consentLimiter);
   app.use("/api/e-consent/import/fhir/consent", consentLimiter);
+  app.use("/api/e-consent/govbr", consentLimiter);
 }
 
 app.use("/api/auth", require("./src/interface/routes/auth.routes"));

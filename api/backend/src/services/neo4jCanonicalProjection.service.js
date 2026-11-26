@@ -83,6 +83,9 @@ class Neo4jCanonicalProjectionService {
     if (type === 'TERMINOLOGY_RELATION_PROMOTED') {
       return this.applyTerminologyRelationProjection(session, event);
     }
+    if (type === 'BIOMARKER_ASSOCIATION_UPSERTED') {
+      return this.applyBiomarkerAssociationProjection(session, event);
+    }
 
     return {
       skipped: true,
@@ -585,6 +588,68 @@ class Neo4jCanonicalProjectionService {
     });
 
     return { projected: true, eventType: event.eventType, sourceConceptId, targetConceptId };
+  }
+
+  // ADR 2026-11-26: (:Doenca_ORPHA)-[:POSSUI_BIOMARCADOR]->(:Biomarcador)
+  async applyBiomarkerAssociationProjection(session, event) {
+    const payload = event.payload || {};
+    const orphaRaw = normalizeText(payload.orphaCode);
+    const numericOrpha = orphaRaw.replace(/^ORPHA:/i, '');
+    const analyte = payload.analyte || {};
+    const analyteCode = normalizeText(analyte.code);
+    const analyteSystem = normalizeText(analyte.systemUri);
+    if (!numericOrpha || !analyteCode) {
+      return {
+        skipped: true,
+        eventType: event.eventType,
+        reason: 'missing orphaCode or analyte.code',
+      };
+    }
+    const biomarkerKey = `${analyteSystem}|${analyteCode}`;
+    const prefixedOrpha = `ORPHA:${numericOrpha}`;
+
+    const cypher = `
+      MERGE (d:Doenca_ORPHA {code: $numericOrpha})
+      ON CREATE SET d.createdAt = datetime(), d.codePrefixed = $prefixedOrpha
+      SET d.updatedAt = datetime(),
+          d.codePrefixed = $prefixedOrpha
+
+      MERGE (b:Biomarcador {id: $biomarkerKey})
+      ON CREATE SET b.createdAt = datetime()
+      SET b.updatedAt = datetime(),
+          b.code = $analyteCode,
+          b.systemUri = $analyteSystem,
+          b.nome = $analyteDisplay,
+          b.lastProjectionEventId = $eventId
+
+      MERGE (d)-[r:POSSUI_BIOMARCADOR]->(b)
+      ON CREATE SET r.createdAt = datetime()
+      SET r.updatedAt = datetime(),
+          r.biomarkerId = $biomarkerId,
+          r.biomarkerRole = $biomarkerRole,
+          r.lastProjectionEventId = $eventId
+
+      RETURN d.code AS orphaCode, b.id AS biomarkerKey
+    `;
+
+    await session.run(cypher, {
+      numericOrpha,
+      prefixedOrpha,
+      biomarkerKey,
+      analyteCode,
+      analyteSystem,
+      analyteDisplay: normalizeText(analyte.display) || analyteCode,
+      biomarkerId: normalizeText(payload.biomarkerId),
+      biomarkerRole: normalizeText(payload.biomarkerRole),
+      eventId: normalizeText(event.eventId),
+    });
+
+    return {
+      projected: true,
+      eventType: event.eventType,
+      orphaCode: numericOrpha,
+      biomarkerKey,
+    };
   }
 }
 

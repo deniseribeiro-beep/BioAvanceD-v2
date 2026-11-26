@@ -120,8 +120,16 @@ export function useSamplesPage() {
   const selectedSamples = filteredSamples.filter((sample) => selectedSampleIds.includes(sample.id));
 
   const submitSearch = () => {
-    setSearch(searchInput.trim());
+    const term = searchInput.trim();
+    setSearch(term);
     setCurrentPage(1);
+    // Server-side specimenId lookup when the term looks like an id so the
+    // default 50-row page cannot hide a just-created sample (ui-mongo-binding).
+    if (/^\d{4,}$/.test(term)) {
+      void loadSamples({ specimenId: term });
+    } else if (!term) {
+      void loadSamples();
+    }
   };
 
   return {

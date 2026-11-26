@@ -834,9 +834,9 @@ services:
 
   reference-data-bootstrap-edam-test:
     # RF028 (#374): one-shot, idempotent EDAM reference-data import —
-    # sixteenth and final of the Fase 2 sources, closing out the chain.
-    # Runs after reference-data-bootstrap-cl-test completes, matching the
-    # dev stack's documented recommended order.
+    # sixteenth of the Fase 2 sources. Runs after
+    # reference-data-bootstrap-cl-test completes, matching the
+    # documented recommended order. Biomarker associations follow EDAM.
     build:
       context: ./api/backend
       dockerfile: Dockerfile.dev
@@ -845,6 +845,25 @@ services:
     command: ["npm", "run", "reference:import:edam"]
     depends_on:
       reference-data-bootstrap-cl-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-biomarker-associations-test:
+    # SRC_MARKERDB curated/full JSONL → biomarkerAssociations (ELM-0275..0285).
+    # After HGNC/LOINC/EDAM so analyte codes resolve against promoted refs.
+    # ADR 2026-11-25: official import, not fictitious #1206 seed.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:biomarker-associations"]
+    depends_on:
+      reference-data-bootstrap-edam-test:
+        condition: service_completed_successfully
+      reference-data-bootstrap-hgnc-test:
+        condition: service_completed_successfully
+      reference-data-bootstrap-loinc-test:
         condition: service_completed_successfully
     networks: [bioavanced-test]
 

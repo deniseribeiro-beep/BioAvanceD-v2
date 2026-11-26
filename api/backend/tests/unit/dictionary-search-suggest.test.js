@@ -220,6 +220,44 @@ describe('dictionary routes - /search and /suggest (Neo4j + redis cache)', () =>
         3600,
         JSON.stringify(res.body)
       );
+      expect(session.run.mock.calls[0][0]).toContain('Doenca_ORPHA');
+      expect(session.run.mock.calls[0][1]).toEqual(
+        expect.objectContaining({ numericOrpha: '558', prefixedOrpha: 'ORPHA:558' }),
+      );
+    });
+
+    it('accepts orphaCode with ORPHA: prefix and normalizes the cache key', async () => {
+      const session = fakeSession([
+        record({
+          d: { properties: { code: '324', nome: 'Fabry' } },
+          fenotipos: [],
+          biomarcadores: [],
+        }),
+      ]);
+      const setEx = vi.fn().mockResolvedValue('OK');
+      const app = loadRouteWithMocks({
+        session,
+        createClientImpl: () => ({
+          isOpen: true,
+          on: vi.fn(),
+          connect: vi.fn().mockResolvedValue(undefined),
+          get: vi.fn().mockResolvedValue(null),
+          setEx,
+        }),
+      });
+
+      const res = await request(app).get('/api/dictionary/suggest?orphaCode=ORPHA:324');
+
+      expect(res.status).toBe(200);
+      expect(res.body.disease.display).toBe('Fabry');
+      expect(setEx).toHaveBeenCalledWith(
+        'orpha:suggest:324',
+        3600,
+        expect.any(String),
+      );
+      expect(session.run.mock.calls[0][1]).toEqual(
+        expect.objectContaining({ numericOrpha: '324', prefixedOrpha: 'ORPHA:324' }),
+      );
     });
 
     it('returns a cached payload without hitting Neo4j on a cache hit', async () => {

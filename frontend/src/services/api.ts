@@ -96,6 +96,7 @@ const TOKEN_OPTIONAL_ROUTES = [
   '/e-consent/consent-tokens/accept',
   '/e-consent/consent-tokens/revoke',
   '/e-consent/consent-tokens/signed-tcle',
+  '/e-consent/govbr',
   // #822: the other two participant-facing pages, on the JWT token system.
   // Same reasoning as the pair above -- EConsentPage and EConsentImportPage
   // are entered by emailed link, so the visitor has no session and the token
@@ -342,7 +343,8 @@ export const phoneCodeService = {
 
 // ========== SAMPLE SERVICES ==========
 export const sampleService = {
-  getAll: () => api.get<ApiEnvelope<Sample[]>>('/samples'),
+  getAll: (params?: { limit?: number; skip?: number; specimenId?: string; participantId?: string; sampleType?: string }) =>
+    api.get<ApiEnvelope<Sample[]>>('/samples', { params }),
   getById: (id: number | string) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
@@ -966,6 +968,13 @@ export const consentService = {
     signatureImageBase64?: string;
     signatureMimeType?: string;
     collectionPlace?: string;
+    location?: {
+      status: 'unavailable' | 'captured';
+      latitude?: number;
+      longitude?: number;
+      accuracyMeters?: number | null;
+      capturedAt?: string | null;
+    };
   }) => api.post<PatientConsent>('/e-consent/consents', data),
   // RF010 AC6 (#1375): `consentId` is the consent's Mongo _id. No scope means
   // the whole consent; a scope names the permission codes to withdraw.
@@ -1019,7 +1028,12 @@ export const consentTokenService = {
   accept: (
     participantId: string,
     token: string,
-    manifestation: { consentTemplateId: string; responses: Record<string, boolean> }
+    manifestation: {
+      consentTemplateId: string;
+      responses: Record<string, boolean>;
+      location?: ConsentPanelLocation;
+      identityProof?: ConsentIdentityProof | null;
+    }
   ) =>
     api.post<{
       success: boolean;
@@ -1044,6 +1058,28 @@ export const consentTokenService = {
       { patientId: participantId, token },
       { responseType: 'blob' }
     ),
+};
+
+export type ConsentIdentityProof =
+  | { provider: 'govbr'; sub: string; email?: string | null; name?: string | null; mock?: boolean; verifiedAt?: string }
+  | { provider: 'icp-brasil'; certificateThumbprint: string; signedTermHash?: string; subjectDn?: string; verifiedAt?: string }
+  | { provider: 'panel' };
+
+export const govbrConsentService = {
+  status: () =>
+    api.get<{ enabled: boolean; issuer: string | null; mock: boolean }>('/e-consent/govbr/status'),
+  start: (participantId: string, token: string) =>
+    api.post<{ authorizationUrl: string; state: string }>('/e-consent/govbr/start', {
+      patientId: participantId,
+      participantId,
+      token,
+    }),
+  callback: (code: string, state: string) =>
+    api.get<{
+      success: boolean;
+      participantId: string;
+      identityProof: ConsentIdentityProof;
+    }>('/e-consent/govbr/callback', { params: { code, state } }),
 };
 
 export type ConsentPanelLocation =

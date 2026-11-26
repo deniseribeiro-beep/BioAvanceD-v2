@@ -123,6 +123,7 @@ async function buildLocalSemanticSuggestions(db, orphaCode) {
     $or: [
       { 'relacoes.orpha': normalizedOrpha },
       { 'relacoes.orpha': `ORPHA:${normalizedOrpha}` },
+      { codigo: normalizedOrpha },
       { codigo: `ORPHA:${normalizedOrpha}` },
     ],
     ativo: { $ne: false },
@@ -332,38 +333,75 @@ router.get('/search', async (req, res) => {
 router.get('/suggest', async (req, res) => {
   const { orphaCode } = req.query;
   if (!orphaCode) return res.status(400).json({ error: 'Missing orphaCode' });
-  const cacheKey = `orpha:suggest:${orphaCode}`;
+  // Accept "324" or "ORPHA:324"; Neo4j nodes may store either spelling.
+  const numericOrpha = normalizeOrphaCode(orphaCode);
+  if (!numericOrpha) return res.status(400).json({ error: 'Missing orphaCode' });
+  const prefixedOrpha = `ORPHA:${numericOrpha}`;
+  const cacheKey = `orpha:suggest:${numericOrpha}`;
   try {
     const cached = await getCacheValue(cacheKey);
     if (cached) return sendSuggestions(req, res, JSON.parse(cached));
 
     const driver = getNeo4jDriver();
     const session = driver.session();
-    // Cypher: busca HPOs e Biomarcadores relacionados
+    // Cypher: match numeric or prefixed code on Doenca_ORPHA.
     const cypher = `
-      MATCH (d:Doenca_ORPHA {code: $orphaCode})
+      MATCH (d:Doenca_ORPHA)
+      WHERE d.code = $numericOrpha
+         OR d.code = $prefixedOrpha
+         OR replace(toUpper(coalesce(d.code, '')), 'ORPHA:', '') = $numericOrpha
       OPTIONAL MATCH (d)-[:APRESENTA_FENOTIPO]->(h:Fenotipo_HPO)
       OPTIONAL MATCH (d)-[:POSSUI_BIOMARCADOR]->(b:Biomarcador)
       RETURN d, collect(DISTINCT h) as fenotipos, collect(DISTINCT b) as biomarcadores
+      LIMIT 1
     `;
-    const result = await session.run(cypher, { orphaCode }, neo4jTxConfig(currentRequestId()));
+    const result = await session.run(
+      cypher,
+      { numericOrpha, prefixedOrpha },
+      neo4jTxConfig(currentRequestId())
+    );
     await session.close();
-    if (!result.records.length) return res.status(404).json({ error: 'Not found' });
+    if (!result.records.length) {
+      const dbMiss = req.app.locals.db;
+      if (dbMiss && typeof dbMiss.collection === 'function') {
+        const fallbackMiss = await buildLocalSemanticSuggestions(dbMiss, numericOrpha);
+        if (fallbackMiss) {
+          await setCacheValue(cacheKey, 3600, JSON.stringify(fallbackMiss));
+          return sendSuggestions(req, res, fallbackMiss);
+        }
+      }
+      return res.status(404).json({ error: 'Not found' });
+    }
     const d = result.records[0].get('d').properties;
-    const phenotypes = result.records[0].get('fenotipos')
+    let phenotypes = result.records[0].get('fenotipos')
       .map((h) => (h && h.properties ? normalizeCoding({
         system: 'http://purl.obolibrary.org/obo/hp.owl',
         code: h.properties.code,
         display: h.properties.nome || h.properties.name,
       }, 'http://purl.obolibrary.org/obo/hp.owl') : null))
       .filter(Boolean);
-    const biomarkers = result.records[0].get('biomarcadores')
+    let biomarkers = result.records[0].get('biomarcadores')
       .map((b) => (b && b.properties ? normalizeCoding({
         system: 'http://loinc.org',
         code: b.properties.code || b.properties.nome,
         display: b.properties.nome || b.properties.name,
       }, 'http://loinc.org') : null))
       .filter(Boolean);
+
+    // Until PHR-003 outbox projects POSSUI_BIOMARCADOR, Neo4j often returns
+    // the disease with an empty biomarker list — merge Mongo associations.
+    if (biomarkers.length === 0) {
+      const dbMerge = req.app.locals.db;
+      if (dbMerge && typeof dbMerge.collection === 'function') {
+        const local = await buildLocalSemanticSuggestions(dbMerge, numericOrpha);
+        if (local?.biomarkers?.length) {
+          biomarkers = local.biomarkers;
+        }
+        if (phenotypes.length === 0 && local?.phenotypes?.length) {
+          phenotypes = local.phenotypes;
+        }
+      }
+    }
 
     const response = {
       disease: normalizeCoding({
@@ -384,7 +422,7 @@ router.get('/suggest', async (req, res) => {
     }
 
     try {
-      const fallback = await buildLocalSemanticSuggestions(db, orphaCode);
+      const fallback = await buildLocalSemanticSuggestions(db, numericOrpha);
       if (fallback) {
         await setCacheValue(cacheKey, 3600, JSON.stringify(fallback));
         return sendSuggestions(req, res, fallback);
@@ -419,6 +457,113 @@ router.get('/disease-profile', async (req, res) => {
     return res.json({
       disease: normalizeDiseaseProfile(disease),
     });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+const SIGTAP_SYSTEM_URI = 'https://terminologia.saude.gov.br/fhir/CodeSystem/BRTabelaSUS';
+
+router.get('/procedures/search', async (req, res) => {
+  const db = req.app.locals.db;
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+
+  const query = String(req.query?.query || req.query?.q || '').trim();
+  if (!query) {
+    return res.status(400).json({ error: 'Missing query' });
+  }
+
+  const limit = Math.min(Math.max(Number(req.query?.limit || 20), 1), 50);
+  try {
+    const regex = new RegExp(escapeRegex(query), 'i');
+    const concepts = await db.collection('terminologyConcepts')
+      .find({
+        systemUri: SIGTAP_SYSTEM_URI,
+        obsolete: { $ne: true },
+        $or: [{ code: regex }, { display: regex }],
+      })
+      .sort({ display: 1 })
+      .limit(limit)
+      .toArray();
+
+    const institutional = await db.collection('institutionalProcedureCodes')
+      .find({
+        active: { $ne: false },
+        $or: [{ code: regex }, { display: regex }, { name: regex }],
+      })
+      .sort({ display: 1, name: 1 })
+      .limit(limit)
+      .toArray()
+      .catch(() => []);
+
+    const procedures = [
+      ...concepts.map((row) => ({
+        code: row.code,
+        display: row.display,
+        systemUri: row.systemUri || SIGTAP_SYSTEM_URI,
+        source: 'SIGTAP',
+      })),
+      ...institutional.map((row) => ({
+        code: row.code,
+        display: row.display || row.name || row.code,
+        systemUri: row.systemUri || 'institutional',
+        source: 'INSTITUTIONAL',
+      })),
+    ].slice(0, limit);
+
+    return res.json({ procedures });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/institutional-procedures', async (req, res) => {
+  const db = req.app.locals.db;
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const rows = await db.collection('institutionalProcedureCodes')
+      .find({ active: { $ne: false } })
+      .sort({ display: 1, name: 1 })
+      .limit(200)
+      .toArray();
+    return res.json({
+      procedures: rows.map((row) => ({
+        id: String(row._id),
+        code: row.code,
+        display: row.display || row.name || row.code,
+        active: row.active !== false,
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/institutional-procedures', async (req, res) => {
+  const db = req.app.locals.db;
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+  const code = String(req.body?.code || '').trim();
+  const display = String(req.body?.display || req.body?.name || '').trim();
+  if (!code || !display) {
+    return res.status(400).json({ error: 'code and display are required' });
+  }
+  try {
+    const now = new Date();
+    const result = await db.collection('institutionalProcedureCodes').updateOne(
+      { code },
+      {
+        $set: {
+          code,
+          display,
+          name: display,
+          active: true,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      { upsert: true },
+    );
+    return res.status(result.upsertedCount ? 201 : 200).json({ code, display, active: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

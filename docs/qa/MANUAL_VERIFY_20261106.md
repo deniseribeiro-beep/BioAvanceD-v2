@@ -12,11 +12,20 @@ Homolog em `0274b0f6` (`feature/homolog-consent-mail-directory`), proxy `:8080`,
 | TABLE-ACTIONS | PASS após fix | Ações do inventário passaram a `.table-actions` em linha. |
 | BOX-LABEL | PASS após fix | Seletor da grade usa o último segmento do `path` quando `boxName` falta. |
 
+## TCLE gov.br / ICP (wave PHR)
+
+| ID | Resultado | Nota |
+|---|---|---|
+| TCLE-GOVBR-01 | INSTRUMENTED | Flag `CONSENT_GOVBR_OIDC_ENABLED`; rotas `/api/e-consent/govbr/{status,start,callback}`; botão na `ConsentTokenPage` |
+| TCLE-GEO-ACCEPT | INSTRUMENTED | Aceite remoto envia `location` (`readPanelLocation`) + `identityProof` na evidência |
+| TCLE-ICP-01 | INSTRUMENTED | `icpBrasil.service` + evidência `identityProvider: icp-brasil` quando proof no accept; flag `CONSENT_ICP_BRASIL_ENABLED` |
+| TCLE-MANUAL | PENDING | Homolog: habilitar mock `GOVBR_OIDC_MOCK=true`, percorrer link do participante, ver proof na evidence JSON |
+
 ## Skips
 
 | ID | Rota / UI | Por que skip | O que verificar manualmente | Critério de ok |
 |---|---|---|---|---|
-| SKIP-001 | `/biomarker-associations` | Homolog sem catálogo analito–condição (`biomarkerAssociations` = 0) | Abrir a lista após importar associações reais | Linhas do catálogo aparecem; Nova Associação só para exceção |
+| BIO-001 | `/biomarker-associations` | **PASS** (2026-11-25) | Catálogo MarkerDB fixture (16) importado em produção GCP; lista com busca/paginação; CTA empty-state só quando `itemCount = 0`; suggest Mongo fallback com `orphaCode` do fixture |
 | SKIP-002 | `/samples/:id`, `/logs/:id`, `/reports/:id`, `/admin/tcle/edit/:id` | Precisam de id real; smoke de ouro usa `demo-id` | Abrir um id existente da lista | Página carrega sem layout colapsado |
 | SKIP-003 | `/next/intake` | Wizard foundation sem `h1` de página shell | Percorrer os passos do intake | Conteúdo do wizard visível |
 | SKIP-004 | Gate e2e completo (`scripts/e2e-gate.sh`) | Fora do escopo deste passe | Rodar o gate no CI ou na VM com disco livre | Gate verde |
