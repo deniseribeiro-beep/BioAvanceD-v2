@@ -154,6 +154,12 @@ Ver `PENDING_HUMAN_REVIEW_20261125_passo3_wave.md` (DECIDED). Git: `feature/dock
 - Tip: `acf7f16f` — OUT `e2e-gate-out-phr-20261126-051234` — `E2E_GATE_EXIT=0` — **605 passed / 1 skipped / 0 failed** (14.0m)
 - Inclui: axe `/facility-management`, ui-mongo-binding samples, inline-storage-movement, audit-chain-integrity, `tcle-govbr-icp`
 
+### Dumps / Mongo (fechamento 2026-11-26)
+- Docs/staging: 9 pares MarkerDB TSV+XML + JSONL 2505; Zenodo pack `docs/data/zenodo-pack/` (manifest+checksums+zip)
+- Prod `bioavanced_dev`: `terminologyConcepts=556020` (full-lab HPO/ORPHA/MONDO/LOINC/…); `biomarkerAssociations=2521` (2505 MarkerDB + 16 fixture ORPHA; Fabry GLA/lyso-Gb3)
+- Test stack: `biomarkerAssociations=2521`
+- Fora deste fechamento (documentado stub/sample): SIGTAP full na coleção (só sample no pack), SRC_CPATH/SRC_FDA_PGX sem dump
+
 ### Critérios smoke
 - `/biomarker-associations` itemCount > 0; suggest ORPHA fixture com biomarkers.length > 0 (Mongo)
 - Wizard: buscar procedimento SIGTAP; alergia ATC; GPS sugere Local da coleta
