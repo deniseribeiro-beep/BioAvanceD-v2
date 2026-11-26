@@ -1,28 +1,26 @@
-import { useState, useMemo, Fragment, CSSProperties } from 'react';
+import { useState, useMemo, useEffect, Fragment, CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
-import Modal from '../components/UI/Modal';
 import { Edit, Trash2, Search, ArrowLeft } from 'lucide-react';
-import StatusBadge, { ConsentStatus } from '../components/Consent/StatusBadge';
-import SignaturePad from '../components/Consent/SignaturePad';
+import StatusBadge from '../components/Consent/StatusBadge';
+import InPersonConsentModal from '../components/Consent/InPersonConsentModal';
 import { Patient } from '../types/models';
 import { usePatients } from '../hooks/usePatients';
 import { useAuth } from '../contexts/AuthContext';
-import { dataImportService, patientService } from '../services/api';
+import { patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
-import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
-import { convertExcelFileToFhirBundle, downloadFhirExcelTemplate } from '../utils/fhirExcelImport';
 import { hasConsentRecord, normalizeConsentStatus } from './patientsConsentStatus';
-import './PatientsPage.css';
+
+const DIRECTORY_REFRESH_MS = 15_000;
 
 const styles: Record<string, CSSProperties> = {
   consentActions: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: '11rem 13.5rem 11rem auto',
     alignItems: 'center',
-    gap: '0.5rem',
-    flexWrap: 'wrap'
+    columnGap: '0.5rem'
   },
   consentActionButton: {
     padding: '0.3rem 0.6rem',
@@ -31,24 +29,13 @@ const styles: Record<string, CSSProperties> = {
   consentStatusCell: {
     display: 'flex',
     alignItems: 'center'
-  },
-  consentHint: {
-    fontSize: '0.8rem',
-    color: 'var(--text-light)'
-  },
-  importInfoPanel: {
-    marginBottom: '1rem',
-    padding: '0.9rem 1rem',
-    border: '1px solid var(--border)',
-    borderRadius: '8px',
-    backgroundColor: 'var(--surface)'
   }
 };
 
 export default function PatientsPage() {
   const navigate = useNavigate();
   const { t, language } = useLanguage();
-  const { patients, loading, error, deletePatient, loadPatients } = usePatients();
+  const { patients, loading, error, deletePatient, loadPatients, refreshPatients } = usePatients();
   const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [searchResults, setSearchResults] = useState<Patient[]>([]);
@@ -57,8 +44,32 @@ export default function PatientsPage() {
   const [resendingConsentFor, setResendingConsentFor] = useState<string | null>(null);
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
   const [activeParticipantId, setActiveParticipantId] = useState<string | null>(null);
-  const [consentOverrides, setConsentOverrides] = useState<Record<string, ConsentStatus>>({});
   const canImportPatients = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador' || user?.accessType === 3 || user?.accessType === 4;
+
+  useEffect(() => {
+    let intervalId = 0;
+    const stop = () => window.clearInterval(intervalId);
+    const start = () => {
+      stop();
+      intervalId = window.setInterval(() => {
+        if (!document.hidden) void refreshPatients();
+      }, DIRECTORY_REFRESH_MS);
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+        return;
+      }
+      void refreshPatients();
+      start();
+    };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [refreshPatients]);
 
   const isConnectionError = (errorMessage?: string) => {
     const normalized = String(errorMessage || '').toLowerCase();
@@ -75,16 +86,6 @@ export default function PatientsPage() {
     setActiveParticipantId(null);
   };
 
-  const handleConfirmSignature = (_dataUrl: string) => {
-    if (!activeParticipantId) return;
-    setConsentOverrides((prev) => ({
-      ...prev,
-      [activeParticipantId]: 'GRANTED'
-    }));
-    setIsSignatureModalOpen(false);
-    setActiveParticipantId(null);
-  };
-  
   // Handler para busca de pacientes
   const handleSearch = async (term: string) => {
     if (!term || term.trim().length === 0) {
@@ -222,195 +223,16 @@ export default function PatientsPage() {
     }
   };
 
-  const getButtonLabel = (key: string, en: string, es: string) => {
-    if (language === 'en-US') return en;
-    if (language === 'es-ES') return es;
-    return t(key);
-  };
-
   const getPatientsActionLabel = (key: string, en: string, es: string) => {
     if (language === 'en-US') return en;
     if (language === 'es-ES') return es;
     return t(key);
   };
 
-  // Estado para importação FHIR
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [importedFile, setImportedFile] = useState<File | null>(null);
-  const [importedJson, setImportedJson] = useState<any>(null);
-  const [importExcelFile, setImportExcelFile] = useState<File | null>(null);
-  const [fhirImportStep, setFhirImportStep] = useState(1);
-  const [fhirBatchId, setFhirBatchId] = useState('');
-  const [fhirBatch, setFhirBatch] = useState<any>(null);
-  const [fhirStagingRows, setFhirStagingRows] = useState<any[]>([]);
-  const [fhirConsentSummary, setFhirConsentSummary] = useState<any>(null);
-  const [importLoading, setImportLoading] = useState(false);
-  const [importResult, setImportResult] = useState<ImportResultSummaryData | null>(null);
-
-  const resetFhirImportState = () => {
-    setIsImportModalOpen(false);
-    setImportedFile(null);
-    setImportedJson(null);
-    setImportExcelFile(null);
-    setFhirImportStep(1);
-    setFhirBatchId('');
-    setFhirBatch(null);
-    setFhirStagingRows([]);
-    setFhirConsentSummary(null);
-    setImportResult(null);
-  };
-
-  const getFhirResourceCount = (resourceType: string) => {
-    if (!importedJson?.entry || !Array.isArray(importedJson.entry)) return 0;
-    return importedJson.entry.filter((entry: any) => entry?.resource?.resourceType === resourceType).length;
-  };
-
-  const getReadyToCommitCount = () => fhirStagingRows.filter((row) => row.status === 'READY_TO_COMMIT').length;
-  const getValidWithEmailCount = () => fhirStagingRows.filter((row) => row.status === 'VALID' && row.normalized?.patientEmail).length;
-  const getFhirValidationSummary = () => {
-    const counts = fhirBatch?.counts || {};
-    return {
-      total: counts.total ?? fhirStagingRows.length,
-      valid: counts.valid ?? fhirStagingRows.filter((row) => row.status === 'VALID').length,
-      pendingConsent: counts.pendingConsent ?? fhirStagingRows.filter((row) => row.status === 'PENDING_CONSENT').length,
-      errors: counts.errors ?? fhirStagingRows.filter((row) => row.status === 'ERROR' || row.status === 'NEEDS_EMAIL' || row.status === 'CONSENT_SEND_FAILED').length,
-      readyToCommit: counts.readyToCommit ?? fhirStagingRows.filter((row) => row.status === 'READY_TO_COMMIT').length,
-    };
-  };
-
-  const refreshFhirBatchState = (data: any) => {
-    const batch = data?.batch || data?.data?.batch || null;
-    const records = data?.records || data?.data?.records || [];
-    setFhirBatch(batch);
-    setFhirStagingRows(Array.isArray(records) ? records : []);
-    const nextBatchId = String(batch?._id || batch?.id || data?.batchId || data?.data?.batchId || fhirBatchId || '');
-    if (nextBatchId) setFhirBatchId(nextBatchId);
-  };
-
-  const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setImportExcelFile(e.target.files?.[0] || null);
-  };
-
-  const handleConvertExcelToFhir = async () => {
-    if (!importExcelFile) {
-      alert('Selecione um arquivo Excel preenchido com o modelo.');
-      return;
-    }
-
-    setImportLoading(true);
-    try {
-      const bundle = await convertExcelFileToFhirBundle(importExcelFile);
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/fhir+json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'importacao-fhir-bundle.json';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      setImportedJson(bundle);
-      setImportedFile(new File([blob], 'importacao-fhir-bundle.json', { type: 'application/fhir+json' }));
-      setFhirImportStep(2);
-    } catch (err: any) {
-      alert(err?.message || 'Não foi possível converter o Excel para JSON FHIR.');
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
-  // Handler para leitura do arquivo
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type === 'application/json') {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const json = JSON.parse(ev.target?.result as string);
-          setImportedFile(file);
-          setImportedJson(json);
-          setFhirImportStep(2);
-          setFhirBatchId('');
-          setFhirBatch(null);
-          setFhirStagingRows([]);
-          setFhirConsentSummary(null);
-        } catch (err) {
-          alert('Arquivo JSON inválido');
-          setImportedFile(null);
-          setImportedJson(null);
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      alert('Selecione um arquivo .json válido');
-      setImportedFile(null);
-      setImportedJson(null);
-    }
-  };
-
-  const handleValidateFhirBatch = async () => {
-    if (!importedJson) return;
-    setImportLoading(true);
-    setImportResult(null);
-    try {
-      const stagedResponse = fhirBatchId
-        ? await dataImportService.validateFhirBatch(fhirBatchId)
-        : await dataImportService.stageFhirBundle(importedJson);
-      const data = stagedResponse?.data || {};
-      refreshFhirBatchState(data);
-      setFhirImportStep(3);
-    } catch (err: any) {
-      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
-      setImportResult({ success: false, error: errorMessage || 'A importação em lote exige um FHIR R4 Bundle JSON.' });
-      alert('Erro ao validar lote: ' + (errorMessage || 'A importação em lote exige um FHIR R4 Bundle JSON.'));
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
-  const handleSendFhirConsents = async () => {
-    if (!fhirBatchId) return;
-    setImportLoading(true);
-    try {
-      const response = await dataImportService.sendFhirBatchConsents(fhirBatchId);
-      const data = response?.data || {};
-      refreshFhirBatchState(data);
-      const results = data.consentResults || [];
-      setFhirConsentSummary({
-        sent: results.filter((item: any) => item.sent).length,
-        failed: results.filter((item: any) => item.sent === false).length,
-        pending: (data.records || []).filter((row: any) => row.status === 'PENDING_CONSENT').length,
-      });
-      setFhirImportStep(5);
-    } catch (err: any) {
-      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
-      setImportResult({ success: false, error: errorMessage || 'Erro ao enviar TCLEs' });
-      alert('Erro ao enviar TCLEs: ' + (errorMessage || 'Erro desconhecido'));
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
-  const handleCommitFhirBatch = async () => {
-    if (!fhirBatchId || getReadyToCommitCount() === 0) return;
-    setImportLoading(true);
-    try {
-      const response = await dataImportService.commitFhirBatch(fhirBatchId);
-      refreshFhirBatchState(response?.data || {});
-      setImportResult({ success: true, message: 'Registros assinados salvos com sucesso.' });
-      await loadPatients();
-    } catch (err: any) {
-      const errorMessage = err?.response?.data?.error || err?.response?.data?.message || err?.message;
-      setImportResult({ success: false, error: errorMessage || 'Erro ao salvar registros assinados' });
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
   return (
-    <div className="page patients-page" data-testid="patients-page">
-      <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+    <div className="page-shell patients-page" data-testid="patients-page">
+      <div className="page-header" style={{ alignItems: 'center', flexWrap: 'nowrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
           <Button data-testid="patients-back-button" aria-label={t('common.back')} onClick={() => navigate('/dashboard')} variant="secondary" style={{ minWidth: 'auto' }}>
             <ArrowLeft size={18} />
           </Button>
@@ -422,7 +244,7 @@ export default function PatientsPage() {
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           {canImportPatients && (
             <Button data-testid="patients-import-fhir-button" variant="primary" onClick={() => navigate('/patients/import-fhir')}>
-              Importar FHIR
+              Importar dados
             </Button>
           )}
           <div style={{ 
@@ -549,6 +371,8 @@ export default function PatientsPage() {
           data-testid="patients-table"
           headers={[
             t('patients.tableId'),
+            t('patients.recordNumber'),
+            t('patients.birthDate'),
             t('patients.tableConsent'),
             t('patients.actions'),
           ]}
@@ -558,7 +382,7 @@ export default function PatientsPage() {
             const participantId = patient.participantId 
               ? String(patient.participantId) 
               : ((patient as any).id ? String((patient as any).id) : `patient-${index}`);
-            const rawConsentStatus = consentOverrides[participantId] || (patient as any).consentStatus || (patient as any).status;
+            const rawConsentStatus = (patient as any).consentStatus || (patient as any).status;
             const consentStatus = normalizeConsentStatus(String(rawConsentStatus || ''));
             const isConsentPending = consentStatus === 'PENDING';
             const canCollectSignature = consentStatus !== 'GRANTED';
@@ -567,6 +391,8 @@ export default function PatientsPage() {
               <Fragment key={`patient-fragment-${participantId}`}>
                 <tr key={`patient-row-${index}-${participantId}`} data-testid={`patient-row-${participantId}`}>
                   <td>{participantId}</td>
+                  <td>{patient.recordNumber || ''}</td>
+                  <td>{patient.birthDate || ''}</td>
                   <td>
                     <div style={styles.consentStatusCell}>
                       <StatusBadge status={consentStatus} />
@@ -575,68 +401,48 @@ export default function PatientsPage() {
                   {canViewFullData ? (
                     <td>
                       <div style={styles.consentActions} className="consent-actions">
-                        {canCollectSignature ? (
-                          <Button
-                            data-testid={`collect-signature-button-${participantId}`}
-                            variant="primary"
-                            onClick={() => handleOpenSignatureModal(participantId)}
-                            style={styles.consentActionButton}
-                            className="consent-action-button"
-                          >
-                            {getPatientsActionLabel('patients.collectSignature', 'Collect Signature', 'Recolectar firma')}
-                          </Button>
-                        ) : (
-                          <span style={styles.consentHint}>{t('patients.signed')}</span>
-                        )}
-                        <Button
-                          data-testid={`send-tcle-link-button-${participantId}`}
-                          variant="secondary"
-                          onClick={() => handleSendTcleLink(participantId)}
-                          disabled={resendingConsentFor === participantId}
-                          style={styles.consentActionButton}
-                          className="consent-action-button"
-                        >
-                          {resendingConsentFor === participantId
-                            ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
-                            : 'Enviar Link TCLE'}
-                        </Button>
-                        {isConsentPending && (
-                          <Button
-                            data-testid={`resend-consent-button-${participantId}`}
-                            variant="secondary"
-                            onClick={async () => {
-                              setResendingConsentFor(participantId);
-                              try {
-                                await patientService.resendConsentNotification(participantId);
-                                await loadPatients();
-                                alert(t('patients.notificationsResent'));
-                              } catch (err: any) {
-                                const errorMsg = err.response?.data?.message || err.message || t('patients.notificationsResendError');
-                                alert(errorMsg);
-                              } finally {
-                                setResendingConsentFor(null);
-                              }
-                            }}
-                            disabled={resendingConsentFor === participantId}
-                            style={styles.consentActionButton}
-                            className="consent-action-button"
-                          >
-                            {resendingConsentFor === participantId
-                              ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
-                              : getPatientsActionLabel('patients.resendNotifications', 'Resend Notifications', 'Reenviar notificaciones')}
-                          </Button>
-                        )}
-                        {hasConsentRecord(String(rawConsentStatus || '')) && (
-                          <Button
-                            data-testid={`consent-history-button-${participantId}`}
-                            variant="secondary"
-                            onClick={() => navigate(`/consents?participantId=${encodeURIComponent(participantId)}`)}
-                            style={styles.consentActionButton}
-                            className="consent-action-button"
-                          >
-                            Histórico do TCLE
-                          </Button>
-                        )}
+                        <div>
+                          {canCollectSignature && (
+                            <Button
+                              data-testid={`collect-signature-button-${participantId}`}
+                              variant="primary"
+                              onClick={() => handleOpenSignatureModal(participantId)}
+                              style={styles.consentActionButton}
+                              className="consent-action-button"
+                            >
+                              {getPatientsActionLabel('patients.collectSignature', 'Collect Signature', 'Recolectar firma')}
+                            </Button>
+                          )}
+                        </div>
+                        <div>
+                          {isConsentPending && (
+                            <Button
+                              data-testid={`send-tcle-link-button-${participantId}`}
+                              variant="secondary"
+                              onClick={() => handleSendTcleLink(participantId)}
+                              disabled={resendingConsentFor === participantId}
+                              style={styles.consentActionButton}
+                              className="consent-action-button"
+                            >
+                              {resendingConsentFor === participantId
+                                ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
+                                : 'Enviar TCLE por e-mail'}
+                            </Button>
+                          )}
+                        </div>
+                        <div>
+                          {hasConsentRecord(String(rawConsentStatus || '')) && (
+                            <Button
+                              data-testid={`consent-history-button-${participantId}`}
+                              variant="secondary"
+                              onClick={() => navigate(`/consents?participantId=${encodeURIComponent(participantId)}`)}
+                              style={styles.consentActionButton}
+                              className="consent-action-button"
+                            >
+                              Histórico do TCLE
+                            </Button>
+                          )}
+                        </div>
                         <div className="table-actions">
                           <button
                             data-testid={`edit-patient-button-${participantId}`}
@@ -672,9 +478,13 @@ export default function PatientsPage() {
       </Card>
       )}
 
-      <Modal isOpen={isSignatureModalOpen} onClose={handleCloseSignatureModal} title={t('patients.digitalSignature')}>
-        <SignaturePad onConfirm={handleConfirmSignature} onCancel={handleCloseSignatureModal} />
-      </Modal>
+      <InPersonConsentModal
+        isOpen={isSignatureModalOpen}
+        participantId={activeParticipantId}
+        title={t('patients.digitalSignature')}
+        onClose={handleCloseSignatureModal}
+        onSaved={loadPatients}
+      />
 
       {showSearchResults && (
         <div style={{ 

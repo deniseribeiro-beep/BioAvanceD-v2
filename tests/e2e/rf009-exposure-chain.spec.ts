@@ -104,6 +104,8 @@ test.describe('Telemetry exposure through the physical chain (#1392, RF009 AC5/A
     // (m60) and ends when the container leaves its position (m20).
     const loaded = await post(`/containers/${containerId}/specimens`, techA, { specimenId, loadedAt: m(100).toISOString() });
     expect(loaded.status(), await loaded.text()).toBe(201);
+    const prepared = await post('/racks', coordA, { storageRackId: rackId });
+    expect(prepared.status(), await prepared.text()).toBe(201);
     const placed = await post(`/containers/${containerId}/position`, techA, {
       storagePositionId: `${rackId}:A01`, placedAt: m(80).toISOString(), removedAt: m(20).toISOString(),
     });

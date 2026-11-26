@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 const temperatureController = require('../../src/controllers/temperature.controller');
 const temperatureService = require('../../src/services/temperature.service');
 const auditLogger = require('../../src/utils/auditLogger');
+const logger = require('../../src/utils/logger');
 
 function buildRes() {
   // Express always supplies res.locals; #1120's audit reason is written there.
@@ -155,10 +156,12 @@ describe('temperature.controller.createReading', () => {
     expect(res.status).toHaveBeenCalledWith(201);
   });
 
+  // temperatureValue, not value: a field this route does not read is stripped
+  // and audited first (RULE-025, #1582), and this case reads the CREATE row.
   it('#1080: writes an audit row for the machine caller, which has no req.user', async () => {
     const { logSpy, req, res } = machineIngestSetup(
       { sensorId: 's-1', organizationId: 'org-real' },
-      { sensorId: 's-1', value: 4.2 }
+      { sensorId: 's-1', temperatureValue: 4.2 }
     );
 
     await temperatureController.createReading(req, res);
@@ -194,6 +197,95 @@ describe('temperature.controller.createReading', () => {
     expect(db.collection).not.toHaveBeenCalledWith('sensors');
     expect(create.mock.calls[0][1].organizationId).toBe('org-a');
     expect(res.status).toHaveBeenCalledWith(201);
+  });
+});
+
+// RULE-025 (#1582): a reading sent with fields outside the route's contract
+// reaches the service without them and with their names, and one security
+// audit names them, never a value, written before any refusal. A
+// contract-only body writes none.
+describe('RULE-025 on the temperature routes (#1582)', () => {
+  const PII_NAME = 'Maria da Silva 123.456.789-09';
+  const extras = { patientName: PII_NAME, cpf: '12345678909' };
+
+  function setup({ sensorDoc = { sensorId: 's-1', organizationId: 'org-real' }, body, organizationScope } = {}) {
+    const fakeReading = { telemetryReadingId: 'r1', sensorId: 's-1', temperatureValue: 4.2, temperatureUnit: '°C' };
+    const create = vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
+    const findOne = vi.fn().mockResolvedValue(sensorDoc);
+    const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = { app: { locals: { db } }, body, ...(organizationScope ? { organizationScope } : {}) };
+    return { create, logSpy, req, res: buildRes() };
+  }
+
+  const strippedAudits = (logSpy) => logSpy.mock.calls
+    .map(([entry]) => entry)
+    .filter((entry) => entry && entry.action === 'TELEMETRY_PII_STRIPPED');
+
+  it('(a) passes a valid reading on without its extra fields and audits it once', async () => {
+    const { create, logSpy, req, res } = setup({
+      body: { sensorId: 's-1', temperatureValue: 4.2, ...extras },
+      organizationScope: { scope: 'global' },
+    });
+
+    await temperatureController.createReading(req, res);
+
+    const passed = create.mock.calls[0][1];
+    expect(passed).not.toHaveProperty('patientName');
+    expect(passed).not.toHaveProperty('cpf');
+    expect(passed).toMatchObject({ sensorId: 's-1', temperatureValue: 4.2 });
+    expect(create.mock.calls[0][2]).toEqual({ strippedFields: ['cpf', 'patientName'] });
+    expect(strippedAudits(logSpy)).toEqual([expect.objectContaining({
+      resourceType: 'TelemetryReading',
+      resourceId: 's-1',
+      severity: 'warning',
+      source: 'api',
+      payload: { ingestionService: 'temperature-api', fieldNames: ['cpf', 'patientName'], unlistedFieldCount: 0 },
+    })]);
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('(b) an unknown sensor on the machine route is refused 404 and still audited', async () => {
+    const { create, logSpy, req, res } = setup({ sensorDoc: null, body: { sensorId: 'ghost', temperatureValue: 4.2, ...extras } });
+
+    await temperatureController.createReading(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(strippedAudits(logSpy)).toHaveLength(1);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('(c) a contract-only body writes no security audit', async () => {
+    const { create, logSpy, req, res } = setup({ body: { sensorId: 's-1', temperatureValue: 4.2 } });
+
+    await temperatureController.createReading(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(strippedAudits(logSpy)).toHaveLength(0);
+    expect(create.mock.calls[0][2]).toEqual({ strippedFields: [] });
+  });
+
+  it('(d) no extra field value reaches a log or the response', async () => {
+    const logCalls = Object.keys(logger)
+      .filter((name) => typeof logger[name] === 'function')
+      .map((name) => vi.spyOn(logger, name).mockImplementation(() => {}));
+    const accepted = setup({ body: { sensorId: 's-1', temperatureValue: 4.2, ...extras }, organizationScope: { scope: 'global' } });
+    await temperatureController.createReading(accepted.req, accepted.res);
+    const refused = setup({ sensorDoc: null, body: { sensorId: 'ghost', temperatureValue: 4.2, ...extras } });
+    await temperatureController.createReading(refused.req, refused.res);
+
+    expect(accepted.res.status).toHaveBeenCalledWith(201);
+    expect(refused.res.status).toHaveBeenCalledWith(404);
+    // The refusal is logged, so the logs are read, not merely silent.
+    expect(logCalls.some((spy) => spy.mock.calls.length)).toBe(true);
+    const seen = JSON.stringify([
+      ...logCalls.flatMap((spy) => spy.mock.calls),
+      accepted.res.json.mock.calls,
+      refused.res.json.mock.calls,
+    ]);
+    expect(seen).not.toContain('Maria');
+    expect(seen).not.toContain('12345678909');
   });
 });
 

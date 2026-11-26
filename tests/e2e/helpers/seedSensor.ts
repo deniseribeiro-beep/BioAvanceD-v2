@@ -214,6 +214,12 @@ export async function findTemperatureIncident(sensorId: string): Promise<any | n
   return db.collection('temperatureIncidents').findOne({ sensorKey: sensorId });
 }
 
+/** #1516: reads back the mqtt_ingestion_audit rows the MQTT subscriber wrote for a sensor. */
+export async function findMqttIngestionAudits(sensorId: string): Promise<any[]> {
+  const db = await getDb();
+  return db.collection('mqtt_ingestion_audit').find({ sensorId }).toArray();
+}
+
 /** Reads back the EnvironmentalExcursion (if any) opened for a given device. */
 export async function findEnvironmentalExcursion(deviceId: string): Promise<any | null> {
   const db = await getDb();

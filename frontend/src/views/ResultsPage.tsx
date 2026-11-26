@@ -13,7 +13,6 @@ import { resultService, importService } from '../services/api';
 import { extractResponseEntity } from '../api/response.adapters';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import AnalysisUpload from '../components/AnalysisUpload.jsx';
-import './ResultsPage.css';
 
 // #905: the jobs-list endpoint returns the worker's flat counts
 // (totalRecords/successCount/errorCount) verbatim -- there is no nested
@@ -174,7 +173,7 @@ export default function ResultsPage() {
   };
 
   return (
-    <div className="page">
+    <div className="page-shell">
       <div className="page-header">
 
         <div>
@@ -404,7 +403,7 @@ export default function ResultsPage() {
                       <span className="metric-value">{selectedJob.metrics.skippedRecords}</span>
                     </div>
                   )}
-                  {selectedJob.metrics.processingTime && (
+                  {!!selectedJob.metrics.processingTime && (
                     <div className="metric-item">
                       <label className="metric-label">{t('results.metrics.processingTime', 'Tempo de Processamento')}</label>
                       <span className="metric-value">{selectedJob.metrics.processingTime.toFixed(2)}s</span>

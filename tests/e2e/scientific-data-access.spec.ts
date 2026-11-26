@@ -9,13 +9,29 @@ import {
   cleanupStorageBoxLocation,
   seedStudy,
   seedProtocol,
+  seedCollectionEntity,
   seedActiveConsent,
   seedDuoConcept,
+  clearCollectionRegime,
   closeSeedDb,
+  readSampleFileStorage,
+  readSampleFileRow,
+  readConsentAuthorizationDecision,
+  readDataFileVersions,
+  findSampleFileAuditRows,
+  findAccessRequestAuditRows,
+  deleteRetentionPolicies,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { deleteOrganizations } from './helpers/listOrganizations';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  assignGovernedCustody,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -37,8 +53,30 @@ function validSampleFields() {
 }
 
 const seededStorageBoxes: SeededStorageBox[] = [];
+// #1497 (RF004 AC2): the collection a specimen enters when its case names none.
+let governed: GovernedCollection | null = null;
 
-async function createRealSample(request: any, token: string): Promise<string> {
+test.beforeAll(async () => {
+  governed = await seedGovernedCollection(`rf007-rf024-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+});
+
+// RF007 AC3 (#1477): the DataFile retention policies a case creates, removed in afterAll.
+const createdRetentionPolicyIds: string[] = [];
+
+// RNF029 (#1477): the paths of every binary value in a stored document; a BSON
+// Binary reads back as a Binary (_bsontype 'Binary'), a Buffer or a Uint8Array.
+function binaryFieldPaths(value: unknown, at = ''): string[] {
+  if (value === null || typeof value !== 'object' || value instanceof Date) return [];
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array || (value as any)._bsontype === 'Binary') {
+    return [at || '(document)'];
+  }
+  if ((value as any)._bsontype) return [];
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+    binaryFieldPaths(child, at ? `${at}.${key}` : key)
+  );
+}
+
+async function createRealSample(request: any, token: string, extra: Record<string, unknown> = {}): Promise<string> {
   const participant = await createRealParticipant(request, apiBaseURL!, token);
   const seededStorageBox = await seedStorageBoxLocation();
   seededStorageBoxes.push(seededStorageBox);
@@ -51,9 +89,11 @@ async function createRealSample(request: any, token: string): Promise<string> {
       ...validSampleFields(),
       boxId,
       positionCode,
+      collectionId: governed!.collectionId,
+      ...extra,
     },
   });
-  expect([201, 202]).toContain(create.status());
+  expect([201, 202], await create.text()).toContain(create.status());
   return (await create.json()).data.specimenId;
 }
 
@@ -61,11 +101,14 @@ test.afterAll(async () => {
   await Promise.all(
     seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
   );
+  await deleteRetentionPolicies(createdRetentionPolicyIds).catch(() => {});
+  await cleanupGovernedCollection(governed);
+  await closeGovernedCollectionDb();
   await closeSeedDb();
 });
 
 test.describe('Scientific files (RF007) — real backend', () => {
-  test('uploads a scientific file, recording checksum/URI/encryption and auditing it (AC#3/4/5/6/7, RNF029)', async ({
+  test('uploads a scientific file, recording checksum/URI/encryption and auditing it (AC#2/3/5/6, RNF029)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -90,22 +133,35 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(upload.status()).toBe(201);
     const uploadBody = await upload.json();
 
-    // AC#5/RNF029 - URI, checksum and encryption metadata recorded.
+    // RF007 AC3, RNF029 C2 - URI, checksum and encryption metadata recorded.
     expect(uploadBody.data.uri).toMatch(/^objstore:\/\/samples\//);
     expect(uploadBody.data.checksum).toBe(expectedChecksum);
     expect(uploadBody.data.checksumAlgorithm).toBe('sha256');
     expect(uploadBody.data.encryption.encrypted).toBe(true);
     expect(uploadBody.data.encryption.algorithm).toBe('aes-256-gcm');
-    // AC#5 - access restrictions recorded alongside the file.
+    // RF007 AC3 - access restrictions recorded alongside the file.
     expect(uploadBody.data.accessPolicy).toMatchObject({ view: 'authenticated' });
-    // AC#5 ("formato")/dict-02 ELM-0317/ELM-0319 (#679) - format and
+    // dict-02 ELM-0317/ELM-0319 (#679) - format and
     // default pipeline-stage role recorded alongside the file.
     expect(uploadBody.data.fileFormat).toBe('text/csv');
     expect(uploadBody.data.fileRole).toBe('raw');
-    // AC#6 - linked to the specimen it was uploaded against.
+    // RF007 AC5 - linked to the specimen it was uploaded against.
     expect(uploadBody.data.specimenId).toBeTruthy();
+    // RF007 AC2/AC3, RNF016 C4 (#1419) - the binary went to the S3 store this
+    // stack runs: the URI is the content address, and the row records no local
+    // path (the filesystem store records one, the S3 store null). The owner
+    // segment is the sample's _id or its x-<hash>, not specimenId.
+    const storageObjectVersion: string = uploadBody.data.storageObjectVersion;
+    expect(storageObjectVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const objectHex = storageObjectVersion.slice('sha256:'.length);
+    expect(uploadBody.data.uri).toMatch(new RegExp(`^objstore://samples/[A-Za-z0-9_-]+/sha256/${objectHex}$`));
+    expect(await readSampleFileStorage(String(uploadBody.data._id))).toMatchObject({
+      storageUri: uploadBody.data.uri,
+      storageObjectVersion,
+      storagePath: null,
+    });
 
-    // AC#7 - upload is audited.
+    // RF007 AC6 - upload is audited.
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
 
     // RNF029 round-trip - decrypting on download reproduces the original
@@ -120,7 +176,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
     const downloadedChecksum = crypto.createHash('sha256').update(downloadedBytes).digest('hex');
     expect(downloadedChecksum).toBe(expectedChecksum);
 
-    // AC#7 - list (access) is also audited.
+    // RF007 AC6 - list (access) is also audited.
     const listWatch = await watchAuditTrail(request, apiBaseURL!, admin.token);
     const list = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -260,7 +316,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(upload.status()).toBe(400);
   });
 
-  test('replaces a scientific file, recomputing checksum/encryption and auditing the substitution (AC#7, #334)', async ({
+  test('replaces a scientific file, recomputing checksum/encryption and auditing the substitution (AC#2/6, #334)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -307,7 +363,7 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(replaceBody.data.encryption.encrypted).toBe(true);
     expect(replaceBody.data.uri).toMatch(/^objstore:\/\/samples\//);
 
-    // AC#7 - substituição is audited, same as upload/access/removal.
+    // AC#6 - the substitution (a new version) is audited, same as upload/access/removal.
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
 
     // Round-trip proof: downloading now serves the NEW content, decrypted
@@ -321,6 +377,167 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(downloadedBytes.equals(replacementContent)).toBe(true);
     const downloadedChecksum = crypto.createHash('sha256').update(downloadedBytes).digest('hex');
     expect(downloadedChecksum).toBe(expectedNewChecksum);
+  });
+
+  test('a replace keeps the previous checksum in a DataFileVersion, a delete is logical and audited, and the file carries its retention policy (RF007 AC3-6, #1477)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sampleID = await createRealSample(request, admin.token);
+
+    // RF007 AC3 (V2E-0475): the server records the active DataFile policy on the file.
+    const policy = await request.post(`${apiBaseURL}/api/retention-policies`, {
+      headers: auth,
+      data: {
+        applicableEntityTypes: ['DataFile'],
+        triggerEvent: 'creation',
+        postRetentionAction: 'destroy',
+        retentionPeriod: 'P3650D',
+        jurisdiction: 'BR',
+        retentionBasis: ['RF007 AC3 e2e fixture basis'],
+        legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+        reviewRequired: false,
+      },
+    });
+    expect(policy.status(), await policy.text()).toBe(201);
+    const retentionPolicyId = String((await policy.json()).data._id);
+    createdRetentionPolicyIds.push(retentionPolicyId);
+
+    const originalContent = Buffer.from('RF007 AC4 e2e version 1 bytes');
+    const originalChecksum = crypto.createHash('sha256').update(originalContent).digest('hex');
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: auth,
+      multipart: { file: { name: 'versioned.csv', mimeType: 'text/csv', buffer: originalContent } },
+    });
+    expect(upload.status(), await upload.text()).toBe(201);
+    const uploaded = (await upload.json()).data;
+    const fileID = String(uploaded._id);
+    expect(uploaded.checksum).toBe(originalChecksum);
+    expect(uploaded.retentionPolicyId).toBe(retentionPolicyId);
+
+    // RF007 AC4: the replace writes a version 1 for the superseded binary and a version 2 for the new one.
+    const replacementContent = Buffer.from('RF007 AC4 e2e version 2 bytes, a different payload');
+    const replacementChecksum = crypto.createHash('sha256').update(replacementContent).digest('hex');
+    const replace = await request.put(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/replace`, {
+      headers: auth,
+      multipart: {
+        changeReason: 'RF007 AC4 e2e correction',
+        file: { name: 'versioned-v2.csv', mimeType: 'text/csv', buffer: replacementContent },
+      },
+    });
+    expect(replace.status(), await replace.text()).toBe(200);
+    const replaced = (await replace.json()).data;
+    expect(replaced.versionNumber).toBe(2);
+    expect(replaced.checksum).toBe(replacementChecksum);
+
+    const versions = await readDataFileVersions(fileID);
+    expect(versions.map((version) => version.versionNumber)).toEqual([1, 2]);
+    const [baseline, current] = versions;
+    expect(baseline).toMatchObject({
+      checksum: originalChecksum,
+      objectUri: uploaded.uri,
+      previousVersionId: null,
+      changeReason: 'initial upload',
+      retentionPolicyId,
+    });
+    expect(current).toMatchObject({
+      checksum: replacementChecksum,
+      objectUri: replaced.uri,
+      previousVersionId: baseline.dataFileVersionId,
+      changeReason: 'RF007 AC4 e2e correction',
+      retentionPolicyId,
+    });
+    const replaceAudit = await findSampleFileAuditRows('FILE_REPLACE', fileID);
+    expect(replaceAudit).toHaveLength(1);
+    expect(replaceAudit[0].payload).toMatchObject({
+      previousChecksum: originalChecksum,
+      checksum: replacementChecksum,
+      dataFileVersionId: current.dataFileVersionId,
+      versionNumber: 2,
+    });
+
+    // RF007 AC3: the listed file still carries its policy after the replace.
+    const listed = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, { headers: auth });
+    expect(listed.status()).toBe(200);
+    expect((await listed.json()).data.find((f: any) => String(f._id) === fileID).retentionPolicyId).toBe(retentionPolicyId);
+
+    // RF007 AC6: the delete marks the row and keeps it, its binary's URI and its versions.
+    const remove = await request.delete(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}`, { headers: auth });
+    expect(remove.status(), await remove.text()).toBe(200);
+    const row = await readSampleFileRow(fileID);
+    expect(row).not.toBeNull();
+    expect(row!.deletedAt).toBeInstanceOf(Date);
+    expect(row!.deletedByAnonId).toBeTruthy();
+    expect(row!.storageUri).toBe(replaced.uri);
+    expect(row!.checksum).toBe(replacementChecksum);
+    expect(row!.retentionPolicyId).toBe(retentionPolicyId);
+    expect(await readDataFileVersions(fileID)).toHaveLength(2);
+    const deleteAudit = await findSampleFileAuditRows('FILE_DELETE', fileID);
+    expect(deleteAudit).toHaveLength(1);
+    expect(deleteAudit[0].payload).toMatchObject({ logicalDelete: true, deletedAt: row!.deletedAt.toISOString() });
+
+    // A deleted file is out of the list and its download answers 404.
+    const afterDelete = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files`, { headers: auth });
+    expect((await afterDelete.json()).data.some((f: any) => String(f._id) === fileID)).toBe(false);
+    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, { headers: auth });
+    expect(download.status()).toBe(404);
+  });
+
+  test('keeps no file bytes in MongoDB, serves the binary from object storage and records the malware verdict (RNF029 AC3/AC4/AC6/AC7, #1477)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sampleID = await createRealSample(request, admin.token);
+
+    // 69,011 bytes of text, each line carrying a marker no row may hold.
+    const marker = `rnf029-${crypto.randomUUID()}`;
+    const fileContent = Buffer.from(`marker,row\n${`${marker},1\n`.repeat(1500)}`);
+    expect(fileContent.length).toBeGreaterThan(64 * 1024);
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: auth,
+      multipart: { file: { name: 'rnf029-objects.csv', mimeType: 'text/csv', buffer: fileContent } },
+    });
+    expect(upload.status(), await upload.text()).toBe(201);
+    const fileID = String((await upload.json()).data._id);
+    const replacementContent = Buffer.concat([fileContent, Buffer.from(`${marker},2\n`)]);
+    const replace = await request.put(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/replace`, {
+      headers: auth,
+      multipart: { file: { name: 'rnf029-objects-v2.csv', mimeType: 'text/csv', buffer: replacementContent } },
+    });
+    expect(replace.status(), await replace.text()).toBe(200);
+
+    const row = await readSampleFileRow(fileID);
+    const versions = await readDataFileVersions(fileID);
+    expect(row).not.toBeNull();
+    expect(versions).toHaveLength(2);
+
+    // RNF029 AC3/AC6/AC7: neither the file row nor a version row holds a
+    // binary field or any of the file's text, and each is far smaller than the file.
+    for (const doc of [row!, ...versions]) {
+      expect(binaryFieldPaths(doc)).toEqual([]);
+      const serialized = JSON.stringify(doc);
+      expect(serialized).not.toContain(marker);
+      expect(Buffer.byteLength(serialized)).toBeLessThan(8 * 1024);
+    }
+
+    // The binary lives in the object store: the row names no local path, only
+    // the object's URI, and the download serves the bytes MongoDB does not hold.
+    expect(row!.storagePath).toBeNull();
+    expect(row!.storageUri).toMatch(/^objstore:\/\/samples\//);
+    for (const version of versions) {
+      expect(version.objectUri).toMatch(/^objstore:\/\/samples\//);
+    }
+    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, { headers: auth });
+    expect(download.status()).toBe(200);
+    expect((await download.body()).equals(replacementContent)).toBe(true);
+
+    // RNF029 AC4: the test stack sets no MALWARE_SCAN_DRIVER, so the verdict
+    // recorded is not-available from the "none" scanner.
+    expect(row!.malwareScan).toMatchObject({ status: 'not-available', scanner: 'none' });
+    expect(row!.malwareScan.scannedAt).toBeInstanceOf(Date);
   });
 
   test('rejects a disallowed file format (AC#1)', async ({ request }) => {
@@ -384,6 +601,67 @@ test.describe('Scientific files (RF007) — real backend', () => {
     const body = await upload.json();
     expect(body.success).toBe(false);
   });
+
+  test('a new RetentionPolicy version supersedes the previous one: previousPolicyId, version and active flag (RF014 AC5, #1487)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const policyBody = {
+      applicableEntityTypes: ['DataFile'],
+      triggerEvent: 'creation',
+      postRetentionAction: 'destroy',
+      retentionPeriod: 'P3650D',
+      jurisdiction: 'BR',
+      retentionBasis: ['RF014 AC5 e2e fixture basis'],
+      legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+      reviewRequired: false,
+    };
+
+    const created = await request.post(`${apiBaseURL}/api/retention-policies`, { headers: auth, data: policyBody });
+    expect(created.status(), await created.text()).toBe(201);
+    const v1 = (await created.json()).data;
+    const v1Id = String(v1._id);
+    createdRetentionPolicyIds.push(v1Id);
+
+    const updatedResponse = await request.put(`${apiBaseURL}/api/retention-policies/${v1Id}`, {
+      headers: auth,
+      data: { ...policyBody, retentionPeriod: 'P1825D' },
+    });
+    expect(updatedResponse.status(), await updatedResponse.text()).toBe(200);
+    const v2 = (await updatedResponse.json()).data;
+    const v2Id = String(v2._id);
+    createdRetentionPolicyIds.push(v2Id);
+
+    expect(v2Id).not.toBe(v1Id);
+    expect(v2.previousPolicyId).toBe(v1Id);
+    expect(v2.active).toBe(true);
+    expect(v2.retentionPeriod).toBe('P1825D');
+    expect(Number(v2.version.slice(1))).toBe(Number(v1.version.slice(1)) + 1);
+
+    // The superseded version is kept, inactive, with its period untouched.
+    const old = await request.get(`${apiBaseURL}/api/retention-policies/${v1Id}`, { headers: auth });
+    expect(old.status(), await old.text()).toBe(200);
+    const oldPolicy = (await old.json()).data;
+    expect(oldPolicy.active).toBe(false);
+    expect(oldPolicy.retentionPeriod).toBe('P3650D');
+    expect(oldPolicy.previousPolicyId).toBeNull();
+
+    // The DataFile family names only the new version as its active policy.
+    const classes = await request.get(`${apiBaseURL}/api/retention-policies/data-classes`, { headers: auth });
+    expect(classes.status(), await classes.text()).toBe(200);
+    const dataFileClass = (await classes.json()).data.find((entry: { code: string }) => entry.code === 'dataFile');
+    expect(dataFileClass.retentionPolicyId).toBe(v2Id);
+    expect(dataFileClass.retentionPeriod).toBe('P1825D');
+
+    const list = await request.get(`${apiBaseURL}/api/retention-policies`, { headers: auth });
+    expect(list.status(), await list.text()).toBe(200);
+    const activeDataFilePolicies = (await list.json()).data.filter(
+      (entry: { active: boolean; applicableEntityTypes: string[] }) =>
+        entry.active && entry.applicableEntityTypes.includes('DataFile')
+    );
+    expect(activeDataFilePolicies.map((entry: { _id: string }) => String(entry._id))).toEqual([v2Id]);
+  });
 });
 
 test.describe('Access and distribution requests (RF024) — real backend', () => {
@@ -397,7 +675,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
   async function createRequestForSample(
     request: any,
     token: string,
-    opts: { studyId: string; duoCode?: string }
+    opts: { studyId: string; duoCode?: string; collection?: boolean; specimenId?: string }
   ): Promise<any> {
     const org = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -409,12 +687,70 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     const protocolId = `rf024-protocol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     await seedProtocol(protocolId, { protocolVersion: '1.2' });
 
-    const sampleID = await createRealSample(request, token);
-    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    expect(sampleDoc.status()).toBe(200);
-    const specimenId = (await sampleDoc.json()).data.specimenId;
+    // RNF008 AC3 (#1496): with opts.collection, the specimen is created into
+    // a collection governed for this study and protocol, so the request's
+    // item resolves to that collection.
+    let collectionId: string | undefined;
+    let specimenId = opts.specimenId;
+    let sampleID: string | undefined;
+    // #1495: with opts.specimenId, the caller registered the specimen itself.
+    if (!specimenId && opts.collection) {
+      collectionId = `rnf008-collection-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      await seedCollectionEntity(collectionId);
+      const headers = { Authorization: `Bearer ${token}` };
+      const approval = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/approvals`, {
+        headers,
+        data: {
+          authority: 'CEP sintético',
+          caae: '00000000.0.0000.0000',
+          documentUri: 'https://docs.example.org/parecer.pdf',
+          documentChecksum: `sha256:${'a'.repeat(64)}`,
+          effectivePeriod: { start: '2026-01-01', end: '2030-12-31' },
+          status: 'active',
+          responsibleOrganizationId: organizationId,
+        },
+      });
+      expect(approval.status(), await approval.text()).toBe(201);
+      const approvalId = (await approval.json()).data.approvalId as string;
+      const event = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/events`, {
+        headers,
+        data: {
+          justification: 'Contexto inicial do biorrepositório — RNF008 e2e',
+          governanceContext: {
+            studyId: opts.studyId,
+            protocolId,
+            // The version seedProtocol stored above; the service refuses a mismatch.
+            protocolVersion: '1.2',
+            caae: '00000000.0.0000.0000',
+            responsibleOrganizationId: organizationId,
+            responsibleInvestigatorId: 'investigator-e2e',
+            ethicsApprovalId: approvalId,
+            validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+            plannedEndDate: '2030-12-31',
+          },
+        },
+      });
+      expect(event.status(), await event.text()).toBe(201);
+      sampleID = await createRealSample(request, token, { studyId: opts.studyId, protocolId, collectionId });
+      // RF024 AC2 (#1495): a specimen in a collection is released only while
+      // a custody under the collection's approval in force holds it.
+      const custody = await request.post(`${apiBaseURL}/api/physical-chain/custody`, {
+        headers,
+        data: { specimenId: sampleID, custodianOrganizationId: organizationId, authorizationId: approvalId, responsibleInvestigatorId: 'investigator-e2e' },
+      });
+      expect(custody.status(), await custody.text()).toBe(201);
+    } else if (!specimenId) {
+      sampleID = await createRealSample(request, token);
+      // RF021 AC6: the governed collection's specimen is released only under a custody in force.
+      await assignGovernedCustody(request, apiBaseURL!, { Authorization: `Bearer ${token}` }, governed!, sampleID, organizationId);
+    }
+    if (!specimenId) {
+      const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(sampleDoc.status()).toBe(200);
+      specimenId = (await sampleDoc.json()).data.specimenId;
+    }
     expect(specimenId).toBeTruthy();
 
     const create = await request.post(`${apiBaseURL}/api/access-requests`, {
@@ -432,7 +768,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(create.status(), await create.text()).toBe(201);
     const created = (await create.json()).data;
     expect(created).toMatchObject({ organizationId, protocolId, protocolVersion: '1.2' });
-    return created;
+    return { ...created, collectionId };
   }
 
   // An approval needs a passing evaluation (AC#6): seed the ACTIVE consent
@@ -445,6 +781,31 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     const second = await request.post(url, { headers: { Authorization: `Bearer ${token}` } });
     expect(second.status()).toBe(200);
     expect((await second.json()).data.overallCompatible).toBe(true);
+  }
+
+  // RF024 AC4 (#1493): the configuration release a decision must record.
+  async function configurationReleaseInForce(request: any, token: string): Promise<string> {
+    const auth = { Authorization: `Bearer ${token}` };
+    // A fresh stack has no configuration release until PUT
+    // /api/security/config activates one. Re-sending the current
+    // passwordRules.expirationDays changes nothing and ends no session.
+    const readConfig = async () => {
+      const res = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      return (await res.json()).data;
+    };
+    let config = await readConfig();
+    if (!config.configurationReleaseId) {
+      const put = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { expirationDays: config.passwordRules.expirationDays } },
+      });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      config = await readConfig();
+    }
+    expect(typeof config.configurationReleaseId).toBe('string');
+    expect(config.configurationReleaseId.length).toBeGreaterThan(0);
+    return config.configurationReleaseId as string;
   }
 
   test('registers a request, evaluates real consent/DUO/study compatibility, and only an approved in-force decision unblocks distribution (AC#1/2/3/4)', async ({
@@ -513,6 +874,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     });
 
     // AC#3 - committee decision recorded with justification and validity.
+    const inForce = await configurationReleaseInForce(request, admin.token);
     const decision = await request.post(
       `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`,
       {
@@ -533,7 +895,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(decisionBody.committeeDecision.decidedBy).toBeTruthy();
     // AC#4 - the policy version, the configuration release key and the instant.
     expect(decisionBody.committeeDecision.policyVersion).toBeTruthy();
-    expect(decisionBody.committeeDecision).toHaveProperty('configurationReleaseId');
+    expect(decisionBody.committeeDecision.configurationReleaseId).toBe(inForce);
     expect(decisionBody.committeeDecision.decidedAt).toBeTruthy();
     expect(decisionBody.committeeDecision.decisionId).toBeTruthy();
     // AC#3 - no AccessPolicy covers this request's organization, so the
@@ -579,6 +941,23 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(distributeBody.distributedAt).toBeTruthy();
     // AC#7 - the distribution names the decision that authorized it.
     expect(distributeBody.distributionDecisionId).toBe(decisionBody.committeeDecision.decisionId);
+
+    // AC#7 (#1493) - each operation wrote its own audit row: two evaluations
+    // (incompatible, then compatible), one decision (the refused approval
+    // wrote none) and one distribution (the quarantine refusal wrote none).
+    const rows = await findAccessRequestAuditRows(accessRequest.accessRequestId);
+    const evaluateRows = rows.filter((r) => /^Compatibilidade avaliada/.test(r.message));
+    expect(evaluateRows.map((r) => r.payload.overallCompatible)).toEqual([false, true]);
+    const decisionRows = rows.filter((r) => /^Decisão do comitê registrada/.test(r.message));
+    expect(decisionRows).toHaveLength(1);
+    expect(decisionRows[0].payload.committeeDecision).toMatchObject({
+      decisionId: decisionBody.committeeDecision.decisionId,
+      status: 'approved',
+      configurationReleaseId: inForce,
+    });
+    const distributeRows = rows.filter((r) => /^Solicitação de acesso vinculada à disponibilização/.test(r.message));
+    expect(distributeRows).toHaveLength(1);
+    expect(distributeRows[0].payload.distributionDecisionId).toBe(decisionBody.committeeDecision.decisionId);
 
     // #660 (RF024 AC5): the released distribution is carried out by a
     // Shipment of the specimens it names, received by the recipient.
@@ -677,6 +1056,9 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(approval.status()).toBe(400);
     expect((await approval.json()).message).toMatch(/negada pela política de acesso/);
 
+    // RNF008 AC4 (#1493): the decision records the policy versions, the
+    // configuration release in force and the reasons together.
+    const inForce = await configurationReleaseInForce(request, admin.token);
     const rejection = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
       headers: auth,
       data: { status: 'rejected', justification: 'Negada pela política de acesso — RF024 e2e' },
@@ -686,13 +1068,192 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       status: 'rejected',
       policyEffect: 'deny',
       appliedPolicies: [{ accessPolicyId, policyVersion: '1.1.0', decisionEffect: 'deny' }],
+      configurationReleaseId: inForce,
+      policyReasons: expect.arrayContaining([`${policyBody.policyName} 1.1.0: deny`]),
     });
+  });
+
+  // RNF008 AC3 (#1496): an AccessPolicy scopes by study, protocol and
+  // collection through its conditions; a request outside each scope is not
+  // permitted by it, and one inside all three is.
+  test('an AccessPolicy conditioned on another study, protocol or collection does not permit the request (RNF008 AC3, #1496)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const studyId = `rnf008-study-${Date.now()}`;
+    await seedStudy(studyId);
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, collection: true });
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const createPolicy = async (policyName: string, conditions: Record<string, string>[]): Promise<string> => {
+      const created = await request.post(`${apiBaseURL}/api/access-policies`, {
+        headers: auth,
+        data: {
+          policyName,
+          policyVersion: '1.0.0',
+          applicableEntityTypes: ['AccessRequest'],
+          decisionEffect: 'permit',
+          ruleExpression: 'all-conditions',
+          effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+          roleCodes: ['researcher'],
+          organizationScopeIds: [accessRequest.organizationId],
+          resourceScopes: ['Specimen'],
+          conditions,
+          decisionReasonsRequired: true,
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      return (await created.json()).data.accessPolicyId as string;
+    };
+
+    const outOfScope = [
+      { name: `RNF008 e2e outro estudo ${stamp}`, conditions: [{ consent: 'compatible', studyId: `${studyId}-other` }] },
+      { name: `RNF008 e2e outro protocolo ${stamp}`, conditions: [{ consent: 'compatible', protocolId: 'rnf008-other-protocol' }] },
+      { name: `RNF008 e2e outra coleção ${stamp}`, conditions: [{ consent: 'compatible', collectionId: 'rnf008-other-collection' }] },
+    ];
+    for (const policy of outOfScope) {
+      await createPolicy(policy.name, policy.conditions);
+    }
+
+    const evaluateUrl = `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`;
+    const outside = await request.post(evaluateUrl, { headers: auth });
+    expect(outside.status(), await outside.text()).toBe(200);
+    const outsideData = (await outside.json()).data;
+    // The item's own study, protocol and collection, read off its specimen.
+    expect(outsideData.consentCompatibility[0]).toMatchObject({
+      studyId,
+      protocolId: accessRequest.protocolId,
+      collectionId: accessRequest.collectionId,
+    });
+    expect(outsideData.policyDecision.effect).toBe('review_required');
+    expect(outsideData.policyDecision.appliedPolicies).toEqual([]);
+    expect(outsideData.policyDecision.reasons).toEqual(
+      expect.arrayContaining(outOfScope.map((policy) => `${policy.name} 1.0.0: condições não atendidas`))
+    );
+
+    const inScopeId = await createPolicy(`RNF008 e2e no escopo ${stamp}`, [
+      { consent: 'compatible', studyId, protocolId: accessRequest.protocolId, collectionId: accessRequest.collectionId },
+    ]);
+    const inside = await request.post(evaluateUrl, { headers: auth });
+    expect(inside.status(), await inside.text()).toBe(200);
+    const insideDecision = (await inside.json()).data.policyDecision;
+    expect(insideDecision.effect).toBe('permit');
+    expect(insideDecision.appliedPolicies).toEqual([
+      { accessPolicyId: inScopeId, policyVersion: '1.0.0', decisionEffect: 'permit', decisionReasonsRequired: true },
+    ]);
+  });
+
+  // RNF008 AC3 (#1496): an AccessPolicy scopes by biobank through its
+  // biobankId condition, read off the item's collection through the
+  // ResearchResource links. A permit on another biobank does not permit the
+  // request, one on the item's biobank does, and a deny on it refuses it.
+  test('an AccessPolicy conditioned on another biobank does not permit the request, and a deny on the item\'s biobank refuses it (RNF008 AC3, #1496)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const studyId = `rnf008-bb-study-${Date.now()}`;
+    await seedStudy(studyId);
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, collection: true });
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const biobankId = `rnf008-biobank-${stamp}`;
+    const biobank = await request.post(`${apiBaseURL}/api/biobanks`, {
+      headers: auth,
+      data: {
+        biobankId,
+        biobankName: `Biobanco RNF008 ${stamp}`,
+        biobankDescription: 'Biobanco do teste de escopo RNF008',
+        legalEntityId: accessRequest.organizationId,
+        biobankStatus: 'active',
+        countryCode: 'BR',
+        contactInformation: { email: 'contato@example.org' },
+      },
+    });
+    expect(biobank.status(), await biobank.text()).toBe(201);
+    const resource = await request.post(`${apiBaseURL}/api/research-resources`, {
+      headers: auth,
+      data: {
+        name: `Recurso RNF008 ${stamp}`,
+        contactInformation: [{ email: 'contato@example.org' }],
+        sexCategories: ['female'],
+        sampleTypes: [{ coding: [{ code: 'blood' }] }],
+      },
+    });
+    expect(resource.status(), await resource.text()).toBe(201);
+    const researchResourceId = (await resource.json()).data.researchResourceId as string;
+    const collectionLink = await request.post(`${apiBaseURL}/api/research-resource-collections`, {
+      headers: auth,
+      data: { researchResourceId, collectionId: accessRequest.collectionId },
+    });
+    expect(collectionLink.status(), await collectionLink.text()).toBe(201);
+    const biobankLink = await request.post(`${apiBaseURL}/api/research-resource-biobanks`, {
+      headers: auth,
+      data: { researchResourceId, biobankId },
+    });
+    expect(biobankLink.status(), await biobankLink.text()).toBe(201);
+
+    const createPolicy = async (
+      policyName: string,
+      decisionEffect: 'permit' | 'deny',
+      conditions: Record<string, string>[]
+    ): Promise<string> => {
+      const created = await request.post(`${apiBaseURL}/api/access-policies`, {
+        headers: auth,
+        data: {
+          policyName,
+          policyVersion: '1.0.0',
+          applicableEntityTypes: ['AccessRequest'],
+          decisionEffect,
+          ruleExpression: 'all-conditions',
+          effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+          roleCodes: ['researcher'],
+          organizationScopeIds: [accessRequest.organizationId],
+          resourceScopes: ['Specimen'],
+          conditions,
+          decisionReasonsRequired: true,
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      return (await created.json()).data.accessPolicyId as string;
+    };
+    const evaluate = async (): Promise<any> => {
+      const evaluated = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, { headers: auth });
+      expect(evaluated.status(), await evaluated.text()).toBe(200);
+      return (await evaluated.json()).data;
+    };
+
+    const otherName = `RNF008 e2e outro biobanco ${stamp}`;
+    await createPolicy(otherName, 'permit', [{ consent: 'compatible', biobankId: `${biobankId}-other` }]);
+    const outside = await evaluate();
+    // The item's biobank, read through its collection's ResearchResource.
+    expect(outside.consentCompatibility[0]).toMatchObject({ biobankId, biobankIds: [biobankId] });
+    expect(outside.policyDecision.effect).toBe('review_required');
+    expect(outside.policyDecision.appliedPolicies).toEqual([]);
+    expect(outside.policyDecision.reasons).toEqual(expect.arrayContaining([`${otherName} 1.0.0: condições não atendidas`]));
+
+    const inScopeId = await createPolicy(`RNF008 e2e no biobanco ${stamp}`, 'permit', [{ consent: 'compatible', biobankId }]);
+    const inside = await evaluate();
+    expect(inside.policyDecision.effect).toBe('permit');
+    expect(inside.policyDecision.appliedPolicies).toEqual([
+      { accessPolicyId: inScopeId, policyVersion: '1.0.0', decisionEffect: 'permit', decisionReasonsRequired: true },
+    ]);
+
+    const denyId = await createPolicy(`RNF008 e2e embargo do biobanco ${stamp}`, 'deny', [{ biobankId }]);
+    const refused = await evaluate();
+    expect(refused.policyDecision.effect).toBe('deny');
+    expect(refused.policyDecision.appliedPolicies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ accessPolicyId: denyId, decisionEffect: 'deny' })])
+    );
   });
 
   // #1347 (RF010 AC3/AC7): a term's permissions name governed purposes (DUO
   // codes), so a consent revoked for one purpose is judged on the requested
   // purpose: the revoked one is denied, rather than sent to review.
-  test('a consent revoked for the requested DUO purpose denies the request\'s item (RF010 AC7)', async ({ request }) => {
+  test('a consent revoked for the requested DUO purpose denies the request\'s item and keeps the consent\'s history (RF010 AC7, RNF022 C2)', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -747,6 +1308,250 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       consentAuthorizationResult: 'deny',
       consentAuthorizationReasons: [expect.stringContaining(healthCode)],
     });
+
+    // RNF022 C2: the revocation refuses the use from now on and erases no
+    // history: the acceptance and the revocation both stay readable, and the
+    // revocation retains prior use rather than promising its elimination.
+    const historyRes = await request.get(`${apiBaseURL}/api/e-consent/consents/${consentDocId}/history`, { headers: auth });
+    expect(historyRes.status(), await historyRes.text()).toBe(200);
+    const history = (await historyRes.json()).data;
+    expect(history.currentStateDerived).toBe('partially_revoked');
+    expect(history.decisionEvents.map((event: { decision: string }) => event.decision)).toEqual(['accepted', 'revoked']);
+    expect(history.revocations).toHaveLength(1);
+    expect(history.revocations[0]).toMatchObject({ scope: ['health-1347'], priorUseDisposition: 'retain_history' });
+  });
+
+  // #1492 (RF010 AC7): beside permit and deny, the third result. A consent
+  // partially revoked whose granted purposes cover none of the request's DUO
+  // purpose cannot be judged on it, so the item is sent to review, and the
+  // stored ConsentAuthorizationDecision says so.
+  test('a consent revoked for another purpose sends a request for an uncovered DUO purpose to review (RF010 AC7)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `rf1492-study-${run}`;
+    await seedStudy(studyId);
+    const healthCode = `DUO:rf1492-hmb-${run}`;
+    const diseaseCode = `DUO:rf1492-ds-${run}`;
+    const otherCode = `DUO:rf1492-gru-${run}`;
+    await seedDuoConcept(healthCode);
+    await seedDuoConcept(diseaseCode);
+    await seedDuoConcept(otherCode);
+
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, duoCode: otherCode });
+    const accessRequestId = accessRequest.accessRequestId;
+    const specimenId = accessRequest.requestedItems[0].itemId;
+    const evaluateUrl = `${apiBaseURL}/api/access-requests/${accessRequestId}/evaluate`;
+    const first = await request.post(evaluateUrl, { headers: auth });
+    expect(first.status()).toBe(200);
+    const participantId = (await first.json()).data.consentCompatibility[0].participantId;
+    expect(participantId).toBeTruthy();
+
+    const term = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
+      headers: auth,
+      data: {
+        title: `TCLE e2e 1492 ${run}`,
+        content: 'Termo com finalidades codificadas pela DUO (#1492).',
+        permissions: [
+          { key: 'health-1492', label: 'Pesquisa em saúde', required: false, purposeCode: healthCode },
+          { key: 'disease-1492', label: 'Pesquisa da doença', required: false, purposeCode: diseaseCode },
+        ],
+      },
+    });
+    expect(term.status(), await term.text()).toBe(201);
+    const termBody = (await term.json()).data;
+
+    const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: auth,
+      data: { participantId, consentTemplateId: String(termBody._id), responses: { 'health-1492': true, 'disease-1492': true } },
+    });
+    expect(signed.status(), await signed.text()).toBe(201);
+    const consentDocId = String((await signed.json()).data._id);
+
+    const revoked = await request.post(`${apiBaseURL}/api/e-consent/consents/${consentDocId}/revoke`, {
+      headers: auth,
+      data: { scope: ['health-1492'] },
+    });
+    expect(revoked.status(), await revoked.text()).toBe(200);
+
+    const evaluated = await request.post(evaluateUrl, { headers: auth });
+    expect(evaluated.status()).toBe(200);
+    const body = (await evaluated.json()).data;
+    // Review does not deny the consent: the item stays compatible.
+    expect(body.overallCompatible).toBe(true);
+    expect(body.consentCompatibility[0]).toMatchObject({
+      consentValid: true,
+      compatible: true,
+      consentAuthorizationResult: 'review_required',
+      consentAuthorizationDecisionId: expect.any(String),
+      consentAuthorizationReasons: [expect.stringContaining(otherCode)],
+    });
+    const decisionId = body.consentCompatibility[0].consentAuthorizationDecisionId;
+
+    const readBack = await request.get(`${apiBaseURL}/api/access-requests/${accessRequestId}`, { headers: auth });
+    expect(readBack.status()).toBe(200);
+    expect((await readBack.json()).data.consentCompatibility[0]).toMatchObject({
+      consentAuthorizationResult: 'review_required',
+      consentAuthorizationDecisionId: decisionId,
+    });
+
+    expect(await readConsentAuthorizationDecision(decisionId)).toMatchObject({
+      result: 'review_required',
+      accessRequestId,
+      itemId: specimenId,
+      policyVersion: 'rf010-consent-authorization/1.1.0',
+      appliedRules: expect.arrayContaining(['consent_partial_revocation']),
+      reasons: [expect.stringContaining(otherCode)],
+    });
+  });
+
+  // #1495 (RF024 AC2): a specimen registered into a collection is released
+  // only while the collection holds its regime and an approval in force and
+  // the specimen's custody holds; the denial names each refusal.
+  test('denies a specimen whose collection has no custody, no approval in force or no regime, naming the reason (AC#2, #1495)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `rf024-gov-study-${stamp}`;
+    const protocolId = `rf024-gov-protocol-${stamp}`;
+    const collectionId = `rf024-gov-collection-${stamp}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(collectionId);
+
+    // The collection's governance through the real API: an organization, an
+    // ethics approval in force, then the `created` event with its context.
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName: `RF024 #1495 ${stamp}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    const approval = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/approvals`, {
+      headers: auth,
+      data: {
+        authority: 'CEP sintético',
+        caae: '00000000.0.0000.0000',
+        documentUri: 'https://docs.example.org/parecer.pdf',
+        documentChecksum: `sha256:${'a'.repeat(64)}`,
+        effectivePeriod: { start: '2026-01-01', end: '2030-12-31' },
+        status: 'active',
+        responsibleOrganizationId: organizationId,
+      },
+    });
+    expect(approval.status(), await approval.text()).toBe(201);
+    const approvalId = (await approval.json()).data.approvalId as string;
+    const governed = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/events`, {
+      headers: auth,
+      data: {
+        justification: 'Contexto inicial do biorrepositório — RF024 #1495 e2e',
+        governanceContext: {
+          studyId,
+          protocolId,
+          protocolVersion: '1.0',
+          caae: '00000000.0.0000.0000',
+          responsibleOrganizationId: organizationId,
+          responsibleInvestigatorId: 'investigator-e2e',
+          ethicsApprovalId: approvalId,
+          validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+          plannedEndDate: '2030-12-31',
+        },
+      },
+    });
+    expect(governed.status(), await governed.text()).toBe(201);
+
+    const specimenId = await createRealSample(request, admin.token, { collectionId });
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, specimenId });
+    const evaluate = async (): Promise<any> => {
+      const res = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, { headers: auth });
+      expect(res.status(), await res.text()).toBe(200);
+      return (await res.json()).data;
+    };
+    const expectDenied = (body: any, reason: RegExp) => {
+      expect(body.overallCompatible).toBe(false);
+      expect(body.consentCompatibility[0]).toMatchObject({ consentValid: true, governanceValid: false, compatible: false });
+      expect(body.consentCompatibility[0].governanceReasons).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+      expect(body.policyDecision.effect).toBe('deny');
+      expect(body.policyDecision.reasons).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+    };
+
+    // The consent in force, but no custody holds the specimen yet.
+    await seedActiveConsent((await evaluate()).consentCompatibility[0].participantId);
+    expectDenied(await evaluate(), /sem custódia vigente/);
+
+    // In custody under the collection's approval in force: compatible.
+    const custody = await request.post(`${apiBaseURL}/api/physical-chain/custody`, {
+      headers: auth,
+      data: { specimenId, custodianOrganizationId: organizationId, authorizationId: approvalId, responsibleInvestigatorId: 'investigator-e2e' },
+    });
+    expect(custody.status(), await custody.text()).toBe(201);
+    const inForce = await evaluate();
+    expect(inForce.overallCompatible).toBe(true);
+    expect(inForce.consentCompatibility[0]).toMatchObject({ governanceValid: true, governanceReasons: [] });
+    expect(inForce.policyDecision.effect).not.toBe('deny');
+
+    // The approval suspended: the collection has no approval in force.
+    const suspend = await request.post(
+      `${apiBaseURL}/api/collections/${collectionId}/governance/approvals/${approvalId}/status`,
+      { headers: auth, data: { status: 'suspended', reason: 'Parecer em reanálise — RF024 #1495 e2e' } }
+    );
+    expect(suspend.status(), await suspend.text()).toBe(200);
+    expectDenied(await evaluate(), /sem aprovação de governança vigente/);
+
+    // The collection's regime gone, as a legacy row reads: denied for that.
+    await clearCollectionRegime(collectionId);
+    expectDenied(await evaluate(), /sem regime de governança/);
+  });
+
+  test('a quarantined specimen is denied for use, naming the quarantine, and is compatible again after its evidenced release (RF019 AC3, #1510)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const studyId = `rf1510-study-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    await seedStudy(studyId);
+
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId });
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+    const specimenId = accessRequest.requestedItems[0].itemId;
+
+    const evaluate = async (): Promise<any> => {
+      const res = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, { headers: auth });
+      expect(res.status(), await res.text()).toBe(200);
+      return (await res.json()).data;
+    };
+
+    // Quarantined after a compatible evaluation: the use is refused, naming why.
+    const quarantine = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { specimenStatus: 'quarantined', quarantineReason: 'RF019 e2e: use block' },
+    });
+    expect(quarantine.status(), await quarantine.text()).toBe(200);
+    const quarantineReason = `Espécime ${specimenId} em quarentena (RF019)`;
+    const denied = await evaluate();
+    expect(denied.overallCompatible).toBe(false);
+    expect(denied.consentCompatibility[0]).toMatchObject({
+      consentValid: true,
+      governanceValid: false,
+      governanceReasons: [quarantineReason],
+      compatible: false,
+    });
+    expect(denied.policyDecision.effect).toBe('deny');
+    expect(denied.policyDecision.reasons).toEqual(expect.arrayContaining([quarantineReason]));
+
+    // RF019 AC5: the evidenced release returns the specimen to use.
+    const release = await request.post(`${apiBaseURL}/api/samples/${specimenId}/quarantine/release`, {
+      headers: auth,
+      data: { evidenceIds: ['file-rf1510-review'], reason: 'RF019 e2e: cleared before use' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
+    const allowed = await evaluate();
+    expect(allowed.overallCompatible).toBe(true);
+    // #1497: the specimen's collection and custody hold, so governance is valid rather than absent.
+    expect(allowed.consentCompatibility[0]).toMatchObject({ governanceValid: true, governanceReasons: [], compatible: true });
   });
 
   test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {
@@ -795,13 +1600,26 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       },
     });
     expect(approve.status(), await approve.text()).toBe(200);
+    const approveBody = (await approve.json()).data;
 
+    // AC#4/AC#7 (#1493): a revocation is a decision of its own, recorded
+    // with the release in force and audited.
+    const inForce = await configurationReleaseInForce(request, admin.token);
     const revoke = await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/revoke`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { justification: 'Participante retirou o consentimento — RF024 e2e' },
     });
     expect(revoke.status()).toBe(200);
-    expect((await revoke.json()).data.committeeDecision.status).toBe('revoked');
+    const revokeDecision = (await revoke.json()).data.committeeDecision;
+    expect(revokeDecision.status).toBe('revoked');
+    expect(revokeDecision.configurationReleaseId).toBe(inForce);
+    expect(revokeDecision.decisionId).toBeTruthy();
+    expect(revokeDecision.decisionId).not.toBe(approveBody.committeeDecision.decisionId);
+    const revokeRows = (await findAccessRequestAuditRows(toRevoke.accessRequestId)).filter((r) =>
+      /^Acesso revogado para solicitação/.test(r.message)
+    );
+    expect(revokeRows).toHaveLength(1);
+    expect(revokeRows[0].payload.committeeDecision).toMatchObject({ status: 'revoked', decisionId: revokeDecision.decisionId });
 
     const revokedCheck = await request.get(
       `${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/access-check`,
@@ -832,6 +1650,47 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       { headers: { Authorization: `Bearer ${admin.token}` } }
     );
     expect((await expiredCheck.json()).data).toMatchObject({ allowed: false, reason: 'expired' });
+  });
+
+  // RF024 AC1 (#1311, #1493): the organization and the protocol are
+  // references, so an unknown organization or an unapproved protocol is refused.
+  test('refuses a request naming an unknown organization or an unapproved protocol (AC#1, #1311)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `rf024-refusal-study-${run}`;
+    await seedStudy(studyId);
+    const validBody = {
+      requesterId: `researcher-${run}`,
+      studyId,
+      requestedPurpose: 'RF024 e2e — recusa de referências inválidas',
+      requestedItems: [{ itemType: 'dataset', itemId: 'rf024-refusal-dataset' }],
+    };
+
+    const approvedProtocolId = `rf024-refusal-approved-${run}`;
+    await seedProtocol(approvedProtocolId);
+    const unknownOrganization = await request.post(`${apiBaseURL}/api/access-requests`, {
+      headers: auth,
+      data: { ...validBody, organizationId: `org-unknown-${run}`, protocolId: approvedProtocolId },
+    });
+    expect(unknownOrganization.status(), await unknownOrganization.text()).toBe(422);
+    expect((await unknownOrganization.json()).message).toMatch(/organizationId .* não encontrado/);
+
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName: `RF024 refusal ${run}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    const draftProtocolId = `rf024-refusal-draft-${run}`;
+    await seedProtocol(draftProtocolId, { approvalStatus: 'draft' });
+    const unapprovedProtocol = await request.post(`${apiBaseURL}/api/access-requests`, {
+      headers: auth,
+      data: { ...validBody, organizationId, protocolId: draftProtocolId },
+    });
+    expect(unapprovedProtocol.status(), await unapprovedProtocol.text()).toBe(422);
+    expect((await unapprovedProtocol.json()).message).toMatch(/não está aprovado/);
   });
 });
 
@@ -923,6 +1782,170 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
     const omicsRunBody = await omicsRun.json();
     expect(omicsRunBody.data.modality).toBe('genomics');
     expect(omicsRunBody.data.referenceAssembly).toBe('GRCh38');
+  });
+
+  test('records a run\'s provenance, reads its lineage back over a shared file, and resumes a failed run (AC#1/3/4/6, RNF030 AC1, #1480)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sampleID = await createRealSample(request, admin.token);
+    const executor = `User/${admin.user._id}`;
+    const workflowId = 'rf027-e2e-lineage-pipeline';
+    const workflowVersion = '1.4.0';
+
+    // AC#3: the file the two runs share is a real upload whose checksum the
+    // file record carries; the producer writes it and the consumer reads it.
+    const fileContent = Buffer.from('RF027 e2e fixture - intermediate alignment bytes shared by two runs');
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: auth,
+      multipart: { file: { name: 'aligned.raw', mimeType: 'application/octet-stream', buffer: fileContent } },
+    });
+    expect(upload.status()).toBe(201);
+    const uploadBody = await upload.json();
+    expect(uploadBody.data.checksum).toBe(crypto.createHash('sha256').update(fileContent).digest('hex'));
+    expect(uploadBody.data.checksumAlgorithm).toBe('sha256');
+    const sharedFileId: string = uploadBody.data._id;
+
+    const provenance = {
+      workflowId,
+      workflowVersion,
+      createdBy: executor,
+      containerImageDigest: 'sha256:e2e1480000000000000000000000000000000000000000000000000000000',
+      softwareDependencies: [{ name: 'bwa', version: '0.7.17' }, { name: 'samtools', version: '1.19' }],
+      parameters: { threads: 4, minMapQ: 20 },
+      hardwareProfile: { cpu: 'synthetic-8c', memoryGb: 32 },
+      randomSeed: 0,
+      datasetSnapshotId: 'rf027-e2e-snapshot-1480',
+      environmentManifestUri: 'object://synthetic/environment-1480.json',
+    };
+
+    // AC#1, RNF030 AC1: the producer records version, digest, parameters,
+    // dependencies, hardware, seed, environment and executor, and reads back.
+    const producerCreate = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), runStatus: 'succeeded' },
+    });
+    expect(producerCreate.status()).toBe(201);
+    const producerId: string = (await producerCreate.json()).data.workflowRunId;
+
+    const producerRead = await request.get(`${apiBaseURL}/api/workflow-runs/${producerId}`, { headers: auth });
+    expect(producerRead.status()).toBe(200);
+    expect((await producerRead.json()).data).toMatchObject({ workflowRunId: producerId, runStatus: 'succeeded', ...provenance });
+
+    // AC#6: a failed run records why it failed.
+    const failedCreate = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: {
+        ...provenance,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        runStatus: 'failed',
+        failureReason: 'synthetic node loss during variant calling',
+      },
+    });
+    expect(failedCreate.status()).toBe(201);
+    const failedId: string = (await failedCreate.json()).data.workflowRunId;
+
+    // AC#3: the shared file is linked as the producer's output and the failed run's input,
+    // and each link is audited (RF012).
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+    const linkOutput = await request.post(`${apiBaseURL}/api/workflow-runs/${producerId}/files`, {
+      headers: auth,
+      data: { fileId: sharedFileId, direction: 'output' },
+    });
+    expect(linkOutput.status()).toBe(200);
+    expect((await linkOutput.json()).data.outputFileIds).toEqual([sharedFileId]);
+    const linkInput = await request.post(`${apiBaseURL}/api/workflow-runs/${failedId}/files`, {
+      headers: auth,
+      data: { fileId: sharedFileId, direction: 'input' },
+    });
+    expect(linkInput.status()).toBe(200);
+    expect((await linkInput.json()).data.inputFileIds).toEqual([sharedFileId]);
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch, 2);
+
+    // AC#4: the failed run's lineage reads its producer back over the shared file.
+    const lineage = await request.get(`${apiBaseURL}/api/workflow-runs/${failedId}/lineage`, { headers: auth });
+    expect(lineage.status()).toBe(200);
+    const lineageData = (await lineage.json()).data;
+    expect(lineageData.workflowRunId).toBe(failedId);
+    expect(lineageData.truncated).toBe(false);
+    expect(lineageData.runs).toHaveLength(2);
+    expect(lineageData.runs[0]).toMatchObject({ workflowRunId: failedId, relation: 'root', depth: 0, runStatus: 'failed', inputFileIds: [sharedFileId] });
+    expect(lineageData.runs[1]).toMatchObject({
+      workflowRunId: producerId,
+      relation: 'upstream',
+      depth: 1,
+      runStatus: 'succeeded',
+      datasetSnapshotId: 'rf027-e2e-snapshot-1480',
+      outputFileIds: [sharedFileId],
+    });
+    expect(lineageData.edges).toEqual([{ fromWorkflowRunId: producerId, toWorkflowRunId: failedId, fileId: sharedFileId }]);
+
+    const downstream = await request.get(`${apiBaseURL}/api/workflow-runs/${producerId}/lineage`, { headers: auth });
+    expect(downstream.status()).toBe(200);
+    const downstreamRuns = (await downstream.json()).data.runs;
+    expect(downstreamRuns.map((run: any) => [run.workflowRunId, run.relation, run.depth])).toEqual([
+      [producerId, 'root', 0],
+      [failedId, 'downstream', 1],
+    ]);
+
+    // AC#4: the same lineage exports as one FHIR Provenance Bundle, root first.
+    const fhir = await request.get(`${apiBaseURL}/api/export/fhir/workflow-runs/${failedId}/lineage`, { headers: auth });
+    expect(fhir.status()).toBe(200);
+    const fhirData = (await fhir.json()).data;
+    expect(fhirData.lineage).toEqual({ workflowRunId: failedId, truncated: false });
+    expect(fhirData.mapping.mappingId).toBe('MAP-V2-008');
+    const resources = fhirData.bundle.entry.map((entry: any) => entry.resource);
+    expect(resources.map((resource: any) => resource.id)).toEqual([failedId, producerId]);
+    expect(resources[0].entity).toEqual([{ role: 'source', what: { reference: `DocumentReference/${sharedFileId}` } }]);
+    expect(resources[0].agent[0].who.identifier.value).toBe(executor);
+    expect(resources[1].target).toEqual([{ reference: `DocumentReference/${sharedFileId}` }]);
+
+    // AC#6: a failure reason belongs to a failed or cancelled run only.
+    const reasonOnSuccess = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, startedAt: new Date().toISOString(), runStatus: 'succeeded', failureReason: 'not a failure' },
+    });
+    expect(reasonOnSuccess.status()).toBe(422);
+    expect((await reasonOnSuccess.json()).details).toContain('failureReason só é permitido quando runStatus é failed ou cancelled');
+
+    // AC#6: a resume names the failed run, under the same workflow and version.
+    const resumeCreate = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, startedAt: new Date().toISOString(), runStatus: 'running', resumesWorkflowRunId: failedId },
+    });
+    expect(resumeCreate.status()).toBe(201);
+    const resumeId: string = (await resumeCreate.json()).data.workflowRunId;
+    const resumeRead = await request.get(`${apiBaseURL}/api/workflow-runs/${resumeId}`, { headers: auth });
+    expect(resumeRead.status()).toBe(200);
+    expect((await resumeRead.json()).data).toMatchObject({ resumesWorkflowRunId: failedId, failureReason: null, runStatus: 'running' });
+    const failedRead = await request.get(`${apiBaseURL}/api/workflow-runs/${failedId}`, { headers: auth });
+    expect(failedRead.status()).toBe(200);
+    expect((await failedRead.json()).data).toMatchObject({ runStatus: 'failed', failureReason: 'synthetic node loss during variant calling' });
+
+    // AC#6: only a failed or cancelled run is resumed, a changed version is a
+    // new derivation, and the link is never edited after creation.
+    const resumeSucceeded = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, startedAt: new Date().toISOString(), runStatus: 'running', resumesWorkflowRunId: producerId },
+    });
+    expect(resumeSucceeded.status()).toBe(422);
+    expect((await resumeSucceeded.json()).error).toBe('resumesWorkflowRunId deve referenciar uma execução failed ou cancelled');
+
+    const resumeOtherVersion = await request.post(`${apiBaseURL}/api/workflow-runs`, {
+      headers: auth,
+      data: { ...provenance, workflowVersion: '1.5.0', startedAt: new Date().toISOString(), runStatus: 'running', resumesWorkflowRunId: failedId },
+    });
+    expect(resumeOtherVersion.status()).toBe(422);
+    expect((await resumeOtherVersion.json()).error).toBe('uma retomada mantém workflowId e workflowVersion da execução retomada');
+
+    const editLink = await request.put(`${apiBaseURL}/api/workflow-runs/${resumeId}`, {
+      headers: auth,
+      data: { resumesWorkflowRunId: producerId },
+    });
+    expect(editLink.status()).toBe(422);
+    expect((await editLink.json()).error).toBe('resumesWorkflowRunId é registrado na criação da execução e não pode ser editado');
   });
 
   test('registers an omics run without a genomic reference when not applicable (AC#5 "quando aplicável")', async ({
@@ -1058,6 +2081,7 @@ test.describe('Reports (RF008) — real backend', () => {
         ...validSampleFields(),
         boxId,
         positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());

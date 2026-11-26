@@ -159,6 +159,53 @@ describe('batch-validation-engine.service#buildSampleRow', () => {
     expect(mapped.locationID).toBeUndefined();
     expect(mapped.sampleType).toBe('Sangue');
   });
+
+  // #1536: parseSampleRow reads the eight SPREC keys, and the header map had
+  // no entry for any, so every batch-imported sample certified on an
+  // all-null SPREC. normalizeHeader folds snake_case and camelCase onto one
+  // key, so both forms must reach the parsed sprec.
+  it('maps every SPREC header, snake_case and camelCase, onto the field parseSampleRow reads (#1536)', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+    const expected = {
+      matrixType: 'fluid',
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    };
+
+    [
+      {
+        sprec_matrix_type: 'fluid',
+        sprec_sample_type: 'BLD',
+        sprec_primary_container: 'SST',
+        sprec_pre_centrifugation: 'A',
+        sprec_centrifugation: 'A',
+        sprec_second_centrifugation: 'A',
+        sprec_post_centrifugation_delay: 'A',
+        sprec_long_term_storage: 'C',
+      },
+      {
+        sprecMatrixType: 'fluid',
+        sprecSampleTypeCode: 'BLD',
+        sprecPrimaryContainer: 'SST',
+        sprecPreCentrifugation: 'A',
+        sprecCentrifugation: 'A',
+        sprecSecondCentrifugation: 'A',
+        sprecPostCentrifugationDelay: 'A',
+        sprecLongTermStorage: 'C',
+      },
+    ].forEach((row) => {
+      const parsed = importLGPDService.parseSampleRow(
+        batchValidationEngine.buildSampleRow({ ...row, sampleType: 'PLASMA' })
+      );
+
+      expect(parsed.sprec, JSON.stringify(row)).toEqual(expected);
+    });
+  });
 });
 
 describe('batch-validation-engine.service', () => {
@@ -334,6 +381,80 @@ describe('batch-validation-engine.service', () => {
     expect(sampleData.collectionSite).toBe('org-a');
   });
 
+  // RNF018 AC5 (#1524): a JSON row's governanceEvidence references reach
+  // createSample, which resolves them before it certifies; a row's own
+  // governanceEvidenceResolution never does.
+  it("passes a JSON row's governanceEvidence to createSample, which resolves it (RNF018 AC5, #1524)", async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-ev', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-ev' });
+    const governanceEvidence = {
+      documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:appr-1', hash: 'sha256:' + 'a'.repeat(64) }],
+    };
+
+    await batchValidationEngine.persistSample(
+      db,
+      { patientID: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', quantity: '1', governanceEvidence },
+      2
+    );
+
+    expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    expect(createSampleSpy.mock.calls[0][1].governanceEvidence).toEqual({
+      documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:appr-1', hash: 'sha256:' + 'a'.repeat(64) }],
+    });
+  });
+
+  it('passes no governanceEvidence key for a row that presents none (RNF018 AC5, #1524)', async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-ev', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-ev' });
+
+    await batchValidationEngine.persistSample(
+      db,
+      { patientID: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', quantity: '1' },
+      2
+    );
+
+    expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    expect(Object.prototype.hasOwnProperty.call(createSampleSpy.mock.calls[0][1], 'governanceEvidence')).toBe(false);
+  });
+
+  it('never passes a governanceEvidenceResolution the row sends (RNF018 AC5, #1524)', async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-ev', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-ev' });
+
+    await batchValidationEngine.persistSample(
+      db,
+      {
+        patientID: '12345678',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+        governanceEvidence: {
+          documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:appr-1', hash: 'sha256:' + 'a'.repeat(64) }],
+        },
+        governanceEvidenceResolution: {
+          documentation: [{
+            uri: 'urn:bioavanced:collection-governance-approval:appr-1',
+            hash: 'sha256:' + 'a'.repeat(64),
+            status: 'resolved',
+          }],
+        },
+      },
+      2
+    );
+
+    expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    expect(Object.prototype.hasOwnProperty.call(createSampleSpy.mock.calls[0][1], 'governanceEvidenceResolution')).toBe(false);
+  });
+
   // #1376 box 4: the participant's organization is its own decision, so the
   // participant a sample row creates gets none from the upload.
   it('creates the participant with no organizationId while the sample carries it (#1376)', async () => {
@@ -444,6 +565,97 @@ describe('batch-validation-engine.service', () => {
     );
     expect(result.classification).not.toBe('INVALID');
     expect(result.persistedIds).toContain('sample-object-id-6');
+  });
+
+  it('hands createSample the file\'s SPREC columns, so the sample certifies on them (#1536)', async () => {
+    const { resolveMethodologicalQuality } = require('../../src/services/quality-domain.service');
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-1536', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+      _id: 'sample-object-id-1536',
+      specimenId: 'BR-2026-001536',
+    });
+
+    await batchValidationEngine.persistSample(
+      db,
+      {
+        participantId: '12345678',
+        sampleType: 'PLASMA',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+        sprec_matrix_type: 'fluid',
+        sprec_sample_type: 'BLD',
+        sprec_primary_container: 'SST',
+        sprec_pre_centrifugation: 'A',
+        sprec_centrifugation: 'A',
+        sprec_second_centrifugation: 'A',
+        sprec_post_centrifugation_delay: 'A',
+        sprec_long_term_storage: 'C',
+      },
+      11
+    );
+
+    const sprec = createSampleSpy.mock.calls[0][1].sprec;
+    expect(sprec).toEqual({
+      matrixType: 'fluid',
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'A',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    });
+
+    const quality = resolveMethodologicalQuality({ sprec });
+    expect(quality.final_grade).toBe('A');
+    expect(quality.rcs_score).toBe(100);
+    expect(quality.governance_status).toBe(1);
+  });
+
+  // #1497 (RF004 AC2, ELM-0118): a row's collection column reaches
+  // createSample, which checks it; a row without one leaves the key unset.
+  describe('collectionId column (#1497)', () => {
+    const persistWith = async (extraColumns) => {
+      const db = createDb({
+        patientID: '12345678',
+        patient: { _id: 'patient-object-id-1497', participantId: '12345678' },
+      });
+      const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+        _id: 'sample-object-id-1497',
+        specimenId: 'BR-2026-001497',
+      });
+      await batchValidationEngine.persistSample(
+        db,
+        {
+          participantId: '12345678',
+          sampleType: 'PLASMA',
+          sampleOrigin: 'Coleta',
+          quantity: '1',
+          ...extraColumns,
+        },
+        12
+      );
+      expect(createSampleSpy).toHaveBeenCalledTimes(1);
+      return createSampleSpy.mock.calls[0][1];
+    };
+
+    it("hands createSample a collectionId header's value trimmed", async () => {
+      const sampleData = await persistWith({ collectionId: ' COL-1 ' });
+      expect(sampleData.collectionId).toBe('COL-1');
+    });
+
+    it('hands createSample a Coleção header as collectionId', async () => {
+      const sampleData = await persistWith({ 'Coleção': 'COL-2' });
+      expect(sampleData.collectionId).toBe('COL-2');
+    });
+
+    it('leaves collectionId unset when the row has no collection column', async () => {
+      const sampleData = await persistWith({});
+      expect(sampleData).not.toHaveProperty('collectionId');
+    });
   });
 
   it('returns INVALID with the thrown error message when createSample rejects', async () => {

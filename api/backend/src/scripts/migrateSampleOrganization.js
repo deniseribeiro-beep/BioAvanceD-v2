@@ -16,6 +16,13 @@
  * Writes no other field. Idempotent: a backfilled document has an
  * organizationId, so a second run changes nothing.
  *
+ * One-way: no rollback. The run sets organizationId equal to collectionSite
+ * where it was null, missing or empty, and which of the three it was is not
+ * recorded; samples created since carry an organizationId too, so this run's
+ * writes cannot be told apart. Nothing needs it undone: collectionSite is
+ * never changed, and the readers fell back to it before the run. Undo is
+ * restoring samples from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:sample-organization               applies
  *   npm run migrate:sample-organization -- --dry-run  counts, writes nothing

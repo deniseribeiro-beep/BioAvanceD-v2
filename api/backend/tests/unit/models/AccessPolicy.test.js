@@ -35,7 +35,8 @@ const request = {
   duoCode: 'DUO:0000007',
   requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }],
 };
-const compatible = [{ consentValid: true, duoCompatible: true, studyActive: true }];
+// RNF008 AC3 (#1496): each entry carries its item's study and protocol.
+const compatible = [{ consentValid: true, duoCompatible: true, studyActive: true, studyId: 'study-1', protocolId: 'protocol-1' }];
 const now = new Date('2026-06-15T00:00:00Z');
 
 describe('AccessPolicy model', () => {
@@ -128,6 +129,15 @@ describe('AccessPolicy model', () => {
       expect(result.reasons[0]).toMatch(/incompatível/);
     });
 
+    // #1495 (RF024 AC2): an item whose collection governance does not hold
+    // denies whatever the policies say, naming its reasons.
+    it('denies an item whose collection regime, approval or custody does not hold, naming the reason', () => {
+      const ungoverned = [{ ...compatible[0], governanceValid: false, governanceReasons: ['Espécime SPEC-1 sem custódia vigente'] }];
+      const result = evaluatePolicies([policy()], request, ungoverned, now);
+      expect(result.effect).toBe('deny');
+      expect(result.reasons[0]).toBe('Espécime SPEC-1 sem custódia vigente');
+    });
+
     it('records a policy in scope whose conditions fail as a reason, not as applied', () => {
       const result = evaluatePolicies([policy({ conditions: [{ protocolId: 'protocol-x' }] })], request, compatible, now);
       expect(result.appliedPolicies).toEqual([]);
@@ -151,10 +161,146 @@ describe('AccessPolicy model', () => {
       ['another entity type', { applicableEntityTypes: ['Specimen'] }],
       ['another purpose', { purposeCodes: ['DUO:0000042'] }],
       ['a period not yet begun', { effectivePeriod: { start: '2027-01-01' } }],
+      ['another study', { conditions: [{ studyId: 'study-2' }] }],
+      ['another protocol', { conditions: [{ protocolId: 'protocol-2' }] }],
+      ['another collection', { conditions: [{ collectionId: 'collection-2' }] }],
+      ['another biobank', { conditions: [{ biobankId: 'biobank-2' }] }],
     ])('does not apply a policy scoped to %s', (_label, overrides) => {
       const result = evaluatePolicies([policy({ decisionEffect: 'deny', ...overrides })], request, compatible, now);
       expect(result.effect).toBe('review_required');
       expect(result.appliedPolicies).toEqual([]);
+    });
+
+    // RNF008 AC3 (#1496): collection scope through the collectionId fact.
+    it('applies a policy conditioned on the collection every requested item belongs to', () => {
+      expect(AccessPolicyModel.validate(payload({ conditions: [{ collectionId: 'collection-1' }] })).isValid).toBe(true);
+      const twoSpecimens = {
+        ...request,
+        requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }, { itemType: 'specimen', itemId: 'SPEC-2' }],
+      };
+      const entry = { consentValid: true, duoCompatible: true, studyActive: true, collectionId: 'collection-1' };
+      const result = evaluatePolicies(
+        [policy({ conditions: [{ consent: 'compatible', collectionId: 'collection-1' }] })],
+        twoSpecimens,
+        [entry, { ...entry }],
+        now
+      );
+      expect(result.effect).toBe('permit');
+    });
+
+    it('does not apply a collection condition to items of two collections or an item with no collection', () => {
+      const twoSpecimens = {
+        ...request,
+        requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }, { itemType: 'specimen', itemId: 'SPEC-2' }],
+      };
+      const entry = { consentValid: true, duoCompatible: true, studyActive: true, collectionId: 'collection-1' };
+      const rule = policy({ conditions: [{ consent: 'compatible', collectionId: 'collection-1' }] });
+      for (const other of [{ ...entry, collectionId: 'collection-2' }, { ...entry, collectionId: null }]) {
+        const result = evaluatePolicies([rule], twoSpecimens, [entry, other], now);
+        expect(result.effect).toBe('review_required');
+        expect(result.appliedPolicies).toEqual([]);
+      }
+    });
+
+    it('applies a deny or review_required conditioned on a collection when any requested item is in it', () => {
+      const twoItems = {
+        ...request,
+        requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }, { itemType: 'dataset', itemId: 'DS-1' }],
+      };
+      const entry = { consentValid: true, duoCompatible: true, studyActive: true, collectionId: 'collection-1' };
+      const broad = policy();
+      const deny = policy({ policyName: 'Embargo', decisionEffect: 'deny', conditions: [{ collectionId: 'collection-1' }] });
+      deny.accessPolicyId = 'policy-2';
+      const review = policy({ policyName: 'Revisão', decisionEffect: 'review_required', conditions: [{ collectionId: 'collection-1' }] });
+      review.accessPolicyId = 'policy-3';
+      for (const other of [{ ...entry, collectionId: 'collection-2' }, { ...entry, collectionId: null }]) {
+        expect(evaluatePolicies([broad, deny], twoItems, [entry, other], now).effect).toBe('deny');
+        expect(evaluatePolicies([broad, review], twoItems, [entry, other], now).effect).toBe('review_required');
+      }
+      expect(evaluatePolicies([broad, deny], twoItems, [{ ...entry, collectionId: 'collection-2' }, { ...entry, collectionId: null }], now).effect)
+        .toBe('permit');
+    });
+
+    it('reads study and protocol per item: a permit does not apply to an item of another study or protocol', () => {
+      const twoSpecimens = {
+        ...request,
+        requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }, { itemType: 'specimen', itemId: 'SPEC-2' }],
+      };
+      const [entry] = compatible;
+      const studyPermit = policy({ conditions: [{ consent: 'compatible', studyId: 'study-1' }] });
+      const protocolPermit = policy({ conditions: [{ consent: 'compatible', protocolId: 'protocol-1' }] });
+      expect(evaluatePolicies([studyPermit], twoSpecimens, [entry, { ...entry }], now).effect).toBe('permit');
+      expect(evaluatePolicies([studyPermit], twoSpecimens, [entry, { ...entry, studyId: 'study-2' }], now).appliedPolicies).toEqual([]);
+      expect(evaluatePolicies([studyPermit], twoSpecimens, [entry, { ...entry, studyId: null }], now).appliedPolicies).toEqual([]);
+      expect(evaluatePolicies([protocolPermit], twoSpecimens, [entry, { ...entry, protocolId: 'protocol-2' }], now).appliedPolicies).toEqual([]);
+      // The items agree with each other but not with the request's declared study.
+      const declaredOther = { ...twoSpecimens, studyId: 'study-2' };
+      expect(evaluatePolicies([studyPermit], declaredOther, [entry, { ...entry }], now).appliedPolicies).toEqual([]);
+    });
+
+    it('applies a deny conditioned on a study or protocol when one item matches every item fact of the condition', () => {
+      const twoSpecimens = {
+        ...request,
+        requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }, { itemType: 'specimen', itemId: 'SPEC-2' }],
+      };
+      const [entry] = compatible;
+      const broad = policy();
+      const denyOf = (condition) => {
+        const deny = policy({ policyName: 'Embargo', decisionEffect: 'deny', conditions: [condition] });
+        deny.accessPolicyId = 'policy-2';
+        return deny;
+      };
+      expect(evaluatePolicies([broad, denyOf({ studyId: 'study-2' })], twoSpecimens, [entry, { ...entry, studyId: 'study-2' }], now).effect)
+        .toBe('deny');
+      expect(evaluatePolicies([broad, denyOf({ protocolId: 'protocol-2' })], twoSpecimens, [entry, { ...entry, protocolId: 'protocol-2' }], now).effect)
+        .toBe('deny');
+      // The request declares study-1 for every item, a dataset item included.
+      expect(evaluatePolicies([broad, denyOf({ studyId: 'study-1' })], twoSpecimens, [{ ...entry, studyId: null }], now).effect)
+        .toBe('deny');
+      // Collection 1 and study 2 on two different items: no one item is both.
+      const split = [{ ...entry, collectionId: 'collection-1' }, { ...entry, studyId: 'study-2', collectionId: 'collection-2' }];
+      expect(evaluatePolicies([broad, denyOf({ collectionId: 'collection-1', studyId: 'study-2' })], twoSpecimens, split, now).effect)
+        .toBe('permit');
+    });
+
+    // RNF008 AC3 (#1496): biobank scope through the biobankId fact.
+    it('applies a permit conditioned on the one biobank every requested item belongs to, and not to an item of two biobanks or none', () => {
+      expect(AccessPolicyModel.validate(payload({ conditions: [{ biobankId: 'biobank-1' }] })).isValid).toBe(true);
+      const twoSpecimens = {
+        ...request,
+        requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }, { itemType: 'specimen', itemId: 'SPEC-2' }],
+      };
+      const entry = { consentValid: true, duoCompatible: true, studyActive: true, biobankId: 'biobank-1', biobankIds: ['biobank-1'] };
+      const rule = policy({ conditions: [{ consent: 'compatible', biobankId: 'biobank-1' }] });
+      expect(evaluatePolicies([rule], twoSpecimens, [entry, { ...entry }], now).effect).toBe('permit');
+      for (const other of [
+        { ...entry, biobankId: null, biobankIds: ['biobank-1', 'biobank-2'] },
+        { ...entry, biobankId: null, biobankIds: [] },
+        { ...entry, biobankId: 'biobank-2', biobankIds: ['biobank-2'] },
+      ]) {
+        const result = evaluatePolicies([rule], twoSpecimens, [entry, other], now);
+        expect(result.effect).toBe('review_required');
+        expect(result.appliedPolicies).toEqual([]);
+      }
+    });
+
+    it('applies a deny or review_required conditioned on a biobank when any requested item belongs to it, an item of two biobanks included', () => {
+      const twoSpecimens = {
+        ...request,
+        requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }, { itemType: 'specimen', itemId: 'SPEC-2' }],
+      };
+      const entry = { consentValid: true, duoCompatible: true, studyActive: true, biobankId: 'biobank-1', biobankIds: ['biobank-1'] };
+      const shared = { ...entry, biobankId: null, biobankIds: ['biobank-1', 'biobank-2'] };
+      const broad = policy();
+      const deny = policy({ policyName: 'Embargo', decisionEffect: 'deny', conditions: [{ biobankId: 'biobank-2' }] });
+      deny.accessPolicyId = 'policy-2';
+      const review = policy({ policyName: 'Revisão', decisionEffect: 'review_required', conditions: [{ biobankId: 'biobank-2' }] });
+      review.accessPolicyId = 'policy-3';
+      expect(evaluatePolicies([broad, deny], twoSpecimens, [entry, shared], now).effect).toBe('deny');
+      expect(evaluatePolicies([broad, review], twoSpecimens, [entry, shared], now).effect).toBe('review_required');
+      expect(evaluatePolicies([broad, deny], twoSpecimens, [entry, { ...entry }], now).effect).toBe('permit');
+      // The biobank is the item's, never one the request declares.
+      expect(evaluatePolicies([broad, deny], { ...twoSpecimens, biobankId: 'biobank-2' }, [entry, { ...entry }], now).effect).toBe('permit');
     });
 
     it('applies a policy whose purposeCodes name the request\'s DUO code', () => {

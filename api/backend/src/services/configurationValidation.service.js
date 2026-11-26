@@ -29,12 +29,14 @@ const { ensureConfigurationValidationRunIndexes } = require('../utils/governance
 const SOURCE_COMPONENT = 'configurationValidation';
 
 class ConfigurationValidationError extends Error {
-  constructor(message, statusCode, { validationRun, violatedInvariants }) {
+  constructor(message, statusCode, { validationRun, violatedInvariants, violations = [] }) {
     super(message);
     this.name = 'ConfigurationValidationError';
     this.statusCode = statusCode;
     this.validationRun = validationRun;
     this.violatedInvariants = violatedInvariants;
+    // RNF018 AC2: one { invariantId, fieldPath } per refused path.
+    this.violations = violations;
   }
 }
 
@@ -77,9 +79,11 @@ function evaluate({ findings, fixedAttempts = [], now = new Date() }) {
     invariantResults,
     now,
   });
-  const violated = invariantResults.filter((entry) => entry.result === 'fail').map((entry) => entry.invariantId);
+  const failed = invariantResults.filter((entry) => entry.result === 'fail');
+  const violated = failed.map((entry) => entry.invariantId);
+  const violations = failed.flatMap((entry) => entry.paths.map((fieldPath) => ({ invariantId: entry.invariantId, fieldPath })));
   const error = run.status === 'failed'
-    ? new ConfigurationValidationError(refusalMessage(findings, fixedAttempts, violated), violated.length ? 422 : 400, { validationRun: run, violatedInvariants: violated })
+    ? new ConfigurationValidationError(refusalMessage(findings, fixedAttempts, violated), violated.length ? 422 : 400, { validationRun: run, violatedInvariants: violated, violations })
     : null;
   return { run, violated, error };
 }

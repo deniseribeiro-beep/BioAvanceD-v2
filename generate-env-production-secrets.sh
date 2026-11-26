@@ -123,7 +123,9 @@ PUBLIC_JSON="${PUBLIC_JSON%$'\r'}"
 
 declare -A VALS
 VALS[MONGO_ROOT_PASSWORD]="$MONGO_ROOT_PASSWORD"
-VALS[MONGO_URI]="mongodb://$MONGO_ROOT_USERNAME:$MONGO_ROOT_PASSWORD@mongodb:27017/$MONGO_DB?authSource=admin"
+VALS[MONGO_URI]="mongodb://$MONGO_ROOT_USERNAME:$MONGO_ROOT_PASSWORD@mongodb:27017/$MONGO_DB?authSource=admin&replicaSet=rs0"
+# A mongod key file takes only base64 characters, so tok's base64url (- and _) is not used for it; hex is.
+VALS[MONGO_REPLICA_SET_KEY]="$(openssl rand -hex 48 | tr -d '\r\n')"
 VALS[MONGO_DB_NOVO]="$MONGO_DB"
 VALS[NEO4J_PASSWORD]="$(tok 36)"
 VALS[INFLUXDB_INIT_PASSWORD]="$(tok 36)"

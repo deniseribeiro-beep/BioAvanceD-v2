@@ -19,6 +19,7 @@ const { ObjectId } = require('mongodb');
 
 const importLGPDService = require('../../src/services/import-lgpd.service');
 const { decryptFileBuffer } = require('../../src/utils/fileCrypto');
+const objectStorage = require('../../src/infrastructure/objectStorage');
 const { sealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 
 const CPF = '12345678900';
@@ -101,18 +102,22 @@ describe('#807: LGPD quarantine is encrypted at rest', () => {
   describe('retainSourceFileForBatch', () => {
     let root;
     let tempDir;
+    let store;
 
     beforeEach(() => {
       root = fs.mkdtempSync(path.join(os.tmpdir(), 'bio-807-'));
       tempDir = path.join(root, 'uploads', 'temp');
       fs.mkdirSync(tempDir, { recursive: true });
+      // #1419: the file goes to the object store; keep it under this root.
+      store = objectStorage.createFilesystemObjectStore({ root: path.join(root, 'store') });
+      vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue(store);
     });
 
     afterEach(() => {
       fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('writes ciphertext to disk and records what decrypts it', async () => {
+    it('writes ciphertext to the object store and records what decrypts it', async () => {
       const contents = `Nome,CPF\nMaria da Silva,${CPF}\n`;
       const filePath = path.join(tempDir, 'upload-807');
       fs.writeFileSync(filePath, contents);
@@ -126,7 +131,7 @@ describe('#807: LGPD quarantine is encrypted at rest', () => {
       );
 
       expect(fs.existsSync(filePath)).toBe(false);
-      const onDisk = fs.readFileSync(retained.storedPath);
+      const onDisk = await store.getObject(retained.storageUri);
       expect(onDisk.toString('utf8')).not.toContain(CPF);
 
       const [, update] = updateOne.mock.calls[0];

@@ -11,7 +11,6 @@ import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import { resolveSpecimenStatus, translateSpecimenStatus } from '../utils/sampleHelpers';
 import { selectTemperatureRows, selectAccessLogRows, selectAuditEventRows, rowKey } from './ReportViewPage.helpers';
-import './ReportViewPage.css';
 
 export default function ReportViewPage() {
   const { id } = useParams<{ id: string }>();
@@ -99,15 +98,13 @@ export default function ReportViewPage() {
     window.print();
   };
 
-  const handleDelete = async () => {
-    if (!report) return;
-
-    if (!window.confirm(`Tem certeza que deseja excluir o relatório "${report.reportType}"?\n\nEsta ação não pode ser desfeita.`)) {
+  const handleDelete = async (target: Reports) => {
+    if (!window.confirm(`Tem certeza que deseja excluir o relatório "${target.reportType}"?\n\nEsta ação não pode ser desfeita.`)) {
       return;
     }
 
     try {
-      await reportsService.delete(report.reportID);
+      await reportsService.delete(target.reportID);
       // Redireciona para a lista de relatórios após exclusão
       navigate('/reports');
     } catch (err: any) {
@@ -383,10 +380,10 @@ export default function ReportViewPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {reportData.sensors.map((s: any, idx: number) => {
+                      {reportData.sensors.map((s: any) => {
                         const sensorId = s.sensorId || s.sensorID || s._id || 'N/A';
                         return (
-                          <tr key={s._id || sensorId || idx}>
+                          <tr key={s._id || sensorId}>
                             <td>{sensorId}</td>
                             <td>{s.sensorType}</td>
                             <td>{getMaintenanceStatusLabel(s.maintenanceStatus)}</td>
@@ -501,7 +498,7 @@ export default function ReportViewPage() {
 
   if (loading) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div className="page-header">
           <h1 className="page-title">Carregando relatório...</h1>
         </div>
@@ -511,7 +508,7 @@ export default function ReportViewPage() {
 
   if (error) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div className="page-header">
           <h1 className="page-title">Erro</h1>
         </div>
@@ -528,7 +525,7 @@ export default function ReportViewPage() {
 
   if (!report) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div className="page-header">
           <h1 className="page-title">Relatório não encontrado</h1>
         </div>
@@ -544,7 +541,7 @@ export default function ReportViewPage() {
   }
 
   return (
-    <div className="page report-view-page">
+    <div className="page-shell report-view-page">
       <div className="page-header report-view-header">
         <div className="page-header-content">
           <Button onClick={() => navigate('/reports')} variant="secondary" className="back-button">
@@ -572,7 +569,7 @@ export default function ReportViewPage() {
             <Download size={18} />
             Download JSON
           </Button>
-          <Button onClick={handleDelete} variant="danger">
+          <Button onClick={() => handleDelete(report)} variant="danger">
             <Trash2 size={18} />
             Excluir
           </Button>

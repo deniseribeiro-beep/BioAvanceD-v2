@@ -1,26 +1,26 @@
-import { HTMLAttributes } from 'react';
-import './Spinner.css';
+import { cn } from '@/lib/utils';
 
-interface SpinnerProps extends HTMLAttributes<HTMLSpanElement> {
+interface SpinnerProps {
   size?: 'sm' | 'md' | 'lg';
-  variant?: 'primary' | 'secondary' | 'muted';
-  label?: string;
+  className?: string;
 }
 
-export default function Spinner({
-  size = 'md',
-  variant = 'primary',
-  label = 'Loading',
-  className = '',
-  ...props
-}: SpinnerProps) {
+const sizeMap = {
+  sm: 'h-4 w-4 border-2',
+  md: 'h-6 w-6 border-2',
+  lg: 'h-10 w-10 border-[3px]',
+};
+
+export default function Spinner({ size = 'md', className = '' }: SpinnerProps) {
   return (
-    <span
-      className={`spinner spinner-${size} spinner-${variant} ${className}`}
+    <div
+      className={cn(
+        'inline-block animate-spin rounded-full border-primary border-r-transparent',
+        sizeMap[size],
+        className
+      )}
       role="status"
-      aria-label={label}
-      aria-live="polite"
-      {...props}
+      aria-label="Loading"
     />
   );
 }

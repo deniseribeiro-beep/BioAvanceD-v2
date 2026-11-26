@@ -14,12 +14,14 @@ import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import SampleFilesSection from '../components/SampleFilesSection';
 import InlineStorageMovementPanel from '../components/samples/InlineStorageMovementPanel';
 import CloseSpecimenAction from '../components/samples/CloseSpecimenAction';
+import SampleCompromiseCard from '../components/samples/SampleCompromiseCard';
+import SampleLineageCard from '../components/samples/SampleLineageCard';
 import { buildSprecAxisSummary, buildSprecSummary } from '../components/samples/sampleListFormatters';
 import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
 import { storageApi } from '../services/storageApi';
 import { resolveLegacySampleStatus } from '../foundation/contracts';
-import './SamplesPage.css';
+import { readSampleQuantities, resolveQuantityStatus } from '../utils/sampleHelpers';
 
 type SampleEditForm = {
   linkedProject: string;
@@ -42,7 +44,6 @@ export function buildSampleUpdatePayload(form: SampleEditForm, parsedAvailable: 
 
   if (parsedAvailable !== null) {
     payload.currentQuantity = parsedAvailable;
-    payload.volumeCurrent = parsedAvailable;
   }
 
   return payload;
@@ -95,24 +96,37 @@ export default function SampleDetailsPage() {
   const canEdit = hasRole(['Administrador', 'Coordenador']) || user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
 
   const computeAvailability = (s: Sample | null | undefined) => {
-    const initial = s?.volumeInitial ?? s?.initialQuantity ?? s?.quantity ?? 0;
-    const current = s?.volumeCurrent ?? s?.currentQuantity ?? s?.quantity ?? 0;
+    const { initial, current } = readSampleQuantities(s);
+    const quantityStatus = resolveQuantityStatus(s);
 
-    if (current <= 0) {
+    // #1436: missing quantities are unknown, not "0,0 µL / Indisponível".
+    if (quantityStatus === 'unknown' || current == null) {
+      return {
+        label: t('samples.detail.availability.unknown', 'Não registrada'),
+        className: 'availability-unknown',
+        current: null as number | null,
+        initial,
+        displayAmount: '—',
+      };
+    }
+
+    if (quantityStatus === 'depleted' || current <= 0) {
       return {
         label: t('samples.detail.availability.unavailable', 'Indisponível'),
         className: 'availability-indisponível',
         current,
-        initial,
+        initial: initial ?? 0,
+        displayAmount: `${Number(current).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL`,
       };
     }
 
-    if (current < initial) {
+    if (quantityStatus === 'partial' || (initial != null && current < initial)) {
       return {
         label: t('samples.detail.availability.partial', 'Parcialmente Disponível'),
         className: 'availability-parcialmente-disponível',
         current,
-        initial,
+        initial: initial ?? current,
+        displayAmount: `${Number(current).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL`,
       };
     }
 
@@ -120,7 +134,8 @@ export default function SampleDetailsPage() {
       label: t('samples.detail.availability.available', 'Disponível'),
       className: 'availability-disponível',
       current,
-      initial,
+      initial: initial ?? current,
+      displayAmount: `${Number(current).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL`,
     };
   };
 
@@ -262,7 +277,6 @@ export default function SampleDetailsPage() {
     return {
       ...sample,
       currentQuantity: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.currentQuantity,
-      volumeCurrent: Number.isFinite(parsedAvailable) ? parsedAvailable : sample?.volumeCurrent,
       linkedProject: form.linkedProject || sample?.linkedProject,
     } as Sample;
   }, [isEditing, sample, form.currentQuantity, form.linkedProject]);
@@ -289,16 +303,22 @@ export default function SampleDetailsPage() {
     { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
     { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
     { value: 'Closed', label: t('samples.status.closed', 'Encerrada') },
+    { value: 'Unknown', label: t('samples.detail.availability.unknown', 'Não registrada') },
   ]), [t]);
 
   // #545: specimenStatus is the sole persisted source of truth (sample.service.js
   // strips currentStatus/status from every write since #540) — "Status Atual"
   // is a read-only derived display, not an editable field. RF006 AC3: the
   // partial/total withdrawal part reads quantityStatus.
+  // #1436: prefer availabilityPreview so unknown quantity shows "Não registrada"
+  // together with "—" instead of legacy AVAILABLE / "Disponível".
   const derivedStatusLabel = useMemo(() => {
+    if (availabilityPreview.className === 'availability-unknown') {
+      return availabilityPreview.label;
+    }
     const derived = resolveLegacySampleStatus(sample);
     return statusOptions.find((option) => option.value === derived)?.label || derived;
-  }, [sample, statusOptions]);
+  }, [sample, statusOptions, availabilityPreview]);
 
   // #628: Result.specimenId is now the sole canonical shape (every write
   // path writes it, existing documents backfilled) — a direct match, not
@@ -320,7 +340,7 @@ export default function SampleDetailsPage() {
 
   if (loading) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div style={{ 
           display: 'flex', 
           justifyContent: 'center', 
@@ -337,7 +357,7 @@ export default function SampleDetailsPage() {
 
   if (error) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div style={{ marginBottom: '1rem' }}>
           <Button variant="secondary" onClick={() => navigate('/samples')}>
             <ArrowLeft size={18} style={{ marginRight: '0.5rem' }} />
@@ -356,7 +376,7 @@ export default function SampleDetailsPage() {
   // Se terminou de carregar mas não encontrou a amostra
   if (!loading && samples !== undefined && !sample && id) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div style={{ marginBottom: '1rem' }}>
           <Button variant="secondary" onClick={() => navigate('/samples')}>
             <ArrowLeft size={18} style={{ marginRight: '0.5rem' }} />
@@ -381,7 +401,7 @@ export default function SampleDetailsPage() {
   // Se ainda não tem sample (ainda carregando ou aguardando)
   if (!sample) {
     return (
-      <div className="page">
+      <div className="page-shell">
         <div style={{ 
           display: 'flex', 
           justifyContent: 'center', 
@@ -404,7 +424,7 @@ export default function SampleDetailsPage() {
     if (sample) {
       setForm({
         linkedProject: sample.linkedProject || '',
-        currentQuantity: (sample.volumeCurrent ?? sample.currentQuantity ?? sample.quantity ?? '').toString(),
+        currentQuantity: (sample.currentQuantity ?? sample.quantity ?? '').toString(),
         sampleOrigin: sample.sampleOrigin || '',
         extractionProtocol: sample.extractionProtocol || '',
         participantId: sample.participantId ? String(sample.participantId) : '',
@@ -436,7 +456,6 @@ export default function SampleDetailsPage() {
         ...prev!,
         ...payload,
         currentQuantity: payload.currentQuantity ?? prev?.currentQuantity,
-        volumeCurrent: payload.volumeCurrent ?? prev?.volumeCurrent,
       }));
       // Se backend retornou amostra, sincroniza
       if (updated) {
@@ -456,11 +475,11 @@ export default function SampleDetailsPage() {
   };
 
   return (
-    <div className="page" data-testid="sample-detail-root">
+    <div className="page-shell" data-testid="sample-detail-root">
       <div className="page-header">
         <div>
             <h1 className="page-title" data-testid="sample-detail-page-title">
-            {t('samples.detail.title', 'Detalhes da Amostra')} - {sample.barcode || (sample as any).specimenId || t('common.notAvailable', 'N/A')}
+            {t('samples.detail.title', 'Detalhes da Amostra')} - {(sample as any).specimenId || sample._id || (sample as any).id || t('common.notAvailable', 'N/A')}
           </h1>
 
           <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -603,6 +622,9 @@ export default function SampleDetailsPage() {
           )}
         </Card>
 
+        <SampleCompromiseCard sampleId={String(sample._id || sample.specimenId || id)} t={t} locale={locale} />
+        <SampleLineageCard parentSpecimenIds={sample.parentSpecimenIds} t={t} />
+
         {/* Informações Básicas */}
         <Card>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text)' }}>
@@ -683,7 +705,9 @@ export default function SampleDetailsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
               <span style={{ fontWeight: 500, color: 'var(--text-light)' }}>{t('samples.detail.totalQuantity', 'Quantidade Total')}:</span>
               <span style={{ color: 'var(--text)' }}>
-                {availabilityPreview.initial.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
+                {availabilityPreview.initial == null
+                  ? '—'
+                  : `${availabilityPreview.initial.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL`}
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', backgroundColor: 'var(--surface)', borderRadius: '4px' }}>
@@ -701,7 +725,7 @@ export default function SampleDetailsPage() {
                 </div>
               ) : (
                 <span style={{ color: 'var(--text)' }}>
-                  {availabilityPreview.current.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} µL
+                  {availabilityPreview.displayAmount}
                 </span>
               )}
             </div>

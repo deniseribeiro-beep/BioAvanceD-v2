@@ -27,6 +27,10 @@ const derivedScoreServicePath = require.resolve('../../src/services/derived-scor
 const activeCodeValidatorPath = require.resolve('../../src/ingestion/activeCodeValidator');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
+// #1428: warm the intakeWizard route graph once at file load so #782 cases
+// under a full coverage run do not pay cold-require inside the it() budget.
+require(routePath);
+
 const allPaths = [
   notificationServicePath,
   patientIdentityServicePath,
@@ -71,6 +75,7 @@ const ORPHA_SYSTEM_URI = 'http://www.orpha.net';
 const HPO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/hp.owl';
 const OMIM_SYSTEM_URI = 'https://www.omim.org';
 const DCB_SYSTEM_URI = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb';
+const ICD10_SYSTEM_URI = 'http://hl7.org/fhir/sid/icd-10';
 
 /**
  * Real query-matching fake for the two RF029 active-code-check collections
@@ -87,12 +92,15 @@ function makeActiveCodeCollections() {
     // #714: AllergyIntolerance's allergenCoding now goes through the same
     // active-release gate as Condition/PhenotypeObservation above.
     { systemUri: DCB_SYSTEM_URI, code: '03730', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-dcb' },
+    // #1337: an ICD-10 code, so a Condition can carry all three codings.
+    { systemUri: ICD10_SYSTEM_URI, code: 'E11', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-icd10' },
   ];
   const referenceDatasetReleases = [
     { referenceDatasetReleaseId: 'release-orpha', datasetCode: 'ORPHA', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-hpo', datasetCode: 'HPO', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-omim', datasetCode: 'OMIM', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-dcb', datasetCode: 'DCB', releaseStatus: 'active' },
+    { referenceDatasetReleaseId: 'release-icd10', datasetCode: 'ICD10', releaseStatus: 'active' },
   ];
   return {
     terminologyConcepts: {
@@ -174,7 +182,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
   // #782: `failCollections` makes a named entity collection reject on insert,
   // so the outcome summary the wizard now returns can be asserted on a real
   // failure. Defaults to none, so every existing caller is unaffected.
-  async function runIntake(payload, { failCollections = [] } = {}) {
+  async function runIntake(payload, { failCollections = [], failWith } = {}) {
     clearCache();
 
     const notificationServiceModule = require(notificationServicePath);
@@ -190,7 +198,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     });
 
     const merkleServiceModule = require(merkleServicePath);
-    merkleServiceModule.generateSampleHash = vi.fn(() => 'hash-1');
+    merkleServiceModule.generateSampleHashFromSample = vi.fn(async () => 'hash-1');
 
     const auditLoggerModule = require(auditLoggerPath);
     auditLoggerModule.init = vi.fn();
@@ -230,7 +238,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       collections[key] = {
         docs: [],
         insertOne: vi.fn(async () => {
-          throw new Error(`insert rejeitado (${key})`);
+          throw failWith !== undefined ? failWith : new Error(`insert rejeitado (${key})`);
         }),
       };
     }
@@ -636,5 +644,227 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       'MedicationExposure',
       'PhenotypeObservation',
     ]);
+  });
+  // #1337: the optional fields and failure paths of each entity, so every
+  // fallback the recording takes is pinned by what it writes or reports.
+  it('#693: codes ORPHA, OMIM and ICD-10 together on one Condition', async () => {
+    const payload = { ...VALID_PAYLOAD, diagnosis: { orphaCode: 'ORPHA:558', omimCode: 'OMIM:154700', icdCode: 'E11' } };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.conditions.docs).toHaveLength(1);
+    expect(collections.conditions.docs[0].conditionCoding).toEqual([
+      expect.objectContaining({ systemUri: ORPHA_SYSTEM_URI, code: 'ORPHA:558' }),
+      expect.objectContaining({ systemUri: OMIM_SYSTEM_URI, code: '154700' }),
+      expect.objectContaining({ systemUri: ICD10_SYSTEM_URI, code: 'E11' }),
+    ]);
+  });
+
+  it('#693: skips a phenotype with no hpoId and records one with no label without a display', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: { ...VALID_PAYLOAD.clinical, diseasePhenotypes: [{ label: 'sem código' }, { hpoId: 'HP:0000822' }] },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.phenotypeObservations.docs).toHaveLength(1);
+    expect(collections.phenotypeObservations.docs[0].hpoCoding).toMatchObject({ systemUri: HPO_SYSTEM_URI, code: 'HP:0000822' });
+    expect(collections.phenotypeObservations.docs[0].hpoCoding.display).toBeUndefined();
+    expect(res.body.clinicalEntities.recorded.PhenotypeObservation).toBe(1);
+  });
+
+  it('#693: records a WASHOUT medication as stopped, with the washout start as its period', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        pharmacologyData: { treatmentStatus: 'WASHOUT', medicationName: 'Metformin', atcCode: 'A10BA02', washoutStartDate: '2026-01-01' },
+      },
+    };
+
+    const { collections } = await runIntake(payload);
+
+    expect(collections.medicationExposures.docs).toHaveLength(1);
+    expect(collections.medicationExposures.docs[0]).toMatchObject({
+      medicationStatus: 'stopped',
+      medicationPeriod: { start: new Date('2026-01-01'), end: null },
+    });
+  });
+
+  it('#693: takes the washout end alone as the period when no start is given', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        pharmacologyData: { treatmentStatus: 'WASHOUT', medicationName: 'Metformin', atcCode: 'A10BA02', washoutEndDate: '2026-01-10' },
+      },
+    };
+
+    const { collections } = await runIntake(payload);
+
+    expect(collections.medicationExposures.docs[0]).toMatchObject({
+      medicationStatus: 'stopped',
+      medicationPeriod: { start: null, end: new Date('2026-01-10') },
+    });
+  });
+
+  it('#693: records a NAIVE medication as unknown with no period', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        pharmacologyData: { treatmentStatus: 'NAIVE', medicationName: 'Metformin', atcCode: 'A10BA02' },
+      },
+    };
+
+    const { collections } = await runIntake(payload);
+
+    expect(collections.medicationExposures.docs).toHaveLength(1);
+    expect(collections.medicationExposures.docs[0].medicationStatus).toBe('unknown');
+    expect(collections.medicationExposures.docs[0].medicationPeriod ?? null).toBeNull();
+  });
+
+  it('#708: records an allergen with no name and no reaction without a display and with an empty reaction list', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: { ...VALID_PAYLOAD.clinical, allergies: [{ allergenCode: '03730' }] },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.allergyIntolerances.docs).toHaveLength(1);
+    expect(collections.allergyIntolerances.docs[0].allergenCoding).toMatchObject({ code: '03730' });
+    expect(collections.allergyIntolerances.docs[0].allergenCoding.display).toBeUndefined();
+    expect(collections.allergyIntolerances.docs[0].reaction).toEqual([]);
+  });
+
+  it('#709: records an uncoded family condition by name, a coded one without a name, and an entry with neither as no condition', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        familyHistories: [
+          { relationship: 'mother', conditionName: 'Diabetes' },
+          { relationship: 'father', orphaCode: 'ORPHA:558' },
+          { relationship: 'sibling' },
+        ],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.familyHistories.docs).toHaveLength(3);
+    const [mother, father, sibling] = collections.familyHistories.docs;
+    expect(mother.familyCondition).toHaveLength(1);
+    expect(mother.familyCondition[0].condition).toMatchObject({ display: 'Diabetes' });
+    expect(mother.familyCondition[0].condition.code).toBeUndefined();
+    expect(mother.familyCondition[0].onset).toBeUndefined();
+    expect(father.familyCondition[0].condition).toMatchObject({ systemUri: ORPHA_SYSTEM_URI, code: 'ORPHA:558' });
+    expect(father.familyCondition[0].condition.display).toBeUndefined();
+    expect(sibling.familyCondition).toEqual([]);
+  });
+
+  it('#710: skips a procedure with no performed date and records one with no name or body site', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        procedures: [{ procedureCode: 'LOCAL-002' }, { procedureCode: 'LOCAL-001', performed: '2026-01-15' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.procedures.docs).toHaveLength(1);
+    expect(collections.procedures.docs[0].procedureCoding[0]).toMatchObject({ code: 'LOCAL-001' });
+    expect(collections.procedures.docs[0].procedureCoding[0].display).toBeUndefined();
+    expect(collections.procedures.docs[0].bodySite).toEqual([]);
+  });
+
+  it('#711: skips an observation with no effective date and records one with no name, value or unit as nulls', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: {
+        ...VALID_PAYLOAD.clinical,
+        observationRecords: [{ loincCode: '2345-7' }, { loincCode: '718-7', effectiveDate: '2026-01-15' }],
+      },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.clinicalObservations.docs).toHaveLength(1);
+    expect(collections.clinicalObservations.docs[0].observationCoding).toMatchObject({ code: '718-7' });
+    expect(collections.clinicalObservations.docs[0].observationCoding.display).toBeUndefined();
+    expect(collections.clinicalObservations.docs[0].value ?? null).toBeNull();
+    expect(collections.clinicalObservations.docs[0].unit ?? null).toBeNull();
+  });
+
+  it('#712: skips an outcome with a type but no date', async () => {
+    const payload = {
+      ...VALID_PAYLOAD,
+      clinical: { ...VALID_PAYLOAD.clinical, clinicalOutcomes: [{ outcomeType: 'remission' }] },
+    };
+
+    const { res, collections } = await runIntake(payload);
+
+    expect(res.status).toBe(200);
+    expect(collections.clinicalOutcomes.docs).toHaveLength(0);
+    expect(res.body.clinicalEntities.recorded.ClinicalOutcome).toBeUndefined();
+  });
+
+  const ALL_ENTITIES_PAYLOAD = {
+    ...VALID_PAYLOAD,
+    clinical: {
+      ...VALID_PAYLOAD.clinical,
+      allergies: [{ allergenName: 'Dipirona', allergenCode: '03730', reaction: 'Urticária' }],
+      familyHistories: [{ relationship: 'mother', conditionName: 'Marfan syndrome', orphaCode: 'ORPHA:558', onset: '30 anos' }],
+      procedures: [{ procedureName: 'Liver biopsy', procedureCode: 'LOCAL-001', performed: '2026-01-15', bodySite: 'Liver' }],
+      observationRecords: [{ testName: 'Hemoglobina', loincCode: '718-7', value: '13.2', unit: 'g/dL', effectiveDate: '2026-01-15' }],
+      clinicalOutcomes: [{ outcomeType: 'remission', outcomeDate: '2026-02-01' }],
+      charlsonConditions: ['copd'],
+    },
+  };
+  const ALL_ENTITY_COLLECTIONS = [
+    'encounters', 'conditions', 'phenotypeObservations', 'medicationExposures', 'allergyIntolerances',
+    'familyHistories', 'procedures', 'clinicalObservations', 'clinicalOutcomes', 'derivedScores',
+  ];
+
+  it('#782: names each list entity that failed by its reference, with the error message', async () => {
+    const { res } = await runIntake(ALL_ENTITIES_PAYLOAD, {
+      failCollections: ['allergyIntolerances', 'familyHistories', 'procedures', 'clinicalObservations', 'clinicalOutcomes', 'derivedScores'],
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const byEntity = Object.fromEntries(res.body.clinicalEntities.failed.map((f) => [f.entity, f]));
+    expect(byEntity.AllergyIntolerance).toMatchObject({ reference: '03730', error: 'insert rejeitado (allergyIntolerances)' });
+    expect(byEntity.FamilyHistory).toMatchObject({ reference: 'mother', error: 'insert rejeitado (familyHistories)' });
+    expect(byEntity.Procedure).toMatchObject({ reference: 'LOCAL-001', error: 'insert rejeitado (procedures)' });
+    expect(byEntity.ClinicalObservation).toMatchObject({ reference: '718-7', error: 'insert rejeitado (clinicalObservations)' });
+    expect(byEntity.ClinicalOutcome).toMatchObject({ reference: 'remission', error: 'insert rejeitado (clinicalOutcomes)' });
+    expect(byEntity.DerivedScore).toMatchObject({ error: 'insert rejeitado (derivedScores)' });
+    expect(res.body.clinicalEntities.recorded).toMatchObject({ Encounter: 1, Condition: 1 });
+  });
+
+  it('#782: reports a failure whose error carries no message by the error itself', async () => {
+    const { res } = await runIntake(ALL_ENTITIES_PAYLOAD, { failCollections: ALL_ENTITY_COLLECTIONS, failWith: new Error('') });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.clinicalEntities.recorded).toEqual({});
+    expect(res.body.clinicalEntities.failed.map((f) => f.entity).sort()).toEqual([
+      'AllergyIntolerance', 'ClinicalObservation', 'ClinicalOutcome', 'Condition', 'DerivedScore',
+      'Encounter', 'FamilyHistory', 'MedicationExposure', 'PhenotypeObservation', 'Procedure',
+    ]);
+    for (const failure of res.body.clinicalEntities.failed) {
+      expect(failure.error).toBe('Error');
+    }
   });
 });

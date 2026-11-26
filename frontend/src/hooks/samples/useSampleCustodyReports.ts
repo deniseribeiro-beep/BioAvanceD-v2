@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { sampleChainApi } from '@/services/sampleChainApi';
 import { Sample } from '@/types/models';
 import { useSamples } from '../useSamples';
@@ -52,7 +52,7 @@ export function useSampleCustodyReports() {
     return seq;
   };
 
-  const rows = useMemo<SampleCustodyRow[]>(() => (samples || []) as SampleCustodyRow[], [samples]);
+  const rows = samples as SampleCustodyRow[];
 
   const toggleMovements = async (sample: SampleRecord) => {
     const sampleId = resolveSampleId(sample);

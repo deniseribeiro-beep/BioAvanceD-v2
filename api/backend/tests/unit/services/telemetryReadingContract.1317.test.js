@@ -25,6 +25,12 @@ describe('readingIdentityOf', () => {
     expect(identity.payloadHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('keeps a device timestamp with an offset as its UTC instant (RNF025 C2)', () => {
+    const identity = readingIdentityOf({ sensorId: 's1', temperatureValue: 4, timestamp: '2026-10-10T08:59:00.000-03:00' }, RECEIVED);
+    expect(identity.observedAt.toISOString()).toBe('2026-10-10T11:59:00.000Z');
+    expect(identity.receivedAt.toISOString()).toBe('2026-10-10T12:00:00.000Z');
+  });
+
   it('without a device timestamp, observedAt is the receipt time and the clock is unknown', () => {
     const identity = readingIdentityOf({ sensorId: 's1', temperatureValue: 4 }, RECEIVED);
     expect(identity.observedAt).toBe(RECEIVED);

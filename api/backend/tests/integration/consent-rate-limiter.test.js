@@ -22,6 +22,11 @@ const request = require('supertest');
 const appPath = require.resolve('../../app');
 const envPath = require.resolve('../../src/config/env');
 
+// #1428: warm app.js once at file load. Each loadAppWithEnv still deletes
+// require.cache and reloads for env isolation; the first cold graph then
+// sits outside any it() timeout budget under full coverage.
+require(appPath);
+
 // The unauthenticated token-credential surface, one path per mount in app.js.
 // A junk token is enough: the limiter runs before the handler, and every one
 // of these answers 4xx for a bad token, so only the 429s are the signal.

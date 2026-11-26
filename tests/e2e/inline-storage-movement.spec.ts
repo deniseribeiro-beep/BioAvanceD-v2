@@ -63,7 +63,12 @@ async function openPanelForSample(page: import('@playwright/test').Page, sample:
   // by the same page, wrongly fulfilling them with the list envelope and
   // crashing SampleDetailsPage's compliance-graph rendering (`.graphPath` of
   // an object with no such key).
-  await page.route('**/api/samples', async (route) => {
+  // Match pathname `/api/samples` with optional query (`?limit=200` from
+  // useSamples after ui-mongo-binding). Playwright's bare `**/api/samples`
+  // glob does not match when a query string is present, so the list call
+  // used to fall through to the real backend, 401 on mockLogin's unsigned
+  // token, and force-logout to /login before Gerenciar Armazenagem appeared.
+  await page.route((url) => /\/api\/samples$/.test(url.pathname), async (route) => {
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({
       status: 200,
@@ -72,8 +77,43 @@ async function openPanelForSample(page: import('@playwright/test').Page, sample:
     });
   });
 
+  // Deep-link fallback when the list window misses the fixture id.
+  await page.route(`**/api/samples/${sample._id}`, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: sample }),
+    });
+  });
+
   await page.route('**/api/samples/*/compliance-graph', async (route) => {
     await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ success: false }) });
+  });
+
+  // #1567: since #1559 SampleDetailsPage mounts SampleCompromiseCard, whose
+  // mount effect reads GET /api/samples/:id/graph-status. Unmocked, it 401s
+  // against a real backend on mockLogin's unsigned token and the global
+  // response interceptor force-logs-out mid-test -- the #611 mechanism, as
+  // with #744's files route below. Answered with the "clear" status (not
+  // projected, no compromise), and scoped to the graph-status sub-route
+  // only, for the same reason the bare '**/api/samples' route above is.
+  await page.route('**/api/samples/*/graph-status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: {
+          sampleId: sample._id,
+          projected: false,
+          status: null,
+          compromisedAt: null,
+          compromiseFreezerKey: null,
+          compromiseBreachedSince: null,
+        },
+      }),
+    });
   });
 
   // SampleDetailsPage also mounts useResults()/useEquipment(), which fire

@@ -265,9 +265,14 @@ describe('Incidents API integration', () => {
   let app;
   let incidentsState;
   const sendIncidentAlertEmail = vi.fn();
+  // #1552: POST /create is gated by the real machine-ingest gate (not stubbed
+  // here), which reads TELEMETRY_INGEST_SECRET at request time.
+  const ORIGINAL_SECRET = process.env.TELEMETRY_INGEST_SECRET;
+  const INGEST_SECRET = 'incident-test-secret';
 
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.TELEMETRY_INGEST_SECRET = INGEST_SECRET;
 
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
@@ -294,10 +299,51 @@ describe('Incidents API integration', () => {
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
     }
+    if (ORIGINAL_SECRET === undefined) delete process.env.TELEMETRY_INGEST_SECRET;
+    else process.env.TELEMETRY_INGEST_SECRET = ORIGINAL_SECRET;
+  });
+
+  const INCIDENT_BODY = {
+    sensorKey: 'sensor-a1',
+    sensorName: 'Sensor A1',
+    currentTemperature: -3.1,
+    maxTemperature: -2.8,
+    minTemperature: -4.2,
+    samplesOutOfRange: 1,
+  };
+
+  it('POST /api/incidents/create refuses a request with no ingest secret configured (#1552)', async () => {
+    delete process.env.TELEMETRY_INGEST_SECRET;
+
+    const response = await request(app).post('/api/incidents/create')
+      .set('x-telemetry-ingest-secret', INGEST_SECRET)
+      .send(INCIDENT_BODY);
+
+    expect(response.status).toBe(403);
+    expect(incidentsState.incidents).toHaveLength(0);
+    expect(sendIncidentAlertEmail).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/incidents/create refuses a request carrying no secret header (#1552)', async () => {
+    const response = await request(app).post('/api/incidents/create').send(INCIDENT_BODY);
+
+    expect(response.status).toBe(403);
+    expect(incidentsState.incidents).toHaveLength(0);
+    expect(sendIncidentAlertEmail).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/incidents/create refuses a request carrying the wrong secret (#1552)', async () => {
+    const response = await request(app).post('/api/incidents/create')
+      .set('x-telemetry-ingest-secret', 'wrong')
+      .send(INCIDENT_BODY);
+
+    expect(response.status).toBe(403);
+    expect(incidentsState.incidents).toHaveLength(0);
+    expect(sendIncidentAlertEmail).not.toHaveBeenCalled();
   });
 
   it('POST /api/incidents/create cria novo incidente e agrega um aberto existente', async () => {
-    const createResponse = await request(app).post('/api/incidents/create').send({
+    const createResponse = await request(app).post('/api/incidents/create').set('x-telemetry-ingest-secret', INGEST_SECRET).send({
       sensorKey: 'sensor-a1',
       sensorName: 'Sensor A1',
       currentTemperature: -3.1,
@@ -314,7 +360,7 @@ describe('Incidents API integration', () => {
     incidentsState.incidents[0].samplesOutOfRange = 1;
     incidentsState.incidents[0].status = 'open';
 
-    const aggregateResponse = await request(app).post('/api/incidents/create').send({
+    const aggregateResponse = await request(app).post('/api/incidents/create').set('x-telemetry-ingest-secret', INGEST_SECRET).send({
       sensorKey: 'sensor-a1',
       sensorName: 'Sensor A1',
       currentTemperature: -2.2,
@@ -329,7 +375,7 @@ describe('Incidents API integration', () => {
   });
 
   it('POST /api/incidents/create quarentena amostra vinculada ao sensor', async () => {
-    const response = await request(app).post('/api/incidents/create').send({
+    const response = await request(app).post('/api/incidents/create').set('x-telemetry-ingest-secret', INGEST_SECRET).send({
       sensorKey: 'sensor-a1',
       sensorName: 'Sensor A1',
       currentTemperature: -3.1,
@@ -404,4 +450,12 @@ describe('Incidents API integration', () => {
     expect(update.quarantineStatus).toBeUndefined();
     expect(update.status).not.toBe('AVAILABLE');
   });
+});
+
+// #1505 (RF019 AC6): recordAction appends a QUARANTINE_APPLIED outbox event;
+// this file's fake db has no outbox, and the event's contract is pinned in
+// quarantine-action.service.test.js.
+beforeEach(() => {
+  const { GraphProjectionService } = require('../../src/services/graphProjection.service');
+  vi.spyOn(GraphProjectionService.prototype, 'appendQuarantineApplyEvent').mockResolvedValue(null);
 });

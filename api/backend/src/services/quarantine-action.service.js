@@ -1,5 +1,9 @@
 const { getCollection } = require('../utils/collectionResolver');
 const QuarantineActionModel = require('../models/QuarantineAction');
+const { GraphProjectionService } = require('./graphProjection.service');
+const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
+
+const graphProjection = new GraphProjectionService();
 
 /**
  * #1219: an action names its specimens by the canonical specimenId. Rows
@@ -38,7 +42,23 @@ function canonicalSpecimenId(sample) {
 async function recordAction(db, data, session) {
   const collection = await getCollection(db, 'quarantineActions');
   const action = QuarantineActionModel.create(data);
-  await collection.insertOne(action, session ? { session } : undefined);
+  // #1505 (RF019 AC6): the insert and its QUARANTINE_APPLIED outbox event
+  // share one write: the caller's session when it passes one, else a
+  // transaction where the deployment runs one.
+  const write = async (s) => {
+    await collection.insertOne(action, s ? { session: s } : undefined);
+    await graphProjection.appendQuarantineApplyEvent(db, {
+      quarantineActionId: action.quarantineActionId,
+      specimenIds: action.specimenIds,
+      reasonCodes: action.reasonCodes,
+      actionStatus: action.actionStatus,
+      startedAt: action.startedAt,
+      authorizedBy: action.authorizedBy,
+      sourceService: 'quarantine-action',
+    }, s ? { session: s } : {});
+  };
+  if (session) await write(session);
+  else await withTransactionWhereSupported(db, write);
   return action;
 }
 

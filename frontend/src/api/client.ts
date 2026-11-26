@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { withRequestId } from './requestId';
+import { installTimingReporter } from './timingReporter';
 import { getLanguage } from '../i18n';
 
 export type ApiToastType = 'success' | 'error' | 'warning' | 'info';
@@ -38,7 +39,6 @@ function resolveApiBaseUrl(): string {
 }
 
 function dispatchToast(detail: ApiToastEventDetail) {
-  if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent<ApiToastEventDetail>(API_TOAST_EVENT, { detail }));
 }
 
@@ -46,9 +46,7 @@ function getErrorMessage(error: AxiosError): string {
   const responseMessage = (error.response?.data as { message?: string; error?: string } | undefined)?.message
     || (error.response?.data as { message?: string; error?: string } | undefined)?.error;
 
-  return responseMessage
-    || error.message
-    || 'Ocorreu um erro inesperado na comunicação com a API';
+  return responseMessage || error.message;
 }
 
 export const apiClient: AxiosInstance = axios.create({
@@ -79,7 +77,16 @@ apiClient.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    const status = error.response?.status;
+    if (!error.response) {
+      dispatchToast({
+        message: 'Não foi possível conectar ao backend.',
+        type: 'error',
+        duration: 4500,
+      });
+      return Promise.reject(error);
+    }
+
+    const { status } = error.response;
 
     if (status === 403) {
       dispatchToast({
@@ -87,19 +94,13 @@ apiClient.interceptors.response.use(
         type: 'error',
         duration: 4500,
       });
-    } else if (status && status >= 500) {
+    } else if (status >= 500) {
       dispatchToast({
         message: 'Falha no servidor. Tente novamente em instantes.',
         type: 'error',
         duration: 4500,
       });
-    } else if (!error.response) {
-      dispatchToast({
-        message: 'Não foi possível conectar ao backend.',
-        type: 'error',
-        duration: 4500,
-      });
-    } else if (status && status >= 400) {
+    } else if (status >= 400) {
       dispatchToast({
         message: getErrorMessage(error),
         type: 'warning',
@@ -110,6 +111,9 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+// RNF001 C4 (#1469): installed last, so it times each call around the other interceptors.
+installTimingReporter(apiClient);
 
 export function notifyApiToast(detail: ApiToastEventDetail) {
   dispatchToast(detail);

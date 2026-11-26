@@ -8,7 +8,7 @@ const SampleModule = require('../models/Sample');
 const SampleModel = SampleModule.SampleModel || SampleModule;
 const TemperatureModel = require('../models/Temperature');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
-const { readingIdentityOf, screenReading } = require('./telemetryReadingContract');
+const { readingIdentityOf, screenReading, splitContractFields, auditStrippedFields } = require('./telemetryReadingContract');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
@@ -24,6 +24,8 @@ const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const sampleCertification = require('./sample-certification.service');
+const sampleCollectionGate = require('./sample-collection-gate.service');
 const { insertSampleWithProjection } = require('./graphProjection.service');
 const { issueSpecimenLabel } = require('./specimenLabel.service');
 const { withoutLegacyBarcode } = require('../utils/sampleBarcodeWindow');
@@ -31,6 +33,13 @@ const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { hashConsentToken } = require('../utils/consentTokenHash');
+
+// RULE-025, RF009 AC8 (#1582): the temperature import's reading contract, the
+// columns parseTemperatureCSV reads. Any other column is stripped per row.
+const TEMPERATURE_IMPORT_READING_FIELDS = Object.freeze([
+  'sensorId', 'sensorID', 'temperatureValue', 'temperatureUnit', 'timestamp', 'readingStatus', 'sensorStatus',
+  'signalQuality', 'batteryLevel', 'locationId', 'locationID', 'facility', 'zone',
+]);
 
 /**
  * Service de Importação de Dados
@@ -597,6 +606,9 @@ class ImportService {
           try {
             // Normalize legacy quality fields to canonical names (non-destructive)
             const sampleData = qualityCompatibility.normalizeSample(sampleDataRaw || {});
+            // RNF018 AC4 (#1537): the row's own RCS result and evidence
+            // resolution are never stored; only certification sets them.
+            for (const field of [...SampleModule.RCS_DERIVED_FIELDS, 'governanceEvidenceResolution']) delete sampleData[field];
             if (!sampleData.specimenId) {
               sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
             }
@@ -610,6 +622,11 @@ class ImportService {
               continue;
             }
 
+            // RNF018 AC4 (#1537): a row with a SPREC is certified as createSample
+            // certifies it, its governanceEvidence resolved first (RNF018 AC5).
+            // RF004 AC2 (#1538): the row enters only a collection that admits it.
+            await sampleCollectionGate.assertSampleCollectionAdmits(db, sampleData);
+            await sampleCertification.certifySampleSprec(db, sampleData);
             const sample = SampleModel.create(sampleData);
             // #1376, #1192: the tenancy key comes from the caller's scope,
             // never from the row (SampleModel.create nulls a row's own). A
@@ -726,6 +743,8 @@ class ImportService {
               continue;
             }
 
+            // RF004 AC2 (#1538): the row enters only a collection that admits it.
+            await sampleCollectionGate.assertSampleCollectionAdmits(db, sampleData);
             const sample = SampleModel.create(sampleData);
             // #1376, #1192: the tenancy key comes from the caller's scope,
             // never from the row (SampleModel.create nulls a row's own). A
@@ -811,6 +830,11 @@ class ImportService {
 
   /**
    * Processa importação de temperatura
+   * RULE-025, RF009 AC8 (#1582): each row's cells outside
+   * TEMPERATURE_IMPORT_READING_FIELDS are stripped before hash, screen and
+   * store, flag the reading and write one security audit per row, naming the
+   * columns and never a value. A blank extra cell carries no value and is not
+   * counted; a contract cell reaches parseTemperatureCSV as received.
    */
   async importTemperature(db, file) {
     try {
@@ -828,7 +852,13 @@ class ImportService {
 
       for (const row of rows) {
         try {
-          const tempData = this.parseTemperatureCSV(row);
+          // The contract cells reach the parser as received, so a blank one is
+          // refused or defaulted exactly as before; only an extra column's
+          // blank cell carries no value and goes uncounted.
+          const { reading: contractRow, strippedFields: extraColumns } = splitContractFields(row, TEMPERATURE_IMPORT_READING_FIELDS);
+          const strippedFields = extraColumns.filter((field) => !(typeof row[field] === 'string' && row[field].trim() === ''));
+          await auditStrippedFields(db, { ingestionService: 'temperature-import', strippedFields, sensorId: contractRow.sensorId || contractRow.sensorID || null });
+          const tempData = this.parseTemperatureCSV(contractRow);
           const validation = TemperatureModel.validate(tempData);
           
           if (!validation.isValid) {
@@ -846,7 +876,7 @@ class ImportService {
             // a file carries readings taken long before it was uploaded, so the clock is
             // `unknown` (V2E-0556, the origin clock's known condition), not `drift`.
             identity.clockStatus = 'unknown';
-            await screenReading(db, identity, tempData);
+            await screenReading(db, identity, tempData, { strippedFields });
             const temperature = { ...TemperatureModel.create(tempData), ...identity, timestamp: identity.observedAt };
             try {
               temperature.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(temperature);
@@ -960,6 +990,8 @@ class ImportService {
     const linkedProjectRaw = this.getRowValue(row, ['linkedProject', 'projeto']);
     const tcleRaw = this.getRowValue(row, ['consentTemplateId']);
     const merkleRaw = this.getRowValue(row, ['merkleRoot']);
+    // RF004 AC2, ELM-0118 (#1538): the row's collection, read by the collection gate.
+    const collectionIdRaw = this.getRowValue(row, ['collectionId']);
 
     const sprec = {
       matrixType: normalizeString(this.getRowValue(row, ['sprec_matrix_type', 'sprecMatrixType'])),
@@ -998,6 +1030,7 @@ class ImportService {
       sampleOrigin: normalizeString(sampleOriginRaw),
       extractionProtocol: normalizeString(extractionRaw),
       barcode: normalizeString(barcodeRaw),
+      collectionId: normalizeString(collectionIdRaw),
       registeredAt: toDate(registrationRaw, 'registeredAt') || new Date(),
       quantity: toFloat(this.getRowValue(row, ['quantity', 'volume']), 'quantity'),
       quality: normalizeString(qualityRaw),

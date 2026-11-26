@@ -260,6 +260,42 @@ describe('ImportLGPDService.readCSV', () => {
     await expect(importLgpdService.readCSV(filePath)).rejects.toThrow('Arquivo CSV está vazio ou não contém dados válidos');
   });
 
+  it('rejects a CSV whose every line is blank, sniffing no delimiter (#1337)', async () => {
+    const filePath = writeTmpFile('all-blank.csv', '\n   \n\n');
+
+    await expect(importLgpdService.readCSV(filePath)).rejects.toThrow('Arquivo CSV está vazio ou não contém dados válidos');
+  });
+
+  it('wraps a csv parser error that carries no message with the default text (#1337)', async () => {
+    delete require2.cache[csvParserPath];
+    delete require2.cache[importLgpdServicePath];
+
+    require2.cache[csvParserPath] = {
+      id: csvParserPath,
+      filename: csvParserPath,
+      loaded: true,
+      exports: () => {
+        const t = new Transform({
+          transform(chunk, enc, cb) { cb(); },
+        });
+        process.nextTick(() => t.emit('error', new Error('')));
+        return t;
+      },
+    };
+
+    try {
+      const freshService = require2(importLgpdServicePath);
+      const filePath = writeTmpFile('stream-error-no-message.csv', 'patientName,birthDate\nJoão Silva,25/12/1990\n');
+
+      await expect(freshService.readCSV(filePath)).rejects.toThrow(
+        'Erro ao processar arquivo CSV: Erro desconhecido'
+      );
+    } finally {
+      delete require2.cache[csvParserPath];
+      delete require2.cache[importLgpdServicePath];
+    }
+  });
+
   it('wraps a stream error from the underlying csv parser', async () => {
     // csv-parser is required at module scope in import-lgpd.service.js, so
     // the only way to make readCSV's own .pipe(...).on('error', ...) handler
@@ -360,6 +396,54 @@ describe('ImportLGPDService.readExcel', () => {
     ]);
 
     await expect(importLgpdService.readExcel(filePath, 'patients')).rejects.toThrow(/Não foi possível encontrar a linha de cabeçalhos/);
+  });
+
+  it('names patientName as the missing header for a patients sheet (#1337)', async () => {
+    const filePath = await writeTmpWorkbook('no-header-patients.xlsx', [
+      { sheetName: 'Pacientes', rows: [['nome', 'nascimento'], ['João', '25/12/1990']] },
+    ]);
+
+    await expect(importLgpdService.readExcel(filePath, 'patients')).rejects.toThrow('a coluna "patientName" está presente');
+  });
+
+  it('names participantId or sampleType as the missing header for a samples sheet (#1337)', async () => {
+    const filePath = await writeTmpWorkbook('no-header-samples.xlsx', [
+      { sheetName: 'Amostras', rows: [['codigo', 'tipo'], ['1', 'PLASMA']] },
+    ]);
+
+    await expect(importLgpdService.readExcel(filePath, 'samples')).rejects.toThrow('a coluna "participantId ou sampleType" está presente');
+  });
+
+  it('rejects a sheet with no rows at all (#1337)', async () => {
+    const filePath = await writeTmpWorkbook('empty-sheet.xlsx', [
+      { sheetName: 'Pacientes', rows: [] },
+    ]);
+
+    await expect(importLgpdService.readExcel(filePath, 'patients')).rejects.toThrow('Erro ao processar arquivo Excel: Planilha está vazia');
+  });
+
+  it('skips a row whose only values sit outside the header columns, and counts it (#1337)', async () => {
+    const filePath = await writeTmpWorkbook('stray-cell.xlsx', [
+      { sheetName: 'Pacientes', rows: [
+        ['patientName'],
+        ['João Silva'],
+        [null, 'stray'],
+      ] },
+    ]);
+
+    const rows = await importLgpdService.readExcel(filePath, 'patients');
+
+    expect(rows).toEqual([{ patientName: 'João Silva' }]);
+    expect(rows.skippedCount).toBe(1);
+  });
+
+  it('wraps a thrown value with no message in the default text (#1337)', async () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementationOnce(() => { throw 'disk gone'; });
+
+    await expect(importLgpdService.readExcel('/any/file.xlsx', 'patients')).rejects.toThrow(
+      'Erro ao processar arquivo Excel: Erro desconhecido'
+    );
+    existsSpy.mockRestore();
   });
 
   it('rejects when there are headers but no data rows', async () => {

@@ -12,7 +12,6 @@ import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../constants/sprecDictionary';
 import { SPECIMEN_TYPES, SAMPLE_ORIGINS } from '../config/constants/specimen.constants';
 import { ArrowLeft, Download, Filter, Search, X } from 'lucide-react';
-import './ReportQueryPage.css';
 
 type LookupOption = {
   system?: string;
@@ -1012,7 +1011,7 @@ export default function ReportQueryPage() {
   };
 
   return (
-    <div className="page report-query-page">
+    <div className="page-shell report-query-page">
       <div className="page-header report-query-header">
         <div>
           <Button variant="secondary" onClick={handleCancel} className="report-query-back-button">

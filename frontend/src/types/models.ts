@@ -240,6 +240,8 @@ export interface Sample {
   // #1216: the canonical business id the API names every specimen by. The
   // legacy sampleID field is prohibited on the wire and no writer sets it.
   specimenId?: string;
+  // #1559: a derivative names the specimens it was derived from.
+  parentSpecimenIds?: string[];
   sampleType: string;
   sampleOrigin?: string;
   extractionProtocol?: string;
@@ -310,13 +312,10 @@ export interface Sample {
   totalWithdrawn?: number; // Total já retirado
   totalReturned?: number; // Total já devolvido
   lastWithdrawalID?: number; // ID da última retirada
-  // Controle de volume (normaliza naming para front/back)
-  volumeInitial?: number; // Volume inicial
-  volumeCurrent?: number; // Volume atual
   checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
   // Status de disponibilidade
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Destroyed' | 'Unusable';
-  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED';
+  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED' | 'UNKNOWN';
   // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';
@@ -477,6 +476,7 @@ export interface PatientConsent {
   participantId: string;
   consentTemplateId: string;
   signedAt?: Date | string;
+  signedTcleDocumentUri?: string | null;
   status: 'ACTIVE' | 'REVOKED';
   revokedAt?: Date | string | null;
   ipAddress?: string;
@@ -514,6 +514,24 @@ export interface ConsentRevocationRecord {
   reason: string | null;
   effectiveAt: Date | string;
   priorUseDisposition?: string | null;
+  channel?: string | null;
+  location?: {
+    status: 'captured' | 'unavailable';
+    latitude?: number;
+    longitude?: number;
+    accuracyMeters?: number | null;
+    capturedAt?: string | null;
+  } | null;
+}
+
+export interface ConsentCommunicationRecord {
+  consentCommunicationEventId: string;
+  participantId?: string | null;
+  communicationType: string;
+  contentTemplateId: string;
+  purpose?: string | null;
+  deliveryStatus: string;
+  sentAt: Date | string;
 }
 
 /** GET /api/e-consent/consents/:id/history (RF010 AC5). */
@@ -526,6 +544,7 @@ export interface ConsentHistory {
   supersedesConsentId: string | null;
   decisionEvents: ConsentDecisionEvent[];
   revocations: ConsentRevocationRecord[];
+  communications?: ConsentCommunicationRecord[];
 }
 
 export enum FileType {

@@ -5,7 +5,6 @@ import Input from '../components/UI/Input';
 import { ArrowLeft, QrCode, CheckCircle, AlertCircle, Shield, Key } from 'lucide-react';
 import { authService } from '../services/api';
 import { LIMITS } from '../config/constants/limits.constants';
-import './MFASetupPage.css';
 
 export default function MFASetupPage() {
   const navigate = useNavigate();
@@ -76,11 +75,6 @@ export default function MFASetupPage() {
   };
 
   const handleVerifyAndEnable = async () => {
-    if (!verificationCode || verificationCode.length !== 6) {
-      setError('Digite um código de 6 dígitos');
-      return;
-    }
-
     setLoading(true);
     setError('');
     
@@ -148,20 +142,13 @@ export default function MFASetupPage() {
   };
 
   const handleCancel = () => {
-    if (isFirstLogin) {
-      // No primeiro acesso, volta para login
-      localStorage.removeItem('tempUsername');
-      localStorage.removeItem('tempPassword');
-      navigate('/login');
+    // Na configuração normal, volta para Minha Segurança
+    // Se veio da página de segurança do usuário, retorna para lá
+    if (fromUserSecurity) {
+      navigate('/user/security');
     } else {
-      // Na configuração normal, volta para Minha Segurança
-      // Se veio da página de segurança do usuário, retorna para lá
-      if (fromUserSecurity) {
-        navigate('/user/security');
-      } else {
-        // Fallback: volta para dashboard se não vier da página de segurança
-        navigate('/dashboard');
-      }
+      // Fallback: volta para dashboard se não vier da página de segurança
+      navigate('/dashboard');
     }
   };
 

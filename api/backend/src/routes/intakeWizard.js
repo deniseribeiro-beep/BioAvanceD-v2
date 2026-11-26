@@ -3,11 +3,12 @@ const express = require('express');
 const router = express.Router();
 const patientIdentityService = require('../services/PatientIdentityService');
 const participantIdentityService = require('../services/participantIdentity.service');
-const { generateSampleHash } = require('../services/MerkleService');
+const { generateSampleHashFromSample } = require('../services/MerkleService');
 const { getCollection } = require('../utils/collectionResolver');
 const auditLogger = require('../utils/auditLogger');
 const qualityDomain = require('../services/quality-domain.service');
 const sampleService = require('../services/sample.service');
+const governanceEvidenceResolver = require('../services/governance-evidence-resolver.service');
 const rcsAssessmentService = require('../services/rcs-assessment.service');
 const encounterService = require('../services/encounter.service');
 const conditionService = require('../services/condition.service');
@@ -474,6 +475,9 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     registeredAt: new Date(registrationDate),
     quantity: normalizeNumber(specimen.quantity, 0),
     unit: normalizeString(specimen.unit) || null,
+    // RF004 AC2 (#1497): the collection the wizard picked (ELM-0118);
+    // createSample checks a given one as it does for POST /api/samples.
+    collectionId: normalizeString(specimen.collectionId) || null,
     specimenStatus,
     linkedProject: normalizeString(specimen.linkedProject) || 'INTAKE_WIZARD',
     parentSpecimenIds: normalizeArray(specimen.parentSpecimenIds).map((parentId) => normalizeString(parentId)).filter(Boolean),
@@ -744,6 +748,24 @@ function calcularQualidade(samplePayloadOrTempo, temperatura) {
   return resolverQualidadeMetodologica(samplePayloadOrTempo);
 }
 
+// RF004 AC2 (#1497): the wizard names the specimen's collection (ELM-0118) in
+// specimen.collectionId. The shared canonical.v1.specimen schema now admits
+// it, and the ingestion Specimen target gates it (#1538); the intake still
+// validates the specimen without it, and buildSampleDocumentFromIntake hands
+// it to createSample, which gates it.
+function splitIntakeCollectionId(data) {
+  const specimen = data?.specimen;
+  if (!specimen || typeof specimen !== 'object' || Array.isArray(specimen)
+    || !Object.prototype.hasOwnProperty.call(specimen, 'collectionId')) {
+    return { contractData: data, collectionIdInvalid: false };
+  }
+  const { collectionId, ...specimenWithoutCollection } = specimen;
+  return {
+    contractData: { ...data, specimen: specimenWithoutCollection },
+    collectionIdInvalid: typeof collectionId !== 'string',
+  };
+}
+
 async function handleIntakeWizard(req, res) {
   const data = req.body;
 
@@ -782,14 +804,24 @@ async function handleIntakeWizard(req, res) {
       return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations, details: canonicalViolations.map((field) => `${field}: campo não canônico`) });
     }
 
-    const validation = validate('canonical.v1.intake', data);
-    if (!validation.valid) {
-      const fields = [];
+    const { contractData, collectionIdInvalid } = splitIntakeCollectionId(data);
+    const validation = validate('canonical.v1.intake', contractData);
+    if (!validation.valid || collectionIdInvalid) {
+      const fields = collectionIdInvalid ? ['specimen.collectionId'] : [];
       for (const issue of validation.errors || []) {
         const field = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.') || issue.params?.missingProperty || null;
         if (field) fields.push(field);
       }
       return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)], details: [...new Set(fields)].map((field) => `${field}: campo não canônico`) });
+    }
+
+    // RNF018 AC1 (#1525): the backend twin of the wizard's quantity check. A
+    // quantity at or below zero is refused before the participant match, the
+    // audit entry or the sample is written.
+    const specimenQuantity = data?.specimen?.quantity;
+    if (specimenQuantity !== undefined && !(Number(specimenQuantity) > 0)) {
+      const detail = 'specimen.quantity deve ser um número maior que zero';
+      return res.status(422).json({ success: false, error: 'INVALID_QUANTITY', fields: ['specimen.quantity'], details: [detail] });
     }
 
     const db = req.app.locals.db;
@@ -822,7 +854,23 @@ async function handleIntakeWizard(req, res) {
     const matchOutcome = await resolveMatchedPatient(db, data, { organizationId, organizationScope: req.organizationScope });
     const consentDecision = await resolveConsentDecision(db, matchOutcome.patient);
     const automaticLocation = await resolveAutomaticLocation(db);
-    const qualidade = resolverQualidadeMetodologica(data?.specimen || {});
+    // RNF018 AC5 (#1524): the body's governanceEvidence references are
+    // resolved against the stored records before certification, as POST
+    // /api/samples resolves them; only the resolution reaches the assessment.
+    // The specimen does not exist yet, so no specimenId is passed: a
+    // custody-event or telemetry reference cannot resolve at intake (fail
+    // closed), whatever specimen.specimenId the body names. A documentation
+    // reference resolves only to an approval of the named collection, the
+    // same collectionId the specimen persists and createSample gates.
+    const governanceEvidenceResolution = await governanceEvidenceResolver.resolveGovernanceEvidence(db, {
+      governanceEvidence: data.governanceEvidence,
+      specimenId: null,
+      collectionId: normalizeString(data?.specimen?.collectionId) || null,
+    });
+    const qualidade = resolverQualidadeMetodologica(
+      data?.specimen || {},
+      ...(governanceEvidenceResolution ? [{ governanceEvidenceResolution }] : [])
+    );
 
     auditLogger.init(db);
     await auditLogger.log({
@@ -873,7 +921,11 @@ async function handleIntakeWizard(req, res) {
     if (qualidade.sprec && Object.keys(qualidade.sprec).length > 0) {
       sampleToPersist.sprec = qualidade.sprec;
     }
-    sampleToPersist.merkleRoot = generateSampleHash(sampleToPersist);
+    // RNF018 AC5 (#1524): createSample certifies the sprec again, so it gets
+    // the same references to resolve; SampleModel.create does not store them.
+    if (data.governanceEvidence !== undefined) {
+      sampleToPersist.governanceEvidence = data.governanceEvidence;
+    }
     // #474: sampleService.createSample now allocates boxId/positionCode
     // atomically via AllocateSampleUseCase as part of the create call
     // itself (occupancyGrid write, StorageAssignment, audit/lineage trail)
@@ -904,15 +956,32 @@ async function handleIntakeWizard(req, res) {
     // (sample.service.js#createSample), recorded once the sample has fully
     // landed (create + allocation both already succeeded by this point) so
     // a best-effort failure here never fails the intake itself.
+    // #1549: createSample records and pins the RcsAssessment from the SPREC
+    // it certified; the wizard records one (from qualidade) only when the
+    // stored sample carries no pin, so a registration leaves exactly one
+    // snapshot, the one the pin and the seal name.
+    if (!allocatedSample.sealedRcsAssessmentId) {
+      try {
+        const assessment = await rcsAssessmentService.recordAssessment(db, allocatedSample.specimenId, qualidade);
+        await samplesCollection.updateOne(
+          { _id: createdSample._id },
+          { $set: { sealedRcsAssessmentId: assessment._id } }
+        );
+        allocatedSample.sealedRcsAssessmentId = assessment._id;
+      } catch (assessmentError) {
+        logger.error('Falha ao registrar RcsAssessment para a amostra do intake wizard:', assessmentError.message || assessmentError);
+      }
+    }
+
+    // #1546: sealed last, once createSample's certification has set the RCS
+    // fields and both snapshots are pinned, so the seal covers what
+    // generateSampleHashFromSample recomputes (#502).
     try {
-      const assessment = await rcsAssessmentService.recordAssessment(db, allocatedSample.specimenId, qualidade);
-      await samplesCollection.updateOne(
-        { _id: createdSample._id },
-        { $set: { sealedRcsAssessmentId: assessment._id } }
-      );
-      allocatedSample.sealedRcsAssessmentId = assessment._id;
-    } catch (assessmentError) {
-      logger.error('Falha ao registrar RcsAssessment para a amostra do intake wizard:', assessmentError.message || assessmentError);
+      const merkleRoot = await generateSampleHashFromSample(db, allocatedSample);
+      await samplesCollection.updateOne({ _id: createdSample._id }, { $set: { merkleRoot } });
+      allocatedSample.merkleRoot = merkleRoot;
+    } catch (sealError) {
+      logger.error('Falha ao selar a merkleRoot da amostra do intake wizard:', sealError.message || sealError);
     }
 
     // #693 (RF005 AC4-6): additive real-entity recording, best-effort --
@@ -1006,9 +1075,16 @@ router.get('/patient-match', async (req, res) => {
   const patientName = normalizeString(req.query?.patientName || req.query?.name);
   const birthDate = parseBirthDateDay(req.query?.birthDate);
   const participantIdQuery = normalizeString(req.query?.patientID || req.query?.patientId);
+  const identityDocument = participantIdentityService.normalizeIdentityDocument(
+    req.query?.identityDocument || req.query?.documento || req.query?.cpf || ''
+  );
+  const matchByDocument = Boolean(identityDocument && String(identityDocument).length >= 5);
 
-  if (!participantIdQuery && (!patientName || !birthDate)) {
-    return res.status(400).json({ success: false, error: 'Informe patientID ou (patientName + birthDate).' });
+  if (!participantIdQuery && !matchByDocument && (!patientName || !birthDate)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Informe identityDocument, patientID ou (patientName + birthDate).',
+    });
   }
 
   try {
@@ -1033,6 +1109,25 @@ router.get('/patient-match', async (req, res) => {
       ? await identityCollection.findOne({ participantId: participantIdQuery })
       : null;
     let identity = rawIdentityById ? participantIdentityService.decryptIdentity(rawIdentityById) : null;
+    let matchType = identity ? 'participantId' : null;
+
+    // Document-first intake: blind-index lookup on identityDocumentHash
+    // (same canonical digits-only form as encryptIdentityFields / #1109).
+    if (!identity && matchByDocument) {
+      const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates(
+        'identityDocument',
+        identityDocument
+      );
+      const documentOrConditions = identityDocumentHashes.length
+        ? [{ identityDocumentHash: { $in: identityDocumentHashes } }]
+        : [{ identityDocument }];
+      const documentCandidates = await identityCollection.find({ $or: documentOrConditions }).toArray();
+      const rawDocumentMatch = (documentCandidates || [])[0] || null;
+      if (rawDocumentMatch) {
+        identity = participantIdentityService.decryptIdentity(rawDocumentMatch);
+        matchType = 'identityDocument';
+      }
+    }
 
     if (!identity && patientNameNormalized && birthDate) {
       const { start: startOfDay, end: endOfDay } = birthDateDayRange(birthDate);
@@ -1060,6 +1155,7 @@ router.get('/patient-match', async (req, res) => {
           .replace(/\s+/g, ' ');
         return candidateNormalized === patientNameNormalized;
       }) || null;
+      if (identity) matchType = 'name+birthDate';
     }
 
     let patientStatus = 'ACTIVE';
@@ -1068,7 +1164,7 @@ router.get('/patient-match', async (req, res) => {
       const patientsCollection = await getCollection(db, 'patients');
       patientRecord = await patientsCollection.findOne(
         { participantId: identity.participantId },
-        { projection: { status: 1, clinicalUnitId: 1 } }
+        { projection: { status: 1, clinicalUnitId: 1, sex: 1 } }
       );
       patientStatus = normalizeString(patientRecord?.status) || 'ACTIVE';
     }
@@ -1080,6 +1176,45 @@ router.get('/patient-match', async (req, res) => {
     const outOfScope = Boolean(identity)
       && !isRecordInOrganizationScope(patientRecord, req.organizationScope, 'clinicalUnitId');
     const matched = Boolean(identity) && !outOfScope;
+
+    let samples = [];
+    if (matched && identity?.participantId) {
+      try {
+        const samplesCollection = await getCollection(db, 'samples');
+        const sampleRows = await samplesCollection
+          .find(
+            { participantId: String(identity.participantId) },
+            {
+              projection: {
+                specimenId: 1,
+                sampleType: 1,
+                sampleOrigin: 1,
+                matrixType: 1,
+                registeredAt: 1,
+                quantity: 1,
+                unit: 1,
+              },
+            }
+          )
+          .sort({ registeredAt: -1 })
+          .limit(30)
+          .toArray();
+        samples = sampleRows
+          .map((row) => ({
+            specimenId: normalizeString(row.specimenId),
+            sampleType: normalizeString(row.sampleType) || null,
+            sampleOrigin: normalizeString(row.sampleOrigin) || null,
+            matrixType: normalizeString(row.matrixType) || null,
+            registeredAt: row.registeredAt || null,
+            quantity: row.quantity ?? null,
+            unit: normalizeString(row.unit) || null,
+          }))
+          .filter((row) => row.specimenId);
+      } catch (sampleError) {
+        logger.warn('patient-match: falha ao listar amostras do participante:', sampleError?.message || sampleError);
+        samples = [];
+      }
+    }
 
     auditLogger.init(db);
     await auditLogger.log({
@@ -1094,11 +1229,13 @@ router.get('/patient-match', async (req, res) => {
       payload: {
         endpoint: '/patient-match',
         matched,
+        matchType: matched ? matchType : null,
         ...(outOfScope ? { outOfScope: true } : {}),
         query: {
           patientID: participantIdQuery || null,
           patientName: patientName || null,
           birthDate: birthDate ? birthDate.toISOString().slice(0, 10) : null,
+          identityDocument: matchByDocument ? '[provided]' : null,
         },
       },
       req,
@@ -1108,14 +1245,20 @@ router.get('/patient-match', async (req, res) => {
     return res.json({
       success: true,
       matched,
+      matchType: matched ? matchType : null,
       patient: matched
         ? {
           patientID: normalizeString(identity.participantId),
           patientName: normalizeString(identity.patientName),
           birthDate: identity.birthDate || null,
+          identityDocument: normalizeString(identity.identityDocument) || identityDocument || null,
+          email: normalizeString(identity.email) || null,
+          phone: normalizeString(identity.phone) || null,
+          sex: normalizeString(patientRecord?.sex) || null,
           status: patientStatus,
         }
         : null,
+      samples: matched ? samples : [],
       message: matched
         ? 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.'
         : '',

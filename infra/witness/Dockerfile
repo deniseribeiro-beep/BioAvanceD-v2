@@ -10,6 +10,10 @@ COPY witness-server.js /app/witness-server.js
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+# RNF014 C3 (#1470): compose.prod.yml runs this image as uid 10001.
+RUN addgroup -S -g 10001 app && adduser -S -u 10001 -G app app \
+  && chown -R app:app /run/secrets
+
 EXPOSE 8096
 
 ENTRYPOINT ["/app/entrypoint.sh"]

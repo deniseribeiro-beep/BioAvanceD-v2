@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
+import ListPagination from '../components/UI/ListPagination';
 import { Database, Download, RotateCcw, AlertCircle, CheckCircle, Clock, Save, Shield } from 'lucide-react';
 import { useBackup, Backup } from '../hooks/useBackup';
 import { useBackupPolicy, BackupPolicy } from '../hooks/useBackupPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import './BackupPage.css';
+import { LIST_PAGE_SIZE, useClientPagination } from '../hooks/useClientPagination';
 
 const CRON_FIELD_PATTERN = /^(\S+\s+){4}\S+$/;
 
@@ -104,22 +105,19 @@ export default function BackupPage() {
     }
   };
 
-  const handlePolicyFieldChange = (field: keyof BackupPolicy, value: string | number | boolean) => {
-    if (!policyDraft) return;
-    setPolicyDraft({ ...policyDraft, [field]: value });
+  const handlePolicyFieldChange = (draft: BackupPolicy, field: keyof BackupPolicy, value: string | number | boolean) => {
+    setPolicyDraft({ ...draft, [field]: value });
   };
 
-  const handleSavePolicy = async () => {
-    if (!policyDraft) return;
-
-    const validationErrors = validateBackupPolicyDraft(policyDraft);
+  const handleSavePolicy = async (draft: BackupPolicy) => {
+    const validationErrors = validateBackupPolicyDraft(draft);
     setPolicyValidationErrors(validationErrors);
     if (validationErrors.length > 0) {
       return;
     }
 
     try {
-      await updatePolicy(policyDraft);
+      await updatePolicy(draft);
       setPolicySaveStatus('success');
       setTimeout(() => setPolicySaveStatus('idle'), 3000);
     } catch (err) {
@@ -141,16 +139,14 @@ export default function BackupPage() {
     }
   };
 
-  const handleRestore = async () => {
-    if (!selectedBackup) return;
-
-    const confirmMessage = t('backup.restoreConfirm').replace('{fileName}', selectedBackup.fileName);
+  const handleRestore = async (backup: Backup) => {
+    const confirmMessage = t('backup.restoreConfirm').replace('{fileName}', backup.fileName);
     if (!confirm(confirmMessage)) {
       return;
     }
 
     try {
-      await restoreBackup(selectedBackup.fileName);
+      await restoreBackup(backup.fileName);
       alert(t('backup.restoreSuccess'));
       setIsRestoreModalOpen(false);
       setSelectedBackup(null);
@@ -173,9 +169,11 @@ export default function BackupPage() {
   // Verifica se o usuário é Administrador
   const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
 
+  const backupsPagination = useClientPagination(backups, LIST_PAGE_SIZE);
+
   if (!isAdmin) {
     return (
-      <div className="backup-page">
+      <div className="page-shell backup-page">
         <div className="access-denied">
           <AlertCircle size={48} />
           <h2>{t('backup.accessDenied')}</h2>
@@ -186,12 +184,12 @@ export default function BackupPage() {
   }
 
   return (
-    <div className="backup-page">
-      <div className="backup-header">
-          <h1>
+    <div className="page-shell backup-page">
+      <div className="page-header backup-header">
+          <h1 className="page-title">
             <Database /> {t('backup.management')}
           </h1>
-          <p>{t('backup.description')}</p>
+          <p className="page-subtitle">{t('backup.description', 'Faça backup e restaure dados do sistema')}</p>
       </div>
 
       <div className="backup-content">
@@ -250,8 +248,8 @@ export default function BackupPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {backups.map((backup, index) => (
-                    <tr key={index}>
+                  {backupsPagination.pagedItems.map((backup, index) => (
+                    <tr key={backup.fileName || index}>
                       <td>{backup.fileName}</td>
                       <td>{formatFileSize(backup.size)}</td>
                       <td>{formatDate(backup.createdAt)}</td>
@@ -278,6 +276,16 @@ export default function BackupPage() {
                   ))}
                 </tbody>
               </table>
+              <ListPagination
+                currentPage={backupsPagination.currentPage}
+                totalPages={backupsPagination.totalPages}
+                pageStart={backupsPagination.pageStart}
+                pageEnd={backupsPagination.pageEnd}
+                total={backupsPagination.total}
+                onPageChange={backupsPagination.setCurrentPage}
+                testIdPrefix="backups-pagination"
+                emptyLabel={t('backup.noBackups')}
+              />
             </div>
           )}
 
@@ -332,7 +340,7 @@ export default function BackupPage() {
                 id="backup-policy-cron"
                 type="text"
                 value={policyDraft.cronExpression}
-                onChange={(e) => handlePolicyFieldChange('cronExpression', e.target.value)}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'cronExpression', e.target.value)}
               />
               <span className="policy-help">{t('backup.policy.cronExpressionHelp')}</span>
             </div>
@@ -344,7 +352,7 @@ export default function BackupPage() {
                 type="number"
                 min="30"
                 value={policyDraft.retentionDays}
-                onChange={(e) => handlePolicyFieldChange('retentionDays', parseInt(e.target.value, 10))}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'retentionDays', parseInt(e.target.value, 10))}
               />
               <span className="policy-help">{t('backup.policy.retentionDaysHelp')}</span>
             </div>
@@ -353,7 +361,7 @@ export default function BackupPage() {
               <input
                 type="checkbox"
                 checked={policyDraft.encryptionEnabled}
-                onChange={(e) => handlePolicyFieldChange('encryptionEnabled', e.target.checked)}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'encryptionEnabled', e.target.checked)}
               />
               <span>{t('backup.policy.encryptionEnabled')}</span>
             </label>
@@ -366,7 +374,7 @@ export default function BackupPage() {
                 min="1"
                 max="24"
                 value={policyDraft.rpoHours}
-                onChange={(e) => handlePolicyFieldChange('rpoHours', parseInt(e.target.value, 10))}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'rpoHours', parseInt(e.target.value, 10))}
               />
               <span className="policy-help">{t('backup.policy.rpoHoursHelp')}</span>
             </div>
@@ -379,7 +387,7 @@ export default function BackupPage() {
                 min="1"
                 max="12"
                 value={policyDraft.rtoHours}
-                onChange={(e) => handlePolicyFieldChange('rtoHours', parseInt(e.target.value, 10))}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'rtoHours', parseInt(e.target.value, 10))}
               />
               <span className="policy-help">{t('backup.policy.rtoHoursHelp')}</span>
             </div>
@@ -390,7 +398,7 @@ export default function BackupPage() {
             </p>
 
             <div className="policy-actions">
-              <Button onClick={handleSavePolicy} disabled={policySaving}>
+              <Button onClick={() => handleSavePolicy(policyDraft)} disabled={policySaving}>
                 <Save size={16} /> {t('backup.policy.save')}
               </Button>
             </div>
@@ -433,7 +441,7 @@ export default function BackupPage() {
                 {t('common.cancel')}
               </Button>
               <Button
-                onClick={handleRestore}
+                onClick={() => handleRestore(selectedBackup)}
                 disabled={loading}
                 className="restore-button"
               >

@@ -39,6 +39,14 @@
  * Idempotent: a second run reports `migrated: 0`. `remaining` counts the
  * identities left for a person or a rerun (legacyName + unreadable + raced).
  *
+ * One-way: no rollback. It overwrites the stored instant with noon UTC of the
+ * day, and a ciphertext's birthDateHash with that day's blind index (also where
+ * only the hash differed, after a key change); a keyless stack's plaintext
+ * birthDate is overwritten and no hash. The old instant, whatever it was, is
+ * not kept, and putting a midnight back would bring back the day-before
+ * reading the migration fixes (#1412). Undo is restoring participantIdentities
+ * from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:participant-birth-dates               applies
  *   npm run migrate:participant-birth-dates -- --dry-run  counts, writes nothing

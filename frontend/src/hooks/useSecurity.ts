@@ -23,10 +23,6 @@ const extractErrorMessage = (error: unknown, fallback: string): string => {
     return apiError.response?.data?.message || apiError.message || fallback;
   }
 
-  if (error instanceof Error) {
-    return error.message;
-  }
-
   return fallback;
 };
 
@@ -156,9 +152,14 @@ export function useSecurity() {
   // not stale data, so its finally-clear stays unconditional.
   const configSeq = useRequestSequence();
   const permissionsSeq = useRequestSequence();
+  // #1446: `loading` is set by loadConfig alone, so only a newer loadConfig
+  // may take over its reset; an updateConfig that supersedes a load's data
+  // must not leave `loading` stuck true.
+  const loadingSeq = useRequestSequence();
 
   const loadConfig = async () => {
     const seq = configSeq.next();
+    const loadingTurn = loadingSeq.next();
     try {
       setLoading(true);
       setError(null);
@@ -169,7 +170,7 @@ export function useSecurity() {
       if (!configSeq.isCurrent(seq)) return;
       setError(extractErrorMessage(err, 'Erro ao carregar configurações'));
     } finally {
-      if (configSeq.isCurrent(seq)) setLoading(false);
+      if (loadingSeq.isCurrent(loadingTurn)) setLoading(false);
     }
   };
 

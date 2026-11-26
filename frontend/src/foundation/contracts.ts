@@ -9,7 +9,7 @@ export type RoleName = 'Administrador' | 'Coordenador' | 'Técnico' | 'Usuário 
 
 export type UserStatus = 'active' | 'inactive' | 'blocked' | 'suspended';
 
-export type SampleLifecycleStatus = 'AVAILABLE' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED';
+export type SampleLifecycleStatus = 'AVAILABLE' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED' | 'UNKNOWN';
 
 export type LegacySampleStatus =
   | 'Available'
@@ -18,7 +18,8 @@ export type LegacySampleStatus =
   | 'Withdrawn'
   | 'Destroyed'
   | 'Unusable'
-  | 'Closed';
+  | 'Closed'
+  | 'Unknown';
 
 export type StorageBoxStatus = 'ACTIVE' | 'FULL' | 'RETIRED';
 
@@ -47,6 +48,7 @@ export const LEGACY_SAMPLE_STATUS_LABELS: Record<SampleLifecycleStatus, LegacySa
   DEPLETED: 'TotallyWithdrawn',
   UNAVAILABLE: 'Unusable',
   CLOSED: 'Closed',
+  UNKNOWN: 'Unknown',
 };
 
 // #539: buckets a specimen down to this file's narrower SampleLifecycleStatus,
@@ -64,6 +66,8 @@ export function resolveSampleLifecycleStatus(sample: SpecimenStatusLike | null |
   const quantityStatus = resolveQuantityStatus(sample);
   if (quantityStatus === 'depleted') return 'DEPLETED';
   if (quantityStatus === 'partial') return 'PARTIAL';
+  // #1436: missing quantities are unknown — do not fold into AVAILABLE / "Disponível".
+  if (quantityStatus === 'unknown') return 'UNKNOWN';
   return 'AVAILABLE';
 }
 
@@ -111,6 +115,7 @@ export const SAMPLE_LIFECYCLE_STATUSES: Array<ContractOption<SampleLifecycleStat
   { value: 'DEPLETED', label: 'Esgotada' },
   { value: 'UNAVAILABLE', label: 'Indisponível' },
   { value: 'CLOSED', label: 'Encerrada' },
+  { value: 'UNKNOWN', label: 'Não registrada' },
 ];
 
 export const STORAGE_BOX_STATUSES: Array<ContractOption<StorageBoxStatus>> = [
@@ -226,25 +231,6 @@ export const CONSENT_SCOPES: ConsentScopeDefinition[] = [
     requiredFor: ['controle_laboratorio', 'validacao'],
   },
 ];
-
-export const FHIR_GENDERS: Array<ContractOption<'male' | 'female' | 'other' | 'unknown'>> = [
-  { value: 'male', label: 'Masculino' },
-  { value: 'female', label: 'Feminino' },
-  { value: 'other', label: 'Outro' },
-  { value: 'unknown', label: 'Não informado' },
-];
-
-export function getRoleByAccessType(accessType: number | undefined): RoleName | undefined {
-  return ROLE_DEFINITIONS.find((role) => role.accessType === accessType)?.value;
-}
-
-export function getRoleAccessType(roleName: RoleName): number {
-  return ROLE_DEFINITIONS.find((role) => role.value === roleName)?.accessType ?? 2;
-}
-
-export function getActiveConsentScopes(category?: ConsentScopeCategory) {
-  return category ? CONSENT_SCOPES.filter((scope) => scope.category === category) : CONSENT_SCOPES;
-}
 
 export const FOUNDATION_CONTRACT_SUMMARY = {
   roles: ROLE_DEFINITIONS.length,

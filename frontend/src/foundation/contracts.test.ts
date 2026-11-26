@@ -41,10 +41,12 @@ describe('resolveSampleLifecycleStatus', () => {
     expect(resolveSampleLifecycleStatus({ specimenStatus: 'CLOSED' })).toBe('CLOSED');
   });
 
-  it('defaults to AVAILABLE when nothing is present, matching the backend default', () => {
-    expect(resolveSampleLifecycleStatus(null)).toBe('AVAILABLE');
-    expect(resolveSampleLifecycleStatus(undefined)).toBe('AVAILABLE');
-    expect(resolveSampleLifecycleStatus({})).toBe('AVAILABLE');
+  it('defaults missing quantities to UNKNOWN instead of AVAILABLE (#1436)', () => {
+    expect(resolveSampleLifecycleStatus(null)).toBe('UNKNOWN');
+    expect(resolveSampleLifecycleStatus(undefined)).toBe('UNKNOWN');
+    expect(resolveSampleLifecycleStatus({})).toBe('UNKNOWN');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available' })).toBe('UNKNOWN');
+    expect(resolveSampleLifecycleStatus({ specimenStatus: 'available', quantityStatus: 'unknown' })).toBe('UNKNOWN');
   });
 });
 
@@ -55,9 +57,10 @@ describe('resolveLegacySampleStatus', () => {
     expect(resolveLegacySampleStatus({ specimenStatus: 'available', quantityStatus: 'depleted' })).toBe('TotallyWithdrawn');
     expect(resolveLegacySampleStatus({ specimenStatus: 'quarantined' })).toBe('Unusable');
     expect(resolveLegacySampleStatus({ specimenStatus: 'closed', quantityStatus: 'depleted' })).toBe('Closed');
+    expect(resolveLegacySampleStatus({ specimenStatus: 'available', quantityStatus: 'unknown' })).toBe('Unknown');
   });
 
-  it('defaults to Available when the specimen is absent', () => {
-    expect(resolveLegacySampleStatus(undefined)).toBe('Available');
+  it('defaults missing quantities to Unknown (#1436)', () => {
+    expect(resolveLegacySampleStatus(undefined)).toBe('Unknown');
   });
 });

@@ -1,0 +1,63 @@
+# Pulls the backend, worker and frontend images of compose.test.yml from
+# GHCR instead of building them (#1563). The images are published by
+# .github/workflows/publish-images.yml, tagged with the full commit SHA:
+#
+#   IMAGE_TAG=<40-char sha> docker compose --env-file .env.test.example
+#     -f compose.test.yml -f compose.test.images.yml pull
+#
+# Every service built from api/backend/Dockerfile.dev runs the one
+# bioavanced-backend-test image, the worker included; frontend-app-test runs
+# bioavanced-frontend-test (its preview target and build argument). The
+# services keep their build: sections, so a service whose image is present
+# locally runs it and is not rebuilt. tsa-test, witness-test,
+# frontend-unit-runner and playwright-runner are not published and still
+# build locally.
+services:
+  backend-app-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  admin-bootstrap-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  foundation-bootstrap-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  essential-reference-bootstrap-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-mondo-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-orpha-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-icd11-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-icd10-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-omim-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-hgnc-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-loinc-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-ucum-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-dcb-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-atc-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-duo-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-uberon-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-ncbitax-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-cl-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  reference-data-bootstrap-edam-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  worker-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  neo4j-projection-worker-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  frontend-app-test:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-frontend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  backend-unit-runner:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend-test:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}

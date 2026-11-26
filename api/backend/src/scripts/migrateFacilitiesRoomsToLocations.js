@@ -23,6 +23,14 @@
  * alreadyMigrated, and a freezer already under a location in
  * alreadyUnderRoom, so a second run writes nothing.
  *
+ * One-way: no rollback. After the run the facilities and rooms collections
+ * are read by nothing but this migration, and legacyPlacementChain.service.js
+ * places a legacy FREEZER's location under its room's mirrored location at
+ * run time, so locations written since sit under the mirrors and nothing
+ * tells them from the ones this run moved. Deleting the mirrors would orphan
+ * them. Undo it by restoring storageLocations from a backup taken before the
+ * run; facilities and rooms are never changed.
+ *
  * Usage (from api/backend):
  *   npm run migrate:facilities-rooms-to-locations                          applies
  *   npm run migrate:facilities-rooms-to-locations -- --dry-run             counts, writes nothing
@@ -42,11 +50,11 @@ function organizationIdArg(argv) {
   return value;
 }
 
-async function run(argv = process.argv.slice(2)) {
+async function run(argv = process.argv.slice(2), { db } = {}) {
   const dryRun = argv.includes('--dry-run');
   const organizationId = organizationIdArg(argv);
-  const db = await connectDB();
-  const summary = await mirrorFacilitiesAndRooms(db, { dryRun, organizationId });
+  const database = db || await connectDB();
+  const summary = await mirrorFacilitiesAndRooms(database, { dryRun, organizationId });
   console.log(`Facility/Room -> StorageLocation (${summary.mode}):`, JSON.stringify(summary, null, 2));
   return summary;
 }

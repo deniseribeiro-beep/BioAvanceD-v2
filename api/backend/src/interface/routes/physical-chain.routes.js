@@ -11,7 +11,9 @@ const labelResolver = require('../../services/labelResolver.service');
 const scope = require('../../services/physicalChainScope.service');
 const telemetryExposure = require('../../services/telemetryExposure.service');
 const storageLocations = require('../../services/storageLocation.service');
+const storageRacks = require('../../services/storageRack.service');
 const legalHolds = require('../../services/legalHold.service');
+const validationProtocols = require('../../services/physicalIdentificationProtocol.service');
 const { findSampleByAnyId } = require('../../utils/sampleLookup');
 const { deviceUsabilityRefusal } = require('../../services/deviceLifecycle.service');
 
@@ -298,7 +300,10 @@ router.post('/specimen-assignments/:specimenContainerAssignmentId/unload', requi
  * Body: { storagePositionId, placedAt?, removedAt?, sourceEventId? }
  * The container is in scope through the specimen it holds (RULE-030). An
  * empty, unplaced one is placed by the holder of the target position's rack
- * location.
+ * location. The scope checks run before the placement, so a caller out of
+ * scope gets its 403 first.
+ * 422 POSITION_NOT_IN_GRID when storagePositionId is not one of its rack's
+ * StoragePosition rows (POST /racks), a rack never prepared included (#1532).
  */
 router.post('/containers/:containerId/position', requirePermission('manageStorageAllocation'), requireOrganizationScope, async (req, res) => {
   try {
@@ -311,7 +316,7 @@ router.post('/containers/:containerId/position', requirePermission('manageStorag
       await scope.assertContainerInScope(db, containerId, req.organizationScope);
     }
     const sourceEventId = sourceEventIdOf(req);
-    const assignment = await physicalChain.placeContainer(db, { ...(req.body || {}), containerId: req.params.containerId, sourceEventId });
+    const assignment = await physicalChain.placeContainer(db, { ...(req.body || {}), containerId: req.params.containerId, sourceEventId }, { requirePreparedPosition: true });
     await audit(req, 'ContainerPositionAssignment', assignment.containerPositionAssignmentId, { sourceEventId, containerId: assignment.containerId, storagePositionId: assignment.storagePositionId });
     return res.status(201).json({ success: true, data: assignment });
   } catch (error) {
@@ -339,12 +344,21 @@ router.post('/position-assignments/:containerPositionAssignmentId/remove', requi
  * Body: { storageLocationId, placedAt?, removedAt?, sourceEventId? }
  * The rack is in scope through the location (RULE-035): 403
  * LOCATION_OUT_OF_SCOPE, 404 LOCATION_NOT_FOUND, and 422 LOCATION_UNUSABLE
- * when the location or an ancestor is not active (RF017 AC8).
+ * when the location or an ancestor is not active (RF017 AC8). A caller of
+ * organization scope must also hold the location the rack's own record
+ * names, if any (403 LOCATION_OUT_OF_SCOPE, #1513).
  */
 router.post('/racks/:storageRackId/location', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     const body = req.body || {};
+    // #1513: a rack whose record names a location is that location's
+    // organization's; another organization must not place it elsewhere and
+    // take its grid.
+    if (req.organizationScope?.scope !== 'global') {
+      const prepared = await (await getCollection(db, 'storageRacks')).findOne({ storageRackId: String(req.params.storageRackId) });
+      if (prepared?.storageLocationId) await scope.assertLocationInScope(db, prepared.storageLocationId, req.organizationScope);
+    }
     if (body.storageLocationId) {
       await scope.assertLocationInScope(db, body.storageLocationId, req.organizationScope);
       const refusal = await storageLocations.locationUsabilityRefusal(db, body.storageLocationId);
@@ -377,6 +391,72 @@ router.post('/rack-assignments/:rackLocationAssignmentId/remove', requirePermiss
     const closed = await physicalChain.removeRack(db, id, req.body?.removedAt);
     await audit(req, 'RackLocationAssignment', id, { removedAt: closed.removedAt });
     return res.json({ success: true, data: closed });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+// ==================== RACK GRID (RF016 AC2) ====================
+
+/**
+ * POST /api/physical-chain/racks
+ * Body: { storageRackId?, rackType?, rowCount?, columnCount?,
+ *         coordinateScheme?, orientationRule?, storageLocationId?,
+ *         catalogReference?, status?, sourceEventId? }
+ * Creates the rack and one StoragePosition per cell of its grid (#1513).
+ * An omitted grid field takes the approved fixture: cryogenic_rack, 8x12,
+ * alpha_numeric, top_left_origin, so 96 positions. A named location must be
+ * the caller's (404 LOCATION_NOT_FOUND, 403 LOCATION_OUT_OF_SCOPE) and
+ * usable (422 LOCATION_UNUSABLE, RF017 AC8), and the caller must hold the
+ * location the rack is already open at. 409 RACK_EXISTS; 422
+ * VALIDATION_ERROR, a storageRackId that is not a non-empty string included.
+ */
+router.post('/racks', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const body = req.body || {};
+    if (body.storageLocationId) {
+      await scope.assertLocationInScope(db, body.storageLocationId, req.organizationScope);
+      // RF017 AC8: a rack is not prepared at a location that is not usable.
+      const refusal = await storageLocations.locationUsabilityRefusal(db, body.storageLocationId);
+      if (refusal) {
+        return res.status(422).json({ success: false, error: 'LOCATION_UNUSABLE', message: refusal, details: [refusal] });
+      }
+    }
+    // Another organization must not pre-empt the grid of a rack located in
+    // yours.
+    if (body.storageRackId && req.organizationScope?.scope !== 'global') {
+      const located = await (await getCollection(db, 'rackLocationAssignments')).findOne({ storageRackId: String(body.storageRackId), assignmentStatus: 'active' });
+      if (located) await scope.assertLocationInScope(db, located.storageLocationId, req.organizationScope);
+    }
+    const sourceEventId = sourceEventIdOf(req);
+    const rack = await storageRacks.createRack(db, body);
+    await audit(req, 'StorageRack', rack.storageRackId, {
+      sourceEventId,
+      rackType: rack.rackType,
+      rowCount: rack.rowCount,
+      columnCount: rack.columnCount,
+      positionCount: rack.positionCount,
+      storageLocationId: rack.storageLocationId,
+    });
+    return res.status(201).json({ success: true, data: rack });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+/**
+ * GET /api/physical-chain/racks/:storageRackId/positions
+ * The rack's StoragePosition rows in top_left_origin order (#1513). 404
+ * RACK_NOT_FOUND; 403 RACK_OUT_OF_SCOPE unless the rack's location is the
+ * caller's, and a rack located nowhere is a global caller's only.
+ */
+router.get('/racks/:storageRackId/positions', requirePermission('viewStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const rack = await storageRacks.findRack(db, req.params.storageRackId);
+    await scope.assertRackInScope(db, rack.storageRackId, req.organizationScope);
+    return res.json({ success: true, data: await storageRacks.listRackPositions(db, rack.storageRackId) });
   } catch (error) {
     return sendError(res, error);
   }
@@ -415,6 +495,102 @@ router.post('/containers/:containerId/labels', requirePermission('manageStorageT
     });
     await audit(req, 'LabelIdentifier', label.labelIdentifierId, { containerId, symbology: label.symbology, identifierOrigin: label.identifierOrigin });
     return res.status(201).json({ success: true, data: label });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+/**
+ * POST /api/physical-chain/racks/:storageRackId/labels
+ * Body: { encodedValue, symbology, identifierOrigin, namespaceRegistryId,
+ *         carrierPlacement, immutableAtSource, templateVersionId?, printBatchId? }
+ * Issues the rack's linear code (RF016 AC5). The target is the rack, known
+ * by its open RackLocationAssignment or its StorageRack row (#1513), and in
+ * scope as for reading its grid: through its open location first, then the
+ * location on its own record; a rack located nowhere is a global caller's
+ * only. Its symbology is code_128, the one linear symbology RF016 AC5
+ * names; the rack's code is institutional (RULE-034).
+ * 201; 403 RACK_OUT_OF_SCOPE; 404 RACK_NOT_FOUND (neither an open placement
+ * nor a StorageRack row under that id, a container's id included); 409
+ * LABEL_EXISTS; 422 VALIDATION_ERROR (another symbology, personal data,
+ * RULE-012).
+ */
+const RACK_LABEL_SYMBOLOGY = 'code_128';
+
+router.post('/racks/:storageRackId/labels', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const storageRackId = String(req.params.storageRackId);
+    const located = await (await getCollection(db, 'rackLocationAssignments')).findOne({ storageRackId, assignmentStatus: 'active' });
+    const recorded = located ? null : await (await getCollection(db, 'storageRacks')).findOne({ storageRackId });
+    if (!located && !recorded) {
+      return res.status(404).json({ success: false, error: 'RACK_NOT_FOUND', message: `Rack ${storageRackId} não encontrado` });
+    }
+    await scope.assertRackInScope(db, storageRackId, req.organizationScope);
+    const body = req.body || {};
+    if (String(body.symbology ?? '').toLowerCase() !== RACK_LABEL_SYMBOLOGY) {
+      const message = `O código linear do rack exige symbology ${RACK_LABEL_SYMBOLOGY} (RF016 AC5)`;
+      return res.status(422).json({ success: false, error: 'VALIDATION_ERROR', message, details: [message] });
+    }
+    const actor = actorId(req);
+    const label = await labelResolver.registerLabel(db, {
+      ...body,
+      targetType: 'storage_rack',
+      targetId: storageRackId,
+      status: 'active',
+      issuedAt: new Date(),
+      issuedBy: actor ? String(actor) : null,
+    });
+    await audit(req, 'LabelIdentifier', label.labelIdentifierId, { storageRackId, symbology: label.symbology, identifierOrigin: label.identifierOrigin });
+    return res.status(201).json({ success: true, data: label });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+// ==================== VALIDATION PROTOCOL (RF016 AC7, RULE-037) ====================
+
+/**
+ * POST /api/physical-chain/validation-protocols
+ * Body: { physicalIdentificationValidationProtocolId?, protocolVersion,
+ *         scope, evidenceUri, evidenceHash, approvedSymbologies,
+ *         fixtureCatalogRefs, realSpecimenUse, approvalStatus?, approvedAt? }
+ * Registers the ex ante physical identification protocol (#1514). It is a
+ * global record, held by no organization. 201 { success, data }; 409
+ * PROTOCOL_EXISTS (same id or protocolVersion); 422 VALIDATION_ERROR.
+ */
+router.post('/validation-protocols', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const protocol = await validationProtocols.registerProtocol(db, req.body || {});
+    await audit(req, 'PhysicalIdentificationValidationProtocol', protocol.physicalIdentificationValidationProtocolId, {
+      protocolVersion: protocol.protocolVersion,
+      approvalStatus: protocol.approvalStatus,
+    });
+    return res.status(201).json({ success: true, data: protocol });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+/**
+ * POST /api/physical-chain/validation-protocols/:physicalIdentificationValidationProtocolId/executions
+ * Authorizes a run of the stored protocol only when it is
+ * approved_for_execution and, ex ante, uses no real specimen (RF016 AC7,
+ * RULE-037). The authorization is documentary, not a result of the assay,
+ * and nothing is written but its audit entry. 200 { success, data }; 404
+ * PROTOCOL_NOT_FOUND; 409 PROTOCOL_NOT_EXECUTABLE.
+ */
+router.post('/validation-protocols/:physicalIdentificationValidationProtocolId/executions', requirePermission('manageStorageAllocation'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const execution = await validationProtocols.authorizeExecution(db, req.params.physicalIdentificationValidationProtocolId);
+    await audit(req, 'PhysicalIdentificationValidationProtocol', execution.physicalIdentificationValidationProtocolId, {
+      protocolVersion: execution.protocolVersion,
+      approvalStatus: execution.approvalStatus,
+      executionAuthorized: true,
+    });
+    return res.json({ success: true, data: execution });
   } catch (error) {
     return sendError(res, error);
   }

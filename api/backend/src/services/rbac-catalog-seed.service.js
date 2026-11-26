@@ -43,12 +43,12 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody', 'manageAccessGrants'],
+      permissions: ['createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody', 'manageAccessGrants'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'setUserPassword', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody', 'manageAccessGrants'],
+      permissions: ['createUser', 'readUser', 'updateUser', 'deleteUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'setUserPassword', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody', 'manageAccessGrants'],
     },
   ],
 };
@@ -95,13 +95,28 @@ const PERMISSION_CATALOG = {
   withdrawSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Retirar amostra' },
   viewTemperature: { resourceType: 'Temperature', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Visualizar temperatura' },
   uploadFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Enviar arquivos' },
-  createUser: { resourceType: 'User', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar usuário' },
+  // #1229 (Dennis, 2026-10-29, lifting #1008's deferral of direction 2):
+  // createUser gated every verb on a user account, and the Coordenador held
+  // it. Requisitos v4.0.0 RF003 names the Administrador as the only actor of
+  // user management, and the only screens calling these routes are
+  // Administrador-only, so the account verbs split into four codes, each
+  // with the one action its routes derive, all seeded on the Administrador
+  // only. createUser is POST /register; readUser the GETs; updateUser
+  // PUT /:id and the organization-scope grant and revoke (passed 'UPDATE',
+  // since they change the account's scope); deleteUser DELETE /:id.
+  // upsertPermission narrows createUser's allowedActions and inserts the
+  // three new codes, and upsertRole drops createUser from the Coordenador,
+  // at the next boot (#1341), so an already-seeded database needs no
+  // migration.
+  createUser: { resourceType: 'User', allowedActions: ['CREATE'], displayName: 'Criar usuário' },
+  readUser: { resourceType: 'User', allowedActions: ['READ'], displayName: 'Visualizar usuários' },
+  updateUser: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Editar usuário' },
+  deleteUser: { resourceType: 'User', allowedActions: ['DELETE'], displayName: 'Excluir usuário' },
   // #1008 (Denise, 2026-09-25): RF003 names the Administrador as the actor
   // for role assignment (AC#3, "atribuir papel com vigência e escopo"), so
   // granting, changing or re-dating a role is its own permission, seeded on
-  // the Administrador only. createUser keeps the account itself: the
-  // Coordenador still lists, edits and deletes users, but no longer assigns
-  // roles. CREATE is POST /api/users/register, where every new account is
+  // the Administrador only. (#1229 later took the account verbs from the
+  // Coordenador as well.) CREATE is POST /api/users/register, where every new account is
   // granted a role. UPDATE is PUT /api/users/:id, checked in the handler
   // only when a role actually changes.
   assignRole: { resourceType: 'UserRoleAssignment', allowedActions: ['CREATE', 'UPDATE'], displayName: 'Atribuir papel' },
@@ -187,9 +202,9 @@ const PERMISSION_CATALOG = {
   manageCustody: { resourceType: 'CustodianshipAssignment', allowedActions: ['CREATE'], displayName: 'Gerenciar custódia' },
   // #1229: access.routes.js borrowed createUser for a different resource,
   // the report-access grant (dict-02's AccessGrant). Its own code, seeded to
-  // exactly createUser's population (Coordenador + Administrador), so the
-  // move is a no-op for every caller, as #929 did for requestConsent. The
-  // split of createUser itself by verb stays deferred (#1008). The four
+  // exactly createUser's population then (Coordenador + Administrador), so
+  // the move is a no-op for every caller, as #929 did for requestConsent.
+  // The split of createUser itself by verb followed (above). The four
   // actions are what the routes' GET, POST, PUT and DELETE derive through
   // METHOD_TO_ACTION. upsertPermission inserts the code and upsertRole sets
   // both roles to the seed's list at the next boot (#1341), so an

@@ -36,6 +36,18 @@ const report = {
       ]
     },
     {
+      id: 'HOMOLOG-SMTP-TRACE-AND-SIGNED-TCLE',
+      title: 'Envio de e-mail da pilha de teste com rastro de data, hora e local, e termo assinado legível',
+      status: 'PASSED',
+      evidence: [
+        'NotificationService.emailSendTrace() grava sentAt, sentAtLocal (America/Sao_Paulo) e location do SMTP',
+        'compose.test.yml SMTP_HOST=smtp-test SMTP_PORT=1025 e ALERT_EMAIL_TO da caixa de teste',
+        'scripts/gcp-access-proxy/nginx.conf publica a caixa em /mailpit/',
+        'GET /api/e-consent/consents/:id/signed-tcle e POST /api/e-consent/consent-tokens/signed-tcle',
+        'src/services/tclePdf.js e src/workers/jobs/consent-expiry.job.js'
+      ]
+    },
+    {
       id: 'GAP9-BIOMARKER-INTEGRITY',
       title: 'Integridade criptográfica de biomarcadores com hash SHA-256 e prova Merkle',
       status: 'PASSED',

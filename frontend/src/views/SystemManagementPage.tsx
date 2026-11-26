@@ -1,21 +1,30 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
-import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound, LogOut, Landmark } from 'lucide-react';
+import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound, LogOut, Landmark, Search } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
 import { useOrganizations } from '../hooks/useOrganizations';
 import { useCollections } from '../hooks/useCollections';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { userService } from '../services/api';
-import { Organization, Collection } from '../types/models';
+import { Organization } from '../types/models';
 import SecurityPage from './SecurityPage';
-import CollectionGovernancePanel from './CollectionGovernancePanel';
-import './SystemManagementPage.css';
+import { formatSemicolonTags } from './collectionForm';
+
+export {
+  buildOrganizationSubmissionPayload,
+} from './organizationForm';
+export {
+  parseSemicolonTags,
+  formatSemicolonTags,
+  buildCollectionFormState,
+  buildCollectionSubmissionPayload,
+} from './collectionForm';
+export type { CollectionFormState } from './collectionForm';
 
 type TabType = 'users' | 'organizations' | 'collections' | 'security';
 
@@ -57,35 +66,47 @@ export default function SystemManagementPage() {
   ];
 
   return (
-    <div className="page" data-testid="system-management-page">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">{t('system.title', 'Gerenciamento do Sistema')}</h1>
-          <p className="page-subtitle">{t('system.subtitle', 'Gerenciamento integrado de usuários e configurações de segurança')}</p>
-        </div>
+    <div className="page-shell flex w-full min-w-0 flex-col gap-4" data-testid="system-management-page">
+      <div className="card-surface">
+        <h1 className="page-title">{t('system.title', 'Gerenciamento do Sistema')}</h1>
+        <p className="page-subtitle">
+          {t('system.subtitle', 'Usuários, organizações, coleções e políticas de segurança')}
+        </p>
       </div>
 
-      <div className="system-tabs">
+      <div
+        className="flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1"
+        role="tablist"
+        aria-label={t('system.tabsLabel', 'Seções do gerenciamento do sistema')}
+      >
         {tabs.map((tab) => {
           const Icon = tab.icon;
+          const active = activeTab === tab.id;
           return (
             <button
               key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
               data-testid={`system-tab-${tab.id}`}
-              className={`system-tab ${activeTab === tab.id ? 'active' : ''}`}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                active
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-primary-soft hover:text-primary'
+              }`}
               onClick={() => {
                 setActiveTab(tab.id);
                 setSearchParams({ tab: tab.id });
               }}
             >
-              <Icon size={18} />
+              <Icon className="h-4 w-4" />
               <span>{tab.label}</span>
             </button>
           );
         })}
       </div>
 
-      <div className="system-tab-content">
+      <div className="min-w-0 space-y-4">
         {activeTab === 'users' && <UsersSection />}
         {activeTab === 'organizations' && <OrganizationsSection />}
         {activeTab === 'collections' && <CollectionsSection />}
@@ -97,13 +118,23 @@ export default function SystemManagementPage() {
 
 // Seção de Usuários
 function UsersSection() {
-  const { users, loading, error, validateUserStatus, deleteUser, loadUsers } = useUsers();
+  const { users, loading, error, deleteUser, loadUsers } = useUsers();
   const { organizations } = useOrganizations();
   const { user: currentUser } = useAuth();
   const navigate = useNavigate();
   const { t } = useLanguage();
-  
+  const [userQuery, setUserQuery] = useState('');
+
   const isAdmin = currentUser?.roleName === 'Administrador' || currentUser?.accessType === 4;
+
+  const filteredUsers = useMemo(() => {
+    const list = Array.isArray(users) ? users : [];
+    const q = userQuery.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((u) =>
+      [u.name, u.email, u.username].some((v) => String(v || '').toLowerCase().includes(q))
+    );
+  }, [users, userQuery]);
 
   const getRoleIcon = (roleName?: string) => {
     switch (roleName) {
@@ -138,6 +169,22 @@ function UsersSection() {
   return (
     <>
       <div className="section-header">
+        <div className="relative min-w-[16rem] flex-1 max-w-md">
+          <Search
+            size={16}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            data-testid="users-search-input"
+            type="search"
+            value={userQuery}
+            onChange={(e) => setUserQuery(e.target.value)}
+            placeholder={t('users.searchPlaceholder', 'Buscar por nome, email ou usuário')}
+            className="pl-9"
+            aria-label={t('users.searchPlaceholder', 'Buscar por nome, email ou usuário')}
+          />
+        </div>
         <Button data-testid="new-user-button" onClick={() => navigate('/users/new')}>
           <Plus size={18} />
           {t('users.new')}
@@ -161,51 +208,76 @@ function UsersSection() {
             t('common.actions'),
           ]}
         >
-          {Array.isArray(users) && users.map((user) => {
-            const userIsAdmin = user.roleName === 'Administrador' || user.accessType === 4;
-            const userId = (user as any)._id || user.id;
-            const showResetButton = !userIsAdmin;
-            
-            return (
-              <tr key={userId || user.id}>
-                <td>{user.name}</td>
-                <td>{user.email}</td>
-                <td>{resolveOrganizationLabel(organizations, user.organizationId)}</td>
-                <td>{user.username}</td>
-                <td>
-                  <div className="role-badge-container">
-                    {user.roleName ? (
-                      <span className={`role-badge role-${user.roleName.toLowerCase().replace(' ', '-')}`}>
-                        {getRoleIcon(user.roleName)}
-                        {user.roleName}
-                      </span>
-                    ) : (
-                      <span className="role-badge role-tecnico">
-                        {getAccessTypeLabel(user.accessType)}
-                      </span>
-                    )}
-                    {/* #1240: the additive auditor role, beside the main one. */}
-                    {user.auditorRole && (
-                      <span className="role-badge role-auditor" data-testid={`auditor-badge-${userId || user.id}`}>
-                        {t('users.auditorBadge')}
-                      </span>
-                    )}
-                  </div>
-                </td>
-                <td>
-                  <span className={`status-badge status-${user.status?.toLowerCase() || 'ativo'}`}>
-                    {user.status || t('users.statusActive')}
-                  </span>
-                </td>
-                <td>
-                  <div className="mfa-cell">
+          {filteredUsers.length === 0 && userQuery.trim() ? (
+            <tr>
+              <td colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                <span data-testid="users-search-empty">
+                  {t('users.searchEmpty', 'Nenhum usuário encontrado')}
+                </span>
+              </td>
+            </tr>
+          ) : (
+            filteredUsers.map((user) => {
+              const userIsAdmin = user.roleName === 'Administrador' || user.accessType === 4;
+              const userId = (user as any)._id || user.id;
+              const showResetButton = !userIsAdmin;
+
+              return (
+                <tr key={userId || user.id}>
+                  <td>{user.name}</td>
+                  <td>{user.email}</td>
+                  <td>{resolveOrganizationLabel(organizations, user.organizationId)}</td>
+                  <td>{user.username}</td>
+                  <td>
+                    <div className="role-badge-container">
+                      {user.roleName ? (
+                        <span className={`role-badge role-${user.roleName.toLowerCase().replace(' ', '-')}`}>
+                          {getRoleIcon(user.roleName)}
+                          {user.roleName}
+                        </span>
+                      ) : (
+                        <span className="role-badge role-tecnico">
+                          {getAccessTypeLabel(user.accessType)}
+                        </span>
+                      )}
+                      {/* #1240: the additive auditor role, beside the main one. */}
+                      {user.auditorRole && (
+                        <span className="role-badge role-auditor" data-testid={`auditor-badge-${userId || user.id}`}>
+                          {t('users.auditorBadge')}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <span className={`status-badge status-${user.status?.toLowerCase() || 'ativo'}`}>
+                      {user.status || t('users.statusActive')}
+                    </span>
+                  </td>
+                  <td>
                     <span className={`status-badge ${userIsAdmin ? 'status-inativo' : (user.mfaEnabled ? 'status-ativo' : 'status-inativo')}`}>
                       {userIsAdmin ? t('users.mfaNotApplicable') : (user.mfaEnabled ? t('users.mfaEnabled') : t('users.mfaDisabled'))}
                     </span>
-                    {showResetButton && (
+                  </td>
+                  <td className="whitespace-nowrap">
+                    <div className="table-actions">
                       <button
                         type="button"
-                        data-testid={`reset-mfa-button-${userId || user.id}`}
+                        data-testid={`edit-user-button-${userId || user.id}`}
+                        className="action-button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          navigate('/users/new', { state: { user } });
+                        }}
+                        title={t('common.edit')}
+                        aria-label={t('common.edit')}
+                      >
+                        <Edit size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`force-password-reset-button-${userId || user.id}`}
+                        className="action-button"
                         onClick={async (e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -213,30 +285,28 @@ function UsersSection() {
                             alert(t('users.userIdNotFound'));
                             return;
                           }
-                          const confirmMessage = user.mfaEnabled 
-                            ? t('users.mfaResetConfirm').replace('{name}', user.name)
-                            : t('users.mfaResetConfirmInactive').replace('{name}', user.name);
+                          const confirmMessage = t('users.forcePasswordResetConfirm').replace('{name}', user.name);
                           if (confirm(confirmMessage)) {
                             try {
-                              await userService.resetMFA(userId);
-                              alert(t('users.mfaResetSuccess'));
+                              await userService.forcePasswordReset(userId);
+                              alert(t('users.forcePasswordResetSuccess'));
                               await loadUsers();
                             } catch (err: any) {
-                              alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.mfaResetError'));
+                              alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.forcePasswordResetError'));
                             }
                           }
                         }}
-                        title={user.mfaEnabled ? t('users.mfaResetTitle') : t('users.mfaResetTitleInactive')}
-                        className="mfa-reset-button"
+                        title={t('users.forcePasswordResetTitle')}
+                        aria-label={t('users.forcePasswordResetTitle')}
                       >
-                        <RotateCcw size={14} />
-                        <span>{t('users.mfaReset')}</span>
+                        <KeyRound size={16} />
                       </button>
-                    )}
-                    {isAdmin && userIsAdmin && user.mfaEnabled && (
+                      {/* #1020 / RF003 AC#5: revoke every active session, recording
+                          whether the account is judged at risk (P1X-0267 'risk'). */}
                       <button
                         type="button"
-                        data-testid={`disable-mfa-button-${userId || user.id}`}
+                        data-testid={`revoke-sessions-button-${userId || user.id}`}
+                        className="action-button"
                         onClick={async (e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -244,157 +314,151 @@ function UsersSection() {
                             alert(t('users.userIdNotFound'));
                             return;
                           }
-                          const confirmMessage = t('users.mfaDisableConfirm').replace('{name}', user.name);
-                          if (confirm(confirmMessage)) {
+                          if (!confirm(`Revogar todas as sessões ativas de ${user.name}?`)) return;
+                          const reason = confirm(
+                            'A conta pode estar comprometida?\n\nOK: registrar o motivo como "risco".\nCancelar: registrar como ação administrativa.'
+                          ) ? 'risk' : 'admin_action';
+                          try {
+                            const response = await userService.revokeSessions(userId, reason);
+                            alert(`${response.data.data.revoked} sessão(ões) revogada(s).`);
+                          } catch (err: any) {
+                            alert(err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao revogar sessões');
+                          }
+                        }}
+                        title="Revogar sessões"
+                        aria-label="Revogar sessões"
+                      >
+                        <LogOut size={16} />
+                      </button>
+                      {showResetButton && (
+                        <button
+                          type="button"
+                          data-testid={`reset-mfa-button-${userId || user.id}`}
+                          className="action-button"
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (!userId) {
+                              alert(t('users.userIdNotFound'));
+                              return;
+                            }
+                            const confirmMessage = user.mfaEnabled
+                              ? t('users.mfaResetConfirm').replace('{name}', user.name)
+                              : t('users.mfaResetConfirmInactive').replace('{name}', user.name);
+                            if (confirm(confirmMessage)) {
+                              try {
+                                await userService.resetMFA(userId);
+                                alert(t('users.mfaResetSuccess'));
+                                await loadUsers();
+                              } catch (err: any) {
+                                alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.mfaResetError'));
+                              }
+                            }
+                          }}
+                          title={user.mfaEnabled ? t('users.mfaResetTitle') : t('users.mfaResetTitleInactive')}
+                          aria-label={user.mfaEnabled ? t('users.mfaResetTitle') : t('users.mfaResetTitleInactive')}
+                        >
+                          <RotateCcw size={16} />
+                        </button>
+                      )}
+                      {isAdmin && userIsAdmin && user.mfaEnabled && (
+                        <button
+                          type="button"
+                          data-testid={`disable-mfa-button-${userId || user.id}`}
+                          className="action-button"
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (!userId) {
+                              alert(t('users.userIdNotFound'));
+                              return;
+                            }
+                            const confirmMessage = t('users.mfaDisableConfirm').replace('{name}', user.name);
+                            if (confirm(confirmMessage)) {
+                              try {
+                                await userService.disableMFA(userId);
+                                alert(t('users.mfaDisableSuccess'));
+                                await loadUsers();
+                              } catch (err: any) {
+                                alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.mfaDisableError'));
+                              }
+                            }
+                          }}
+                          title={t('users.mfaDisableTitle')}
+                          aria-label={t('users.mfaDisableTitle')}
+                        >
+                          <XCircle size={16} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        data-testid={`delete-user-button-${userId || user.id}`}
+                        className="action-button danger"
+                        onClick={async (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (confirm(t('users.deleteConfirm'))) {
                             try {
-                              await userService.disableMFA(userId);
-                              alert(t('users.mfaDisableSuccess'));
+                              const id = (user as any)._id || user.id;
+                              await deleteUser(id);
                               await loadUsers();
                             } catch (err: any) {
-                              alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.mfaDisableError'));
+                              alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.deleteError'));
                             }
                           }
                         }}
-                        title={t('users.mfaDisableTitle')}
-                        className="mfa-disable-button"
+                        title={t('common.delete')}
+                        aria-label={t('common.delete')}
                       >
-                        <XCircle size={14} />
-                        <span>{t('users.mfaDisable')}</span>
+                        <Trash2 size={16} />
                       </button>
-                    )}
-                  </div>
-                </td>
-                <td>
-                  <div className="table-actions">
-                    <button
-                      data-testid={`edit-user-button-${userId || user.id}`}
-                      className="action-button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        navigate('/users/new', { state: { user } });
-                      }}
-                      title={t('common.edit')}
-                    >
-                      <Edit size={16} />
-                    </button>
-                    <button
-                      data-testid={`force-password-reset-button-${userId || user.id}`}
-                      className="action-button"
-                      onClick={async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (!userId) {
-                          alert(t('users.userIdNotFound'));
-                          return;
-                        }
-                        const confirmMessage = t('users.forcePasswordResetConfirm').replace('{name}', user.name);
-                        if (confirm(confirmMessage)) {
-                          try {
-                            await userService.forcePasswordReset(userId);
-                            alert(t('users.forcePasswordResetSuccess'));
-                            await loadUsers();
-                          } catch (err: any) {
-                            alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.forcePasswordResetError'));
-                          }
-                        }
-                      }}
-                      title={t('users.forcePasswordResetTitle')}
-                    >
-                      <KeyRound size={16} />
-                    </button>
-                    {/* #1020 / RF003 AC#5: revoke every active session, recording
-                        whether the account is judged at risk (P1X-0267 'risk'). */}
-                    <button
-                      data-testid={`revoke-sessions-button-${userId || user.id}`}
-                      className="action-button"
-                      onClick={async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (!userId) {
-                          alert(t('users.userIdNotFound'));
-                          return;
-                        }
-                        if (!confirm(`Revogar todas as sessões ativas de ${user.name}?`)) return;
-                        const reason = confirm(
-                          'A conta pode estar comprometida?\n\nOK: registrar o motivo como "risco".\nCancelar: registrar como ação administrativa.'
-                        ) ? 'risk' : 'admin_action';
-                        try {
-                          const response = await userService.revokeSessions(userId, reason);
-                          alert(`${response.data.data.revoked} sessão(ões) revogada(s).`);
-                        } catch (err: any) {
-                          alert(err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao revogar sessões');
-                        }
-                      }}
-                      title="Revogar sessões"
-                    >
-                      <LogOut size={16} />
-                    </button>
-                    <button
-                      data-testid={`delete-user-button-${userId || user.id}`}
-                      className="action-button danger"
-                      onClick={async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (confirm(t('users.deleteConfirm'))) {
-                          try {
-                            const userId = (user as any)._id || user.id;
-                            await deleteUser(userId);
-                            await loadUsers();
-                          } catch (err: any) {
-                            alert(err.response?.data?.error || err.response?.data?.message || err.message || t('users.deleteError'));
-                          }
-                        }
-                      }}
-                      title={t('common.delete')}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })
+          )}
         </Table>
       </Card>
     </>
   );
 }
 
-/**
- * Monta o payload de criação/edição de uma Organization a partir do
- * estado do formulário — remove campos gerenciados pelo servidor
- * (organizationId, normalizedName, _id) e normaliza campos opcionais
- * vazios para null (o backend distingue "não informado" de string vazia).
- */
-export function buildOrganizationSubmissionPayload(
-  formData: Partial<Organization>
-): Partial<Organization> {
-  const { organizationId, normalizedName, _id, ...rest } = formData;
-  return {
-    ...rest,
-    acronym: rest.acronym ? rest.acronym : null,
-    organizationType: rest.organizationType ? rest.organizationType : null,
-    website: rest.website ? rest.website : null,
-  };
-}
-
 // Seção de Organizações
 function OrganizationsSection() {
-  const { organizations, loading, error, createOrganization, updateOrganization, deleteOrganization } = useOrganizations();
+  const navigate = useNavigate();
+  const { organizations, loading, error, deleteOrganization } = useOrganizations();
   const { t } = useLanguage();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingOrganization, setEditingOrganization] = useState<Organization | null>(null);
+  const [search, setSearch] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const rows = Array.isArray(organizations) ? organizations : [];
+    if (!q) return rows;
+    return rows.filter((org) =>
+      [org.officialName, org.acronym, org.organizationType, org.countryCode, org.website]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    );
+  }, [organizations, search]);
 
   return (
     <>
-      <div className="section-header">
+      <div className="section-header flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[12rem] flex-1">
+          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 opacity-50" />
+          <input
+            type="search"
+            className="input w-full pl-9"
+            data-testid="organizations-search-input"
+            placeholder={t('system.organizations.search', 'Buscar organizações…')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
         <Button
           data-testid="new-organization-button"
-          onClick={() => {
-            setEditingOrganization(null);
-            setIsModalOpen(true);
-          }}
+          onClick={() => navigate('/organizations/new')}
         >
           <Plus size={18} />
           {t('system.organizations.new', 'Nova Organização')}
@@ -416,8 +480,8 @@ function OrganizationsSection() {
             t('common.actions'),
           ]}
         >
-          {Array.isArray(organizations) && organizations.length > 0 ? (
-            organizations.map((org) => (
+          {filtered.length > 0 ? (
+            filtered.map((org) => (
               <tr key={org.organizationId || org._id}>
                 <td>{org.officialName}</td>
                 <td>{org.acronym || '-'}</td>
@@ -429,10 +493,11 @@ function OrganizationsSection() {
                     <button
                       data-testid={`edit-organization-button-${org.organizationId}`}
                       className="action-button"
-                      onClick={() => {
-                        setEditingOrganization(org);
-                        setIsModalOpen(true);
-                      }}
+                      onClick={() =>
+                        navigate(`/organizations/${org.organizationId}/edit`, {
+                          state: { organization: org },
+                        })
+                      }
                       title={t('common.edit')}
                     >
                       <Edit size={16} />
@@ -460,243 +525,55 @@ function OrganizationsSection() {
           ) : (
             <tr>
               <td colSpan={6} style={{ textAlign: 'center', padding: '2rem' }}>
-                {loading ? t('common.loading') : t('system.organizations.empty', 'Nenhuma organização cadastrada')}
+                {loading
+                  ? t('common.loading')
+                  : search.trim()
+                    ? t('system.organizations.searchEmpty', 'Nenhuma organização encontrada')
+                    : t('system.organizations.empty', 'Nenhuma organização cadastrada')}
               </td>
             </tr>
           )}
         </Table>
       </Card>
-
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingOrganization(null);
-        }}
-        title={editingOrganization
-          ? t('system.organizations.editTitle', 'Editar Organização')
-          : t('system.organizations.newTitle', 'Nova Organização')}
-      >
-        <OrganizationForm
-          organization={editingOrganization}
-          onSave={async (data) => {
-            try {
-              const payload = buildOrganizationSubmissionPayload(data);
-              if (editingOrganization) {
-                await updateOrganization(editingOrganization.organizationId, payload);
-              } else {
-                await createOrganization(payload);
-              }
-              setIsModalOpen(false);
-              setEditingOrganization(null);
-            } catch (err: any) {
-              alert(err.message);
-            }
-          }}
-          onCancel={() => {
-            setIsModalOpen(false);
-            setEditingOrganization(null);
-          }}
-        />
-      </Modal>
     </>
   );
 }
 
-function OrganizationForm({
-  organization,
-  onSave,
-  onCancel,
-}: {
-  organization: Organization | null;
-  onSave: (data: Partial<Organization>) => void;
-  onCancel: () => void;
-}) {
-  const { t } = useLanguage();
-  const [formData, setFormData] = useState<Partial<Organization>>(
-    organization || {
-      officialName: '',
-      acronym: '',
-      organizationType: '',
-      countryCode: '',
-      website: '',
-    }
-  );
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSave(formData);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="form" data-testid="organization-form">
-      <div className="form-grid">
-        <Input
-          label={t('system.organizations.officialName', 'Nome Oficial')}
-          data-testid="organization-official-name-input"
-          value={formData.officialName || ''}
-          onChange={(e) => setFormData({ ...formData, officialName: e.target.value })}
-          required
-        />
-        <Input
-          label={t('system.organizations.acronym', 'Sigla')}
-          data-testid="organization-acronym-input"
-          value={formData.acronym || ''}
-          onChange={(e) => setFormData({ ...formData, acronym: e.target.value })}
-        />
-        <Input
-          label={t('system.organizations.organizationType', 'Tipo')}
-          data-testid="organization-type-input"
-          value={formData.organizationType || ''}
-          onChange={(e) => setFormData({ ...formData, organizationType: e.target.value })}
-        />
-        <Input
-          label={t('system.organizations.countryCode', 'País (código ISO)')}
-          data-testid="organization-country-code-input"
-          value={formData.countryCode || ''}
-          onChange={(e) => setFormData({ ...formData, countryCode: e.target.value.toUpperCase() })}
-          maxLength={2}
-          required
-        />
-        <Input
-          label={t('system.organizations.website', 'Website')}
-          data-testid="organization-website-input"
-          value={formData.website || ''}
-          onChange={(e) => setFormData({ ...formData, website: e.target.value })}
-        />
-      </div>
-      <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          {t('common.cancel')}
-        </Button>
-        <Button type="submit" data-testid="organization-form-submit">
-          {t('common.save')}
-        </Button>
-      </div>
-    </form>
-  );
-}
-
-// Campos CodeableConcept[] da Collection (ELM-0043..0046, 0048..0049,
-// dict-02_DICIONARIO.md) — sem terminologia codificada ainda (Fase 1), então
-// cada um é editado como uma lista de texto livre separada por ";" (mesmo
-// separador usado nos valores de exemplo do próprio dicionário, ex.:
-// "plasma; serum; tissue") e persistido como Array<{ text: string }>.
-const COLLECTION_CODEABLE_CONCEPT_FIELDS = [
-  'sampleTypes',
-  'datasetTypes',
-  'diseaseScope',
-  'inclusionCriteriaCategories',
-  'miabisUseAccessConditions',
-  'storageTemperatureCategories',
-] as const;
-
-type CollectionCodeableConceptField = typeof COLLECTION_CODEABLE_CONCEPT_FIELDS[number];
-
-export function parseSemicolonTags(text: string): string[] {
-  return text.split(';').map((s) => s.trim()).filter(Boolean);
-}
-
-export function formatSemicolonTags(items: Array<Record<string, unknown>> | undefined, key: string): string {
-  if (!Array.isArray(items)) {
-    return '';
-  }
-  return items.map((item) => String(item?.[key] ?? '')).filter(Boolean).join('; ');
-}
-
-export interface CollectionFormState {
-  collectionId: string;
-  collectionName: string;
-  collectionStatus: string;
-  governanceRegime: string;
-  exclusionCriteria: string;
-  participantCount: string;
-  sampleCount: string;
-  relatedPublicationsText: string;
-  sampleTypesText: string;
-  datasetTypesText: string;
-  diseaseScopeText: string;
-  inclusionCriteriaCategoriesText: string;
-  miabisUseAccessConditionsText: string;
-  storageTemperatureCategoriesText: string;
-}
-
-/**
- * Converte uma Collection existente no estado (texto) do formulário de
- * edição — inverso de buildCollectionSubmissionPayload.
- */
-export function buildCollectionFormState(collection: Collection | null): CollectionFormState {
-  return {
-    collectionId: collection?.collectionId || '',
-    collectionName: collection?.collectionName || '',
-    collectionStatus: collection?.collectionStatus || 'active',
-    governanceRegime: collection?.governanceRegime || '',
-    exclusionCriteria: collection?.exclusionCriteria || '',
-    participantCount: collection?.participantCount != null ? String(collection.participantCount) : '',
-    sampleCount: collection?.sampleCount != null ? String(collection.sampleCount) : '',
-    relatedPublicationsText: formatSemicolonTags(collection?.relatedPublications, 'value'),
-    sampleTypesText: formatSemicolonTags(collection?.sampleTypes, 'text'),
-    datasetTypesText: formatSemicolonTags(collection?.datasetTypes, 'text'),
-    diseaseScopeText: formatSemicolonTags(collection?.diseaseScope, 'text'),
-    inclusionCriteriaCategoriesText: formatSemicolonTags(collection?.inclusionCriteriaCategories, 'text'),
-    miabisUseAccessConditionsText: formatSemicolonTags(collection?.miabisUseAccessConditions, 'text'),
-    storageTemperatureCategoriesText: formatSemicolonTags(collection?.storageTemperatureCategories, 'text'),
-  };
-}
-
-const CODEABLE_CONCEPT_TEXT_KEY: Record<CollectionCodeableConceptField, keyof CollectionFormState> = {
-  sampleTypes: 'sampleTypesText',
-  datasetTypes: 'datasetTypesText',
-  diseaseScope: 'diseaseScopeText',
-  inclusionCriteriaCategories: 'inclusionCriteriaCategoriesText',
-  miabisUseAccessConditions: 'miabisUseAccessConditionsText',
-  storageTemperatureCategories: 'storageTemperatureCategoriesText',
-};
-
-/**
- * Monta o payload de criação/edição de uma Collection a partir do estado
- * (texto) do formulário — implementa as regras de dict-02_DICIONARIO.md
- * ELM-0043..0052: campos CodeableConcept[]/Identifier[] parseados de listas
- * separadas por ";", contagens normalizadas para inteiro ou null.
- */
-export function buildCollectionSubmissionPayload(formData: CollectionFormState): Partial<Collection> {
-  const payload: Partial<Collection> = {
-    collectionId: formData.collectionId.trim(),
-    collectionName: formData.collectionName.trim(),
-    collectionStatus: formData.collectionStatus || 'active',
-    governanceRegime: (formData.governanceRegime || null) as Collection['governanceRegime'],
-    exclusionCriteria: formData.exclusionCriteria.trim() || null,
-    participantCount: formData.participantCount.trim() === '' ? null : Number(formData.participantCount),
-    sampleCount: formData.sampleCount.trim() === '' ? null : Number(formData.sampleCount),
-    relatedPublications: parseSemicolonTags(formData.relatedPublicationsText).map((value) => ({ value })),
-  };
-
-  for (const field of COLLECTION_CODEABLE_CONCEPT_FIELDS) {
-    const textValue = formData[CODEABLE_CONCEPT_TEXT_KEY[field]] as string;
-    payload[field] = parseSemicolonTags(textValue).map((text) => ({ text }));
-  }
-
-  return payload;
-}
-
 // Seção de Coleções
 function CollectionsSection() {
-  const { collections, loading, error, loadCollections, createCollection, updateCollection, deleteCollection } = useCollections();
-  const { organizations } = useOrganizations();
+  const navigate = useNavigate();
+  const { collections, loading, error, deleteCollection } = useCollections();
   const { t } = useLanguage();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingCollection, setEditingCollection] = useState<Collection | null>(null);
-  const [governedCollection, setGovernedCollection] = useState<Collection | null>(null);
+  const [search, setSearch] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const rows = Array.isArray(collections) ? collections : [];
+    if (!q) return rows;
+    return rows.filter((c) =>
+      [c.collectionId, c.collectionName, c.collectionStatus, formatSemicolonTags(c.sampleTypes, 'text')]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    );
+  }, [collections, search]);
 
   return (
     <>
-      <div className="section-header">
+      <div className="section-header flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[12rem] flex-1">
+          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 opacity-50" />
+          <input
+            type="search"
+            className="input w-full pl-9"
+            data-testid="collections-search-input"
+            placeholder={t('system.collections.search', 'Buscar coleções…')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
         <Button
           data-testid="new-collection-button"
-          onClick={() => {
-            setEditingCollection(null);
-            setIsModalOpen(true);
-          }}
+          onClick={() => navigate('/collections/new')}
         >
           <Plus size={18} />
           {t('system.collections.new', 'Nova Coleção')}
@@ -717,8 +594,8 @@ function CollectionsSection() {
             t('common.actions'),
           ]}
         >
-          {Array.isArray(collections) && collections.length > 0 ? (
-            collections.map((collection) => (
+          {filtered.length > 0 ? (
+            filtered.map((collection) => (
               <tr key={collection.collectionId || collection._id}>
                 <td>{collection.collectionId}</td>
                 <td>{collection.collectionName}</td>
@@ -733,10 +610,11 @@ function CollectionsSection() {
                     <button
                       data-testid={`edit-collection-button-${collection.collectionId}`}
                       className="action-button"
-                      onClick={() => {
-                        setEditingCollection(collection);
-                        setIsModalOpen(true);
-                      }}
+                      onClick={() =>
+                        navigate(`/collections/${collection.collectionId}/edit`, {
+                          state: { collection },
+                        })
+                      }
                       title={t('common.edit')}
                     >
                       <Edit size={16} />
@@ -744,7 +622,11 @@ function CollectionsSection() {
                     <button
                       data-testid={`governance-collection-button-${collection.collectionId}`}
                       className="action-button"
-                      onClick={() => setGovernedCollection(collection)}
+                      onClick={() =>
+                        navigate(`/collections/${collection.collectionId}/governance`, {
+                          state: { collection },
+                        })
+                      }
                       title={t('system.collections.governance.title', 'Governança')}
                     >
                       <Landmark size={16} />
@@ -772,225 +654,20 @@ function CollectionsSection() {
           ) : (
             <tr>
               <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
-                {loading ? t('common.loading') : t('system.collections.empty', 'Nenhuma coleção cadastrada')}
+                {loading
+                  ? t('common.loading')
+                  : search.trim()
+                    ? t('system.collections.searchEmpty', 'Nenhuma coleção encontrada')
+                    : t('system.collections.empty', 'Nenhuma coleção cadastrada')}
               </td>
             </tr>
           )}
         </Table>
       </Card>
-
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingCollection(null);
-        }}
-        title={editingCollection
-          ? t('system.collections.editTitle', 'Editar Coleção')
-          : t('system.collections.newTitle', 'Nova Coleção')}
-      >
-        <CollectionForm
-          collection={editingCollection}
-          onSave={async (data) => {
-            try {
-              if (editingCollection) {
-                await updateCollection(editingCollection.collectionId, data);
-              } else {
-                await createCollection(data);
-              }
-              setIsModalOpen(false);
-              setEditingCollection(null);
-            } catch (err: any) {
-              alert(err.message);
-            }
-          }}
-          onCancel={() => {
-            setIsModalOpen(false);
-            setEditingCollection(null);
-          }}
-        />
-      </Modal>
-
-      <Modal
-        isOpen={governedCollection !== null}
-        onClose={() => {
-          setGovernedCollection(null);
-          // A decision may have set or converted the regime the table shows.
-          loadCollections();
-        }}
-        title={`${t('system.collections.governance.title', 'Governança')}: ${governedCollection?.collectionName ?? ''}`}
-      >
-        {governedCollection && (
-          <CollectionGovernancePanel collection={governedCollection} organizations={organizations} />
-        )}
-      </Modal>
     </>
   );
 }
 
-function CollectionForm({
-  collection,
-  onSave,
-  onCancel,
-}: {
-  collection: Collection | null;
-  onSave: (data: Partial<Collection>) => void;
-  onCancel: () => void;
-}) {
-  const { t } = useLanguage();
-  const [formData, setFormData] = useState<CollectionFormState>(() => buildCollectionFormState(collection));
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSave(buildCollectionSubmissionPayload(formData));
-  };
-
-  const tagFieldHelp = t('system.collections.tagFieldHelp', 'Separe múltiplos valores por ";"');
-
-  return (
-    <form onSubmit={handleSubmit} className="form" data-testid="collection-form">
-      <div className="form-grid">
-        {!collection && (
-          <Input
-            label={t('system.collections.collectionId', 'ID')}
-            data-testid="collection-id-input"
-            value={formData.collectionId}
-            onChange={(e) => setFormData({ ...formData, collectionId: e.target.value })}
-            required
-          />
-        )}
-        <Input
-          label={t('system.collections.collectionName', 'Nome')}
-          data-testid="collection-name-input"
-          value={formData.collectionName}
-          onChange={(e) => setFormData({ ...formData, collectionName: e.target.value })}
-          required
-        />
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="collectionStatusSelect">
-            {t('system.collections.collectionStatus', 'Status')}
-          </label>
-          <select
-            id="collectionStatusSelect"
-            className="input"
-            value={formData.collectionStatus}
-            onChange={(e) => setFormData({ ...formData, collectionStatus: e.target.value })}
-          >
-            <option value="active">{t('system.collections.statusActive', 'Ativa')}</option>
-            <option value="inactive">{t('system.collections.statusInactive', 'Inativa')}</option>
-          </select>
-        </div>
-        <div className="form-grid-full">
-          <label className="input-label" htmlFor="collectionGovernanceRegimeSelect">
-            {t('system.collections.governanceRegime', 'Regime de governança')}
-          </label>
-          {/* RF004 AC2: biobank or biorepository. RF020 AC4: once set, a change is a governed event, not an edit; a collection stored without one may receive it. */}
-          <select
-            id="collectionGovernanceRegimeSelect"
-            data-testid="collection-governance-regime-select"
-            className="input"
-            value={formData.governanceRegime}
-            onChange={(e) => setFormData({ ...formData, governanceRegime: e.target.value })}
-            disabled={!!collection?.governanceRegime}
-            required
-          >
-            <option value="">{t('system.collections.governanceRegimePlaceholder', 'Selecione o regime')}</option>
-            <option value="biobank">{t('system.collections.regimeBiobank', 'Biobanco')}</option>
-            <option value="biorepository">{t('system.collections.regimeBiorepository', 'Biorrepositório')}</option>
-          </select>
-        </div>
-        <Input
-          label={t('system.collections.sampleTypes', 'Tipos de Amostra')}
-          data-testid="collection-sample-types-input"
-          value={formData.sampleTypesText}
-          onChange={(e) => setFormData({ ...formData, sampleTypesText: e.target.value })}
-          helperText={tagFieldHelp}
-          placeholder="plasma; serum; tissue"
-        />
-        <Input
-          label={t('system.collections.datasetTypes', 'Tipos de Dados')}
-          data-testid="collection-dataset-types-input"
-          value={formData.datasetTypesText}
-          onChange={(e) => setFormData({ ...formData, datasetTypesText: e.target.value })}
-          helperText={tagFieldHelp}
-          placeholder="clinical; genomic; imaging"
-        />
-        <Input
-          label={t('system.collections.diseaseScope', 'Escopo de Doenças')}
-          data-testid="collection-disease-scope-input"
-          value={formData.diseaseScopeText}
-          onChange={(e) => setFormData({ ...formData, diseaseScopeText: e.target.value })}
-          helperText={tagFieldHelp}
-          placeholder="ORPHA:...; ICD-11:..."
-        />
-        <Input
-          label={t('system.collections.inclusionCriteriaCategories', 'Critérios de Inclusão')}
-          data-testid="collection-inclusion-criteria-input"
-          value={formData.inclusionCriteriaCategoriesText}
-          onChange={(e) => setFormData({ ...formData, inclusionCriteriaCategoriesText: e.target.value })}
-          helperText={tagFieldHelp}
-        />
-        <Input
-          label={t('system.collections.exclusionCriteria', 'Critérios de Exclusão')}
-          data-testid="collection-exclusion-criteria-input"
-          value={formData.exclusionCriteria}
-          onChange={(e) => setFormData({ ...formData, exclusionCriteria: e.target.value })}
-        />
-        <Input
-          label={t('system.collections.miabisUseAccessConditions', 'Condições de Uso e Acesso')}
-          data-testid="collection-use-access-input"
-          value={formData.miabisUseAccessConditionsText}
-          onChange={(e) => setFormData({ ...formData, miabisUseAccessConditionsText: e.target.value })}
-          helperText={tagFieldHelp}
-          placeholder="DUO:0000042"
-        />
-        <Input
-          label={t('system.collections.storageTemperatureCategories', 'Categorias de Temperatura')}
-          data-testid="collection-storage-temperature-input"
-          value={formData.storageTemperatureCategoriesText}
-          onChange={(e) => setFormData({ ...formData, storageTemperatureCategoriesText: e.target.value })}
-          helperText={tagFieldHelp}
-          placeholder="-80 °C"
-        />
-        <Input
-          label={t('system.collections.participantCount', 'Número de Participantes')}
-          data-testid="collection-participant-count-input"
-          type="number"
-          min={0}
-          value={formData.participantCount}
-          onChange={(e) => setFormData({ ...formData, participantCount: e.target.value })}
-        />
-        <Input
-          label={t('system.collections.sampleCount', 'Número de Amostras')}
-          data-testid="collection-sample-count-input"
-          type="number"
-          min={0}
-          value={formData.sampleCount}
-          onChange={(e) => setFormData({ ...formData, sampleCount: e.target.value })}
-        />
-        <Input
-          label={t('system.collections.relatedPublications', 'Publicações Relacionadas (DOI/PMID)')}
-          data-testid="collection-related-publications-input"
-          value={formData.relatedPublicationsText}
-          onChange={(e) => setFormData({ ...formData, relatedPublicationsText: e.target.value })}
-          helperText={tagFieldHelp}
-          placeholder="doi:...; pmid:..."
-        />
-      </div>
-      <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          {t('common.cancel')}
-        </Button>
-        <Button type="submit" data-testid="collection-form-submit">
-          {t('common.save')}
-        </Button>
-      </div>
-    </form>
-  );
-}
-
-// Seção de Segurança (importa o componente completo)
 function SecuritySection() {
-  return <SecurityPage />;
+  return <SecurityPage embedded />;
 }
-

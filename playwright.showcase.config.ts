@@ -27,13 +27,18 @@ export default defineConfig({
     baseURL,
     trace: 'off',
     screenshot: 'off',
-    video: 'on',
+    // Recorded at the viewport's own size rather than Playwright's default
+    // fit-to-800x800, which downscales 1280x720 to 800x450 and leaves small
+    // text unreadable. A larger size does not sharpen it: the screencast
+    // frames stay at CSS pixels whatever the device scale factor, and a
+    // 1920x1080 size only pads them with grey.
+    video: { mode: 'on', size: { width: 1280, height: 720 } },
     executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH,
   },
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 720 } },
     },
   ],
 });

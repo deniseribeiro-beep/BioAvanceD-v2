@@ -63,6 +63,33 @@ describe('canonical.v1.intake specimen.parentSpecimenIds (dict-02 ELM-0120, #137
   });
 });
 
+describe('canonical.v1.specimen collectionId (ELM-0118, RF004 AC2, #1538)', () => {
+  // The shared specimen schema admits a non-empty collectionId; the ingestion
+  // Specimen target's collection gate refuses a specimen naming none.
+  it('accepts a specimen that names a collection', () => {
+    const { valid, errors } = validate('canonical.v1.specimen', {
+      ...baseIntake.specimen,
+      collectionId: 'COL-1'
+    });
+
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+
+  it.each([
+    ['an empty string', ''],
+    ['a number', 1],
+  ])('refuses %s as collectionId at /collectionId', (_label, collectionId) => {
+    const { valid, errors } = validate('canonical.v1.specimen', {
+      ...baseIntake.specimen,
+      collectionId
+    });
+
+    expect(valid).toBe(false);
+    expect(errors.some((error) => error.instancePath === '/collectionId')).toBe(true);
+  });
+});
+
 describe('canonical.v1.intake organizationId (#1376)', () => {
   it('accepts a top-level organizationId string, the organization the intake stamps', () => {
     const { valid, errors } = validate('canonical.v1.intake', { ...baseIntake, organizationId: 'org-a' });
@@ -141,5 +168,34 @@ describe('canonical.v1.intake consent (#1318)', () => {
 
     expect(errors).toEqual([]);
     expect(valid).toBe(true);
+  });
+});
+
+describe('canonical.v1.intake governanceEvidence (RNF018 AC5, #1524)', () => {
+  it('accepts a top-level governanceEvidence object', () => {
+    const { valid, errors } = validate('canonical.v1.intake', {
+      ...baseIntake,
+      governanceEvidence: { documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:A1', hash: `sha256:${'a'.repeat(64)}` }] }
+    });
+
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+
+  it.each([
+    ['an array', []],
+    ['a string', 'urn:bioavanced:collection-governance-approval:A1'],
+    ['null', null]
+  ])('rejects a governanceEvidence that is %s', (_label, governanceEvidence) => {
+    const { valid, errors } = validate('canonical.v1.intake', { ...baseIntake, governanceEvidence });
+
+    expect(valid).toBe(false);
+    expect(errors.some((error) => error.instancePath === '/governanceEvidence')).toBe(true);
+  });
+
+  it('rejects a top-level governanceEvidenceResolution', () => {
+    const { valid } = validate('canonical.v1.intake', { ...baseIntake, governanceEvidenceResolution: {} });
+
+    expect(valid).toBe(false);
   });
 });

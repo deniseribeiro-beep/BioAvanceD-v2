@@ -45,6 +45,8 @@ const specimenSchema = {
     // ELM-0128: the collection site, an Organization reference. The intake
     // stamps the caller's resolved organization here (#1355).
     collectionSite: { type: 'string' },
+    // ELM-0118: the governed collection; the ingestion target's gate refuses a specimen naming none (#1538).
+    collectionId: { type: 'string', minLength: 1 },
     // dict-02 ELM-0120: the specimens this one derives from (#1371).
     parentSpecimenIds: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
     merkleRoot: { type: 'string' },
@@ -521,6 +523,10 @@ const intakeSchema = {
       properties: { participantId: false, responses: false, supersedesConsentId: false }
     },
     specimen: { $ref: 'canonical.v1.specimen' },
+    // RNF018 AC5 (#1524): the governance evidence references the intake
+    // resolves before certification, in the shape POST /api/quality/preview
+    // takes; the resolver judges each entry and fails a malformed one closed.
+    governanceEvidence: { type: 'object' },
     // The organization the intake stamps as Sample.organizationId (#1376).
     organizationId: { type: 'string', minLength: 1 },
     diagnosis: {

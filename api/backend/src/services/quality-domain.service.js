@@ -51,9 +51,21 @@ function readQualificationContext(payload = {}) {
   }));
 }
 
-function evaluateQuality(payload = {}) {
+// RNF018 AC5 (#1524): governanceEvidenceResolution is set only by the
+// server's evidence resolver, through the option; a copy the client sent,
+// at the top level or inside `sample`, is dropped, so it can never pass a
+// governance criterion.
+function evaluateQuality(payload = {}, { governanceEvidenceResolution } = {}) {
   // Normalize legacy input to canonical fields without destroying legacy values
   const normalized = qualityCompatibility.normalizeSample(payload || {});
+  delete normalized.governanceEvidenceResolution;
+  if (isPlainObject(normalized.sample)) {
+    const { governanceEvidenceResolution: _clientSent, ...sample } = normalized.sample;
+    normalized.sample = sample;
+  }
+  if (isPlainObject(governanceEvidenceResolution)) {
+    rcsCertificationService.samplePayloadOf(normalized).governanceEvidenceResolution = governanceEvidenceResolution;
+  }
   const result = rcsCertificationService.certify(normalized);
   const qualificationContext = readQualificationContext(payload);
   return {
@@ -65,8 +77,10 @@ function evaluateQuality(payload = {}) {
   };
 }
 
-function resolveMethodologicalQuality(samplePayload = {}) {
-  return evaluateQuality(samplePayload);
+// RNF018 AC5 (#1524): options carries only the server-resolved
+// governanceEvidenceResolution, as evaluateQuality takes it.
+function resolveMethodologicalQuality(samplePayload = {}, options = {}) {
+  return evaluateQuality(samplePayload, options);
 }
 
 function calculateMethodologyQualityFromSprec(sprec = {}, context = {}) {

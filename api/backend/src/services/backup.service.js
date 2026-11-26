@@ -39,6 +39,20 @@ async function resolveRetentionDays(db) {
   return Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
 }
 
+// RNF010 C3 (#1484): the policy's rtoHours for the restore test's timing, or
+// null. Never throws, so a policy read never changes a run's outcome.
+async function resolveRtoHours(db) {
+  if (!db) return null;
+  try {
+    const policy = await backupPolicyService.getPolicy(db);
+    const rtoHours = Number(policy?.rtoHours);
+    return Number.isFinite(rtoHours) && rtoHours > 0 ? rtoHours : null;
+  } catch (error) {
+    logger.warn('Não foi possível ler rtoHours da política de backup:', error.message);
+    return null;
+  }
+}
+
 // #1325: unlike resolveRetentionDays, this fails closed. A run whose policy
 // cannot be read (no db handle, or the lookup throws) is aborted rather
 // than written in plaintext (RNF010: "cópias criptografadas"). Only a
@@ -100,25 +114,45 @@ async function prepareDecryptedRestoreCopy(backupPath, manifest) {
   const scratchBase = getRestoreScratchBaseDir();
   ensureDirSync(scratchBase);
   const scratchDir = await fs.promises.mkdtemp(path.join(scratchBase, 'bioavanced-restore-decrypt-'));
-  await fs.promises.cp(backupPath, scratchDir, {
-    recursive: true,
-    filter: (src) => path.basename(src) !== CHECKSUM_MANIFEST_FILE
-  });
+  // #1426: a failure past mkdtemp never reaches the caller's cleanup, which
+  // only knows the directory once this returns, so the copy (and any file
+  // already decrypted into it) is removed here before the error goes on.
+  try {
+    await fs.promises.cp(backupPath, scratchDir, {
+      recursive: true,
+      filter: (src) => path.basename(src) !== CHECKSUM_MANIFEST_FILE
+    });
 
-  const encryptedFiles = Array.isArray(manifest?.encryptedFiles) ? manifest.encryptedFiles : [];
-  for (const entry of encryptedFiles) {
-    if (!entry || typeof entry.file !== 'string') continue;
-    // eslint-disable-next-line no-await-in-loop
-    const filePath = path.join(scratchDir, ...entry.file.split('/'));
-    // eslint-disable-next-line no-await-in-loop
-    const ciphertext = await fs.promises.readFile(filePath);
-    const plaintext = decryptFileBuffer(ciphertext, entry);
-    // eslint-disable-next-line no-await-in-loop
-    await fs.promises.writeFile(filePath, plaintext);
+    const encryptedFiles = Array.isArray(manifest?.encryptedFiles) ? manifest.encryptedFiles : [];
+    for (const entry of encryptedFiles) {
+      if (!entry || typeof entry.file !== 'string') continue;
+      // eslint-disable-next-line no-await-in-loop
+      const filePath = path.join(scratchDir, ...entry.file.split('/'));
+      // eslint-disable-next-line no-await-in-loop
+      const ciphertext = await fs.promises.readFile(filePath);
+      const plaintext = decryptFileBuffer(ciphertext, entry);
+      // eslint-disable-next-line no-await-in-loop
+      await fs.promises.writeFile(filePath, plaintext);
+    }
+  } catch (error) {
+    await cleanupDecryptedRestoreCopy(scratchDir);
+    throw error;
   }
 
   return scratchDir;
 }
+
+// #1426: what a shell prints when the mongorestore executable itself is
+// missing -- sh's "not found", bash's "command not found", cmd.exe's
+// "'mongorestore' is not recognized", and a direct spawn's
+// "spawn mongorestore ENOENT". A bare ENOENT is not one of them: any file
+// the restore reads can carry it.
+const RESTORE_BINARY_MISSING = /mongorestore: (?:command )?not found|mongorestore'? is not recognized|spawn mongorestore ENOENT/i;
+
+// #1437: the same messages for the mongodump executable. A bare ENOENT is
+// not one of them: any file the dump, its encryption or the manifest write
+// touches can carry it.
+const DUMP_BINARY_MISSING = /mongodump: (?:command )?not found|mongodump'? is not recognized|spawn mongodump ENOENT/i;
 
 // A decrypt-scratch teardown failure must never mask the restore's own
 // result, same reasoning as dropScratch() below for the scratch database.
@@ -821,10 +855,9 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
     // #1325: the Neo4j and InfluxDB exports run after the dump tree is
     // encrypted, so their files are encrypted once, by their own module, and
     // before the checksum, so it covers them. A store error is answered here,
-    // never by the catch below: its dumpBinaryMissing test matches ENOENT,
-    // which a store's fs or socket error can carry, and would send the run to
-    // the JSON fallback. No manifest.json is written for this folder, so a
-    // restore test of it fails.
+    // before the catch below, so no retention or JSON fallback runs on it.
+    // No manifest.json is written for this folder, so a restore test of it
+    // fails.
     let stores;
     try {
       stores = await backupStores.exportSecondaryStores(backupDir, encryptionEnabled);
@@ -850,8 +883,8 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
 
     // #1325 (RNF010 C1): the off-site copy runs once the manifest is written
     // and before retention. Its error is answered here, as a store error is,
-    // so an ENOENT in its message never starts the JSON fallback. The local
-    // copy is complete, so the run keeps its path and checksum.
+    // before the catch below, so no retention or JSON fallback runs on it.
+    // The local copy is complete, so the run keeps its path and checksum.
     let offsite;
     try {
       offsite = await backupOffsite.uploadBackupRunOffsite(backupDir, encryptionEnabled);
@@ -867,7 +900,8 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
     return { success: true, path: backupDir, mode: 'mongodump', checksum, stores, offsite };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
-    const dumpBinaryMissing = /mongodump: not found|is not recognized|ENOENT/i.test(String(details || ''));
+    // #1437: a bare ENOENT is any file's, not mongodump's.
+    const dumpBinaryMissing = DUMP_BINARY_MISSING.test(String(details || ''));
 
     if (dumpBinaryMissing) {
       try {
@@ -957,7 +991,15 @@ async function restoreBackup(backupPath) {
 
   try {
     if (isEncryptedMongodumpManifest(manifest)) {
-      scratchDecryptDir = await prepareDecryptedRestoreCopy(backupPath, manifest);
+      // #1426: a decryption failure (a bad key, a corrupt or missing file)
+      // answers like every other failure here, never as a rejection.
+      try {
+        scratchDecryptDir = await prepareDecryptedRestoreCopy(backupPath, manifest);
+      } catch (decryptError) {
+        const decryptDetails = decryptError?.message || String(decryptError);
+        logger.error('Erro ao descriptografar backup para restauração:', decryptDetails);
+        return { success: false, error: decryptDetails };
+      }
       restoreSourcePath = scratchDecryptDir;
     }
 
@@ -974,7 +1016,7 @@ async function restoreBackup(backupPath) {
       };
     } catch (err) {
       const details = err && err.error ? err.error.message : err?.message;
-      const restoreBinaryMissing = /mongorestore: not found|is not recognized|ENOENT/i.test(String(details || ''));
+      const restoreBinaryMissing = RESTORE_BINARY_MISSING.test(String(details || ''));
 
       if (restoreBinaryMissing) {
         try {
@@ -1163,7 +1205,7 @@ async function runControlledRestoreTest(backupPath) {
     };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
-    const restoreBinaryMissing = /mongorestore: not found|is not recognized|ENOENT/i.test(String(details || ''));
+    const restoreBinaryMissing = RESTORE_BINARY_MISSING.test(String(details || ''));
 
     if (restoreBinaryMissing) {
       try {
@@ -1201,13 +1243,29 @@ async function runControlledRestoreTest(backupPath) {
 // #727 (RF013 AC#4): thin wrapper so every testRestoreBackup() call persists
 // exactly one restoreTestHistory entry, same pattern as runBackup/
 // recordBackupHistory above.
+//
+// RNF010 C3 (#1484): the run's wall time is recorded against the policy's
+// rtoHours. It times the restore test (a MongoDB restore into a scratch
+// database plus a parse of the Neo4j/InfluxDB exports), a lower bound of a
+// full recovery, not a timed full recovery. Past rtoHours logs an error; the
+// run's success is unchanged.
 async function testRestoreBackup(backupPath, db) {
-  const startedAt = new Date();
+  const startMs = Date.now();
+  const startedAt = new Date(startMs);
   const result = await runControlledRestoreTest(backupPath);
+  const endMs = Date.now();
+  const durationMs = endMs - startMs;
+  const completedAt = new Date(endMs);
+
+  const rtoHours = await resolveRtoHours(db);
+  const withinRto = (!result.success || rtoHours === null) ? null : durationMs <= rtoHours * 3600000;
+  if (withinRto === false) {
+    logger.error(`Teste de restauração excedeu o RTO: ${durationMs} ms > ${rtoHours} h`, path.basename(backupPath));
+  }
 
   await recordRestoreTestHistory(db, {
     startedAt,
-    completedAt: new Date(),
+    completedAt,
     status: result.success ? 'success' : 'error',
     mode: result.mode || null,
     scratchDb: result.scratchDb || null,
@@ -1220,6 +1278,9 @@ async function testRestoreBackup(backupPath, db) {
     restoredDocuments: typeof result.restoredDocuments === 'number' ? result.restoredDocuments : null,
     // #1325: per-store verified/skipped/failed, null when not tested.
     stores: result.stores ?? null,
+    durationMs,
+    rtoHours,
+    withinRto,
     error: result.error || null
   });
 

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Card from '../components/UI/Card';
+import Button from '../components/UI/Button';
 import { apiClient } from '../api/client';
-import '../components/UI/Button.css';
 
 type SymbologyAsset = {
   payload: string;
@@ -87,9 +87,9 @@ export default function SampleLabelPage() {
   }, [id]);
 
   const downloadPrintJob = async () => {
-    if (!id) {
-      return;
-    }
+    // The button renders only once a label has loaded, which needs an id; this
+    // guard only narrows useParams' optional id for the type checker.
+    if (!id) return;
 
     setActionError('');
     setBusyAction('print-job');
@@ -115,7 +115,7 @@ export default function SampleLabelPage() {
 
   if (loading) {
     return (
-      <div className="page" data-testid="sample-label-loading">
+      <div className="page-shell" data-testid="sample-label-loading">
         <p>Carregando...</p>
       </div>
     );
@@ -123,25 +123,25 @@ export default function SampleLabelPage() {
 
   if (error || !label) {
     return (
-      <div className="page" data-testid="sample-label-error">
+      <div className="page-shell" data-testid="sample-label-error">
         <p>{error || 'Amostra não encontrada.'}</p>
       </div>
     );
   }
 
   return (
-    <div className="page" data-testid="sample-label-page">
+    <div className="page-shell" data-testid="sample-label-page">
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 className="page-title">Etiqueta</h1>
-        <button
-          className="btn btn-primary"
+        <Button
           type="button"
+          variant="primary"
           data-testid="sample-label-print-job-button"
           disabled={busyAction === 'print-job'}
           onClick={() => void downloadPrintJob()}
         >
           {busyAction === 'print-job' ? 'Gerando...' : 'Print job (ZPL)'}
-        </button>
+        </Button>
       </div>
 
       {actionError && (

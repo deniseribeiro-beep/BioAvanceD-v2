@@ -125,6 +125,13 @@ describe('#1163: storage lookup indexes are ensured on their read paths', () => 
   });
 });
 
+// terminologies.routes.js takes `authenticate` when it is required (#1553).
+const authModule = require('../../src/infrastructure/middleware/auth');
+authModule.authenticate = (req, res, next) => {
+  req.user = { id: 'user-1' };
+  next();
+};
+
 describe('#1163: GET /api/terminologies ensures its { sistema, codigo } lookup', () => {
   function buildApp(db) {
     delete require.cache[require.resolve('../../src/interface/routes/terminologies.routes')];

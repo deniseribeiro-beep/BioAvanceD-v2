@@ -262,6 +262,22 @@ describe('sample.routes', () => {
       expect(res.body.details).toContain('participantId deve ser uma string com 8 dígitos');
     });
 
+    it('answers 422 BARCODE_PERSONAL_DATA on create when the barcode holds personal data (RNF007 AC4)', async () => {
+      const refusal = Object.assign(new Error('O código de barras não pode conter um e-mail (RNF007 AC4)'), { statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn().mockRejectedValue(refusal) });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({
+        success: false,
+        error: 'BARCODE_PERSONAL_DATA',
+        message: 'O código de barras não pode conter um e-mail (RNF007 AC4)',
+        details: ['O código de barras não pode conter um e-mail (RNF007 AC4)'],
+      });
+    });
+
     it('rejects registrationDate as a non-canonical alias of registeredAt', async () => {
       const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});
@@ -312,6 +328,45 @@ describe('sample.routes', () => {
       expect(res.body.error).toBe('NON_CANONICAL_FIELD');
       expect(res.body.fields).toContain(field);
       expect(executeMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses an RCS-derived field on create with 422 RCS_DERIVED_WRITE_REFUSED (RNF018 AC4, #1489)', () => {
+      const { router } = loadRoute();
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      };
+      const next = vi.fn();
+
+      router._test.validateCreateSamplePayload({ body: { ...VALID_PAYLOAD, finalGrade: 'A' } }, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: 'RCS_DERIVED_WRITE_REFUSED',
+        fields: ['finalGrade'],
+        details: ['finalGrade: derivado da certificação RCS e não pode ser informado']
+      }));
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('refuses a governance or seal field of the RCS result on create with 422 RCS_DERIVED_WRITE_REFUSED (RNF018 AC4, #1526)', () => {
+      const { router } = loadRoute();
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      };
+      const next = vi.fn();
+
+      router._test.validateCreateSamplePayload({ body: { ...VALID_PAYLOAD, governanceStatus: 1, sealedRcsAssessmentId: 'forged' } }, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: 'RCS_DERIVED_WRITE_REFUSED',
+        fields: ['governanceStatus', 'sealedRcsAssessmentId']
+      }));
+      expect(next).not.toHaveBeenCalled();
     });
 
     describe('#1368: parentSpecimenIds (ELM-0120)', () => {
@@ -1802,6 +1857,120 @@ describe('sample.routes', () => {
     });
   });
 
+  describe('GET /:id/graph-status (#1559)', () => {
+    function fakeGraphDriver(run) {
+      const session = { run: vi.fn(run), close: vi.fn().mockResolvedValue(undefined) };
+      return { session: vi.fn(() => session), fakeSession: session };
+    }
+
+    it('graph-status returns 503 when db is unavailable', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, null);
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ success: false, error: 'Banco de dados não disponível' });
+    });
+
+    it('graph-status returns 404 when the sample is unknown', async () => {
+      const getSample = vi.fn().mockResolvedValue(null);
+      const driver = fakeGraphDriver(async () => ({ records: [] }));
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+      app.locals.neo4jDriver = driver;
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ success: false, error: 'Amostra não encontrada' });
+      expect(driver.session).not.toHaveBeenCalled();
+    });
+
+    it('graph-status returns 403 out of scope and never reads the graph', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1', collectionSite: 'org-other' });
+      const driver = fakeGraphDriver(async () => ({ records: [] }));
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+      app.locals.neo4jDriver = driver;
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(403);
+      expect(driver.session).not.toHaveBeenCalled();
+    });
+
+    it('graph-status returns 503 when the graph driver is absent', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1' });
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ success: false, error: 'Grafo indisponível' });
+    });
+
+    it('graph-status returns the projected compromise of the Mongo _id', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1' });
+      const fields = {
+        status: 'COMPROMISED',
+        compromisedAt: '2026-11-16T10:00:00Z',
+        compromiseFreezerKey: 'freezer-7',
+        compromiseBreachedSince: '2026-11-16T09:30:00Z',
+      };
+      const driver = fakeGraphDriver(async () => ({ records: [{ get: (key) => fields[key] }] }));
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+      app.locals.neo4jDriver = driver;
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(200);
+      expect(driver.fakeSession.run.mock.calls[0][1]).toEqual({ sampleId: 'oid-1' });
+      expect(res.body).toEqual({
+        success: true,
+        data: { sampleId: 'oid-1', projected: true, ...fields },
+      });
+    });
+
+    it('graph-status returns 500 when the graph read throws', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1' });
+      const driver = fakeGraphDriver(async () => { throw new Error('graph down'); });
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+      app.locals.neo4jDriver = driver;
+
+      const res = await request(app).get('/api/samples/s1/graph-status');
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ success: false, error: 'Erro ao ler o estado projetado da amostra' });
+    });
+
+    for (const code of ['ServiceUnavailable', 'SessionExpired']) {
+      it(`graph-status returns 503 without the driver text when the graph read fails with ${code}`, async () => {
+        const getSample = vi.fn().mockResolvedValue({ _id: 'oid-1' });
+        const driver = fakeGraphDriver(async () => {
+          throw Object.assign(new Error('Failed to connect to server. Caused by: connect ECONNREFUSED 127.0.0.1:7687'), { code });
+        });
+        const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+        const app = buildApp(router, {});
+        app.locals.neo4jDriver = driver;
+
+        const res = await request(app).get('/api/samples/s1/graph-status');
+
+        expect(res.status).toBe(503);
+        expect(res.body).toEqual({ success: false, error: 'Grafo indisponível' });
+      });
+    }
+  });
+
   describe('GET /', () => {
     it('returns 503 when db is unavailable', async () => {
       const { router } = loadRoute();
@@ -2608,6 +2777,71 @@ describe('sample.routes', () => {
       expect(res.body).toMatchObject({ success: false, error: 'SPECIMEN_STATUS_WRITE_REFUSED', message: 'quantityStatus é derivado' });
     });
 
+    // RNF018 AC4 (#1489): a refused write to the RCS result answers 422 with its fields.
+    it('answers 422 RCS_DERIVED_WRITE_REFUSED when the service refuses a write to the RCS result', async () => {
+      const refusal = Object.assign(new Error('x'), { statusCode: 422, code: 'RCS_DERIVED_WRITE_REFUSED', fields: ['rcsScore'], details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ rcsScore: 99 });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({ success: false, error: 'RCS_DERIVED_WRITE_REFUSED', message: 'x', fields: ['rcsScore'], details: ['x'] });
+    });
+
+    // RF018 AC10 (#1537): a refused change to the certified SPREC answers 422 with its field.
+    it('answers 422 SPREC_WRITE_REFUSED when the service refuses a SPREC change', async () => {
+      const refusal = Object.assign(new Error('x'), { statusCode: 422, code: 'SPREC_WRITE_REFUSED', fields: ['sprec'], details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ sprec: { longTermStorage: 'A' } });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({ success: false, error: 'SPREC_WRITE_REFUSED', message: 'x', fields: ['sprec'], details: ['x'] });
+    });
+
+    // RNF018 AC1 (#1525): a refused quantity answers 422 with its fields.
+    it('answers 422 INVALID_QUANTITY when the service refuses a negative quantity', async () => {
+      const refusal = Object.assign(new Error('x'), { statusCode: 422, code: 'INVALID_QUANTITY', fields: ['currentQuantity'], details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ currentQuantity: -1 });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({ success: false, error: 'INVALID_QUANTITY', message: 'x', fields: ['currentQuantity'], details: ['x'] });
+    });
+
+    // RF006 AC4 (#1531): an edit of a ledgered quantity answers 422 with its fields.
+    it('answers 422 QUANTITY_LEDGER_WRITE_REFUSED when the service refuses an edit of a ledgered quantity', async () => {
+      const refusal = Object.assign(new Error('x'), { statusCode: 422, code: 'QUANTITY_LEDGER_WRITE_REFUSED', fields: ['currentQuantity'], details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ currentQuantity: 9 });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({ success: false, error: 'QUANTITY_LEDGER_WRITE_REFUSED', message: 'x', fields: ['currentQuantity'], details: ['x'] });
+    });
+
+    // #1548: a resealing edit that lost a race with another edit answers 409, so the client re-reads.
+    it('answers 409 SAMPLE_SEAL_WRITE_CONFLICT when the service refuses a reseal that lost a race (#1548)', async () => {
+      const conflict = Object.assign(new Error('x'), { statusCode: 409, code: 'SAMPLE_SEAL_WRITE_CONFLICT', details: ['x'] });
+      const updateSample = vi.fn().mockRejectedValue(conflict);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ clinicalData: { notes: 'x' } });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ success: false, error: 'SAMPLE_SEAL_WRITE_CONFLICT', message: 'x', details: ['x'] });
+    });
+
     // #1378 (ELM-0116): a barcode write refused after the migration window answers 422 with its code.
     it('answers 422 LEGACY_BARCODE_WRITE_REFUSED when the service refuses a barcode write', async () => {
       const refusal = Object.assign(new Error('Sample.barcode (ELM-0116) não é mais gravado'), { statusCode: 422, code: 'LEGACY_BARCODE_WRITE_REFUSED' });
@@ -2623,6 +2857,24 @@ describe('sample.routes', () => {
         error: 'LEGACY_BARCODE_WRITE_REFUSED',
         message: 'Sample.barcode (ELM-0116) não é mais gravado',
         details: ['Sample.barcode (ELM-0116) não é mais gravado'],
+      });
+    });
+
+    // RNF007 AC4 (#1463): a barcode holding personal data answers 422 with its code.
+    it('answers 422 BARCODE_PERSONAL_DATA when the service refuses a barcode holding personal data', async () => {
+      const refusal = Object.assign(new Error('O código de barras não pode conter um CPF (RNF007 AC4)'), { statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ barcode: '52998224725' });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({
+        success: false,
+        error: 'BARCODE_PERSONAL_DATA',
+        message: 'O código de barras não pode conter um CPF (RNF007 AC4)',
+        details: ['O código de barras não pode conter um CPF (RNF007 AC4)'],
       });
     });
 
@@ -2990,6 +3242,27 @@ describe('sample.routes', () => {
       const res = await request(app).post('/api/samples/000000000000000000000000/return').send({});
 
       expect(res.status).toBe(400);
+    });
+
+    it('hands returnSample the string form of req.user._id as the audit user when req.user has no id', async () => {
+      const returnSample = vi.fn().mockResolvedValue({ returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 1, movementID: 'm3' });
+      const getSample = vi.fn().mockResolvedValue(null);
+      const authImpl = (req, res, next) => {
+        req.user = { _id: { toString: () => 'oid-77' }, name: 'Tester' };
+        next();
+      };
+      const { router } = loadRoute({ sampleServiceOverrides: { returnSample, getSample }, authImpl });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples/000000000000000000000000/return').send({});
+
+      expect(res.status).toBe(200);
+      expect(returnSample).toHaveBeenCalledWith(
+        expect.anything(),
+        '000000000000000000000000',
+        {},
+        expect.objectContaining({ userId: 'oid-77' })
+      );
     });
 
     it('resolves the audit actor role from req.user.role and the x-forwarded-for header, with a req.t fallback message', async () => {
@@ -3399,7 +3672,9 @@ describe('sample.routes authorization gates (issue #921)', () => {
   });
 
   describe('requireOrganizationScope presence pinning', () => {
-    // 25 of the file's 27 routes wire in requireOrganizationScope.
+    // All 32 of the file's routes wire in requireOrganizationScope; 30 are
+    // pinned here (POST /:id/quarantine/release and GET /:id/state-decisions
+    // are not).
     const GATED_CASES = [
       // #1185: the create stamps the caller's organization, so it needs the scope.
       { label: 'POST /', method: 'post', path: '/' },
@@ -3408,6 +3683,7 @@ describe('sample.routes authorization gates (issue #921)', () => {
       { label: 'GET /by-barcode/:barcode', method: 'get', path: '/by-barcode/BC1' },
       { label: 'GET /:id/miabis-compliance', method: 'get', path: '/s1/miabis-compliance' },
       { label: 'GET /:id/compliance-graph', method: 'get', path: '/s1/compliance-graph' },
+      { label: 'GET /:id/graph-status', method: 'get', path: '/s1/graph-status' },
       { label: 'GET /', method: 'get', path: '/' },
       { label: 'GET /:id/label', method: 'get', path: '/s1/label' },
       { label: 'GET /:id/label/print-job', method: 'get', path: '/s1/label/print-job' },

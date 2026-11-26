@@ -70,9 +70,12 @@ const DEFAULTS = {
   rackLocationAssignments: 'rackLocationAssignments',
   telemetryExposureSummaries: 'telemetryExposureSummaries',
   storageLocations: 'storageLocations',
+  storageRacks: 'storageRacks',
+  storagePositions: 'storagePositions',
   operationalStateDecisions: 'operationalStateDecisions',
   labelIdentifiers: 'labelIdentifiers',
   scanEvents: 'scanEvents',
+  physicalIdentificationValidationProtocols: 'physicalIdentificationValidationProtocols',
   custodianshipAssignments: 'custodianshipAssignments',
   shipments: 'shipments',
   devices: 'devices',
@@ -218,9 +221,12 @@ describe('config/collections', () => {
       rackLocationAssignments: 'rackLocationAssignments',
       telemetryExposureSummaries: 'telemetryExposureSummaries',
       storageLocations: 'storageLocations',
+      storageRacks: 'storageRacks',
+      storagePositions: 'storagePositions',
       operationalStateDecisions: 'operationalStateDecisions',
       labelIdentifiers: 'labelIdentifiers',
       scanEvents: 'scanEvents',
+      physicalIdentificationValidationProtocols: 'physicalIdentificationValidationProtocols',
       custodianshipAssignments: 'custodianshipAssignments',
       shipments: 'shipments',
       devices: 'devices',
@@ -269,6 +275,26 @@ describe('config/collections', () => {
       dataQualityAssessments: 'dataQualityAssessments',
       referenceCoverageManifests: 'referenceCoverageManifests'
     });
+  });
+
+  // env.js gives every COLL_* key its own default, so the `||` fallbacks in
+  // collections.js only answer when the env module lacks a key. Load
+  // collections.js against an env module that carries none.
+  it('falls back to its own default for every key when the env module carries no COLL_* value', () => {
+    const realEnvEntry = require.cache[ENV_PATH];
+    delete require.cache[COLLECTIONS_PATH];
+    require.cache[ENV_PATH] = { id: ENV_PATH, filename: ENV_PATH, loaded: true, exports: {}, children: [] };
+    try {
+      const { CANONICAL_COLLECTIONS } = require('../../../src/config/collections');
+      expect(CANONICAL_COLLECTIONS).toEqual(DEFAULTS);
+    } finally {
+      if (realEnvEntry) {
+        require.cache[ENV_PATH] = realEnvEntry;
+      } else {
+        delete require.cache[ENV_PATH];
+      }
+      delete require.cache[COLLECTIONS_PATH];
+    }
   });
 
   it('freezes the CANONICAL_COLLECTIONS object', () => {

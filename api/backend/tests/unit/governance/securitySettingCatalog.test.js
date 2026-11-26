@@ -19,7 +19,7 @@ const { createFakeDb } = require('../foundation/helpers/fake-db');
  */
 const entries = Object.values(SECURITY_SETTING_CATALOG);
 const defaults = securityService.getDefaultConfig();
-const GROUPS = ['authentication', 'passwordRules', 'session', 'loginAttempts', 'logging', 'privacy', 'enhancedSecurity', 'lgpd'];
+const GROUPS = ['authentication', 'passwordRules', 'session', 'loginAttempts', 'logging', 'privacy', 'enhancedSecurity', 'lgpd', 'telemetry'];
 
 const valueOf = (config, path) => {
   const [group, key] = path.split('.');

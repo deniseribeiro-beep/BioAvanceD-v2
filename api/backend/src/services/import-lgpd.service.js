@@ -17,6 +17,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
 const { sealStagedRecord, revealStagedRecord, sealedStagingCollection } = require('../utils/stagedRowCrypto');
 const { encryptFileBuffer, isFileEncryptionAvailable } = require('../utils/fileCrypto');
+const objectStorage = require('../infrastructure/objectStorage');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -28,6 +29,7 @@ const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const sampleCollectionGate = require('./sample-collection-gate.service');
 const { insertSampleWithProjection } = require('./graphProjection.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
@@ -1792,6 +1794,11 @@ class ImportLGPDService {
         }
       }
 
+      // RF004 AC2 (#1538): the collection gate createSample runs. Checked
+      // before the participant match, so a refused row writes nothing; the
+      // outer catch reports it and the row is quarantined (RNF011 AC4).
+      await sampleCollectionGate.assertSampleCollectionAdmits(db, sampleData);
+
       const matchedPatient = await participantIdentityService.matchOrUpsertParticipant(db, {
         participantId: sampleData.participantId,
         patientName: sampleData.patientName,
@@ -2364,6 +2371,12 @@ class ImportLGPDService {
       collectionSite: row.collectionSite !== undefined && row.collectionSite !== null && String(row.collectionSite).trim() !== ''
         ? String(row.collectionSite).trim()
         : null,
+      // ELM-0118 (#1538), Specimen.collectionId. Set only when the row names
+      // one, so a caller that sets its own collectionId sees no null key.
+      // Only the canonical header is read, as for collectionSite.
+      ...(row.collectionId !== undefined && row.collectionId !== null && String(row.collectionId).trim() !== ''
+        ? { collectionId: String(row.collectionId).trim() }
+        : {}),
       patientName: row.patientName?.trim() || row.nomePaciente?.trim() || row.nome?.trim() || null,
       patientBirthDate: this.parseBirthDate(row.birthDate || row.dataNascimento || row.patientBirthDate),
       patientEmail: row.email ? String(row.email).trim().toLowerCase() : null,
@@ -2851,9 +2864,12 @@ class ImportLGPDService {
    * reconstruir o que o operador enviou.
    *
    * O arquivo sai de `uploads/temp/` (que qualquer rotina de limpeza pode
-   * legitimamente esvaziar) para `uploads/quarantine/`, e o nome no disco e o
-   * id do lote -- **nunca** o `originalname`, que vem do cliente e serviria
-   * de vetor de path traversal. O nome original fica so como metadado.
+   * legitimamente esvaziar) para o Object Storage (#1419, RNF016 C4), na area
+   * `import-sources` com o id do lote como dono -- a chave e
+   * `import-sources/<lote>/sha256/<hex>` e **nunca** contem o `originalname`,
+   * que vem do cliente e serviria de vetor de path traversal. O nome original
+   * fica so como metadado. O arquivo em staging so e apagado depois que a
+   * gravacao no store deu certo.
    *
    * Best-effort, igual a `quarantineRejectedSampleRows`: perder a copia de
    * revisao nao pode derrubar uma importacao que ja gravou linhas. Devolve
@@ -2867,13 +2883,7 @@ class ImportLGPDService {
       if (!file?.path || !fs.existsSync(file.path)) return null;
 
       const originalName = path.basename(String(file.originalname || '')) || 'upload';
-      const extension = path.extname(originalName) || '.dat';
       const size = fs.statSync(file.path).size;
-
-      const quarantineDir = path.join(path.dirname(file.path), '..', 'quarantine');
-      fs.mkdirSync(quarantineDir, { recursive: true });
-
-      const storedPath = path.join(quarantineDir, `${String(batchId)}${extension}`);
 
       // #807 (RNF029 AC#5): the file holds the same civil identifiers as the
       // quarantined rows, so it is stored as ciphertext, in the envelope
@@ -2883,11 +2893,7 @@ class ImportLGPDService {
       let encryption = null;
       if (isFileEncryptionAvailable()) {
         encryption = encryptFileBuffer(fs.readFileSync(file.path));
-        fs.writeFileSync(storedPath, encryption.ciphertext);
-        fs.unlinkSync(file.path);
-      } else if (process.env.ALLOW_UNENCRYPTED_FILE_STORAGE === 'true') {
-        fs.renameSync(file.path, storedPath);
-      } else {
+      } else if (process.env.ALLOW_UNENCRYPTED_FILE_STORAGE !== 'true') {
         logger.warn(
           `[SECURITY][AES256] ENCRYPTION_KEY ausente: arquivo de origem do lote ${batchId} nao retido, `
             + 'para nao gravar identificadores civis em texto claro (#807).'
@@ -2895,8 +2901,25 @@ class ImportLGPDService {
         return null;
       }
 
+      // RNF016 C4 / RF007 AC2 (#1419): the file goes to the object store, the
+      // same write-once, content-addressed store as every DataFile binary, so
+      // it follows OBJECT_STORE_DRIVER. The staging file is removed only once
+      // the put has succeeded. A put that throws returns null below, and the
+      // controller removes the staging file on a null, so no plaintext copy
+      // is kept.
+      const stored = await objectStorage.getFileObjectStore().putObject({
+        area: 'import-sources',
+        ownerKey: String(batchId),
+        body: encryption ? encryption.ciphertext : fs.readFileSync(file.path),
+      });
+      fs.unlinkSync(file.path);
+
       const sourceFile = {
-        storedPath,
+        storageUri: stored.uri,
+        storageObjectVersion: stored.version,
+        // A path under the filesystem store, null on S3; batches retained
+        // before #1419 carry only this field, under uploads/quarantine/.
+        storedPath: stored.path || null,
         originalName,
         size,
         retainedAt: new Date(),
@@ -2915,7 +2938,7 @@ class ImportLGPDService {
       );
 
       logger.warn(
-        `[IMPORT_LGPD] Arquivo de origem retido para revisao (batch ${batchId}): ${storedPath}`
+        `[IMPORT_LGPD] Arquivo de origem retido para revisao (batch ${batchId}): ${stored.uri}`
       );
 
       return sourceFile;

@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { MongoClient } from 'mongodb';
+import { randomUUID } from 'crypto';
+import { SIGNATURE_PNG_DATA_URL } from './helpers/consentSignature';
+import { MongoClient, ObjectId } from 'mongodb';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -19,10 +21,34 @@ import {
   waitForTerminologyRelation,
   waitForSampleGovernedBy,
   countSampleNodes,
+  countEthicalConsentNodes,
   countGraph,
   closeNeo4jDriver,
+  readConsentProjection,
+  readStoredAtEdges,
+  waitForStoredAtEdge,
+  removeSampleNodes,
 } from './helpers/queryNeo4j';
+import {
+  consentOutboxEvents,
+  projectionCheckpoint,
+  deleteProjectionCheckpoint,
+  sampleOutboxEvents,
+  requeueOutboxEvents,
+  waitForOutboxEventsProjected,
+  insertPoisonOutboxEvent,
+  readOutboxEvent,
+  deleteOutboxEvents,
+  closeOutboxDb,
+  OUTBOX_POISON_ERROR,
+} from './helpers/queryOutbox';
 import { countAllPoints } from './helpers/queryInflux';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 import {
   countEssentialReferenceDocs,
   essentialReferenceImportRuns,
@@ -36,6 +62,21 @@ import {
   countReferenceDatasetReleasesByDatasetCode,
   countActiveReferenceDatasetReleasesByDatasetCode,
   countTerminologyConceptsBySystemUri,
+  findReferenceRelease,
+  referenceImportRunsForRelease,
+  referenceImportIssuesForRun,
+  countReferenceImportStagingForRun,
+  referenceImportStagingForRun,
+  findReferenceCoverageManifest,
+  findDataQualityAssessment,
+  terminologyConceptsBySystemUri,
+  countTerminologyRelationsByRelease,
+  findAuditLog,
+  insertScratchFoundationDataRun,
+  scratchFoundationDataRun,
+  countScratchFoundationEvidence,
+  setScratchGovernanceChecksum,
+  dropScratchFoundationDb,
   closeFoundationDb,
 } from './helpers/queryFoundationData';
 import {
@@ -59,6 +100,7 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
   test.afterAll(async () => {
     await closeSeedDb();
     await closeNeo4jDriver();
+    await closeOutboxDb();
   });
 
   // POST /api/e-consent/consents (consent.service.js's createPatientConsent,
@@ -70,9 +112,10 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
   // neo4jProjection.worker.js). signatureName/signatureImageBase64 are
   // required by normalizeSignaturePayload's schema validation (minLength 1
   // once the keys are present, even though they're not in the schema's
-  // `required` array) — any non-empty string passes, no real image needed.
+  // `required` array). The signature must also decode to a real PNG, because
+  // the signed TCLE PDF embeds it (#1544).
   function signatureFields() {
-    return { signatureName: 'RF023 e2e signer', signatureImageBase64: 'e2e-fixture-signature' };
+    return { signatureName: 'RF023 e2e signer', signatureImageBase64: SIGNATURE_PNG_DATA_URL };
   }
 
   test('a signed consent projects into Neo4j as an ACTIVE EthicalConsent node', async ({ request }) => {
@@ -135,8 +178,15 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
   // Sample keyed by the consent id and no real sample was ever governed.
   // Both orders are covered: consent first, then sample, and the reverse.
   const seededBoxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rf023-pipeline-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
   test.afterAll(async () => {
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
   });
 
   async function signConsent(request: any, token: string, participant: { participantId: string; consentTemplateId: string }) {
@@ -171,6 +221,7 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
         registeredAt: new Date().toISOString(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(create.status());
@@ -204,6 +255,349 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     await waitForSampleGovernedBy(sampleMongoId, consentId);
     expect(await countSampleNodes(consentId)).toBe(0);
   });
+
+  async function revokeConsent(request: any, token: string, consentId: string) {
+    const revoke = await request.post(`${apiBaseURL}/api/e-consent/consents/${consentId}/revoke`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(revoke.ok()).toBe(true);
+  }
+
+  // #1500 (RF023 AC4, RNF019 C4): the revoke is sent without waiting for the
+  // create's projection, so both events may share one lease batch; the
+  // projector must still apply v1 before v2. The node turns REVOKED inside
+  // the apply, before the checkpoint and the PROJECTED mark are written, so
+  // the outbox and checkpoint are read only once both events are PROJECTED.
+  test("a consent's create and revoke apply in aggregateVersion order and leave the projector's checkpoint at the revoke (RF023 AC4, RNF019 C4)", async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const consentId = await signConsent(request, admin.token, participant);
+    await revokeConsent(request, admin.token, consentId);
+
+    await waitForEthicalConsentStatus(consentId, 'REVOKED');
+    const queued = await consentOutboxEvents(consentId);
+    await waitForOutboxEventsProjected(queued.map((e) => String(e.eventId)));
+
+    const events = await consentOutboxEvents(consentId);
+    expect(events).toHaveLength(2);
+    expect(events.map((e) => e.aggregateVersion)).toEqual([1, 2]);
+    expect(events.map((e) => e.eventType)).toEqual(['CONSENT_UPSERTED', 'CONSENT_REVOKED']);
+    expect(events.map((e) => e.status)).toEqual(['PROJECTED', 'PROJECTED']);
+    expect(new Date(events[0].projectedAt).getTime()).toBeLessThanOrEqual(new Date(events[1].projectedAt).getTime());
+
+    const checkpoint = await projectionCheckpoint('EthicalConsent:' + consentId);
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint!.lastAggregateVersion).toBe(2);
+    expect(checkpoint!.lastEventId).toBe(events[1].eventId);
+    expect(checkpoint!.partitionKey).toBe('EthicalConsent:' + consentId);
+    expect(checkpoint!.projectorName).toBe('neo4j-canonical-projection');
+  });
+
+  // #1500 (RF023 AC6, RNF019 C3): delivery is at-least-once, so an applied
+  // event can come back. The projector must mark it PROJECTED again without
+  // re-applying it: a re-apply would rewrite the node's updatedAt and
+  // lastProjectionAt, and move the checkpoint's updatedAt.
+  test('re-queuing an applied consent event leaves the projected node and the checkpoint unchanged (RF023 AC6, RNF019 C3)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const consentId = await signConsent(request, admin.token, participant);
+    await waitForEthicalConsentStatus(consentId, 'ACTIVE');
+    await revokeConsent(request, admin.token, consentId);
+    await waitForEthicalConsentStatus(consentId, 'REVOKED');
+
+    const events = await consentOutboxEvents(consentId);
+    expect(events).toHaveLength(2);
+    const eventIds = events.map((e) => String(e.eventId));
+    await waitForOutboxEventsProjected(eventIds);
+
+    const before = await readConsentProjection(consentId);
+    expect(before.consent?.status).toBe('REVOKED');
+    const cpBefore = await projectionCheckpoint('EthicalConsent:' + consentId);
+    expect(cpBefore).not.toBeNull();
+
+    await requeueOutboxEvents(eventIds);
+    await waitForOutboxEventsProjected(eventIds);
+
+    const after = await readConsentProjection(consentId);
+    expect(after).toEqual(before);
+    expect(after.consent?.status).toBe('REVOKED');
+    expect(after.consent?.lastProjectionEventId).toBe(eventIds[1]);
+
+    const cpAfter = await projectionCheckpoint('EthicalConsent:' + consentId);
+    expect(cpAfter).not.toBeNull();
+    expect(cpAfter!.lastAggregateVersion).toBe(2);
+    expect(cpAfter!.lastEventId).toBe(cpBefore!.lastEventId);
+    expect(cpAfter!.updatedAt).toEqual(cpBefore!.updatedAt);
+  });
+
+  // #1500 (RF023 AC5, RNF025 C4): a placement projects as a STORED_AT edge carrying
+  // validTime [validFrom, validTo) and the projection's transactionTime; the
+  // next placement closes the open edge at its own validFrom instead of
+  // deleting it. Each edge is read by the box it points into, since the
+  // event keys the Sample by the id auto-assign received.
+  test('a placement projects as a STORED_AT edge with validTime [from,to) and transactionTime, closed by the next placement (RF023 AC5)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const homeBox = await seedStorageBoxLocation();
+    seededBoxes.push(homeBox);
+    const boxA = await seedStorageBoxLocation();
+    seededBoxes.push(boxA);
+    const boxB = await seedStorageBoxLocation();
+    seededBoxes.push(boxB);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'RF023 #1500 placement validTime e2e fixture',
+        registeredAt: new Date().toISOString(),
+        boxId: homeBox.boxId,
+        positionCode: homeBox.positionCode,
+        collectionId: governed!.collectionId,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId;
+    expect(specimenId).toBeTruthy();
+
+    async function placeInto(boxId: string) {
+      const release = await request.delete(`${apiBaseURL}/api/storage/release/${specimenId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(release.status()).toBe(200);
+      const assign = await request.post(`${apiBaseURL}/api/storage/allocate/auto`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { sampleId: specimenId, boxId },
+      });
+      expect(assign.status()).toBe(201);
+      expect((await assign.json()).success).toBe(true);
+    }
+
+    await placeInto(boxA.boxId);
+    const edgesA = await waitForStoredAtEdge(boxA.boxId);
+    expect(edgesA).toHaveLength(1);
+    expect(edgesA[0].validFrom).not.toBeNull();
+    expect(edgesA[0].transactionTime).not.toBeNull();
+    expect(edgesA[0].validTo).toBeNull();
+
+    await placeInto(boxB.boxId);
+    const edgesB = await waitForStoredAtEdge(boxB.boxId);
+    expect(edgesB).toHaveLength(1);
+    await expect
+      .poll(async () => (await readStoredAtEdges(boxA.boxId))[0]?.validTo ?? null, { timeout: 15_000 })
+      .not.toBeNull();
+
+    const [edgeA] = await readStoredAtEdges(boxA.boxId);
+    const [edgeB] = await readStoredAtEdges(boxB.boxId);
+    expect(edgeA.validTo).toBe(edgeB.validFrom);
+    expect(Date.parse(edgeA.validFrom!)).toBeLessThan(Date.parse(edgeA.validTo!));
+    expect(edgeB.validTo).toBeNull();
+    expect(edgeB.transactionTime).not.toBeNull();
+    expect(edgeB.sampleId).toBe(edgeA.sampleId);
+  });
+
+  // #1519 (RNF025 C5, RNF016 C1 C2): the graph is rebuilt from the MongoDB
+  // outbox alone. The sample's node and edges and the projector's checkpoint
+  // are dropped, the sample's outbox events are requeued, and the projector
+  // replays them: each STORED_AT edge comes back with the validTime its
+  // Mongo outbox event holds, while its transactionTime moves to the rebuild.
+  test('a sample\'s graph rebuilt from its MongoDB outbox alone keeps each STORED_AT validTime and takes a new transactionTime (RNF025 C5, RNF016 C1 C2)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const homeBox = await seedStorageBoxLocation();
+    seededBoxes.push(homeBox);
+    const boxA = await seedStorageBoxLocation();
+    seededBoxes.push(boxA);
+    const boxB = await seedStorageBoxLocation();
+    seededBoxes.push(boxB);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'RNF016 #1519 outbox rebuild e2e fixture',
+        registeredAt: new Date().toISOString(),
+        boxId: homeBox.boxId,
+        positionCode: homeBox.positionCode,
+        collectionId: governed!.collectionId,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId;
+    expect(specimenId).toBeTruthy();
+
+    async function placeInto(boxId: string) {
+      const release = await request.delete(`${apiBaseURL}/api/storage/release/${specimenId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(release.status()).toBe(200);
+      const assign = await request.post(`${apiBaseURL}/api/storage/allocate/auto`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { sampleId: specimenId, boxId },
+      });
+      expect(assign.status()).toBe(201);
+      expect((await assign.json()).success).toBe(true);
+    }
+
+    await placeInto(boxA.boxId);
+    await waitForStoredAtEdge(boxA.boxId);
+    await placeInto(boxB.boxId);
+    await waitForStoredAtEdge(boxB.boxId);
+    await expect
+      .poll(async () => (await readStoredAtEdges(boxA.boxId))[0]?.validTo ?? null, { timeout: 15_000 })
+      .not.toBeNull();
+
+    const [edgeA] = await readStoredAtEdges(boxA.boxId);
+    const sampleId = edgeA.sampleId!;
+    expect(sampleId).toBeTruthy();
+    const events = await sampleOutboxEvents(sampleId);
+    const eventIds = events.map((event) => String(event.eventId));
+    await waitForOutboxEventsProjected(eventIds);
+    const boxIds = [homeBox.boxId, boxA.boxId, boxB.boxId];
+    const before = await Promise.all(boxIds.map((boxId) => readStoredAtEdges(boxId)));
+    expect(before[1]).toHaveLength(1);
+    expect(before[2]).toHaveLength(1);
+
+    // RNF016 C1: each edge was written by its MongoDB outbox event, and its
+    // validFrom is the time that event holds.
+    for (const index of [1, 2]) {
+      const placed = events.filter(
+        (event) => event.eventType === 'STORAGE_POSITION_ASSIGNED' && event.payload?.boxId === boxIds[index]
+      );
+      expect(placed).toHaveLength(1);
+      expect(before[index][0].eventId).toBe(String(placed[0].eventId));
+      expect(Date.parse(before[index][0].validFrom!)).toBe(new Date(placed[0].occurredAt).getTime());
+    }
+
+    // RNF016 C2: drop the graph and the projector state, replay the outbox.
+    await removeSampleNodes([sampleId]);
+    expect(await readStoredAtEdges(boxA.boxId)).toHaveLength(0);
+    expect(await readStoredAtEdges(boxB.boxId)).toHaveLength(0);
+    await deleteProjectionCheckpoint('Sample:' + sampleId);
+    await requeueOutboxEvents(eventIds);
+    await waitForOutboxEventsProjected(eventIds, { timeoutMs: 30_000 });
+
+    const after = await Promise.all(boxIds.map((boxId) => readStoredAtEdges(boxId)));
+    for (let index = 0; index < boxIds.length; index += 1) {
+      expect(after[index]).toHaveLength(before[index].length);
+      for (let edge = 0; edge < before[index].length; edge += 1) {
+        // RNF025 C5: validTime is the placement's own and survives the
+        // rebuild; transactionTime is when the graph recorded it.
+        expect(after[index][edge].validFrom).toBe(before[index][edge].validFrom);
+        expect(after[index][edge].validTo).toBe(before[index][edge].validTo);
+        expect(after[index][edge].eventId).toBe(before[index][edge].eventId);
+        expect(after[index][edge].transactionTime).not.toBeNull();
+        expect(Date.parse(after[index][edge].transactionTime!)).toBeGreaterThan(
+          Date.parse(before[index][edge].transactionTime!)
+        );
+      }
+    }
+    expect(after[2][0].validTo).toBeNull();
+
+    // The rebuild appended nothing: the outbox it read is the one it left.
+    expect((await sampleOutboxEvents(sampleId)).map((event) => String(event.eventId))).toEqual(eventIds);
+    const checkpoint = await projectionCheckpoint('Sample:' + sampleId);
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint!.lastAggregateVersion).toBe(events[events.length - 1].aggregateVersion);
+  });
+});
+
+// #1503 (RF023 AC8, RNF019 C8, RNF028 C2): a write request persists to Mongo
+// and appends its outbox event, and returns without writing Neo4j itself (no
+// direct Neo4j write, no Mongo/Neo4j dual-write). Proven with the projection
+// worker stopped, so the only writer left that could touch the graph is the
+// request: scripts/e2e-gate.sh stops neo4j-projection-worker-test, runs the
+// test tagged @projection-worker-stopped alone with
+// E2E_PROJECTION_WORKER_STOPPED=1, and starts the worker again before the
+// full run, where this describe skips.
+test.describe('Outbox → Neo4j projection with the projection worker stopped (RF023 AC8, RNF019 C8, RNF028 C2) — real backend', () => {
+  test.skip(
+    process.env.E2E_PROJECTION_WORKER_STOPPED !== '1',
+    'runs only in the e2e gate phase that stops neo4j-projection-worker-test'
+  );
+
+  const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
+  const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
+  let mongoClient: MongoClient | null = null;
+
+  async function mongoDb() {
+    if (!mongoClient) {
+      mongoClient = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
+      await mongoClient.connect();
+    }
+    return mongoClient.db(mongoDbName);
+  }
+
+  test.afterAll(async () => {
+    await closeSeedDb();
+    await closeNeo4jDriver();
+    await closeOutboxDb();
+    if (mongoClient) {
+      await mongoClient.close();
+      mongoClient = null;
+    }
+  });
+
+  // Same signature fields as the RF023 describe above (normalizeSignaturePayload).
+  function signatureFields() {
+    return { signatureName: 'RF023 e2e signer', signatureImageBase64: SIGNATURE_PNG_DATA_URL };
+  }
+
+  test('@projection-worker-stopped a created consent returns while Mongo holds it and its PENDING outbox event, and the graph is unchanged', async ({
+    request,
+  }) => {
+    const before = await countGraph();
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        consentTemplateId: participant.consentTemplateId,
+        responses: {},
+        ...signatureFields(),
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const consentId = String((await response.json())?.data?._id || '');
+    expect(consentId).toBeTruthy();
+
+    // Mongo holds the consent and the one CONSENT_UPSERTED event the request
+    // appended, still unleased (a new event is PENDING with 0 attempts).
+    const db = await mongoDb();
+    // The consents key's collection (config/collections.js, COLL_CONSENTS unset in the test stack).
+    expect(await db.collection('patientConsents').findOne({ _id: new ObjectId(consentId) })).not.toBeNull();
+    const queued = await consentOutboxEvents(consentId);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].status).toBe('PENDING');
+    expect(queued[0].attempts).toBe(0);
+
+    // Three of the worker's 1000 ms poll intervals: a running worker would
+    // have leased the row (leaseNextBatch is the only PENDING -> PROCESSING
+    // move), so a row still PENDING with 0 attempts shows nothing drained it.
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const after = await consentOutboxEvents(consentId);
+    expect(after).toHaveLength(1);
+    expect(after[0].eventId).toBe(queued[0].eventId);
+    expect(after[0].status).toBe('PENDING');
+    expect(after[0].attempts).toBe(0);
+
+    // The request returned and Neo4j was not written: no node for the
+    // consent and no change anywhere in the graph.
+    expect(await countEthicalConsentNodes(consentId)).toBe(0);
+    expect(await countGraph()).toEqual(before);
+  });
 });
 
 // RF028 AC9 ("Persistir primeiro no MongoDB e projetar no Neo4j
@@ -230,6 +624,114 @@ test.describe('Outbox → Neo4j projection (RF028 AC9) — real backend', () => 
 
   test('a bootstrapped HPO is_a relation projects into Neo4j as a TERMINOLOGY_RELATION edge', async () => {
     await waitForTerminologyRelation('HP:0000118', 'HP:0000001', 'http://purl.obolibrary.org/obo/hp.owl', 'is_a');
+  });
+});
+
+// #1501 (RF023 AC7, RNF019 C5): lease, retry, backoff, lease timeout and dead
+// letter, on the real neo4j-projection-worker-test. Each event is a poison
+// event (queryOutbox.ts's insertPoisonOutboxEvent) the worker fails on every
+// try. The test stack sets neither GRAPH_OUTBOX_MAX_ATTEMPTS nor
+// GRAPH_OUTBOX_RETRY_BACKOFF_MS, so the worker runs on config/env.js's
+// defaults: 8 attempts and a 1000 ms base, a failed try k waiting
+// 1000 * 2^(k-1) ms (neo4jOutbox.service.js's retryDelayMs).
+test.describe('Outbox lease, retry, backoff and dead letter (RF023 AC7, RNF019 C5) — real backend', () => {
+  const MAX_ATTEMPTS = 8;
+  const BACKOFF_BASE_MS = 1000;
+  const eventIds: string[] = [];
+
+  function newEventId(label: string): string {
+    const eventId = `e2e-1501-${label}-${randomUUID()}`;
+    eventIds.push(eventId);
+    return eventId;
+  }
+
+  test.afterAll(async () => {
+    await deleteOutboxEvents(eventIds).catch(() => {});
+    await closeOutboxDb();
+  });
+
+  test('a failed projection is leased, reads RETRYING and waits a backoff that doubles with each try', async () => {
+    test.setTimeout(60_000);
+    const eventId = newEventId('retry');
+    await insertPoisonOutboxEvent(eventId);
+
+    // Any try k the poll lands on: the lease counted it, and the wait is
+    // the base doubled k-1 times.
+    let first: Awaited<ReturnType<typeof readOutboxEvent>> = null;
+    await expect.poll(async () => {
+      first = await readOutboxEvent(eventId);
+      return first?.status === 'RETRYING' && Number(first.attempts) >= 1;
+    }, { timeout: 15_000, intervals: [250] }).toBe(true);
+    const k = Number(first!.attempts);
+    expect(first!.lastError).toContain(OUTBOX_POISON_ERROR);
+    expect(first!.leaseUntil).toBeNull();
+    expect(first!.nextAttemptAt.getTime() - first!.updatedAt.getTime()).toBe(BACKOFF_BASE_MS * 2 ** (k - 1));
+
+    let next: Awaited<ReturnType<typeof readOutboxEvent>> = null;
+    await expect.poll(async () => {
+      next = await readOutboxEvent(eventId);
+      return next?.status === 'RETRYING' && Number(next.attempts) === k + 1;
+    }, { timeout: 20_000, intervals: [250] }).toBe(true);
+    expect(next!.nextAttemptAt.getTime() - next!.updatedAt.getTime()).toBe(BACKOFF_BASE_MS * 2 ** k);
+    // The next try was leased only once the first backoff ran out.
+    expect(next!.updatedAt.getTime()).toBeGreaterThanOrEqual(first!.nextAttemptAt.getTime());
+  });
+
+  test('the next-to-last try is retried and the last try dead-letters the event', async () => {
+    test.setTimeout(60_000);
+    const nextToLast = newEventId('next-to-last');
+    const last = newEventId('last');
+    const priorTries = { status: 'RETRYING', lastError: 'e2e-1501 seeded earlier failure' };
+    await insertPoisonOutboxEvent(nextToLast, { ...priorTries, attempts: MAX_ATTEMPTS - 2 });
+    await insertPoisonOutboxEvent(last, { ...priorTries, attempts: MAX_ATTEMPTS - 1 });
+
+    await expect.poll(async () => (await readOutboxEvent(last))?.status, { timeout: 15_000, intervals: [250] })
+      .toBe('DEAD_LETTER');
+    const dead = await readOutboxEvent(last);
+    expect(dead!.attempts).toBe(MAX_ATTEMPTS);
+    expect(dead!.lastError).toContain(OUTBOX_POISON_ERROR);
+    expect(dead!.processedAt).not.toBeNull();
+    expect(dead!.leaseUntil).toBeNull();
+
+    // Status and count in one read: the lease sets attempts to 7 while the
+    // row is still PROCESSING, before the failure marks it RETRYING.
+    await expect.poll(async () => {
+      const row = await readOutboxEvent(nextToLast);
+      return `${row?.status}:${row?.attempts}`;
+    }, { timeout: 15_000, intervals: [250] }).toBe(`RETRYING:${MAX_ATTEMPTS - 1}`);
+    const retried = await readOutboxEvent(nextToLast);
+    expect(retried!.lastError).toContain(OUTBOX_POISON_ERROR);
+
+    // A dead letter is never leased again.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const still = await readOutboxEvent(last);
+    expect(still!.status).toBe('DEAD_LETTER');
+    expect(still!.attempts).toBe(MAX_ATTEMPTS);
+  });
+
+  test('an event whose lease ran out goes back to RETRYING with the lease cleared', async () => {
+    test.setTimeout(60_000);
+    const eventId = newEventId('lease');
+    const now = Date.now();
+    // Leased ten minutes ago, past GRAPH_OUTBOX_LEASE_MS's 5-minute default.
+    // Its nextAttemptAt lies ahead so the worker's lease in the same pass
+    // leaves it alone and the expiry's own reading stays visible.
+    await insertPoisonOutboxEvent(eventId, {
+      status: 'PROCESSING',
+      attempts: 1,
+      leaseUntil: new Date(now - 5 * 60 * 1000),
+      nextAttemptAt: new Date(now + 120_000),
+      updatedAt: new Date(now - 10 * 60 * 1000),
+    });
+
+    await expect.poll(async () => (await readOutboxEvent(eventId))?.status, { timeout: 15_000, intervals: [250] })
+      .toBe('RETRYING');
+    const expired = await readOutboxEvent(eventId);
+    expect(expired!.lastError).toBe('processing_lease_expired');
+    expect(expired!.leaseUntil).toBeNull();
+    // #1527: the timeout keeps the one try the seeded lease counted.
+    expect(expired!.attempts).toBe(1);
+    expect(expired!.updatedAt.getTime()).toBeGreaterThan(now - 60_000);
   });
 });
 
@@ -273,14 +775,17 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     }
   });
 
+  // RNF031 C5: the bootstrap registers its FoundationDataRun.
   test('the bootstrap records an idempotent FoundationDataRun, not just ad-hoc upserts', async () => {
     const runs = await countFoundationDataRuns();
     expect(runs).toBeGreaterThan(0);
   });
 
   // RF022 AC1 (Requisitos v4.0.0): Foundation validates the approved v2.0.0
-  // dictionary, 1644 elements including the 929 historical ones.
-  test('the bootstrap run validated the v2.0.0 dictionary: 1644 elements, 929 historical', async () => {
+  // dictionary, 1644 elements including the 929 historical ones, in the 146
+  // entities/artefacts of plano F1.3 (RNF031 AC1).
+  // RNF023 C3: no historical id is reused for a new meaning (each keeps its v1.3.0 entity and field).
+  test('the bootstrap run validated the v2.0.0 dictionary: 1644 elements in 146 entities, 929 historical', async () => {
     const run = await latestFoundationDataRun();
     expect(run).not.toBeNull();
     expect(run!.dictionaryVersion).toBe('2.0.0');
@@ -289,7 +794,10 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       loadedTotal: 1644,
       uniqueTotal: 1644,
       historicalTotal: 929,
+      expectedEntityTotal: 146,
+      entityTotal: 146,
       missingHistoricalIds: [],
+      reassignedHistoricalIds: [],
       verified: true,
     });
   });
@@ -315,6 +823,9 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
   // ready ReadinessReport for that run. backend-app-test starts only on it
   // (FOUNDATION_READINESS_REQUIRED), so this suite running at all is the API
   // having passed that gate.
+  // RNF031 C5: the bootstrap registers its ReadinessReport.
+  // RF022 AC8: its zero-operational-data gate counted participants, identities, consents, specimens, telemetry, files, studies, assays and workflow runs before and after apply, and none was created.
+  // RNF031 C7: the same gate confirms the bootstrap created no operational data.
   test('a ready ReadinessReport for the bootstrap run gates the API', async () => {
     const run = await latestFoundationDataRun();
     const report = await latestReadinessReport('test');
@@ -334,13 +845,37 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       'zero-reference-data': 'pass',
       'governance-registry': 'pass',
       configuration: 'pass',
+      rcs: 'pass',
     });
+    const zeroOperational = report!.gateResults.find((gate: any) => gate.gate === 'zero-operational-data');
+    expect(Object.keys(zeroOperational.evidence.after)).toEqual(expect.arrayContaining([
+      'telemetryIngestionEvents', 'telemetryValidationIssues', 'telemetryExposureSummaries', 'telemetryDatastreams',
+      'sample_files', 'assayFiles', 'datasetFiles', 'AnalysisFile', 'dataFileVersions', 'studies', 'assays', 'workflowRuns',
+    ]));
+    expect(zeroOperational.evidence.after).toEqual(zeroOperational.evidence.before);
     expect(report!.p0Coverage).toBeGreaterThan(0);
     expect(report!.p0Coverage).toBeLessThan(1);
   });
 
+  // RF022 AC3, RNF031 AC3: the rcs gate is P0 and its evidence reads the
+  // rule package, the axes, the governance evidence, the input snapshot and
+  // the recalculation of the golden vectors.
+  test('the bootstrap ReadinessReport carries the P0 rcs gate with its five passing checks', async () => {
+    const report = await latestReadinessReport('test');
+    const rcs = report!.gateResults.find((gate: any) => gate.gate === 'rcs');
+    expect(rcs).toMatchObject({ result: 'pass', p0: true });
+    expect(rcs.evidence.error).toBeUndefined();
+    expect(rcs.evidence.checks.map((entry: any) => [entry.check, entry.passed])).toEqual([
+      ['releases', true], ['axes', true], ['governance-evidence', true], ['input-snapshot', true], ['golden-vectors', true],
+    ]);
+    for (const key of ['rulePackage', 'governanceRuleSet', 'matrixMappingRelease', 'sprecMappingRelease']) {
+      expect(rcs.evidence[key]).not.toBeNull();
+    }
+  });
+
   // #1304, plano §4 F1.2: the job registered the release this build follows,
   // once, with the invariant catalog bound to it (RF014 AC6, CFG-003).
+  // RNF031 C5: the bootstrap registers its CanonicalModelRelease.
   test('the bootstrap registered the CanonicalModelRelease and its invariant catalog', async () => {
     const { release, catalogs } = await governanceRegistry('release-2.0.0');
     expect(release).toMatchObject({ semanticVersion: '2.0.0', releaseStatus: 'active' });
@@ -362,6 +897,158 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     expect(constraints.evidence.failed).toEqual([]);
     expect(await indexNamesOf('samples')).toContain('samples_barcode_unique_v2');
     expect(await indexNamesOf('sessions')).toContain('sessions_accessTokenHash_v1');
+  });
+
+  // RF022 AC2/AC5, RNF031 AC2: the run records a step per preparation, the
+  // ones a later phase brings as deferred, and a checkpoint on each step it
+  // completed, in the order it completed them.
+  test('the bootstrap run records a step per preparation and a checkpoint per completed step', async () => {
+    const run = await latestFoundationDataRun();
+    const steps = run!.steps;
+    const byName = Object.fromEntries(steps.map((step: any) => [step.step, step]));
+    expect(steps.map((step: any) => step.step)).toEqual([
+      'entities', 'miabis-minimal', 'sprec-minimal', 'rcs-gov-1.0',
+      'governance-registry', 'rbac-catalog', 'report-templates', 'indexes',
+      'quarantine', 'outbox', 'audit', 'tests', 'rollback',
+    ]);
+    expect(byName.entities).toMatchObject({ status: 'completed', plannedCounts: { elements: 1644, entities: 146, historical: 929 } });
+    for (const key of ['miabis-minimal', 'sprec-minimal', 'rcs-gov-1.0']) {
+      expect(byName[key]).toMatchObject({ status: 'prepared', keyless: 0 });
+    }
+    for (const key of ['governance-registry', 'rbac-catalog', 'report-templates', 'indexes']) {
+      expect(byName[key].status).toBe('completed');
+    }
+    expect(byName.indexes.plannedCounts.indexes).toBeGreaterThan(0);
+    for (const key of ['quarantine', 'outbox', 'audit']) {
+      expect(byName[key]).toMatchObject({ status: 'deferred', builtIn: expect.any(String) });
+    }
+    expect(byName.tests).toMatchObject({ status: 'completed', plannedCounts: { failed: 0 } });
+    expect(byName.rollback).toMatchObject({ status: 'prepared', plannedCounts: { removable: 0 } });
+
+    const completed = steps.filter((step: any) => step.status === 'completed');
+    expect(completed.map((step: any) => step.step)).toEqual([
+      'entities', 'governance-registry', 'rbac-catalog', 'report-templates', 'indexes', 'tests',
+    ]);
+    expect(completed.map((step: any) => step.checkpoint.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    for (const step of completed) {
+      expect(Number.isNaN(new Date(step.checkpoint.completedAt).getTime())).toBe(false);
+    }
+  });
+});
+
+// RF022 AC5/AC9/AC10, RNF031 AC4/AC6 (#1485): the one-shot runs once before
+// the API, and a rollback or a failing gate on the stack's database would
+// block its ReadinessReport. The test-support route runs the job's own
+// runSeed() against an e2e_foundation_ scratch database on the same Mongo,
+// which these tests drop afterwards.
+async function postFoundationRun(request: import('@playwright/test').APIRequestContext, database: string, mode: string) {
+  const response = await request.post(`${apiBaseURL}/api/_test-support/foundation-runs/run`, {
+    headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+    data: { database, mode },
+  });
+  expect(response.status()).toBe(200);
+  return (await response.json()).data;
+}
+
+function gateResultsByName(report: any): Record<string, string> {
+  return Object.fromEntries(report.gateResults.map((gate: any) => [gate.gate, gate.result]));
+}
+
+test.describe('Foundation job modes on a scratch database (RF022 AC5 AC9 AC10, RNF031 AC4 AC6) — real backend', () => {
+  test.describe.configure({ mode: 'serial' });
+  const suffix = `${Date.now()}`;
+  const cycleDb = `e2e_foundation_${suffix}_cycle`;
+  const driftDb = `e2e_foundation_${suffix}_drift`;
+  const registryDb = `e2e_foundation_${suffix}_registry`;
+  let applyRunId: string;
+
+  test.afterAll(async () => {
+    for (const database of [cycleDb, driftDb, registryDb]) await dropScratchFoundationDb(database);
+    await closeFoundationDb();
+  });
+
+  test('dry-run, apply and verify each leave their checkpoint and a ready report naming the rcs gate (RNF031 AC4, RF022 AC5)', async ({ request }) => {
+    const dry = await postFoundationRun(request, cycleDb, 'dry_run');
+    expect(dry.run).toMatchObject({
+      executionMode: 'dry_run', runStatus: 'completed', dryRunResult: 'pass', applyResult: 'not_run', verifyResult: 'not_run', rollbackResult: 'not_required',
+    });
+    expect(dry.run.steps.map((step: any) => [step.step, step.status])).toEqual([
+      ['miabis-minimal', 'planned'], ['sprec-minimal', 'planned'], ['rcs-gov-1.0', 'planned'],
+    ]);
+    expect(dry.report).toBeNull();
+    expect(dry.exitCode).toBe(0);
+
+    // The apply's steps and checkpoints are the bootstrap run's shape (RF022 AC2/AC5).
+    const applied = await postFoundationRun(request, cycleDb, 'apply');
+    expect(applied.run).toMatchObject({
+      executionMode: 'apply', runStatus: 'completed', dryRunResult: 'pass', applyResult: 'pass', verifyResult: 'pass', rollbackResult: 'not_required',
+      previousRunId: dry.run.foundationDataRunId,
+    });
+    expect(applied.run.steps.map((step: any) => [step.step, step.status])).toEqual([
+      ['entities', 'completed'],
+      ['miabis-minimal', 'prepared'], ['sprec-minimal', 'prepared'], ['rcs-gov-1.0', 'prepared'],
+      ['governance-registry', 'completed'], ['rbac-catalog', 'completed'], ['report-templates', 'completed'], ['indexes', 'completed'],
+      ['quarantine', 'deferred'], ['outbox', 'deferred'], ['audit', 'deferred'],
+      ['tests', 'completed'], ['rollback', 'prepared'],
+    ]);
+    expect(applied.run.steps.filter((step: any) => step.checkpoint).map((step: any) => [step.step, step.checkpoint.sequence])).toEqual([
+      ['entities', 1], ['governance-registry', 2], ['rbac-catalog', 3], ['report-templates', 4], ['indexes', 5], ['tests', 6],
+    ]);
+    expect(applied.report).toMatchObject({ status: 'ready', blockers: [], foundationDataRunId: applied.run.foundationDataRunId });
+    expect(gateResultsByName(applied.report)).toMatchObject({ rcs: 'pass' });
+    expect(applied.exitCode).toBe(0);
+    applyRunId = applied.run.foundationDataRunId;
+
+    const verified = await postFoundationRun(request, cycleDb, 'validate');
+    expect(verified.run).toMatchObject({ executionMode: 'validate', verifyResult: 'pass', applyResult: 'not_run', previousRunId: applyRunId });
+    expect(verified.run.steps.map((step: any) => [step.step, step.status])).toEqual([['verify', 'completed']]);
+    expect(verified.report.status).toBe('ready');
+  });
+
+  test('a rollback undoes the newest apply, blocks promotion and leaves the evidence append-only, and only a new apply promotes again (RF022 AC5 AC10)', async ({ request }) => {
+    const before = await scratchFoundationDataRun(cycleDb, applyRunId);
+    const rolled = await postFoundationRun(request, cycleDb, 'rollback');
+    expect(rolled.run).toMatchObject({
+      executionMode: 'rollback', runStatus: 'rolled_back', rollbackResult: 'pass', dryRunResult: 'not_run', applyResult: 'not_run', verifyResult: 'not_run',
+    });
+    expect(rolled.run.validationSummary.rollbackTargetRunId).toBe(applyRunId);
+    expect(rolled.run.steps).toEqual([{ step: 'rollback', status: 'pass', removed: {} }]);
+    expect(rolled.report).toMatchObject({ status: 'blocked', blockers: [`rolled_back:${applyRunId}`] });
+    expect(gateResultsByName(rolled.report)).toMatchObject({ rollback: 'pass' });
+    expect(rolled.exitCode).toBe(0);
+
+    // RF022 AC10: the apply run is never edited; dry_run writes no report.
+    expect(await scratchFoundationDataRun(cycleDb, applyRunId)).toEqual(before);
+    expect(await countScratchFoundationEvidence(cycleDb)).toEqual({ runs: 4, reports: 3 });
+
+    const reapplied = await postFoundationRun(request, cycleDb, 'apply');
+    expect(reapplied.report.status).toBe('ready');
+    expect(reapplied.run.previousRunId).toBe(rolled.run.foundationDataRunId);
+  });
+
+  test('an apply whose release arrives with a different dictionary checksum is blocked before it applies (RF022 AC9, RNF031 AC6)', async ({ request }) => {
+    await insertScratchFoundationDataRun(driftDb, {
+      environment: 'test', runStatus: 'completed', startedAt: new Date(0), canonicalModelReleaseId: 'release-2.0.0', dictionaryChecksum: 'a-different-catalog',
+    });
+    const { run, report, exitCode } = await postFoundationRun(request, driftDb, 'apply');
+    expect(run).toMatchObject({ runStatus: 'failed', dryRunResult: 'fail', applyResult: 'not_run' });
+    expect(report.status).toBe('blocked');
+    expect(report.blockers).toEqual(expect.arrayContaining(['gate:version', 'dry_run_failed']));
+    expect(report.gateResults.find((gate: any) => gate.gate === 'version')).toMatchObject({ result: 'fail', p0: true });
+    expect(exitCode).toBe(2);
+  });
+
+  test('an apply whose registered release and invariant catalog carry a different checksum is blocked on the governance registry (RF022 AC9, RNF031 AC6)', async ({ request }) => {
+    await postFoundationRun(request, registryDb, 'apply');
+    await setScratchGovernanceChecksum(registryDb, 'canonicalModelReleases', 'release-2.0.0', 'sha256:registered-elsewhere');
+    await setScratchGovernanceChecksum(registryDb, 'governanceInvariantCatalogs', 'release-2.0.0', 'sha256:registered-elsewhere');
+    const { report, exitCode } = await postFoundationRun(request, registryDb, 'apply');
+    expect(report.status).toBe('blocked');
+    expect(report.blockers).toEqual(['gate:governance-registry']);
+    expect(report.gateResults.find((gate: any) => gate.gate === 'governance-registry').evidence.failures).toEqual([
+      'checksum da canonicalModelRelease diverge', 'checksum do governanceInvariantCatalog diverge',
+    ]);
+    expect(exitCode).toBe(2);
   });
 });
 
@@ -576,6 +1263,294 @@ test.describe('Reference data importers (RF028) — real backend', () => {
 
     const concepts = await countTerminologyConceptsBySystemUri('http://edamontology.org/EDAM.owl');
     expect(concepts).toBeGreaterThan(0);
+  });
+});
+
+// RF028 AC1-9, RNF032 AC1-9 (#1476): imports run only in the stack's one-shot
+// bootstrap jobs, and promoting or rolling back a bootstrapped dataset on
+// persistent volumes would break every test that relies on it. So the
+// test-support route /api/_test-support/reference-import-runs (same gates as the ingestion
+// probe below) runs the real import pipeline into a fresh E2E_ dataset, and
+// the release it registers is promoted and rolled back through the real
+// Administrador routes. No cleanup: release history is never deleted, and
+// the unique E2E_ code and systemUri touch no other test's data.
+async function postReferenceImportSupport(
+  request: import('@playwright/test').APIRequestContext,
+  path: string,
+  body: Record<string, unknown>,
+) {
+  return request.post(`${apiBaseURL}/api/_test-support/reference-import-runs/${path}`, {
+    headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+    data: body,
+  });
+}
+
+// The ten lines of api/backend/src/reference-data/reference-imports/fixtures/hpo-sample.jsonl:
+// eight valid terms with seven is_a relations, one without a code and one without a label.
+const HPO_SAMPLE_RECORDS: Record<string, unknown>[] = [
+  { id: 'HP:0000001', lbl: 'All', is_a: [], synonyms: [], obsolete: false },
+  { id: 'HP:0000118', lbl: 'Phenotypic abnormality', is_a: ['HP:0000001'], synonyms: [], obsolete: false },
+  { id: 'HP:0000707', lbl: 'Abnormality of the nervous system', is_a: ['HP:0000118'], synonyms: [], obsolete: false },
+  { id: 'HP:0012638', lbl: 'Abnormal nervous system physiology', is_a: ['HP:0000707'], synonyms: [], obsolete: false },
+  { id: 'HP:0001250', lbl: 'Seizure', is_a: ['HP:0012638'], synonyms: ['Seizures', 'Epileptic seizure'], obsolete: false },
+  { id: 'HP:0002133', lbl: 'Status epilepticus', is_a: ['HP:0001250'], synonyms: [], obsolete: false },
+  { id: 'HP:0007359', lbl: 'Focal seizure', is_a: ['HP:0001250'], synonyms: [], obsolete: false },
+  { id: 'HP:0001251', lbl: 'Ataxia', is_a: ['HP:0012638'], synonyms: [], obsolete: false },
+  { id: '', lbl: 'Missing code term', is_a: [], synonyms: [], obsolete: false },
+  { id: 'HP:9999999', lbl: '', is_a: [], synonyms: [], obsolete: false },
+];
+
+test.describe('Reference release lifecycle (RF028 AC1-9, RNF032 AC1-9) — real backend', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  test.afterAll(async () => {
+    await closeFoundationDb();
+    await closeNeo4jDriver();
+  });
+
+  const suffix = `${Date.now()}`;
+  const datasetCode = `E2E_RF028_${suffix}`;
+  const systemUri = `urn:bioavanced:e2e:${datasetCode}`;
+  let firstReleaseId: string;
+
+  test('an import registers its release before the load, stages, quarantines and checkpoints, keeps its asset and writes its coverage manifest and quality assessment (RF028 AC1-7, RNF032 AC1-7)', async ({ request }) => {
+    const response = await postReferenceImportSupport(request, 'run', {
+      datasetCode,
+      datasetVersion: 'e2e-v1',
+      records: HPO_SAMPLE_RECORDS,
+    });
+    expect(response.status(), await response.text()).toBe(200);
+    const { data } = await response.json();
+    expect(data.approved).toBe(true);
+    expect(data.idempotent).toBe(false);
+    expect(data.run.runStatus).toBe('completed');
+    firstReleaseId = data.releaseId;
+
+    // RF028 AC1: the release is registered with its origin before the load.
+    const release = await findReferenceRelease(firstReleaseId);
+    expect(release).not.toBeNull();
+    expect(release!.releaseStatus).toBe('approved');
+    expect(release!.datasetVersion).toBe('e2e-v1');
+    expect(release!.sourceChecksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(release!.sourceFormat).toEqual(['JSONL']);
+    for (const field of ['sourceId', 'license', 'retrievalUri', 'parserVersion', 'mappingVersion', 'coverageManifestId', 'dataQualityAssessmentId']) {
+      expect(release![field], field).toBeTruthy();
+    }
+
+    // RF028 AC3/AC4, RNF032 AC3/AC4: the full run read, validated, rejected,
+    // staged in batches and checkpointed its offset.
+    const runs = await referenceImportRunsForRelease(firstReleaseId);
+    const run = runs.find((candidate) => candidate.referenceImportRunId === data.run.referenceImportRunId);
+    expect(run).toBeDefined();
+    expect(new Date(release!.createdAt).getTime()).toBeLessThanOrEqual(new Date(run!.startedAt).getTime());
+    expect(run!.importMode).toBe('full');
+    expect(run!.recordsRead).toBe(10);
+    expect(run!.recordsValidated).toBe(8);
+    expect(run!.recordsRejected).toBe(2);
+    expect(run!.checkpoint.offset).toBe(15);
+    expect(run!.batchSize).toBe(500);
+    expect(run!.validationSummary.approved).toBe(true);
+    expect(await countReferenceImportStagingForRun(run!.referenceImportRunId)).toBe(15);
+
+    // RF028 AC5, RNF032 AC5: the two bad rows are quarantined as open issues.
+    const issues = await referenceImportIssuesForRun(run!.referenceImportRunId);
+    expect(issues.map((issue) => issue.errorCode).sort()).toEqual(['MISSING_CODE', 'MISSING_DISPLAY']);
+    for (const issue of issues) {
+      expect(issue.resolutionStatus).toBe('open');
+      expect(issue.referenceDatasetReleaseId).toBe(firstReleaseId);
+    }
+
+    // RF028 AC2, RNF032 AC2: the source asset is kept, byte for byte.
+    expect(data.assetUri).toBe(`objstore://reference-releases/${datasetCode}/sha256/${release!.sourceChecksum}`);
+    const assetResponse = await postReferenceImportSupport(request, 'asset', { datasetCode, checksum: release!.sourceChecksum });
+    expect(assetResponse.status(), await assetResponse.text()).toBe(200);
+    const asset = (await assetResponse.json()).data;
+    expect(asset.exists).toBe(true);
+    expect(asset.sha256).toBe(release!.sourceChecksum);
+
+    // RF028 AC6/AC7, RNF032 AC6/AC7: the coverage manifest explains every
+    // missing row, and the quality assessment of the release passed.
+    const manifest = await findReferenceCoverageManifest(release!.coverageManifestId);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.referenceDatasetReleaseId).toBe(firstReleaseId);
+    expect(manifest!.assets).toEqual([data.assetUri]);
+    expect(manifest!.expectedCount).toBe(10);
+    expect(manifest!.obtainedCount).toBe(8);
+    expect(manifest!.exclusions).toHaveLength(2);
+    expect(manifest!.coverageResult).toBe('justified');
+    const assessment = await findDataQualityAssessment(release!.dataQualityAssessmentId);
+    expect(assessment).not.toBeNull();
+    expect(assessment!.status).toBe('passed');
+    expect(assessment!.scopeType).toBe('dataset_release');
+    expect(assessment!.scopeId).toBe(firstReleaseId);
+
+    // RF028 AC8: an approved release writes no records before its promotion.
+    expect(await countTerminologyConceptsBySystemUri(systemUri)).toBe(0);
+  });
+
+  test('promotion and rollback are explicit Administrador calls, publish to the outbox and are audited (RF028 AC5, AC8, AC9, RNF032 AC6, AC8, AC9)', async ({ request }) => {
+    const promoteUrl = (releaseId: string) => `${apiBaseURL}/api/reference-releases/${releaseId}/promote`;
+
+    const unauthenticated = await request.post(promoteUrl(firstReleaseId));
+    expect(unauthenticated.status(), await unauthenticated.text()).toBe(401);
+
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const promoted = await request.post(promoteUrl(firstReleaseId), { headers: auth });
+    expect(promoted.status(), await promoted.text()).toBe(200);
+    const promotion = (await promoted.json()).data;
+    expect(promotion.promoted).toBe(true);
+    expect(promotion.previousReleaseId).toBeNull();
+    expect(promotion.recordsInserted).toBe(15);
+
+    const active = await findReferenceRelease(firstReleaseId);
+    expect(active!.releaseStatus).toBe('active');
+    expect(typeof active!.promotionApprovedBy).toBe('string');
+    expect(active!.promotionApprovedBy).not.toBe('');
+    expect(active!.promotionApprovedBy).not.toBe('system:reference-data-bootstrap');
+
+    const concepts = await terminologyConceptsBySystemUri(systemUri);
+    expect(concepts).toHaveLength(8);
+    for (const concept of concepts) {
+      expect(concept.referenceDatasetReleaseId).toBe(firstReleaseId);
+    }
+    expect(await countTerminologyRelationsByRelease(firstReleaseId)).toBe(7);
+
+    // RF028 AC9: the promoted records reach Neo4j through the outbox.
+    await waitForTerminologyConceptNode('HP:0000118', systemUri, 'Phenotypic abnormality');
+    await waitForTerminologyRelation('HP:0000118', 'HP:0000001', systemUri, 'is_a');
+
+    const promoteAudit = await findAuditLog('PROMOTE', firstReleaseId);
+    expect(promoteAudit).not.toBeNull();
+    expect(promoteAudit!.status).toBe('success');
+
+    const again = await request.post(promoteUrl(firstReleaseId), { headers: auth });
+    expect(again.status(), await again.text()).toBe(409);
+    expect((await again.json()).error).toBe('release_not_approved');
+
+    const unknown = await request.post(promoteUrl(`no-such-release-${suffix}`), { headers: auth });
+    expect(unknown.status(), await unknown.text()).toBe(404);
+    expect((await unknown.json()).error).toBe('release_not_found');
+
+    const secondImport = await postReferenceImportSupport(request, 'run', {
+      datasetCode,
+      datasetVersion: 'e2e-v2',
+      records: HPO_SAMPLE_RECORDS,
+    });
+    expect(secondImport.status(), await secondImport.text()).toBe(200);
+    const second = (await secondImport.json()).data;
+    expect(second.approved).toBe(true);
+    const secondReleaseId: string = second.releaseId;
+    expect(secondReleaseId).not.toBe(firstReleaseId);
+
+    const promotedSecond = await request.post(promoteUrl(secondReleaseId), { headers: auth });
+    expect(promotedSecond.status(), await promotedSecond.text()).toBe(200);
+    expect((await promotedSecond.json()).data.previousReleaseId).toBe(firstReleaseId);
+    expect((await findReferenceRelease(firstReleaseId))!.releaseStatus).toBe('superseded');
+    expect((await findReferenceRelease(secondReleaseId))!.releaseStatus).toBe('active');
+
+    const rollbackUrl = `${apiBaseURL}/api/reference-releases/datasets/${datasetCode}/rollback`;
+    const rolledBack = await request.post(rollbackUrl, { headers: auth });
+    expect(rolledBack.status(), await rolledBack.text()).toBe(200);
+    const rollback = (await rolledBack.json()).data;
+    expect(rollback.rolledBack).toBe(true);
+    expect(rollback.activeReleaseId).toBe(firstReleaseId);
+    expect(rollback.rolledBackReleaseId).toBe(secondReleaseId);
+
+    const rolledBackRelease = await findReferenceRelease(secondReleaseId);
+    expect(rolledBackRelease!.releaseStatus).toBe('rolled_back');
+    expect(rolledBackRelease!.rollbackTargetId).toBe(firstReleaseId);
+    expect((await findReferenceRelease(firstReleaseId))!.releaseStatus).toBe('active');
+    const firstRuns = await referenceImportRunsForRelease(firstReleaseId);
+    expect(firstRuns.some((run) => run.importMode === 'rollback' && run.runStatus === 'rolled_back')).toBe(true);
+    expect(await findAuditLog('ROLLBACK', secondReleaseId)).not.toBeNull();
+
+    const rollbackAgain = await request.post(rollbackUrl, { headers: auth });
+    expect(rollbackAgain.status(), await rollbackAgain.text()).toBe(409);
+    expect((await rollbackAgain.json()).error).toBe('no_previous_release');
+  });
+
+  test('a release whose coverage leaves a gap no exclusion explains is refused promotion (RF028 AC7, RNF032 AC7)', async ({ request }) => {
+    const gapCode = `E2E_RF028_GAP_${suffix}`;
+    const gapSystemUri = `urn:bioavanced:e2e:${gapCode}`;
+    // A duplicated code consumes a row and stages nothing new, with no issue.
+    const response = await postReferenceImportSupport(request, 'run', {
+      datasetCode: gapCode,
+      datasetVersion: 'e2e-v1',
+      records: [HPO_SAMPLE_RECORDS[0], HPO_SAMPLE_RECORDS[1], HPO_SAMPLE_RECORDS[2], HPO_SAMPLE_RECORDS[1]],
+    });
+    expect(response.status(), await response.text()).toBe(200);
+    const { data } = await response.json();
+    expect(data.approved).toBe(true);
+
+    const release = await findReferenceRelease(data.releaseId);
+    expect(release!.releaseStatus).toBe('approved');
+    const manifest = await findReferenceCoverageManifest(release!.coverageManifestId);
+    expect(manifest!.expectedCount).toBe(4);
+    expect(manifest!.obtainedCount).toBe(3);
+    expect(manifest!.coverageResult).toBe('incomplete');
+    const assessment = await findDataQualityAssessment(release!.dataQualityAssessmentId);
+    expect(assessment!.status).toBe('failed');
+
+    const admin = await realLogin(request);
+    const promoted = await request.post(`${apiBaseURL}/api/reference-releases/${data.releaseId}/promote`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(promoted.status(), await promoted.text()).toBe(409);
+    expect((await promoted.json()).error).toBe('coverage_incomplete');
+    expect((await findReferenceRelease(data.releaseId))!.releaseStatus).toBe('approved');
+    expect(await countTerminologyConceptsBySystemUri(gapSystemUri)).toBe(0);
+  });
+});
+
+// RNF028 C7 (#1574): an importer creates no entity or field outside the
+// approved release. Own describe, own dataset, no state shared with the
+// serial lifecycle describe above.
+test.describe('Reference importer refuses an entity outside the approved release (RNF028 C7) — real backend', () => {
+  test.afterAll(async () => {
+    await closeFoundationDb();
+  });
+
+  const datasetCode = `E2E_RNF028_C7_${Date.now()}`;
+
+  test('a record of an entity outside the release is refused as an issue and only TerminologyConcept and TerminologyRelation rows are staged, none carrying its fields (RNF028 C7)', async ({ request }) => {
+    const records: Record<string, unknown>[] = [
+      { id: 'HP:0000001', lbl: 'All', is_a: [], synonyms: [], obsolete: false },
+      // A release term carrying a field outside the release.
+      { id: 'HP:0000118', lbl: 'Phenotypic abnormality', is_a: ['HP:0000001'], synonyms: [], obsolete: false, sampleId: 'E2E-RNF028-C7-S1' },
+      // A record of an entity outside the release.
+      { entityType: 'Sample', sampleId: 'E2E-RNF028-C7-S1', patientId: 'E2E-RNF028-C7-P1' },
+    ];
+    const response = await postReferenceImportSupport(request, 'run', { datasetCode, datasetVersion: 'e2e-v1', records });
+    expect(response.status(), await response.text()).toBe(200);
+    const { data } = await response.json();
+    expect(data.run.runStatus).toBe('completed');
+    expect(data.approved).toBe(true);
+
+    const runs = await referenceImportRunsForRelease(data.releaseId);
+    const run = runs.find((candidate) => candidate.referenceImportRunId === data.run.referenceImportRunId);
+    expect(run).toBeDefined();
+    expect(run!.recordsRead).toBe(3);
+    expect(run!.recordsValidated).toBe(2);
+    expect(run!.recordsRejected).toBe(1);
+
+    const issues = await referenceImportIssuesForRun(run!.referenceImportRunId);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].errorCode).toBe('MISSING_CODE');
+    expect(issues[0].rawValue.entityType).toBe('Sample');
+
+    // Two concepts and one is_a relation; the Sample record stages nothing.
+    const staged = await referenceImportStagingForRun(run!.referenceImportRunId);
+    expect(staged).toHaveLength(3);
+    expect([...new Set(staged.map((row) => row.entityType))].sort()).toEqual(['TerminologyConcept', 'TerminologyRelation']);
+    for (const row of staged) {
+      for (const field of ['sampleId', 'patientId', 'entityType']) {
+        expect(Object.keys(row.candidate), `${row.entityType} candidate`).not.toContain(field);
+      }
+    }
+
+    expect(await countTerminologyConceptsBySystemUri(`urn:bioavanced:e2e:${datasetCode}`)).toBe(0);
   });
 });
 

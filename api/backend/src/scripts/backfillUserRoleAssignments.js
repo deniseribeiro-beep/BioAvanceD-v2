@@ -26,6 +26,11 @@
 // legacy migration over pre-RBAC users, not a seed. Placement 3 of the
 // conventions' "Where a new seed belongs" -- a manual npm script -- which is
 // what admin:create-first and the two mfa scripts are.
+//
+// One-way: no rollback. Its rows carry `grantedBy: 'system-backfill'`, so a
+// person can find them, but `changeUserRole` may since have revoked and
+// replaced one, and enforcement reads UserRoleAssignment only, so removing
+// them leaves those users with no role.
 const { connectDB, closeConnection } = require('../database/mongo');
 const { backfillUserRoleAssignments } = require('../services/rbac-assignment.service');
 

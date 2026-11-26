@@ -9,6 +9,16 @@ const hpoServicePath = require.resolve('../../src/services/hpoService');
 const hpoRoutePath = require.resolve('../../src/routes/hpo');
 const loggerPath = require.resolve('../../src/utils/logger');
 
+// hpo.js takes `authenticate` when it is required (#1553): every case loads it
+// signed in, but the 401 ones, which restore the real gate first.
+const authModule = require('../../src/infrastructure/middleware/auth');
+const realAuthenticate = authModule.authenticate;
+const signedIn = (req, res, next) => {
+  req.user = { id: 'user-1' };
+  next();
+};
+authModule.authenticate = signedIn;
+
 // hpo.js destructures `searchHpoLocal`, `searchHpoExternal`,
 // `isExternalHpoLookupEnabled` from ../services/hpoService at require-time.
 // vi.spyOn() on the hpoService module's exports AFTER hpo.js has already
@@ -178,6 +188,25 @@ describe('hpo routes', () => {
       expect(res.body).toEqual({ error: 'Erro ao buscar termos HPO' });
       expect(searchHpoLocal).toHaveBeenCalledTimes(1);
       expect(searchHpoExternal).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('authentication (#1553)', () => {
+    it.each(['/api/hpo/search?q=term', '/api/hpo/HP:0001250'])('answers 401 to GET %s with no token', async (url) => {
+      authModule.authenticate = realAuthenticate;
+      try {
+        const searchHpoLocal = vi.fn();
+        const app = loadRouteWithMocks({ searchHpoLocal });
+        // No database: authenticate's audit write of the refusal is skipped,
+        // and a request that reached a handler would call searchHpoLocal or
+        // answer 500.
+        app.locals.db = undefined;
+        const res = await request(app).get(url);
+        expect(res.status).toBe(401);
+        expect(searchHpoLocal).not.toHaveBeenCalled();
+      } finally {
+        authModule.authenticate = signedIn;
+      }
     });
   });
 

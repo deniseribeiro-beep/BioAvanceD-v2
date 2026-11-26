@@ -9,6 +9,12 @@ import {
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real-backend proof for two RF008 report defects.
 //
@@ -38,9 +44,17 @@ function validSampleFields(sampleType: string, linkedProject: string) {
 
 test.describe('RF008 report filters and bounded report data (#748, #1077) — real backend', () => {
   const seededBoxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rf008-report-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -67,6 +81,7 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
           ...validSampleFields(sampleType, linkedProject),
           boxId: box.boxId,
           positionCode: box.positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       expect([201, 202], await res.text()).toContain(res.status());
@@ -202,6 +217,7 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
         ...validSampleFields('PLASMA', linkedProject),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202], await create.text()).toContain(create.status());

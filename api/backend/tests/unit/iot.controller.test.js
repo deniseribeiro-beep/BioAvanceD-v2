@@ -476,6 +476,102 @@ describe('iot.controller', () => {
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
 
+  // RF009 AC8, RNF004 C7 (#1540): a body field outside the reading contract
+  // is stripped before the reading is hashed or stored; the reading is
+  // accepted and flagged by a personal_data_stripped issue, never refused.
+  it('accepts a reading that carries personal data, strips it and flags the reading', async () => {
+    const { createHash } = require('crypto');
+    const { canonicalJson } = require('../../src/services/telemetryReadingContract');
+    const base = await connectMongoDBMock();
+    const events = [];
+    const issues = [];
+    connectMongoDBMock.mockResolvedValue({
+      collection: (name) => {
+        if (name === 'telemetryIngestionEvents') return { insertOne: async (doc) => { events.push(doc); return {}; } };
+        if (name === 'telemetryValidationIssues') return { insertMany: async (docs) => { issues.push(...docs); return {}; } };
+        return base.collection(name);
+      },
+    });
+    const req = { body: { sensorId: 'sensor-2', temperature: 5, patientName: 'Maria da Silva', cpf: '12345678909' } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const identity = saveTelemetryPointMock.mock.calls[0][3];
+    expect(identity.payloadHash).toBe(createHash('sha256').update(canonicalJson({ sensorId: 'sensor-2', temperature: 5 })).digest('hex'));
+    expect(issues.filter((issue) => issue.issueCode === 'personal_data_stripped'))
+      .toEqual([expect.objectContaining({ fieldPath: 'cpf,patientName', disposition: 'quarantined' })]);
+    expect(events).toEqual([expect.objectContaining({ validationStatus: 'quarantined', telemetryReadingId: res.body.telemetryReadingId })]);
+    expect(JSON.stringify([events, issues, saveTelemetryPointMock.mock.calls])).not.toContain('Maria');
+  }, 15000);
+
+  // RNF004 C4 (#1521): a client payloadHash is checked against the hash of
+  // the canonical contract fields received. A mismatch is a corrupted
+  // message, refused 422 and recorded, never stored; a match is accepted and
+  // the payloadHash field is neither hashed nor stripped.
+  describe('client payloadHash (#1521, RNF004 C4)', () => {
+    const { createHash } = require('crypto');
+    const { canonicalJson } = require('../../src/services/telemetryReadingContract');
+    const reading = { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-1521' };
+    const readingHash = createHash('sha256').update(canonicalJson(reading)).digest('hex');
+
+    async function captureWrites() {
+      const base = await connectMongoDBMock();
+      const events = [];
+      const issues = [];
+      connectMongoDBMock.mockResolvedValue({
+        collection: (name) => {
+          if (name === 'telemetryIngestionEvents') return { insertOne: async (doc) => { events.push(doc); return {}; } };
+          if (name === 'telemetryValidationIssues') return { insertMany: async (docs) => { issues.push(...docs); return {}; } };
+          return base.collection(name);
+        },
+      });
+      return { events, issues };
+    }
+
+    it('refuses a reading whose payloadHash does not match with 422, records it as corrupted and stores nothing', async () => {
+      const { events, issues } = await captureWrites();
+      const req = { body: { ...reading, payloadHash: '0'.repeat(64) } };
+      const res = createResponse();
+
+      await ingestTelemetry(req, res);
+
+      expect(res.statusCode).toBe(422);
+      expect(res.body).toEqual(expect.objectContaining({ success: false, error: expect.stringMatching(/corrompida/) }));
+      expect(res.locals.auditReason).toBe('payload_hash_mismatch');
+      expect(saveTelemetryPointMock).not.toHaveBeenCalled();
+      expect(events).toEqual([expect.objectContaining({ validationStatus: 'rejected', telemetryReadingId: null, payloadHash: readingHash })]);
+      expect(issues.map((issue) => issue.issueCode)).toEqual(['payload_hash_mismatch']);
+    }, 15000);
+
+    it('a corrupted resend of an accepted client key is refused 422, never answered as a replay', async () => {
+      const first = createResponse();
+      const second = createResponse();
+
+      await ingestTelemetry({ body: { ...reading } }, first);
+      await ingestTelemetry({ body: { ...reading, payloadHash: '0'.repeat(64) } }, second);
+
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(422);
+      expect(second.body.replayed).toBeUndefined();
+      expect(saveTelemetryPointMock).toHaveBeenCalledTimes(1);
+    }, 15000);
+
+    it('control: a matching payloadHash is accepted, hashed out of the reading and not stripped', async () => {
+      const { events, issues } = await captureWrites();
+      const req = { body: { ...reading, payloadHash: readingHash } };
+      const res = createResponse();
+
+      await ingestTelemetry(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(saveTelemetryPointMock.mock.calls[0][3].payloadHash).toBe(readingHash);
+      expect(events).toEqual([]);
+      expect(issues).toEqual([]);
+    }, 15000);
+  });
+
   it('usa notificationEmail como fallback quando alertEmail não está presente', async () => {
     sensorMetadataLeanMock.mockResolvedValueOnce({
       sensorId: 'sensor-2',
@@ -1246,6 +1342,124 @@ describe('iot.controller', () => {
         );
       });
       warnSpy.mockRestore();
+    }, 15000);
+  });
+
+  // RULE-025 (#1582): a trustworthy reading sent with non-contract fields is
+  // kept, its extra fields are stripped before hash, screen and store, it is
+  // flagged, and one security audit names the fields, never a value. A body
+  // refused for its own fault is still audited, and a contract-only body is
+  // not.
+  describe('RULE-025 on POST /api/iot/telemetry (#1582)', () => {
+    const extras = { patientName: 'Maria da Silva 123.456.789-09', cpf: '12345678909' };
+
+    async function captureWrites() {
+      const base = await connectMongoDBMock();
+      const events = [];
+      const issues = [];
+      connectMongoDBMock.mockResolvedValue({
+        collection: (name) => {
+          if (name === 'telemetryIngestionEvents') return { insertOne: async (doc) => { events.push(doc); return {}; } };
+          if (name === 'telemetryValidationIssues') return { insertMany: async (docs) => { issues.push(...docs); return {}; } };
+          return base.collection(name);
+        },
+      });
+      return { events, issues };
+    }
+
+    const strippedAudits = () => auditLogSpy.mock.calls
+      .map(([entry]) => entry)
+      .filter((entry) => entry && entry.action === 'TELEMETRY_PII_STRIPPED');
+
+    it('(a) stores a valid reading with extra fields and writes one security audit', async () => {
+      const { issues } = await captureWrites();
+      const res = createResponse();
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5, ...extras } }, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(saveTelemetryPointMock).toHaveBeenCalledTimes(1);
+      expect(strippedAudits()).toEqual([expect.objectContaining({
+        resourceType: 'TelemetryReading',
+        resourceId: 'sensor-2',
+        severity: 'warning',
+        source: 'api',
+        payload: { ingestionService: 'iot-api', fieldNames: ['cpf', 'patientName'], unlistedFieldCount: 0 },
+      })]);
+      expect(issues.filter((issue) => issue.issueCode === 'personal_data_stripped'))
+        .toEqual([expect.objectContaining({ disposition: 'quarantined' })]);
+    }, 15000);
+
+    it('(b) refuses an implausible reading whole and still audits its extra fields', async () => {
+      await captureWrites();
+      const res = createResponse();
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 900, ...extras } }, res);
+
+      expect(res.statusCode).toBe(422);
+      expect(saveTelemetryPointMock).not.toHaveBeenCalled();
+      expect(strippedAudits()).toHaveLength(1);
+    }, 15000);
+
+    it('(b) a body refused 400 for a missing sensorId still audits its extra fields', async () => {
+      await captureWrites();
+      const res = createResponse();
+
+      await ingestTelemetry({ body: { temperature: 5, ...extras } }, res);
+
+      expect(res.statusCode).toBe(400);
+      expect(saveTelemetryPointMock).not.toHaveBeenCalled();
+      expect(strippedAudits()).toHaveLength(1);
+    }, 15000);
+
+    it('(c) a contract-only reading writes no security audit and no personal_data_stripped issue', async () => {
+      const { issues } = await captureWrites();
+      const res = createResponse();
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(strippedAudits()).toEqual([]);
+      expect(issues.filter((issue) => issue.issueCode === 'personal_data_stripped')).toEqual([]);
+    }, 15000);
+
+    it('(d) no extra field value reaches a log or an issue or an audit or the stored point', async () => {
+      const loggerModule = require('../../src/utils/logger');
+      const spies = Object.keys(loggerModule)
+        .filter((key) => typeof loggerModule[key] === 'function')
+        .map((key) => vi.spyOn(loggerModule, key).mockImplementation(() => undefined));
+      consoleLogSpy.mockClear();
+      const consoleSpies = [
+        consoleLogSpy,
+        vi.spyOn(console, 'error').mockImplementation(() => undefined),
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      ];
+      try {
+        const { events, issues } = await captureWrites();
+        const res = createResponse();
+
+        await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5, ...extras } }, res);
+
+        expect(res.statusCode).toBe(200);
+        // The route's CREATE audit row passes the request itself; auditLogger
+        // keeps only what extractRequestInfo reads from it, never its body.
+        const auditEntries = auditLogSpy.mock.calls.map(([entry]) => (
+          entry && entry.req ? { ...entry, req: auditLogger.extractRequestInfo(entry.req) } : entry
+        ));
+        const seen = JSON.stringify([
+          [...spies, ...consoleSpies].map((spy) => spy.mock.calls),
+          auditEntries,
+          issues,
+          events,
+          saveTelemetryPointMock.mock.calls,
+          res.body,
+        ]);
+        expect(seen).not.toContain('Maria');
+        expect(seen).not.toContain('12345678909');
+      } finally {
+        spies.forEach((spy) => spy.mockRestore());
+        consoleSpies.slice(1).forEach((spy) => spy.mockRestore());
+      }
     }, 15000);
   });
 });

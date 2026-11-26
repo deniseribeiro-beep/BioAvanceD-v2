@@ -23,13 +23,16 @@ function record(counters, status, aborted, ms) {
     else if (status >= 400) counters.clientErrors += 1;
     counters.statusCounts[status] = (counters.statusCounts[status] || 0) + 1;
   }
-  const l = counters.latency;
+  recordLatency(counters.latency, ms);
+}
+
+function recordLatency(latency, ms) {
   let i = LATENCY_BUCKETS_MS.findIndex((bound) => ms <= bound);
   if (i === -1) i = LATENCY_BUCKETS_MS.length;
-  l.buckets[i] += 1;
-  l.count += 1;
-  l.sumMs += ms;
-  if (ms > l.maxMs) l.maxMs = ms;
+  latency.buckets[i] += 1;
+  latency.count += 1;
+  latency.sumMs += ms;
+  if (ms > latency.maxMs) latency.maxMs = ms;
 }
 
 // The upper bound of the bucket holding the 95th percentile, not an exact value.
@@ -172,4 +175,7 @@ module.exports = {
   middleware: defaultMetrics.middleware,
   snapshot: defaultMetrics.snapshot,
   LATENCY_BUCKETS_MS,
+  emptyLatency,
+  recordLatency,
+  latencyView,
 };

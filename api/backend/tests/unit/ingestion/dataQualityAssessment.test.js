@@ -122,6 +122,14 @@ describe('ingestion/dataQualityAssessment assessIngestedRecord (RNF011 C3, #1318
     });
   });
 
+  it('timeliness uses the configured clock drift limit', () => {
+    // #1520, RNF025 AC6: 3 minutes past assessedAt is beyond a 1-minute
+    // limit and within the 5-minute default.
+    const threeMinutesAhead = envelope({ retrievedAt: new Date('2026-10-22T12:03:00.000Z') });
+    expect(resultOf(assess({ envelope: threeMinutesAhead, clockDriftLimitMs: 60000 }), 'timeliness')).toMatchObject({ value: 0, ageSeconds: -180 });
+    expect(resultOf(assess({ envelope: threeMinutesAhead }), 'timeliness')).toMatchObject({ value: 1, ageSeconds: -180 });
+  });
+
   it('9. a null result neither passes nor fails: an otherwise passing record stays passed', () => {
     const doc = assess({ duplicateFound: null });
 

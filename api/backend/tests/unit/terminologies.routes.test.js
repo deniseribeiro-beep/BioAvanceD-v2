@@ -41,6 +41,16 @@ function buildDb({
   return { db, terminologiesBulkWrite, orphanetBulkWrite, cidsFind, orphanetFind, terminologiesFindFn, terminologiesCountFn };
 }
 
+// terminologies.routes.js takes `authenticate` when it is required (#1553):
+// every case loads it signed in, but the 401 one, which restores the real gate.
+const authModule = require('../../src/infrastructure/middleware/auth');
+const realAuthenticate = authModule.authenticate;
+const signedIn = (req, res, next) => {
+  req.user = { id: 'user-1' };
+  next();
+};
+authModule.authenticate = signedIn;
+
 function loadRouter() {
   delete require.cache[require.resolve('../../src/interface/routes/terminologies.routes')];
   return require('../../src/interface/routes/terminologies.routes');
@@ -54,6 +64,20 @@ function buildApp(db) {
   app.use('/api/terminologies', router);
   return app;
 }
+
+describe('terminologies.routes authentication (#1553)', () => {
+  it('answers 401 to GET / with no token', async () => {
+    authModule.authenticate = realAuthenticate;
+    try {
+      // No database: a request that reached the handler would answer 503.
+      const app = buildApp(undefined);
+      const res = await request(app).get('/api/terminologies?q=Fabry');
+      expect(res.status).toBe(401);
+    } finally {
+      authModule.authenticate = signedIn;
+    }
+  });
+});
 
 describe('terminologies.routes', () => {
   const originalFetch = global.fetch;

@@ -9,7 +9,6 @@ import { validatePasswordAndGetError } from '../utils/passwordValidator';
 import { getPasswordIssues, passwordRequirementItems } from '../utils/passwordRules';
 import { usePasswordPolicy } from '../hooks/usePasswordPolicy';
 import { useLanguage } from '../contexts/LanguageContext';
-import './ResetPasswordPage.css';
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
@@ -34,7 +33,9 @@ export default function ResetPasswordPage() {
     }
   }, [token]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // #1445: the form renders only once token is set, so its onSubmit passes the
+  // narrowed token in; no submit can arrive without one.
+  const handleSubmit = async (e: React.FormEvent, resetToken: string) => {
     e.preventDefault();
     setError('');
 
@@ -55,14 +56,9 @@ export default function ResetPasswordPage() {
       return;
     }
 
-    if (!token) {
-      setError(t('auth.invalidToken') || 'Token inválido');
-      return;
-    }
-
     setLoading(true);
     try {
-      await authService.resetPassword(token, newPassword);
+      await authService.resetPassword(resetToken, newPassword);
       setSuccess(true);
       setTimeout(() => {
         navigate('/login');
@@ -126,7 +122,7 @@ export default function ResetPasswordPage() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="reset-password-form">
+          <form onSubmit={(e) => handleSubmit(e, token)} className="reset-password-form">
             <Input
               label="Nova Senha"
               type="password"

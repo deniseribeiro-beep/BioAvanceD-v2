@@ -1,9 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, File, FileImage, FileText, UploadCloud, Barcode, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 import Button from './UI/Button';
 import Input from './UI/Input';
 import { analysisFileService } from '../services/api';
-import './AnalysisUpload.css';
 
 const formatBytes = (bytes) => {
   if (!bytes && bytes !== 0) return '';
@@ -45,6 +44,14 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
   const [validating, setValidating] = useState(false);
   const [validated, setValidated] = useState(null);
   const [qrScanMode, setQrScanMode] = useState(false);
+  // Debounce timer for the typed sample id (#1444): each keystroke cancels the
+  // pending one, so only the latest value is validated once typing pauses.
+  const validationTimerRef = useRef(null);
+  // Sequence number of the latest validation (#1444): a newer request or an
+  // edit of the id bumps it, so a late response for a superseded id is dropped.
+  const validationSeqRef = useRef(0);
+
+  useEffect(() => () => clearTimeout(validationTimerRef.current), []);
 
   const extension = useMemo(() => getExtension(file?.name), [file]);
   const FileIcon = useMemo(() => getFileIcon(extension), [extension]);
@@ -58,8 +65,9 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
   };
 
   const validateSampleId = async (id) => {
+    const seq = ++validationSeqRef.current;
+    setValidated(null);
     if (!id || id.trim() === '') {
-      setValidated(null);
       return;
     }
 
@@ -67,27 +75,31 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
     setError('');
     try {
       const response = await analysisFileService.validateSample(id);
-      
-      if (response.success) {
+      if (seq !== validationSeqRef.current) return;
+      // validateSample resolves to the Axios response; the result is its body.
+      const result = response?.data ?? {};
+
+      if (result.success) {
         setValidated({
           success: true,
-          sample: response.sample,
-          patient: response.patient
+          sample: result.sample,
+          patient: result.patient
         });
       } else {
         setValidated({
           success: false,
-          error: response.error || 'Falha na validação'
+          error: result.error || 'Falha na validação'
         });
       }
     } catch (err) {
+      if (seq !== validationSeqRef.current) return;
       const errorMessage = err?.response?.data?.error || err?.message || 'Erro ao validar amostra';
       setValidated({
         success: false,
         error: errorMessage
       });
     } finally {
-      setValidating(false);
+      if (seq === validationSeqRef.current) setValidating(false);
     }
   };
 
@@ -96,20 +108,26 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
     setSampleId(value);
     
     // Valida apenas após parar de digitar (com delay)
-    if (value.trim().length > 0) {
-      setTimeout(() => {
-        if (value === sampleId) { // Verifica se o valor não mudou
-          validateSampleId(value);
-        }
+    clearTimeout(validationTimerRef.current);
+    validationTimerRef.current = null;
+    // An edited id drops the previous result and any validation in flight.
+    validationSeqRef.current += 1;
+    setValidated(null);
+    setValidating(false);
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      validationTimerRef.current = setTimeout(() => {
+        validationTimerRef.current = null;
+        validateSampleId(trimmed);
       }, 800);
-    } else {
-      setValidated(null);
     }
   };
 
   const handleQrInput = async (event) => {
     const scannedValue = event.target.value.trim();
     if (scannedValue) {
+      clearTimeout(validationTimerRef.current);
+      validationTimerRef.current = null;
       setSampleId(scannedValue);
       await validateSampleId(scannedValue);
       setQrScanMode(false);

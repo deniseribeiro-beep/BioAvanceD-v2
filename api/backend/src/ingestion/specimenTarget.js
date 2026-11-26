@@ -5,10 +5,14 @@
  * (docs/decisions/2026-10-23-ingestion-specimen-target.md). A given barcode
  * is issued as the specimen's LabelIdentifier (#1378); storage is never
  * allocated here (docs/decisions/2026-10-25-ingestion-specimen-storage-and-label.md).
+ * RNF011 AC1 (#1523): a named unit is an active UCUM code
+ * (docs/decisions/2026-11-12-ingestion-specimen-unit.md).
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { SampleModel } = require('../models/Sample');
 const { GraphProjectionService } = require('../services/graphProjection.service');
+const sampleCollectionGate = require('../services/sample-collection-gate.service');
+const { checkActiveCode } = require('./activeCodeValidator');
 const { SPECIMEN_LABEL_NAMESPACE_ID, issueSpecimenLabel } = require('../services/specimenLabel.service');
 const { getCollection } = require('../utils/collectionResolver');
 const { LEGACY_BARCODE_WRITE_REFUSED, sampleBarcodeWindowOpen } = require('../utils/sampleBarcodeWindow');
@@ -16,6 +20,10 @@ const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 
 // RegisterSample.js's assertConsent: the statuses that are positive evidence.
 const ACTIVE_CONSENT_STATUSES = ['ACTIVE', 'VALID', 'GRANTED'];
+
+// The systemUri the UCUM reference import stamps on its concepts
+// (reference-data/reference-imports/sources/ucum.js).
+const UCUM_SYSTEM_URI = 'http://unitsofmeasure.org';
 
 function referenceError(statusCode, message, violationCode) {
   const error = new Error(message);
@@ -81,7 +89,8 @@ async function validateSpecimenReferences(db, payload) {
   }
 
   // dict-02 ELM-0120 (#1368): each parent exists, belongs to the same
-  // participant and is not terminal.
+  // participant, is not terminal and is not quarantined, since deriving is
+  // processing (RF019 AC3).
   const samples = db.collection(CANONICAL_COLLECTIONS.samples);
   const parentIds = parentIdsOf(payload);
   if (parentIds.length > 0) {
@@ -97,6 +106,9 @@ async function validateSpecimenReferences(db, payload) {
       }
       if (SampleModel.isTerminalSpecimen(parent)) {
         throw referenceError(409, `parentSpecimenIds ${parentId} está encerrada (status: ${parent.specimenStatus})`);
+      }
+      if (SampleModel.resolveSpecimenStatus(parent) === 'quarantined') {
+        throw referenceError(409, `parentSpecimenIds ${parentId} está em quarentena e não pode ser processada (RF019)`);
       }
     }
   }
@@ -115,6 +127,30 @@ async function validateSpecimenReferences(db, payload) {
     const activeLabel = { namespaceRegistryId: SPECIMEN_LABEL_NAMESPACE_ID, encodedValue: payload.barcode, status: 'active' };
     if (await getCollection(db, 'labelIdentifiers').findOne(activeLabel)) {
       throw referenceError(409, `barcode ${payload.barcode} já ativo como etiqueta`, 'DUPLICATE_BARCODE');
+    }
+  }
+
+  // RF004 AC2, ELM-0118 (#1538): the mount's own collection gate, last. An
+  // unknown collection is a 404; a missing or refused one quarantines under
+  // the gate's code; a failed lookup rethrows, as the other gates do.
+  try {
+    await sampleCollectionGate.assertSampleCollectionAdmits(db, payload);
+  } catch (error) {
+    if (error.statusCode === 404) throw referenceError(404, error.message);
+    if (error.code === sampleCollectionGate.COLLECTION_REQUIRED
+      || error.code === sampleCollectionGate.COLLECTION_NOT_ADMITTED) {
+      throw referenceError(409, error.message, error.code);
+    }
+    throw error;
+  }
+
+  // RNF011 AC1 (#1523): a named unit is a code of the active UCUM release
+  // (ELM-0138), checked as RF029 AC3 checks every coded value. An absent
+  // unit is not checked here.
+  if (typeof payload.unit === 'string' && payload.unit !== '') {
+    const unitCheck = await checkActiveCode(db, { systemUri: UCUM_SYSTEM_URI, code: payload.unit });
+    if (!unitCheck.active) {
+      throw referenceError(409, `unit ${payload.unit} não é um código UCUM de uma release de referência ativa (status: ${unitCheck.status})`, 'INACTIVE_OR_UNKNOWN_CODE');
     }
   }
 }

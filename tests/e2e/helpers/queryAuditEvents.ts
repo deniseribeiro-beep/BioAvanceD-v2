@@ -21,10 +21,22 @@ async function getDb(): Promise<Db> {
 }
 
 export async function closeAuditEventsDb(): Promise<void> {
-  if (client) {
-    await client.close();
-    client = null;
-  }
+  if (!client) return;
+  const closing = client;
+  client = null;
+  await closing.close();
+}
+
+/** Heal leftover RF012 tamper rows from a timed-out prior run. */
+export async function restoreTamperedAuditResults(
+  logId: string,
+  restoredResult = 'success',
+): Promise<number> {
+  const db = await getDb();
+  const result = await db
+    .collection('audit_events')
+    .updateMany({ logId, result: 'tampered' }, { $set: { result: restoredResult } });
+  return result.modifiedCount;
 }
 
 /** The chain's newest events, newest first. */

@@ -2,6 +2,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
+// orphanet.js takes `authenticate` when it is required (#1553): every case
+// loads it signed in, but the 401 one, which restores the real gate first.
+const authModule = require('../../src/infrastructure/middleware/auth');
+const realAuthenticate = authModule.authenticate;
+const signedIn = (req, res, next) => {
+  req.user = { id: 'user-1' };
+  next();
+};
+authModule.authenticate = signedIn;
+
 const COLLECTION_NAME = 'orphanet_diseases';
 
 function cursor(rows) {
@@ -26,6 +36,23 @@ function loadRouteWithEnv(env = {}) {
   delete require.cache[require.resolve('../../src/routes/orphanet')];
   return buildApp;
 }
+
+describe('orphanet.routes authentication (#1553)', () => {
+  it('answers 401 to GET /search with no token', async () => {
+    const routerPath = require.resolve('../../src/routes/orphanet');
+    authModule.authenticate = realAuthenticate;
+    delete require.cache[routerPath];
+    try {
+      // No database: a request that reached the handler would answer 503.
+      const app = buildApp(undefined);
+      const res = await request(app).get('/api/orphanet/search?q=Fabry');
+      expect(res.status).toBe(401);
+    } finally {
+      authModule.authenticate = signedIn;
+      delete require.cache[routerPath];
+    }
+  });
+});
 
 describe('orphanet.routes', () => {
   const originalFetch = global.fetch;

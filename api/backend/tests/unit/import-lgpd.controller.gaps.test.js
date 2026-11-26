@@ -961,4 +961,371 @@ describe('import-lgpd.controller gaps', () => {
       );
     });
   });
+
+  describe('quarantine batch handlers (#1337)', () => {
+    function batchReq(overrides = {}) {
+      return {
+        organizationScope: { scope: 'global' },
+        app: { locals: { db: createDb() } },
+        params: { batchId: 'batch-1', recordId: 'record-1' },
+        query: {},
+        body: { row: { sampleType: 'PLASMA' } },
+        ...overrides
+      };
+    }
+
+    it('getQuarantineBatch: returns 503 when there is no db', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const res = createRes();
+
+      await controller.getQuarantineBatch(batchReq({ app: { locals: {} } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Banco de dados não disponível' });
+    });
+
+    it('getQuarantineBatch: keeps only sample batches when the permission lookup rejects with a plain string', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbac = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbac, 'userHasPermission').mockRejectedValue('rbac down');
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const serviceSpy = vi.spyOn(importLGPDService, 'getQuarantineBatch').mockResolvedValue({ batch: { _id: 'batch-1' }, records: [] });
+      const res = createRes();
+
+      await controller.getQuarantineBatch(batchReq({ user: { userID: 'u1' } }), res);
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('createPatient'), 'rbac down');
+      expect(serviceSpy).toHaveBeenCalledWith(expect.anything(), 'batch-1', expect.objectContaining({
+        types: [importLGPDService.QUARANTINE_BATCH_TYPES.SAMPLE]
+      }));
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('getQuarantineBatch: returns the error status and its own message for a 404', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbac = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbac, 'userHasPermission').mockResolvedValue(false);
+      vi.spyOn(importLGPDService, 'getQuarantineBatch').mockRejectedValue(
+        Object.assign(new Error('Lote de quarentena não encontrado'), { statusCode: 404 })
+      );
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.getQuarantineBatch(batchReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Lote de quarentena não encontrado' });
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('getQuarantineBatch: returns 500 and the generic message for an error with no statusCode', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbac = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbac, 'userHasPermission').mockResolvedValue(false);
+      vi.spyOn(importLGPDService, 'getQuarantineBatch').mockRejectedValue(new Error('mongo down'));
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.getQuarantineBatch(batchReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Erro ao ler lote de quarentena' });
+      expect(errorSpy).toHaveBeenCalledWith(expect.any(String), 'mongo down');
+    });
+
+    it('getQuarantineBatch: returns 500 and logs the value itself when the service rejects with a plain string', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbac = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbac, 'userHasPermission').mockResolvedValue(false);
+      vi.spyOn(importLGPDService, 'getQuarantineBatch').mockRejectedValue('plain failure');
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.getQuarantineBatch(batchReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Erro ao ler lote de quarentena' });
+      expect(errorSpy).toHaveBeenCalledWith(expect.any(String), 'plain failure');
+    });
+
+    it('resubmitQuarantinedRow: returns 503 when there is no db', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const serviceSpy = vi.spyOn(importLGPDService, 'resubmitQuarantinedSampleRow');
+      const res = createRes();
+
+      await controller.resubmitQuarantinedRow(batchReq({ app: { locals: {} } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(serviceSpy).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['only id', { id: 'u-id' }, 'u-id', 'IMPORT_LGPD'],
+      ['only _id', { _id: 'u-oid' }, 'u-oid', 'IMPORT_LGPD'],
+      ['only email', { email: 'ana@example.com' }, null, 'ana@example.com'],
+    ])('resubmitQuarantinedRow: resolves the actor from a req.user carrying %s, with no ip or user agent', async (_label, user, expectedId, expectedName) => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const serviceSpy = vi.spyOn(importLGPDService, 'resubmitQuarantinedSampleRow').mockResolvedValue({ sampleId: 's-1' });
+      const req = batchReq({ user });
+      const res = createRes();
+
+      await controller.resubmitQuarantinedRow(req, res);
+
+      expect(serviceSpy).toHaveBeenCalledWith(req.app.locals.db, 'batch-1', 'record-1', { sampleType: 'PLASMA' }, {
+        organizationScope: { scope: 'global' },
+        neo4jDriver: null,
+        actor: {
+          userID: expectedId,
+          userId: expectedId,
+          userName: expectedName,
+          userRole: null,
+          ipAddress: null,
+          userAgent: null,
+        },
+      });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: { sampleId: 's-1' } });
+    });
+
+    it('listQuarantineBatches: returns 503 when there is no db', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const res = createRes();
+
+      await controller.listQuarantineBatches(batchReq({ app: { locals: {} } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Banco de dados não disponível' });
+    });
+
+    it('listQuarantineBatches: returns 500 carrying the error message when the service rejects', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbac = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbac, 'userHasPermission').mockResolvedValue(false);
+      vi.spyOn(importLGPDService, 'listQuarantineBatches').mockRejectedValue(new Error('list down'));
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.listQuarantineBatches(batchReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Erro ao listar lotes de quarentena', message: 'list down' });
+      expect(errorSpy).toHaveBeenCalledWith(expect.any(String), 'list down');
+    });
+
+    it('listQuarantineBatches: logs the value itself when the service rejects with a plain string', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbac = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbac, 'userHasPermission').mockResolvedValue(false);
+      vi.spyOn(importLGPDService, 'listQuarantineBatches').mockRejectedValue('plain failure');
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.listQuarantineBatches(batchReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Erro ao listar lotes de quarentena', message: undefined });
+      expect(errorSpy).toHaveBeenCalledWith(expect.any(String), 'plain failure');
+    });
+  });
+
+  describe('import handlers: scope errors, actor fallbacks and stagingBatchId (#1337)', () => {
+    function importReq(overrides = {}) {
+      return {
+        organizationScope: { scope: 'global' },
+        app: { locals: { db: createDb() } },
+        file: { path: '/tmp/i.csv', originalname: 'i.csv' },
+        body: {},
+        ...overrides
+      };
+    }
+
+    it('importPatients: returns 500 with the scope error message when it carries no statusCode', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(controller, 'resolveImportTargetOrganizationId').mockRejectedValue(new Error('scope lookup failed'));
+      const importSpy = vi.spyOn(importLGPDService, 'importPatients');
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const req = importReq();
+      const res = createRes();
+
+      await controller.importPatients(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'scope lookup failed' });
+      expect(cleanupSpy).toHaveBeenCalledWith(req.file.path);
+      expect(importSpy).not.toHaveBeenCalled();
+    });
+
+    it('importPatients: stamps no organizations and no user agent when the scope lookup rejects with a string and req.get is absent', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const rbac = require('../../src/services/rbac-assignment.service');
+      vi.spyOn(rbac, 'resolveUserOrganizationScope').mockRejectedValue('scope store down');
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const importSpy = vi.spyOn(importLGPDService, 'importPatients').mockResolvedValue({ total: 1, success: 1, errors: [] });
+      vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.importPatients(importReq(), res);
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('organizacoes do importador'), 'scope store down');
+      expect(importSpy.mock.calls[0][2].actor).toMatchObject({ userAgent: null, organizationIds: [] });
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('importPatients: returns the stagingBatchId as a string when rows were quarantined', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(importLGPDService, 'importPatients').mockResolvedValue({
+        total: 1, success: 0, errors: [{ row: 2, errors: ['bad'] }], stagingBatchId: 9001
+      });
+      vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.importPatients(importReq(), res);
+
+      expect(res.json.mock.calls[0][0].data.stagingBatchId).toBe('9001');
+    });
+
+    it('importPatientsSmart: returns 500 with the scope error message when it carries no statusCode', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(controller, 'resolveImportTargetOrganizationId').mockRejectedValue(new Error('scope lookup failed'));
+      const importSpy = vi.spyOn(importLGPDService, 'importPatientsSmart');
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const req = importReq();
+      const res = createRes();
+
+      await controller.importPatientsSmart(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'scope lookup failed' });
+      expect(cleanupSpy).toHaveBeenCalledWith(req.file.path);
+      expect(importSpy).not.toHaveBeenCalled();
+    });
+
+    it('importPatientsSmart: resolves the actor from req.user.id and the report user from username, and returns the stagingBatchId as a string', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const fs = require('fs');
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('content'));
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const importSpy = vi.spyOn(importLGPDService, 'importPatientsSmart').mockResolvedValue({
+        total: 1, success: 0, errors: [{ row: 2, errors: ['bad'] }], stagingBatchId: 9002
+      });
+      const persistSpy = vi.spyOn(controller, 'persistSmartImportSummary').mockResolvedValue({ _id: 'report-1' });
+      vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+      vi.spyOn(auditLogger, 'logImport').mockResolvedValue(undefined);
+      const res = createRes();
+
+      await controller.importPatientsSmart(importReq({ user: { id: 'u-7', username: 'jdoe' } }), res);
+
+      expect(importSpy.mock.calls[0][2].actor).toMatchObject({ userID: 'u-7', userId: 'u-7' });
+      expect(persistSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ userId: 'u-7', userName: 'jdoe' }));
+      expect(res.json.mock.calls[0][0].data.stagingBatchId).toBe('9002');
+    });
+
+    it('importSamples: records the failed batch against a req.user carrying only _id, then retains the file', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(importLGPDService, 'importSamples').mockRejectedValue(new Error('Campos obrigatórios ausentes: sampleType'));
+      const recordSpy = vi.spyOn(importLGPDService, 'recordFailedImportBatch').mockResolvedValue('failed-1');
+      const retainSpy = vi.spyOn(importLGPDService, 'retainSourceFileForBatch').mockResolvedValue(null);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const req = importReq({ user: { _id: 'u-oid' } });
+      const res = createRes();
+
+      await controller.importSamples(req, res);
+
+      expect(recordSpy).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({
+        fileName: 'i.csv',
+        actor: expect.objectContaining({ userID: 'u-oid', userId: 'u-oid' })
+      }));
+      expect(retainSpy).toHaveBeenCalledWith(req.app.locals.db, req.file, 'failed-1');
+      // #1419: retention returned null, so the staging file is removed.
+      expect(cleanupSpy).toHaveBeenCalledWith(req.file.path);
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao importar amostras',
+        message: 'Campos obrigatórios ausentes: sampleType'
+      });
+    });
+
+    it('importSamples: falls back to deleting the file when recording the failed batch rejects with a string', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      vi.spyOn(importLGPDService, 'importSamples').mockRejectedValue(new Error('header broke'));
+      vi.spyOn(importLGPDService, 'recordFailedImportBatch').mockRejectedValue('batch store down');
+      const retainSpy = vi.spyOn(importLGPDService, 'retainSourceFileForBatch');
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const req = importReq();
+      const res = createRes();
+
+      await controller.importSamples(req, res);
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Falha ao registrar lote FAILED'), 'batch store down');
+      expect(retainSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledWith(req.file.path);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'header broke' }));
+    });
+
+    it('importSamples: deletes the file without opening a batch when the failure leaves no db to read', async () => {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const recordSpy = vi.spyOn(importLGPDService, 'recordFailedImportBatch');
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const req = importReq({ app: {} });
+      const res = createRes();
+
+      await controller.importSamples(req, res);
+
+      expect(recordSpy).not.toHaveBeenCalled();
+      expect(cleanupSpy).toHaveBeenCalledWith(req.file.path);
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'Erro ao importar amostras' }));
+    });
+  });
+
+  describe('downloadSampleTemplateExcel example row (#1337)', () => {
+    async function exampleRowFor(collections) {
+      const controller = require('../../src/controllers/import-lgpd.controller');
+      const ExcelJS = require('exceljs');
+      const db = {
+        collection: vi.fn((name) => ({
+          find: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue(collections[name])
+        }))
+      };
+      const res = createRes();
+
+      await controller.downloadSampleTemplateExcel({ organizationScope: { scope: 'global' }, app: { locals: { db } } }, res);
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.send.mock.calls[0][0]);
+      const row = workbook.getWorksheet('Amostras').getRow(2);
+      return [row.getCell(2).value, row.getCell(3).value, row.getCell(4).value];
+    }
+
+    it('uses each catalog entry\'s description when it has no id', async () => {
+      const values = await exampleRowFor({
+        sampleTypes: [{ description: 'Plasma' }],
+        sampleOrigins: [{ description: 'Sangue Venoso' }],
+        extractionProtocols: [{ description: 'Tubo EDTA' }]
+      });
+
+      expect(values).toEqual(['Plasma', 'Sangue Venoso', 'Tubo EDTA']);
+    });
+
+    it('uses the canonical defaults when every catalog is empty', async () => {
+      const { SPECIMEN_TYPES, SAMPLE_ORIGINS, EXTRACTION_PROTOCOLS } = require('../../src/config/constants/specimen.constants');
+
+      const values = await exampleRowFor({ sampleTypes: [], sampleOrigins: [], extractionProtocols: [] });
+
+      expect(values).toEqual([SPECIMEN_TYPES[0].id, SAMPLE_ORIGINS[0].id, EXTRACTION_PROTOCOLS[0].id]);
+    });
+  });
 });

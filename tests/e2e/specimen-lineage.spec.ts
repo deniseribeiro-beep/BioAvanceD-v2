@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { MongoClient, ObjectId } from 'mongodb';
-import { realLogin } from './helpers/realAuth';
+import { realLogin, seedRealAuth } from './helpers/realAuth';
 import {
   createRealParticipant,
   seedStorageBoxLocation,
@@ -10,7 +10,14 @@ import {
 } from './helpers/seedParticipant';
 import { seedSensorOnFreezer, removeSensorOnFreezer, closeSeedSensorDb, type SeededFreezerSensor } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
-import { waitForDerivedFrom, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
+import { waitForDerivedFrom, readSampleStatus, removeSampleNodes, countSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
+import { sampleOutboxEvents, waitForOutboxEventsProjected, closeOutboxDb } from './helpers/queryOutbox';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -40,6 +47,12 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
   const seededBoxes: SeededStorageBox[] = [];
   const seededSensors: SeededFreezerSensor[] = [];
   const createdSamples: Array<{ mongoId: string; specimenId: string }> = [];
+  // #1497 (RF004 AC2): the collection these specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`lineage-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     const mongoIds = createdSamples.map((sample) => sample.mongoId);
@@ -72,9 +85,12 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
     await removeSampleNodes(mongoIds);
     await Promise.all(seededSensors.map((sensor) => removeSensorOnFreezer(sensor).catch(() => {})));
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedSensorDb();
     await closeSeedDb();
     await closeNeo4jDriver();
+    await closeOutboxDb();
   });
 
   async function createSample(
@@ -97,6 +113,7 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
         registeredAt: new Date().toISOString(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
         ...extra,
       },
     });
@@ -198,5 +215,146 @@ test.describe('Specimen lineage (#1368) — real backend, compromise through DER
       .poll(async () => readSampleStatus(derivative.mongoId), { timeout: 15_000 })
       .toBe('COMPROMISED');
     expect(await readSampleStatus(control.mongoId)).not.toBe('COMPROMISED');
+
+    // #1505 (RF023 AC8, RF019 AC1/AC4): the breach reached the graph through
+    // one durable SPECIMEN_COMPROMISED outbox row per cycle, on the root
+    // sample only: its cause (the freezer's sensor) and instant (the start of
+    // the excursion), and no temperature reading.
+    const compromiseEvents = (await sampleOutboxEvents(parent.mongoId))
+      .filter((event) => event.eventType === 'SPECIMEN_COMPROMISED');
+    expect(compromiseEvents.length).toBeGreaterThanOrEqual(1);
+    for (const event of compromiseEvents) {
+      expect(event.sourceService).toBe('telemetry-monitor');
+      expect(Object.keys(event.payload).sort()).toEqual(['breachedSince', 'freezerKey', 'specimenId']);
+      expect(event.payload.specimenId).toBe(parent.mongoId);
+      expect(event.payload.freezerKey).toBe(sensor.sensorId);
+      expect(Number.isNaN(Date.parse(String(event.payload.breachedSince)))).toBe(false);
+    }
+    await waitForOutboxEventsProjected(compromiseEvents.map((event) => String(event.eventId)));
+    const derivativeCompromise = (await sampleOutboxEvents(derivative.mongoId))
+      .filter((event) => event.eventType === 'SPECIMEN_COMPROMISED');
+    expect(derivativeCompromise).toHaveLength(0);
+  });
+
+  // #1559: the sample page reads GET /api/samples/:id/graph-status, so a
+  // derivative compromised through DERIVED_FROM shows the breach's freezer and
+  // since-time, and links its parent, whose page shows the compromise too.
+  test('#1559: the derivative\'s page links its parent and shows the cold-chain compromise with its freezer and since-time', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const parentFreezer = await seedStorageBoxLocation();
+    seededBoxes.push(parentFreezer);
+    const derivativeFreezer = await seedStorageBoxLocation();
+    seededBoxes.push(derivativeFreezer);
+
+    const parent = await createSample(request, admin.token, participant.participantId, parentFreezer);
+    const derivative = await createSample(request, admin.token, participant.participantId, derivativeFreezer, {
+      parentSpecimenIds: [parent.specimenId],
+    });
+    const control = await createSample(request, admin.token, participant.participantId, derivativeFreezer, {
+      positionCode: 'A2',
+    });
+
+    await waitForDerivedFrom(derivative.mongoId, parent.mongoId);
+
+    const sensor = await seedSensorOnFreezer(parentFreezer.freezerId, 2, 8);
+    seededSensors.push(sensor);
+
+    const now = Date.now();
+    const timestamps = [3, 2, 1, 0].map((minutesAgo) => new Date(now - minutesAgo * 60_000));
+    for (const timestamp of timestamps) {
+      await postReadingAt(request, sensor.sensorId, -50, timestamp);
+    }
+    await expect
+      .poll(async () => {
+        const points = await queryTemperaturePoints(sensor.sensorId, 10);
+        return points.length;
+      }, { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(timestamps.length);
+
+    await runCycleFull(request, {
+      criticalDurationHours: 2 / 60,
+      expectedReadingIntervalMinutes: 5,
+    });
+
+    await expect
+      .poll(async () => readSampleStatus(parent.mongoId), { timeout: 15_000 })
+      .toBe('COMPROMISED');
+    await expect
+      .poll(async () => readSampleStatus(derivative.mongoId), { timeout: 15_000 })
+      .toBe('COMPROMISED');
+
+    await seedRealAuth(page, admin);
+    await page.goto(`/samples/${derivative.specimenId}`);
+    await expect(page.getByTestId('sample-detail-page-title')).toBeVisible();
+    await expect(page.getByTestId('sample-graph-status')).toHaveAttribute('data-state', 'compromised');
+    await expect(page.getByTestId('sample-compromise-freezer')).toHaveText(sensor.sensorId);
+    const breachedSince = page.getByTestId('sample-compromise-breached-since');
+    await expect(breachedSince).toHaveText(/\S/);
+    await expect(breachedSince).not.toHaveText('N/A');
+
+    const parentLink = page.getByTestId(`sample-lineage-parent-link-${parent.specimenId}`);
+    await expect(parentLink).toBeVisible();
+    await parentLink.click();
+    await expect(page).toHaveURL(new RegExp(`/samples/${parent.specimenId}$`));
+    await expect(page.getByTestId('sample-detail-page-title')).toContainText(parent.specimenId);
+    await expect(page.getByTestId('sample-graph-status')).toHaveAttribute('data-state', 'compromised');
+
+    await page.goto(`/samples/${control.specimenId}`);
+    await expect(page.getByTestId('sample-detail-page-title')).toContainText(control.specimenId);
+    await expect(page.getByTestId('sample-graph-status')).toHaveAttribute('data-state', 'clear');
+    await expect(page.getByTestId('sample-lineage-card')).toHaveCount(0);
+  });
+
+  // #1502 (RF023 AC6, RNF016 C2, RNF019 C6 C7): the reconciliation runs
+  // through its test-support route, scoped to this spec's own sample, since
+  // the runner has no command line into the backend.
+  async function reconcile(request: import('@playwright/test').APIRequestContext, specimenId: string, repair: boolean) {
+    const response = await request.post(`${apiBaseURL}/api/_test-support/graph-projection/reconcile`, {
+      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+      data: { specimenIds: [specimenId], repair },
+    });
+    expect(response.status()).toBe(200);
+    return (await response.json()).data as { samplesMissingFromGraph: Array<{ specimenId: string }>; reappended: number };
+  }
+
+  test('a deleted Sample node is reported missing, and the reconciliation\'s repair replays it from the outbox (RF023 AC6, RNF016 C2, RNF019 C6 C7)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const box = await seedStorageBoxLocation();
+    seededBoxes.push(box);
+    const sample = await createSample(request, admin.token, participant.participantId, box);
+
+    // The projector created the node, and has applied every event of the
+    // sample: each Sample projection MERGEs the node, so one still queued
+    // would re-create it after the delete below.
+    await expect.poll(() => countSampleNodes(sample.mongoId), { timeout: 15_000 }).toBe(1);
+    await expect
+      .poll(async () => {
+        const events = await sampleOutboxEvents(sample.mongoId);
+        return events.length > 0 && events.every((event) => event.status === 'PROJECTED');
+      }, { timeout: 15_000 })
+      .toBe(true);
+
+    await removeSampleNodes([sample.mongoId]);
+    expect(await countSampleNodes(sample.mongoId)).toBe(0);
+
+    const report = await reconcile(request, sample.mongoId, false);
+    expect(report.samplesMissingFromGraph.map((missing) => missing.specimenId)).toEqual([sample.mongoId]);
+    expect(report.reappended).toBe(0);
+    expect(await countSampleNodes(sample.mongoId)).toBe(0);
+
+    const repaired = await reconcile(request, sample.mongoId, true);
+    expect(repaired.reappended).toBe(1);
+    await expect.poll(() => countSampleNodes(sample.mongoId), { timeout: 15_000 }).toBe(1);
+
+    const after = await reconcile(request, sample.mongoId, false);
+    expect(after.samplesMissingFromGraph).toEqual([]);
   });
 });

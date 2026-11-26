@@ -35,6 +35,14 @@ const qualityDomain = require('../../src/services/quality-domain.service');
 const DrugService = require('../../src/services/DrugService');
 const { createMatchingCollection } = require('../factories/filter.factory');
 const env = require('../../src/config/env');
+const sampleCollectionGate = require('../../src/services/sample-collection-gate.service');
+
+// RF004 AC2 (#1538): every row runs the collection gate createSample runs.
+// Stubbed here so the cases about other rules need no governed collection;
+// the cases that prove the gate restore it (mockRestore) and run it for real.
+beforeEach(() => {
+  vi.spyOn(sampleCollectionGate, 'assertSampleCollectionAdmits').mockResolvedValue(null);
+});
 
 const MATCHED_PATIENT = {
   patient: { _id: 'patient-obj-1', participantId: '12345678', patientName: 'Maria Silva' },
@@ -1181,6 +1189,30 @@ describe('ImportLGPDService.importSamples', () => {
       expect(result.errors).toHaveLength(1);
       expect(result.stagingBatchId).toBeNull();
     });
+
+    it('#1538 RF004 AC2: rejects and stages a row that names no collection, storing no sample', async () => {
+      sampleCollectionGate.assertSampleCollectionAdmits.mockRestore();
+      vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+      expect(result.success).toBe(0);
+      expect(result.errors).toHaveLength(1);
+      expect(JSON.stringify(result.errors[0].errors)).toMatch(/collectionId é obrigatório/);
+      expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+
+      expect(importBatchesCollection.insertOne).toHaveBeenCalledTimes(1);
+      expect(importStagingRecordsCollection.insertMany).toHaveBeenCalledTimes(1);
+      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
+      expect(staged).toHaveLength(1);
+      expect(staged[0]).toMatchObject({
+        batchId: importBatchesCollection.insertOne.mock.calls[0][0]._id,
+        rowNumber: 2,
+        status: 'ERROR',
+      });
+      expect(JSON.stringify(staged[0].errors)).toMatch(/collectionId é obrigatório/);
+      expect(result.stagingBatchId).toBe(importBatchesCollection.insertOne.mock.calls[0][0]._id);
+    });
   });
 });
 
@@ -1305,6 +1337,26 @@ describe('ImportLGPDService.processSampleRow (#817)', () => {
     expect(samplesCollection.insertOne).not.toHaveBeenCalled();
   });
 
+  it('#1538 RF004 AC2: rejects a row that names no collection before any participant write', async () => {
+    sampleCollectionGate.assertSampleCollectionAdmits.mockRestore();
+
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.errors[0]).toMatch(/collectionId é obrigatório/);
+    expect(patientIdentityService.matchOrUpsertParticipant).not.toHaveBeenCalled();
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1538 RF004 AC2: a row naming a collection reaches the gate with the trimmed collectionId COL-1', async () => {
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, collectionId: ' COL-1 ' }, rowContext());
+
+    expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
+    expect(sampleCollectionGate.assertSampleCollectionAdmits).toHaveBeenCalledTimes(1);
+    expect(sampleCollectionGate.assertSampleCollectionAdmits.mock.calls[0][0]).toBe(db);
+    expect(sampleCollectionGate.assertSampleCollectionAdmits.mock.calls[0][1].collectionId).toBe('COL-1');
+  });
+
   it('flags a duplicate barcode as a duplicate rejection', async () => {
     ({ db, samplesCollection, patientsCollection } = makeDb({ existingBarcode: { _id: 'other' } }));
 
@@ -1325,6 +1377,79 @@ describe('ImportLGPDService.processSampleRow (#817)', () => {
       data: { participantId: '12345678' },
       sampleId: 'sample-id-1',
     });
+  });
+
+  it('names the drug by its name when the candidate has no generic_name (#1337)', async () => {
+    const drugService = { searchAndCacheDrug: vi.fn().mockResolvedValue([{ name: 'Acetaminofeno', atcCode: 'N02BE01' }]) };
+
+    const outcome = await service.processSampleRow(
+      db,
+      { ...VALID_ROW, treatmentStatus: 'TREATED', medicationName: 'Tylenol' },
+      rowContext({ drugService })
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(drugService.searchAndCacheDrug).toHaveBeenCalledWith('Tylenol', { limit: 5 });
+    expect(samplesCollection.insertOne.mock.calls[0][0].pharmacologyData).toMatchObject({
+      medicationName: 'Acetaminofeno',
+      atcCode: 'N02BE01',
+    });
+  });
+
+  it('keeps the row drug name when the candidate has neither generic_name nor name (#1337)', async () => {
+    const drugService = { searchAndCacheDrug: vi.fn().mockResolvedValue([{ atcCode: 'N02BE01' }]) };
+
+    const outcome = await service.processSampleRow(
+      db,
+      { ...VALID_ROW, treatmentStatus: 'TREATED', medicationName: 'Tylenol' },
+      rowContext({ drugService })
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(samplesCollection.insertOne.mock.calls[0][0].pharmacologyData).toMatchObject({
+      medicationName: 'Tylenol',
+      atcCode: 'N02BE01',
+    });
+  });
+
+  it('returns the model validation errors for an invalid row, inserting nothing (#1337)', async () => {
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, quantity: '0' }, rowContext());
+
+    expect(outcome).toEqual({
+      ok: false,
+      errors: ['quantity deve ser maior que zero'],
+      data: { participantId: '12345678' },
+    });
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects a row whose sampleOrigin is not in the reference data (#1337)', async () => {
+    ({ db, samplesCollection, patientsCollection } = makeDb({ sampleOriginFound: false }));
+
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.errors).toEqual(['Origem "VENOUS_BLOOD" não encontrada no banco de dados. Use um valor cadastrado.']);
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects a row whose extractionProtocol is not in the reference data (#1337)', async () => {
+    ({ db, samplesCollection, patientsCollection } = makeDb({ protocolFound: false }));
+
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.errors).toEqual(['Protocolo de extração "TUBE_EDTA" não encontrado no banco de dados. Use um valor cadastrado.']);
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('stamps organizationId as a string when one is set, and null when none is (#1337)', async () => {
+    await service.processSampleRow(db, VALID_ROW, rowContext({ organizationId: 77 }));
+    expect(samplesCollection.insertOne.mock.calls[0][0].organizationId).toBe('77');
+
+    ({ db, samplesCollection, patientsCollection } = makeDb());
+    await service.processSampleRow(db, VALID_ROW, rowContext());
+    expect(samplesCollection.insertOne.mock.calls[0][0].organizationId).toBeNull();
   });
 });
 

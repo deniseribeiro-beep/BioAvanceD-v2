@@ -22,7 +22,13 @@ export interface QuarantineBatch {
   createdAt?: string | Date | null;
   createdBy?: string | null;
   /** Written by #792 when the upload was retained. Best-effort, so legitimately absent. */
-  sourceFile?: { storedPath?: string; originalName?: string; size?: number } | null;
+  sourceFile?: {
+    storageUri?: string;
+    storageObjectVersion?: string | null;
+    storedPath?: string | null;
+    originalName?: string;
+    size?: number;
+  } | null;
   /** Written by #806 on a FAILED batch: recordFailedImportBatch's error message. */
   error?: string | null;
 }
@@ -83,7 +89,9 @@ export function formatBatchSummary(batch: QuarantineBatch): BatchSummary {
     createdAtLabel: toDateLabel(batch?.createdAt),
     // #792 retention is best-effort, so this is a real distinction to surface:
     // "the file is still available for review" vs "it was not kept".
-    sourceFileRetained: Boolean(batch?.sourceFile?.storedPath),
+    // #1419: an object-store batch carries storageUri (storedPath is null on
+    // S3); one retained before it carries only storedPath.
+    sourceFileRetained: Boolean(batch?.sourceFile?.storageUri || batch?.sourceFile?.storedPath),
     // #806: only a FAILED batch carries an error -- a QUARANTINED batch's
     // rejections live on its records, not on the batch itself.
     errorMessage: batch?.status === 'FAILED' ? (batch?.error || null) : null,

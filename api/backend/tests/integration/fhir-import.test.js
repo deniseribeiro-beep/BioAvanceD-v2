@@ -1605,4 +1605,629 @@ describe('FHIR import staging', () => {
       expect(result.records[0].normalized.rcsPreview.calculation_trace.sprec).toMatchObject({ matrix_type: 'solid', sampleType: 'X' });
     });
   });
+  describe('branch coverage (#1337)', () => {
+    it('flags a Patient email that is present but malformed as INVALID_EMAIL', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-BADMAIL', name: [{ text: 'Paciente' }], identifier: [{ value: 'DOC-1' }], telecom: [{ system: 'email', value: 'not-an-email' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-BADMAIL', subject: { reference: 'Patient/P-BADMAIL' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      expect(result.records[0].status).toBe('ERROR');
+      expect(result.records[0].errors).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'patientEmail', code: 'INVALID_EMAIL' })]));
+    });
+
+    it('requires a specimenId when the Specimen has neither id nor identifier', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-NOID', name: [{ text: 'Paciente' }], identifier: [{ value: 'DOC-2' }] } },
+          { resource: { resourceType: 'Specimen', subject: { reference: 'Patient/P-NOID' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      expect(result.records[0].normalized.specimenId).toBe('');
+      expect(result.records[0].errors).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'specimenId' })]));
+    });
+
+    it('skips non-object entries and a Consent or Condition with no patient reference', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: 'not-a-resource' },
+          { resource: { resourceType: 'Patient', id: 'P-SKIP', name: [{ text: 'Paciente' }], identifier: [{ value: 'DOC-3' }] } },
+          { resource: { resourceType: 'Consent', status: 'active' } },
+          { resource: { resourceType: 'Condition', code: { text: 'Sem paciente' } } },
+          { resource: { resourceType: 'Specimen', id: 'S-SKIP', subject: { reference: 'Patient/P-SKIP' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      expect(result.records).toHaveLength(1);
+      expect(result.records[0].normalized.consentSigned).toBe(false);
+      expect(result.records[0].normalized.diseases).toEqual([]);
+    });
+
+    const logger = require('../../src/utils/logger');
+    const rcsAssessmentService = require('../../src/services/rcs-assessment.service');
+    const specimenPreanalyticsService = require('../../src/services/specimen-preanalytics.service');
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const quarantineActionService = require('../../src/services/quarantine-action.service');
+
+    function editStaged(stored, edit) {
+      const record = revealStagedRecord(stored);
+      edit(record);
+      Object.keys(stored).forEach((key) => { delete stored[key]; });
+      Object.assign(stored, sealStagedRecord(record, { fields: FHIR_STAGING_SEALED_FIELDS }));
+    }
+
+    function emailBundle(suffix, email = `${suffix.toLowerCase()}@example.org`) {
+      return {
+        resourceType: 'Bundle',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: `P-${suffix}`,
+              name: [{ text: `Paciente ${suffix}` }],
+              identifier: [{ value: `DOC-${suffix}` }],
+              ...(email ? { telecom: [{ system: 'email', value: email }] } : {}),
+            },
+          },
+          { resource: { resourceType: 'Specimen', id: `S-${suffix}`, subject: { reference: `Patient/P-${suffix}` }, type: { text: 'SANGUE' } } },
+        ],
+      };
+    }
+
+    it('getBatch answers 404 for a null or empty batch id, and looks a hex id up as an ObjectId', async () => {
+      await expect(fhirImportStagingService.getBatch(db, null)).rejects.toMatchObject({ statusCode: 404 });
+      await expect(fhirImportStagingService.getBatch(db, '')).rejects.toMatchObject({ statusCode: 404 });
+      expect(db.collections.import_batches.findOne).toHaveBeenNthCalledWith(1, { _id: '', type: 'FHIR_BUNDLE' });
+
+      const hexId = '507f1f77bcf86cd799439011';
+      await expect(fhirImportStagingService.getBatch(db, hexId)).rejects.toMatchObject({ statusCode: 404 });
+      const lookedUp = db.collections.import_batches.findOne.mock.calls[2][0]._id;
+      expect(lookedUp).toBeInstanceOf(ObjectId);
+      expect(String(lookedUp)).toBe(hexId);
+    });
+
+    it('skips an identifier with no value for the next one, reports a missing document when none has one, and finds a Patient with no id by its identifier', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-NOVAL', name: [{ text: 'Paciente Sem Valor' }], identifier: [{ system: 'rg' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-NOVAL', subject: { reference: 'Patient/P-NOVAL' }, type: { text: 'SANGUE' } } },
+          { resource: { resourceType: 'Patient', name: [{ text: 'Paciente Sem Id' }], identifier: [{ value: 'DOC-NOPID' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-NOPID', subject: { reference: 'Patient/DOC-NOPID' }, type: { text: 'SANGUE' } } },
+          { resource: { resourceType: 'Patient', id: 'P-SECOND', name: [{ text: 'Paciente Segundo' }], identifier: [{ system: 'rg' }, { system: 'rg', value: 'RG-2' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-SECOND', subject: { reference: 'Patient/P-SECOND' }, type: { text: 'SANGUE' } } },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      expect(result.records[0].normalized.patientDocument).toBe('');
+      expect(result.records[0].errors).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'document' })]));
+      expect(result.records[1].normalized).toMatchObject({ participantId: 'DOC-NOPID', patientName: 'Paciente Sem Id', patientDocument: 'DOC-NOPID' });
+      expect(result.records[1].errors.map((error) => error.field)).not.toContain('patient');
+      expect(result.records[2].normalized.patientDocument).toBe('RG-2');
+    });
+
+    it('reads an extension from valueInteger or valueDecimal, and gives an empty string for one with no value or no url', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-EXTNUM', name: [{ text: 'Paciente ExtNum' }], identifier: [{ value: 'DOC-EXTNUM' }] } },
+          {
+            resource: {
+              resourceType: 'Specimen',
+              id: 'S-INT',
+              subject: { reference: 'Patient/P-EXTNUM' },
+              type: { text: 'SANGUE' },
+              extension: [
+                { valueString: 'Plasma sem url' },
+                { url: 'urn:bioavanced:matrix' },
+                { url: 'urn:bioavanced:storage-temperature', valueInteger: -80 },
+              ],
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Specimen',
+              id: 'S-DEC',
+              subject: { reference: 'Patient/P-EXTNUM' },
+              type: { text: 'SANGUE' },
+              extension: [{ url: 'urn:bioavanced:storage-temperature', valueDecimal: -20.5 }],
+            },
+          },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      expect(result.records[0].normalized).toMatchObject({ matrix: '', storageTemperature: '-80' });
+      expect(result.records[1].normalized.storageTemperature).toBe('-20.5');
+    });
+
+    it('falls back through text, display and code for Conditions and Observations that lack them', async () => {
+      const subject = { reference: 'Patient/P-CODES' };
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Patient', id: 'P-CODES', name: [{ text: 'Paciente Codes' }], identifier: [{ value: 'DOC-CODES' }] } },
+          { resource: { resourceType: 'Specimen', id: 'S-CODES', subject, type: { text: 'SANGUE' } } },
+          { resource: { resourceType: 'Condition', subject, code: { text: 'Só texto' } } },
+          { resource: { resourceType: 'Condition', subject, code: { coding: [{ system: 'http://www.orpha.net', display: 'Síndrome Orpha' }] } } },
+          { resource: { resourceType: 'Condition', subject, code: { coding: [{ system: 'https://omim.org/entry', code: '600000' }] } } },
+          { resource: { resourceType: 'Observation', subject, code: { coding: [{ system: 'https://hpo.jax.org', display: 'Ataxia' }] } } },
+          { resource: { resourceType: 'Observation', subject, code: { text: 'Fenótipo em texto', coding: [{ system: 'https://hpo.jax.org', code: 'HP:0000001' }] } } },
+          { resource: { resourceType: 'Observation', subject, code: { coding: [{ system: 'https://hpo.jax.org', code: 'HP:0000002' }] } } },
+          { resource: { resourceType: 'Observation', subject, valueCodeableConcept: { text: 'Positivo' } } },
+          { resource: { resourceType: 'Observation', subject, code: { text: 'Sem valor' } } },
+        ],
+      };
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      const { diseases, phenotypes, biomarkers } = result.records[0].normalized;
+
+      expect(diseases.map(({ diseaseName, cid10, orphaCode, omimCode }) => ({ diseaseName, cid10, orphaCode, omimCode }))).toEqual([
+        { diseaseName: 'Só texto', cid10: '', orphaCode: '', omimCode: '' },
+        { diseaseName: 'Síndrome Orpha', cid10: '', orphaCode: '', omimCode: '' },
+        { diseaseName: '', cid10: '', orphaCode: '', omimCode: '600000' },
+      ]);
+      expect(phenotypes.map(({ hpoCode, hpoLabel }) => ({ hpoCode, hpoLabel }))).toEqual([
+        { hpoCode: '', hpoLabel: 'Ataxia' },
+        { hpoCode: 'HP:0000001', hpoLabel: 'Fenótipo em texto' },
+        { hpoCode: 'HP:0000002', hpoLabel: '' },
+      ]);
+      expect(biomarkers.map(({ biomarkerType, value }) => ({ biomarkerType, value }))).toEqual([
+        { biomarkerType: '', value: 'Positivo' },
+        { biomarkerType: 'Sem valor', value: null },
+      ]);
+    });
+
+    it('treats a Consent with no status as unsigned and attaches an Observation that names only the Specimen', async () => {
+      const bundle = emailBundle('NOSTATUS');
+      bundle.entry.push(
+        { resource: { resourceType: 'Consent', patient: { reference: 'Patient/P-NOSTATUS' } } },
+        { resource: { resourceType: 'Observation', specimen: { reference: 'Specimen/S-NOSTATUS' }, code: { text: 'Só pela amostra' }, valueString: '7' } }
+      );
+      const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      expect(result.records[0].status).toBe('VALID');
+      expect(result.records[0].normalized.consentSigned).toBe(false);
+      expect(result.records[0].normalized.biomarkers).toEqual([expect.objectContaining({ biomarkerType: 'Só pela amostra', value: '7' })]);
+    });
+
+    it('fills the rcsPreview defaults when the quality result carries none of the optional fields', async () => {
+      vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({ model_version: 'stub', final_grade: 'B' });
+
+      const result = await fhirImportStagingService.stageBundle(db, emailBundle('RCSBARE'), { fileName: 'bundle.json' });
+
+      expect(result.records[0].normalized.rcsPreview).toMatchObject({
+        model_version: 'stub',
+        final_grade: 'B',
+        governance_failure_reasons: [],
+        axis_penalties: [],
+        calculation_trace: {},
+        rcs_input: null,
+      });
+    });
+
+    it('stageBundle answers 400 for an unreadable entry, a Bundle with no resources and one with no Specimen, and stores nothing', async () => {
+      const unreadable = { resourceType: 'Bundle', entry: [{ get resource() { throw new Error('leitura falhou'); } }] };
+      await expect(fhirImportStagingService.stageBundle(db, unreadable)).rejects.toMatchObject({ statusCode: 400, message: 'Bundle FHIR JSON inválido.' });
+      await expect(fhirImportStagingService.stageBundle(db, { resourceType: 'Bundle', entry: [{}, { fullUrl: 'urn:uuid:1' }] }))
+        .rejects.toMatchObject({ statusCode: 400, message: 'Bundle FHIR JSON inválido ou sem entradas.' });
+      await expect(fhirImportStagingService.stageBundle(db, { resourceType: 'Bundle', entry: [{ resource: { resourceType: 'Patient', id: 'P-ONLY' } }] }))
+        .rejects.toMatchObject({ statusCode: 400, message: 'Bundle FHIR não contém Specimen para staging.' });
+      expect(db.collections.import_batches.docs).toHaveLength(0);
+    });
+
+    it('stageBundle names the batch fhir-bundle.json when no fileName is given', async () => {
+      const result = await fhirImportStagingService.stageBundle(db, emailBundle('NOFILE'));
+
+      expect(result.batch.fileName).toBe('fhir-bundle.json');
+      expect(db.collections.import_batches.docs[0].fileName).toBe('fhir-bundle.json');
+    });
+
+    it('getConsentStatus reports PENDING_CONSENT for a valid email whose TCLE was not sent yet', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('NOTSENT'), { fileName: 'bundle.json' });
+
+      const status = await fhirImportStagingService.getConsentStatus(db, staged.batch._id);
+
+      expect(status.records[0]).toMatchObject({ consentStatus: 'PENDING', quarantineReason: 'CONSENT_PENDING', workflowStatus: 'PENDING_CONSENT' });
+    });
+
+    it('getConsentStatus reads a record with no normalized data as under review, with null ids', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('NONORM'), { fileName: 'bundle.json' });
+      editStaged(db.collections.import_staging_records.docs[0], (record) => { delete record.normalized; });
+
+      const status = await fhirImportStagingService.getConsentStatus(db, staged.batch._id);
+
+      expect(status.records[0]).toMatchObject({
+        specimenId: null,
+        participantId: null,
+        patientEmail: null,
+        consentStatus: 'NOT_REQUIRED',
+        quarantineReason: 'TRANSFER_REVIEW_REQUIRED',
+        workflowStatus: 'NEEDS_REVIEW',
+      });
+    });
+
+    it('summarize counts a stored WARNING as a warning and a stored NEEDS_EMAIL as an error', async () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: [
+          { resource: { resourceType: 'Specimen', id: 'S-WARN', type: { text: 'SANGUE' } } },
+          { resource: { resourceType: 'Specimen', id: 'S-NEEDS', type: { text: 'SANGUE' } } },
+        ],
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+      db.collections.import_staging_records.docs[0].status = 'WARNING';
+      db.collections.import_staging_records.docs[1].status = 'NEEDS_EMAIL';
+
+      const result = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      expect(result.counts).toMatchObject({ total: 2, warnings: 1, errors: 1 });
+      expect(result.status).toBe('VALIDATED_WITH_ERRORS');
+    });
+
+    it('validateBatch leaves a CONSENT_SEND_FAILED record as it is', async () => {
+      notificationService.sendConsentEmail.mockRejectedValueOnce(new Error('Resend indisponível'));
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('SENDFAIL'), { fileName: 'bundle.json' });
+      await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      const result = await fhirImportStagingService.validateBatch(db, staged.batch._id);
+
+      expect(result.records[0].status).toBe('CONSENT_SEND_FAILED');
+      expect(result.records[0].consentTracking.error).toBe('Resend indisponível');
+    });
+
+    it('validateBatch keeps a record whose only error is NEEDS_EMAIL in NEEDS_REVIEW with the review warning', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('NOMAIL', null), { fileName: 'bundle.json' });
+      db.collections.import_staging_records.docs[0].warnings = [];
+
+      const result = await fhirImportStagingService.validateBatch(db, staged.batch._id);
+
+      expect(result.records[0].status).toBe('NEEDS_REVIEW');
+      expect(result.records[0].warnings).toEqual([{ field: 'consent', message: 'Registro sem e-mail permanece em revisão.' }]);
+    });
+
+    it('sendConsents refuses to build a token when CONSENT_SECRET is unset or blank', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('NOSECRET'), { fileName: 'bundle.json' });
+      const savedSecret = process.env.CONSENT_SECRET;
+      try {
+        delete process.env.CONSENT_SECRET;
+        await expect(fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' }))
+          .rejects.toThrow('CONSENT_SECRET é obrigatório para fluxos de consentimento.');
+        process.env.CONSENT_SECRET = '   ';
+        await expect(fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' }))
+          .rejects.toThrow('CONSENT_SECRET é obrigatório para fluxos de consentimento.');
+      } finally {
+        process.env.CONSENT_SECRET = savedSecret;
+      }
+      expect(notificationService.sendConsentEmail).not.toHaveBeenCalled();
+    });
+
+    it('sendConsents links to localhost:5173 without FRONTEND_URL and signs empty ids as empty strings', async () => {
+      await fhirImportStagingService.stageBundle(db, emailBundle('NOIDS'), { fileName: 'bundle.json' });
+      db.collections.import_batches.docs[0]._id = '';
+      const stored = db.collections.import_staging_records.docs[0];
+      editStaged(stored, (record) => {
+        record._id = '';
+        record.batchId = '';
+        record.normalized.participantId = '';
+      });
+      const savedUrl = process.env.FRONTEND_URL;
+      let result;
+      try {
+        delete process.env.FRONTEND_URL;
+        result = await fhirImportStagingService.sendConsents(db, '', { userID: 'admin' });
+      } finally {
+        if (savedUrl === undefined) delete process.env.FRONTEND_URL;
+        else process.env.FRONTEND_URL = savedUrl;
+      }
+
+      const link = notificationService.sendConsentEmail.mock.calls[0][1];
+      expect(link.startsWith('http://localhost:5173/patient/e-consent/import/')).toBe(true);
+      const decoded = jwt.verify(decodeURIComponent(link.split('/patient/e-consent/import/')[1]), process.env.CONSENT_SECRET);
+      expect(decoded).toMatchObject({ scope: 'fhir-import-consent', batchId: '', recordId: '', participantId: '' });
+      expect(result.records[0].consentTracking.participantId).toBe('');
+
+      const token = result.records[0].consentTracking.token;
+      await expect(fhirImportStagingService.validateImportConsentToken(db, token)).resolves.toMatchObject({ record: { _id: '' } });
+      await fhirImportStagingService.acceptImportConsentToken(db, token);
+      expect(db.collections.audit_logs.docs.find((doc) => doc.action === 'FHIR_IMPORT_CONSENT_SIGNED').participantId).toBeNull();
+    });
+
+    it('sendConsents records sentBy null, provider resend and messageId null when neither the caller nor the provider names them', async () => {
+      notificationService.sendConsentEmail.mockResolvedValueOnce({ success: true });
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('BAREMAIL'), { fileName: 'bundle.json' });
+
+      const result = await fhirImportStagingService.sendConsents(db, staged.batch._id);
+
+      expect(result.records[0].status).toBe('PENDING_CONSENT');
+      expect(result.records[0].consentTracking).toMatchObject({ sentBy: null, provider: 'resend', messageId: null });
+    });
+
+    it('sendConsents marks CONSENT_SEND_FAILED with the provider reason, or a default one, when the email is not accepted', async () => {
+      notificationService.sendConsentEmail
+        .mockResolvedValueOnce({ success: false, reason: 'Cota excedida' })
+        .mockResolvedValueOnce({ success: false });
+      const bundle = emailBundle('REFUSED1');
+      bundle.entry.push(...emailBundle('REFUSED2').entry);
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      const result = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      expect(result.consentResults.map(({ status, sent, error }) => ({ status, sent, error }))).toEqual([
+        { status: 'CONSENT_SEND_FAILED', sent: false, error: 'Cota excedida' },
+        { status: 'CONSENT_SEND_FAILED', sent: false, error: 'Falha ao enviar TCLE por e-mail.' },
+      ]);
+    });
+
+    it('sendConsents holds a record with no errors array and no normalized data for review', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('BARE'), { fileName: 'bundle.json' });
+      editStaged(db.collections.import_staging_records.docs[0], (record) => {
+        delete record.errors;
+        delete record.normalized;
+      });
+
+      const result = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      expect(result.consentResults[0]).toMatchObject({ status: 'NEEDS_REVIEW', sent: false });
+      expect(result.records[0].errors).toEqual([expect.objectContaining({ code: 'NEEDS_EMAIL' })]);
+      expect(notificationService.sendConsentEmail).not.toHaveBeenCalled();
+    });
+
+    it('a failed audit write is logged as a warning and does not fail the operation', async () => {
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      db.collections.audit_logs.insertOne
+        .mockRejectedValueOnce(new Error('audit indisponível'))
+        .mockRejectedValueOnce('audit recusado');
+      const bundle = emailBundle('AUDIT1');
+      bundle.entry.push(...emailBundle('AUDIT2').entry);
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      const result = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+
+      expect(result.records.map((record) => record.status)).toEqual(['PENDING_CONSENT', 'PENDING_CONSENT']);
+      expect(warn).toHaveBeenCalledWith('[FHIR_IMPORT][AUDIT] Falha ao registrar auditoria', 'audit indisponível');
+      expect(warn).toHaveBeenCalledWith('[FHIR_IMPORT][AUDIT] Falha ao registrar auditoria', 'audit recusado');
+    });
+
+    it('an absent consent token is refused 401 by validate and accept', async () => {
+      await expect(fhirImportStagingService.validateImportConsentToken(db, undefined)).rejects.toMatchObject({ statusCode: 401 });
+      await expect(fhirImportStagingService.acceptImportConsentToken(db, undefined)).rejects.toMatchObject({ statusCode: 401 });
+    });
+
+    it('validateImportConsentToken answers 404 for a token with no ids and for an unknown record of a real batch', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('TOKEN404'), { fileName: 'bundle.json' });
+      const noIds = jwt.sign({ scope: 'fhir-import-consent' }, process.env.CONSENT_SECRET, { expiresIn: '2h' });
+      const unknownRecord = jwt.sign(
+        { scope: 'fhir-import-consent', batchId: String(staged.batch._id), recordId: 'registro-inexistente', participantId: 'P-TOKEN404' },
+        process.env.CONSENT_SECRET,
+        { expiresIn: '2h' }
+      );
+
+      await expect(fhirImportStagingService.validateImportConsentToken(db, noIds))
+        .rejects.toMatchObject({ statusCode: 404, message: 'Registro FHIR de importação não encontrado.' });
+      expect(db.collections.import_batches.findOne).toHaveBeenLastCalledWith({ _id: '', type: 'FHIR_BUNDLE' });
+      await expect(fhirImportStagingService.validateImportConsentToken(db, unknownRecord))
+        .rejects.toMatchObject({ statusCode: 404, message: 'Registro FHIR de importação não encontrado.' });
+    });
+
+    it('validateImportConsentToken rethrows a batch lookup failure that is not a 404', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('LOOKUP'), { fileName: 'bundle.json' });
+      const sent = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+      db.collections.import_batches.findOne.mockRejectedValueOnce(new Error('mongo indisponível'));
+
+      await expect(fhirImportStagingService.validateImportConsentToken(db, sent.records[0].consentTracking.token))
+        .rejects.toThrow('mongo indisponível');
+    });
+
+    it('acceptImportConsentToken keeps a warning with no field and drops the consent one', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('WARNKEEP'), { fileName: 'bundle.json' });
+      const sent = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+      db.collections.import_staging_records.docs[0].warnings = [
+        { message: 'Aviso sem campo' },
+        { field: 'consent', message: 'TCLE enviado e aguardando assinatura.' },
+      ];
+
+      const accepted = await fhirImportStagingService.acceptImportConsentToken(db, sent.records[0].consentTracking.token);
+
+      expect(accepted.record.warnings).toEqual([{ message: 'Aviso sem campo' }]);
+    });
+
+    it('acceptImportConsentToken returns the record it wrote when the re-read finds none, with no warnings array to filter', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('NOREREAD'), { fileName: 'bundle.json' });
+      const sent = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+      delete db.collections.import_staging_records.docs[0].warnings;
+      const records = db.collections.import_staging_records;
+      const realFindOne = records.findOne.getMockImplementation();
+      // The token lookup and the sealed updateOne's own read find the record;
+      // the re-read after the write finds none.
+      records.findOne
+        .mockImplementationOnce(realFindOne)
+        .mockImplementationOnce(realFindOne)
+        .mockImplementationOnce(async () => null);
+
+      const accepted = await fhirImportStagingService.acceptImportConsentToken(db, sent.records[0].consentTracking.token);
+
+      expect(accepted.updated).toBe(true);
+      await expect(records.findOne.mock.results.at(-1).value).resolves.toBeNull();
+      expect(accepted.record).toMatchObject({ status: 'READY_TO_COMMIT', consentStatus: 'SIGNED', warnings: [] });
+      expect(accepted.record.normalized.consentSigned).toBe(true);
+    });
+
+    it('commitBatch skips a study candidate that fails validation', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+      db.collections.import_batches.docs[0].studyCandidates = [{ studyTitle: 'Estudo sem id', ethicsApprovalId: ['CEP-1'] }];
+
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+
+      expect(result.committed).toBe(1);
+      expect(result.studies).toEqual({ created: 0, existing: 0, notCreatedReason: null });
+      expect(db.collections.studies?.docs ?? []).toHaveLength(0);
+    });
+
+    it('commitBatch keeps the phone without a holder lookup when it has no blind-index candidates', async () => {
+      vi.spyOn(participantIdentityService, 'computeBlindIndexCandidates').mockReturnValue([]);
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+      expect(result.committed).toBe(1);
+      expect(participantIdentityService.computeBlindIndexCandidates).toHaveBeenCalledWith('phone', expect.any(String));
+      expect(db.collections.participantIdentities.find).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('#1171'), expect.anything());
+    });
+
+    it('commitBatch inserts a new sample with empty RCS fields and records no assessment or profile when the record has no rcsPreview', async () => {
+      const recordAssessment = vi.spyOn(rcsAssessmentService, 'recordAssessment');
+      const recordProfile = vi.spyOn(specimenPreanalyticsService, 'recordProfile');
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+      editStaged(db.collections.import_staging_records.docs[0], (record) => { delete record.normalized.rcsPreview; });
+
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+      expect(result.committed).toBe(1);
+      expect(db.collections.samples.docs[0]).toMatchObject({ specimenId: 'S-001', sprec: {}, final_grade: '', rcs_score: null });
+      expect(recordAssessment).not.toHaveBeenCalled();
+      expect(recordProfile).not.toHaveBeenCalled();
+    });
+
+    it('commitBatch logs a failed RcsAssessment or SpecimenPreanalytics write and still commits the sample', async () => {
+      const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      vi.spyOn(rcsAssessmentService, 'recordAssessment')
+        .mockRejectedValueOnce(new Error('rcs indisponível'))
+        .mockRejectedValueOnce('rcs recusado');
+      vi.spyOn(specimenPreanalyticsService, 'recordProfile')
+        .mockRejectedValueOnce('perfil recusado')
+        .mockRejectedValueOnce(new Error('perfil indisponível'));
+      const bundle = {
+        resourceType: 'Bundle',
+        entry: ['FAIL1', 'FAIL2'].flatMap((suffix) => [
+          { resource: { resourceType: 'Patient', id: `P-${suffix}`, name: [{ text: `Paciente ${suffix}` }], identifier: [{ value: `DOC-${suffix}` }] } },
+          { resource: { resourceType: 'Consent', status: 'active', patient: { reference: `Patient/P-${suffix}` } } },
+          { resource: { resourceType: 'Specimen', id: `S-${suffix}`, subject: { reference: `Patient/P-${suffix}` }, type: { text: 'SANGUE' } } },
+        ]),
+      };
+      const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+      expect(result.committed).toBe(2);
+      expect(db.collections.samples.docs.map((sample) => sample.specimenId)).toEqual(['S-FAIL1', 'S-FAIL2']);
+      expect(db.collections.samples.docs.some((sample) => sample.sealedRcsAssessmentId || sample.sealedSpecimenPreanalyticsId)).toBe(false);
+      expect(error.mock.calls).toEqual([
+        ['Falha ao registrar RcsAssessment para a amostra importada via FHIR:', 'rcs indisponível'],
+        ['Falha ao registrar SpecimenPreanalytics para a amostra importada via FHIR:', 'perfil recusado'],
+        ['Falha ao registrar RcsAssessment para a amostra importada via FHIR:', 'rcs recusado'],
+        ['Falha ao registrar SpecimenPreanalytics para a amostra importada via FHIR:', 'perfil indisponível'],
+      ]);
+    });
+
+    it('attachExternalDocument answers 404 and commits nothing for a record with no normalized data', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('EXTNONORM', null), { fileName: 'bundle.json' });
+      const stored = db.collections.import_staging_records.docs[0];
+      editStaged(stored, (record) => { delete record.normalized; });
+
+      await expect(fhirImportStagingService.attachExternalDocument(db, staged.batch._id, stored._id, { userID: 'admin' }))
+        .rejects.toMatchObject({ statusCode: 404, message: 'Nenhuma amostra encontrada para o specimenId deste registro; documentação externa não anexada.' });
+      expect(stored.status).toBe('NEEDS_REVIEW');
+    });
+
+    it('attachExternalDocument releases a quarantined sample as SYSTEM when no user is given', async () => {
+      const release = vi.spyOn(quarantineActionService, 'releaseActiveAction').mockResolvedValue(null);
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle('EXTQ', null), { fileName: 'bundle.json' });
+      const recordId = db.collections.import_staging_records.docs[0]._id;
+      db.collections.samples.docs.push({ _id: 'sample-extq', specimenId: 'S-EXTQ', specimenStatus: 'quarantined' });
+
+      await fhirImportStagingService.attachExternalDocument(db, staged.batch._id, recordId, {});
+
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(release.mock.calls[0][1]).toMatchObject({ specimenId: 'S-EXTQ' });
+      expect(release.mock.calls[0][2]).toBe('SYSTEM');
+      expect(db.collections.samples.docs[0].specimenStatus).toBe('available');
+    });
+  });
+});
+
+// RF011 AC5, RNF024 AC2 (#1479): a staged and committed import records the
+// mapping release each profile it declares is registered under.
+describe('FHIR import staging records the mapping release it was read with', () => {
+  const PROFILE = 'https://bioadvanced.dev/fhir/StructureDefinition/rf011-ac5';
+  let db;
+
+  function profileRow(overrides) {
+    return { canonicalUrl: PROFILE, fhirVersion: '4.0.1', profileVersion: '1.0.0', status: 'active', ...overrides };
+  }
+
+  function declaring(bundle, profiles) {
+    return {
+      ...bundle,
+      meta: { profile: profiles.bundle || [] },
+      entry: bundle.entry.map((entry) => {
+        const declared = profiles[entry.resource.resourceType];
+        return declared ? { resource: { ...entry.resource, meta: { profile: declared } } } : entry;
+      }),
+    };
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    db = createDb();
+    process.env.CONSENT_SECRET = 'test-consent-secret';
+    vi.spyOn(notificationService, 'sendConsentEmail').mockResolvedValue({ success: true, provider: 'resend', messageId: 'email-001' });
+    db.collection('fhirProfileRegistries').docs.push(
+      profileRow({ mappingReleaseId: 'REL-ACTIVE' }),
+      profileRow({ profileVersion: '2.0.0', mappingReleaseId: 'REL-BUNDLE' }),
+      profileRow({ profileVersion: '3.0.0', status: 'draft', mappingReleaseId: 'REL-DRAFT' }),
+      profileRow({ profileVersion: '4.0.0', mappingReleaseId: 'REL-MISSING' }),
+    );
+    db.collection('interoperabilityMappingReleases').docs.push(
+      { interoperabilityMappingReleaseId: 'REL-ACTIVE', mappingVersion: '2.1.0' },
+      { interoperabilityMappingReleaseId: 'REL-BUNDLE', mappingVersion: '5.0.0' },
+      { interoperabilityMappingReleaseId: 'REL-DRAFT', mappingVersion: '9.0.0' },
+    );
+  });
+
+  it('records on the batch and on each record only the releases their declared profiles name', async () => {
+    const bundle = declaring(signedBundle, {
+      bundle: [`${PROFILE}|2.0.0`],
+      Patient: [`${PROFILE}|1.0.0`],
+      Specimen: [`${PROFILE}|4.0.0`],
+      Observation: [`${PROFILE}|3.0.0`],
+    });
+    const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
+
+    expect(result.batch.mappingReleases).toEqual([
+      { mappingReleaseId: 'REL-ACTIVE', mappingVersion: '2.1.0' },
+      { mappingReleaseId: 'REL-BUNDLE', mappingVersion: '5.0.0' },
+    ]);
+    expect(db.collections.import_batches.docs[0].mappingReleases).toEqual(result.batch.mappingReleases);
+    const bySpecimen = Object.fromEntries(db.collections.import_staging_records.docs
+      .map((doc) => [revealStagedRecord(doc).normalized.specimenId, doc.mappingReleases]));
+    expect(bySpecimen['S-001']).toEqual([{ mappingReleaseId: 'REL-ACTIVE', mappingVersion: '2.1.0' }]);
+    expect(bySpecimen['S-ERR']).toEqual([]);
+  });
+
+  it('records no release for a Bundle that declares no registered profile', async () => {
+    const result = await fhirImportStagingService.stageBundle(db, declaring(signedBundle, { Patient: [`${PROFILE}|7.7.7`] }), { fileName: 'bundle.json' });
+    expect(result.batch.mappingReleases).toEqual([]);
+    expect(db.collections.import_staging_records.docs.every((doc) => Array.isArray(doc.mappingReleases) && doc.mappingReleases.length === 0)).toBe(true);
+  });
+
+  it('keeps the release on the committed record and names it in the commit audit', async () => {
+    const staged = await fhirImportStagingService.stageBundle(db, declaring(signedBundle, { Patient: [`${PROFILE}|1.0.0`] }), { fileName: 'bundle.json' });
+    const committed = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+    expect(committed.committed).toBe(1);
+
+    const expected = [{ mappingReleaseId: 'REL-ACTIVE', mappingVersion: '2.1.0' }];
+    const committedRecord = db.collections.import_staging_records.docs.find((doc) => doc.status === 'COMMITTED');
+    expect(committedRecord.mappingReleases).toEqual(expected);
+    const auditDoc = db.collections.audit_logs.docs.find((doc) => doc.action === 'FHIR_IMPORT_RECORD_COMMITTED');
+    expect(auditDoc.mappingReleases).toEqual(expected);
+  });
 });

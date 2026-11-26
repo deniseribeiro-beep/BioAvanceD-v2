@@ -15,7 +15,6 @@ import {
   CheckCircle,
   AlertCircle
 } from 'lucide-react';
-import './LogsPage.css';
 
 export default function LogDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -210,7 +209,7 @@ export default function LogDetailPage() {
 
   if (loading) {
     return (
-      <div className="page logs-page logs-detail-page">
+      <div className="page-shell logs-page logs-detail-page">
         <Card>
           <div style={{ padding: '2rem', textAlign: 'center' }}>
             <p>{t('logs.detailPage.loading')}</p>
@@ -222,7 +221,7 @@ export default function LogDetailPage() {
 
   if (error || !log) {
     return (
-      <div className="page logs-page logs-detail-page">
+      <div className="page-shell logs-page logs-detail-page">
         <Card>
           <div style={{ padding: '2rem', textAlign: 'center' }}>
             <p style={{ color: 'var(--danger)' }}>{error || t('logs.detailPage.notFound')}</p>
@@ -237,7 +236,7 @@ export default function LogDetailPage() {
   }
 
   return (
-    <div className="page logs-page logs-detail-page">
+    <div className="page-shell logs-page logs-detail-page">
       <Card>
         <div className="log-detail-actions">
           <Button 

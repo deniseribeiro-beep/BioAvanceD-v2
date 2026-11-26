@@ -809,12 +809,27 @@ class PatientService {
         .toArray();
 
       const total = await patientsCollection.countDocuments(query);
+      const listed = patients.map((patient) => this.toClientPatient(patient));
 
-      return { patients: patients.map((patient) => this.toClientPatient(patient)), total, limit, skip };
+      return { patients: await this.attachDirectoryIdentity(db, listed), total, limit, skip };
     } catch (error) {
       logger.error('Erro ao listar pacientes:', error.message);
       throw error;
     }
+  }
+
+  // Cadastro directory: record number and birth date only. An empty page
+  // does not touch the identity collection. Name, document and contact stay out.
+  async attachDirectoryIdentity(db, patients) {
+    if (!Array.isArray(patients) || patients.length === 0) return patients || [];
+    const fields = await participantIdentityService.directoryFieldsByParticipantId(
+      db,
+      patients.map((patient) => patient.participantId)
+    );
+    return patients.map((patient) => {
+      const extra = fields.get(String(patient.participantId)) || { recordNumber: null, birthDate: null };
+      return { ...patient, recordNumber: extra.recordNumber, birthDate: extra.birthDate };
+    });
   }
 
   /**
@@ -1214,10 +1229,6 @@ class PatientService {
       throw consentTokenRejection('Paciente não encontrado');
     }
 
-    if (patient.status !== 'PENDING_CONSENT') {
-      throw consentTokenRejection('Paciente não está pendente de consentimento');
-    }
-
     // #1049: only the hash is stored, compared in constant time. A legacy
     // row still holding a plaintext `consentToken` and no hash is rejected
     // here; src/scripts/migrateConsentTokenHash.js converts those in place.
@@ -1229,7 +1240,7 @@ class PatientService {
       throw consentTokenRejection('Token expirado');
     }
 
-    return { valid: true, participantId: patient.participantId };
+    return { valid: true, participantId: patient.participantId, patientStatus: patient.status || null };
   }
 
   /**
@@ -1244,12 +1255,16 @@ class PatientService {
    */
   async acceptConsentToken(db, participantId, token, manifestation = {}) {
     await this.validateConsentToken(db, participantId, token);
+    const pendingPatient = await (await this.getPatientsCollection(db)).findOne({ participantId });
+    if (!pendingPatient || pendingPatient.status !== 'PENDING_CONSENT') {
+      throw consentTokenRejection('Paciente não está pendente de consentimento');
+    }
 
     // Lazy: consent.service's module graph is not needed by any other path
     // here, and the recorder is the only thing taken from it.
     const consentService = require('./consent.service');
 
-    const { consentTemplateId, responses, ipAddress, userAgent } = manifestation || {};
+    const { consentTemplateId, responses, ipAddress, userAgent, location, identityProof } = manifestation || {};
     if (!consentTemplateId || !responses || typeof responses !== 'object' || Array.isArray(responses)) {
       throw consentManifestationRejection('consentTemplateId e responses são obrigatórios');
     }
@@ -1269,38 +1284,93 @@ class PatientService {
       throw consentManifestationRejection(validationError.message);
     }
 
+    const authenticationLevel = identityProof?.provider === 'govbr'
+      ? 'govbr'
+      : identityProof?.provider === 'icp-brasil' || identityProof?.provider === 'icp_brasil'
+        ? 'icp-brasil'
+        : 'token';
     const consent = await consentService.createPatientConsent(db, {
       participantId,
       consentTemplateId: String(consentTemplateId),
       responses,
       ipAddress,
-      userAgent
+      userAgent,
+      location,
+      identityProof: identityProof || null,
     }, {
       // RF010 AC4: the participant's own acceptance through the token link.
       channel: 'electronic_link',
       signerRole: 'participant',
-      authenticationLevel: 'token'
+      authenticationLevel,
     });
 
     const patientsCollection = await this.getPatientsCollection(db);
+    const consentPanel = require('./consentPanel.service');
     await patientsCollection.updateOne(
       { participantId },
       {
         $set: {
           status: 'ACTIVE',
           consentAcceptedAt: new Date(),
-          consentTokenHash: null,
-          consentTokenExpiresAt: null,
+          consentTokenExpiresAt: consentPanel.consentPanelExpiresAt(activeTemplate),
           updatedAt: new Date()
         }
       }
     );
+    await consentPanel.recordPanelLinkCommunication(db, consent, 'delivered');
 
     return {
       success: true,
       participantId,
       consentId: consent.consentId,
       consentVersion: consent.consentVersion
+    };
+  }
+
+  /**
+   * The participant, holding the same panel token, revokes the whole consent
+   * or the permissions they name. The consent written is the one belonging
+   * to that participantId; unchecking a permission does not open a new consent.
+   */
+  async revokeConsentByToken(db, participantId, token, request = {}) {
+    await this.validateConsentToken(db, participantId, token);
+    const consentService = require('./consent.service');
+    const consent = await consentService.getPatientConsent(db, participantId);
+    const inForce = consent
+      && consent.status === 'ACTIVE'
+      && consent.currentStateDerived !== 'revoked'
+      && consent.currentStateDerived !== 'superseded';
+    if (!inForce) {
+      throw consentManifestationRejection('Não há consentimento em vigor para revogar');
+    }
+    if (consent.participantId && String(consent.participantId) !== String(participantId)) {
+      throw consentManifestationRejection('O consentimento não pertence a este participante');
+    }
+
+    const scope = Array.isArray(request.scope) ? request.scope.filter((key) => typeof key === 'string' && key.trim()) : undefined;
+    const updated = await consentService.revokeConsent(db, String(consent._id), {
+      scope: scope && scope.length > 0 ? scope : undefined,
+      reason: typeof request.reason === 'string' ? request.reason : undefined,
+      location: request.location,
+    }, {
+      channel: 'electronic_link',
+      signerRole: 'participant',
+      signerId: participantId,
+      authenticationLevel: 'token',
+    });
+    if (updated && updated.status === 'REVOKED') {
+      try {
+        const consentQuarantineService = require('./consentQuarantine.service');
+        await consentQuarantineService.quarantineForRevocation(db, participantId);
+      } catch (quarantineError) {
+        logger.error('Erro ao quarentenar amostras na revogação do participante:', quarantineError.message);
+      }
+    }
+    return {
+      participantId,
+      status: updated?.status || consent.status,
+      currentStateDerived: updated?.currentStateDerived || consent.currentStateDerived || null,
+      effectivePermissions: updated?.effectivePermissions || consent.effectivePermissions || {},
     };
   }
 
@@ -1316,7 +1386,11 @@ class PatientService {
       throw new Error('Paciente não encontrado');
     }
 
-    if (patient.status !== 'PENDING_CONSENT') {
+    // A signed consent is the gate. patient.status alone misses a directory
+    // row whose badge is still pending because no consent is in force.
+    const consentsCollection = await getCollection(db, 'consents');
+    const activeConsent = await consentsCollection.findOne({ participantId, status: 'ACTIVE' });
+    if (activeConsent) {
       throw new Error('Paciente não está pendente de consentimento');
     }
 

@@ -13,7 +13,7 @@ import { getPostLoginRoute } from '../utils/rolePermissions';
 import { Mail, CheckCircle, AlertCircle } from 'lucide-react';
 import { LIMITS } from '../config/constants/limits.constants';
 import { VALIDATION_PATTERNS } from '../config/constants/validation.constants';
-import './LoginPage.css';
+import logo from '@/LOGO_BIOAVANCED_CORE.png';
 
 export default function LoginPage() {
   // #1250: MFASetupPage returns here after a first-login enrolment whose
@@ -140,22 +140,23 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="login-page" data-testid="login-page">
-      <div className="login-container">
-        <Card className="login-card">
-          <div className="login-header">
-            <h1 className="login-title">{t('app.title')}</h1>
-            <p className="login-subtitle">{t('app.subtitle')}</p>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-8" data-testid="login-page">
+      <div className="w-full max-w-md">
+        <Card className="shadow-card">
+          <div className="mb-6 flex flex-col items-center text-center">
+            <img src={logo} alt="" className="mb-3 h-12 w-12 object-contain" />
+            <h1 className="text-xl font-semibold text-foreground">{t('app.title')}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">{t('app.subtitle')}</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="login-form" data-testid="login-form">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4" data-testid="login-form">
             {error && (
-              <div className="error-message" data-testid="login-error" role="alert">
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive" data-testid="login-error" role="alert">
                 {error}
               </div>
             )}
             {!error && loginState.notice === 'mfaEnrolledPasswordChange' && (
-              <div role="status" data-testid="login-notice" style={{ marginBottom: '1rem' }}>
+              <div role="status" data-testid="login-notice" className="rounded-md border border-info/30 bg-info/5 px-3 py-2 text-sm text-info">
                 {t('auth.mfaEnrolledPasswordChange')}
               </div>
             )}
@@ -183,8 +184,8 @@ export default function LoginPage() {
             />
 
             {requiresPasswordChange && (
-              <div className="two-factor-section" data-testid="force-password-change-section">
-                <p className="two-factor-info" data-testid="force-password-change-reason">
+              <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-3" data-testid="force-password-change-section">
+                <p className="text-sm text-muted-foreground" data-testid="force-password-change-reason">
                   {/* #1291: only a forceReset is the administrator's request. */}
                   {passwordChangeReason === 'expired'
                     ? t('auth.passwordChangeRequiredExpired')
@@ -215,7 +216,7 @@ export default function LoginPage() {
             )}
 
             {requiresTwoFactor && (
-              <div className="two-factor-section" data-testid="two-factor-section">
+              <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-3" data-testid="two-factor-section">
                 {useRecoveryCode ? (
                   <Input
                     key="recovery-code"
@@ -246,16 +247,16 @@ export default function LoginPage() {
                   />
                 )}
                 {attemptsRemaining !== undefined && attemptsRemaining > 0 && (
-                  <p className="attempts-warning">
+                  <p className="text-xs text-warning">
                     {t('auth.attemptsRemaining')}: {attemptsRemaining}
                   </p>
                 )}
-                <p className="two-factor-info">
+                <p className="text-sm text-muted-foreground">
                   {useRecoveryCode ? t('auth.recoveryCodeInfo') : t('auth.twoFactorInfo')}
                 </p>
                 <button
                   type="button"
-                  className="link-button"
+                  className="text-sm font-medium text-primary underline-offset-4 hover:underline"
                   data-testid="login-toggle-recovery-code"
                   onClick={() => {
                     setUseRecoveryCode((current) => !current);
@@ -269,7 +270,7 @@ export default function LoginPage() {
 
             <Button 
               type="submit" 
-              className="login-button"
+              className="w-full"
               data-testid="login-submit-button"
               disabled={loading}
             >
@@ -283,11 +284,11 @@ export default function LoginPage() {
             </Button>
 
             {allowPasswordReset && (
-              <div className="forgot-password-link">
+              <div className="text-center">
                 <button
                   type="button"
                   onClick={() => setShowForgotPassword(true)}
-                  className="link-button"
+                  className="text-sm font-medium text-primary underline-offset-4 hover:underline"
                   data-testid="login-forgot-password-button"
                 >
                   {t('auth.forgotPassword')}
@@ -296,7 +297,7 @@ export default function LoginPage() {
             )}
           </form>
 
-          <div className="login-language-selector">
+          <div className="mt-6 border-t border-border pt-4">
             <LanguageSelector />
           </div>
         </Card>
@@ -316,16 +317,16 @@ export default function LoginPage() {
         }}
         title={t('auth.resetPassword')}
       >
-        <div className="forgot-password-modal" data-testid="forgot-password-modal-content">
+        <div className="flex flex-col gap-4" data-testid="forgot-password-modal-content">
           {forgotPasswordError && (
-            <div className="error-message" style={{ marginBottom: '1rem' }}>
+            <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
               <AlertCircle size={16} />
               {forgotPasswordError}
             </div>
           )}
           {!forgotPasswordSuccess ? (
             <>
-              <p style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>
+              <p className="text-sm text-muted-foreground">
                 {t('auth.resetPasswordInstructions', 'Digite seu email cadastrado. Enviaremos um link para redefinir sua senha.')}
               </p>
               <Input
@@ -338,28 +339,32 @@ export default function LoginPage() {
                 required
                 autoFocus
               />
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
+              <div className="mt-2 flex gap-3">
                 <Button
                   data-testid="forgot-password-send-button"
                   onClick={async () => {
-                    if (!forgotPasswordEmail) {
-                      setForgotPasswordError(t('auth.enterEmail', 'Digite seu email'));
-                      return;
-                    }
                     setForgotPasswordLoading(true);
                     setForgotPasswordError('');
                     try {
                       const response = await authService.requestPasswordReset(forgotPasswordEmail);
                       setForgotPasswordSuccess(true);
-                      if (response.data.resetLink) {
-                        setResetLink(response.data.resetLink);
-                      }
-                      if (response.data.token) {
-                        // Em desenvolvimento, mostra o token
-                        setResetLink(`${window.location.origin}/reset-password?token=${response.data.token}`);
+                      // Controller wraps payload as { success, message, data: { resetLink, token } }.
+                      const payload = response?.data?.data || response?.data || {};
+                      // Prefer same-origin link from the token so tunnel/LB port stays correct
+                      // even when the API builds resetLink from a stripped X-Forwarded-Host.
+                      if (payload.token) {
+                        setResetLink(`${window.location.origin}/reset-password?token=${payload.token}`);
+                      } else if (payload.resetLink) {
+                        setResetLink(payload.resetLink);
                       }
                     } catch (err: any) {
-                      setForgotPasswordError(err.response?.data?.error || t('auth.passwordResetError', 'Erro ao solicitar recuperação de senha'));
+                      const apiError = err.response?.data?.error || err.response?.data?.message;
+                      const status = err.response?.status;
+                      setForgotPasswordError(
+                        apiError
+                        || (status ? `${t('auth.passwordResetError', 'Erro ao solicitar recuperação de senha')} (HTTP ${status})` : null)
+                        || t('auth.passwordResetError', 'Erro ao solicitar recuperação de senha')
+                      );
                     } finally {
                       setForgotPasswordLoading(false);
                     }
@@ -382,19 +387,19 @@ export default function LoginPage() {
               </div>
             </>
           ) : (
-            <div className="forgot-password-success">
-              <CheckCircle size={48} style={{ color: '#28a745', marginBottom: '1rem' }} />
-              <h3 style={{ margin: '0 0 1rem 0' }}>{t('auth.resetLinkSentTitle', 'Link de Recuperação Enviado!')}</h3>
-              <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)' }}>
+            <div className="flex flex-col items-center text-center">
+              <CheckCircle size={40} className="mb-3 text-success" />
+              <h3 className="mb-2 text-base font-semibold">{t('auth.resetLinkSentTitle', 'Link de Recuperação Enviado!')}</h3>
+              <p className="mb-3 text-sm text-muted-foreground">
                 {resetLink ? (
                   <>
                     {t('auth.devResetLinkLabel', 'Em desenvolvimento, o link de recuperação é:')}
-                    <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#f8f9fa', borderRadius: '6px' }}>
-                      <Link to={resetLink.replace(window.location.origin, '')} style={{ wordBreak: 'break-all', color: 'var(--primary)' }}>
+                    <div className="mt-3 rounded-md bg-muted p-3 text-left">
+                      <Link to={resetLink.replace(window.location.origin, '')} className="break-all text-primary underline-offset-4 hover:underline">
                         {resetLink}
                       </Link>
                     </div>
-                    <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: 'var(--text-light)' }}>
+                    <p className="mt-3 text-xs text-muted-foreground">
                       {t('auth.prodResetLinkNote', 'Em produção, este link seria enviado por email.')}
                     </p>
                   </>

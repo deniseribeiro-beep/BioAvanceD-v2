@@ -443,6 +443,25 @@ class BatchValidationEngine {
       qualidade: 'quality',
       barcode: 'barcode',
       codigodebarras: 'barcode',
+      // #1536: parseSampleRow reads these eight SPREC keys, and the map had no
+      // entry for any, so every batch-imported sample certified on an
+      // all-null SPREC. normalizeHeader strips non-alphanumerics, so one key
+      // covers the snake_case and camelCase forms. sprecsampletypecode keeps
+      // its own target so parseSampleRow's sprecSampleType-first priority
+      // holds when a file carries both.
+      sprecmatrixtype: 'sprecMatrixType',
+      sprecsampletype: 'sprecSampleType',
+      sprecsampletypecode: 'sprecSampleTypeCode',
+      sprecprimarycontainer: 'sprecPrimaryContainer',
+      sprecprecentrifugation: 'sprecPreCentrifugation',
+      spreccentrifugation: 'sprecCentrifugation',
+      sprecsecondcentrifugation: 'sprecSecondCentrifugation',
+      sprecpostcentrifugationdelay: 'sprecPostCentrifugationDelay',
+      spreclongtermstorage: 'sprecLongTermStorage',
+      // #1497 (RF004 AC2, ELM-0118 Specimen.collectionId 1..1): the specimen's
+      // biobank collection. normalizeHeader reads "Coleção" as colecao.
+      collectionid: 'collectionId',
+      colecao: 'collectionId',
     };
 
     Object.keys(rawRow).forEach((sourceColumn) => {
@@ -616,11 +635,11 @@ class BatchValidationEngine {
     // is literally spelled `registrationDate` still reaches them -- those are
     // real user input, not a dead internal name.
     const collectedAt = this.parseDateValue(
-      rawRow.collectedAt
-      || rawRow.effectiveDateTime
-      || rawRow.issuedAt
-      || rawRow.registrationDate
-      || rawRow.registerDate
+      rawRow?.collectedAt
+      || rawRow?.effectiveDateTime
+      || rawRow?.issuedAt
+      || rawRow?.registrationDate
+      || rawRow?.registerDate
       || specimen?.registeredAt
       || new Date()
     ) || new Date();
@@ -843,7 +862,24 @@ class BatchValidationEngine {
     // #1376, #1192: the uploader's organization stamps the sample only; the
     // participant created below gets none from it.
     const { organizationId = null, ...rowContext } = context;
-    const sampleData = importLGPDService.parseSampleRow(this.buildSampleRow(rawRow));
+    const mappedRow = this.buildSampleRow(rawRow);
+    const sampleData = importLGPDService.parseSampleRow(mappedRow);
+    // #1497 (RF004 AC2): parseSampleRow returns no collectionId, so the mapped
+    // column is carried here, where createSample's gates check it. A missing
+    // or blank value leaves the key unset and createSample decides.
+    const mappedCollectionId = mappedRow.collectionId === null || mappedRow.collectionId === undefined
+      ? ''
+      : String(mappedRow.collectionId).trim();
+    if (mappedCollectionId) {
+      sampleData.collectionId = mappedCollectionId;
+    }
+    // RNF018 AC5 (#1524): a JSON row's governanceEvidence references reach
+    // createSample, which resolves them against the stored records before it
+    // certifies, as POST /api/samples does. buildSampleRow maps no such
+    // column, so a CSV or XLSX row presents none and its criteria stay null.
+    if (rawRow && Object.prototype.hasOwnProperty.call(rawRow, 'governanceEvidence')) {
+      sampleData.governanceEvidence = rawRow.governanceEvidence;
+    }
     sampleData.participantId = sampleData.participantId ? String(sampleData.participantId).trim() : null;
     sampleData.sampleType = sampleData.sampleType ? String(sampleData.sampleType).trim() : null;
     sampleData.sampleOrigin = sampleData.sampleOrigin ? String(sampleData.sampleOrigin).trim() : null;

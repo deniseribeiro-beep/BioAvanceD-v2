@@ -19,6 +19,12 @@ const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 const routePath = require.resolve('../../src/routes/eConsent');
 
+// #1428: the first require(routePath) loads the route's whole graph cold
+// (12543 ms under a loaded coverage run, past the 5000 ms case timeout).
+// Loading it once here leaves each loader to re-evaluate only auth, rbac and
+// eConsent, which clearRouteCache drops; no case's timeout is raised.
+require(routePath);
+
 function clearRouteCache() {
   delete require.cache[authPath];
   delete require.cache[rbacPath];
@@ -943,20 +949,19 @@ describe('eConsent.routes POST /consents (#1150)', () => {
 // Administrador, the same tier createPatient already resolved to, so the swap
 // is a no-op for every real caller -- which is exactly why it needs pinning.
 //
-// requireOrganizationScope: eConsent.js destructures only
-// `{ requireRole, requirePermission }` from rbac (eConsent.js:7) and never
-// references requireOrganizationScope anywhere in the file -- there is no
-// per-route presence/absence to pin because there is no call site.
+// requireOrganizationScope: the staff signed-term route is the call site.
+// The participant route that returns the same file stays outside that gate.
 describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     clearRouteCache();
   });
 
-  it('never references requireOrganizationScope in the router source (no call site to pin)', () => {
+  it('scopes the staff signed term and leaves the participant route open', () => {
     const fs = require('fs');
     const source = fs.readFileSync(routePath, 'utf8');
-    expect(source).not.toContain('requireOrganizationScope');
+    expect(source).toContain("router.get('/consents/:id/signed-tcle', authenticate, requireRole(3, 4), requireOrganizationScope");
+    expect(source).toContain("router.post('/consent-tokens/signed-tcle', consentController.getSignedTcleByToken.bind(consentController))");
   });
 
   // Adapted from storage.routes.test.js:1174-1205: that file's router is
@@ -1128,4 +1133,12 @@ describe('eConsent.routes: the TCLE builder\'s calls admit every role the fronte
 
     expect(disagreements).toEqual([]);
   });
+});
+
+// #1505 (RF019 AC6): recordAction appends a QUARANTINE_APPLIED outbox event;
+// this file's fake db has no outbox, and the event's contract is pinned in
+// quarantine-action.service.test.js.
+beforeEach(() => {
+  const { GraphProjectionService } = require('../../src/services/graphProjection.service');
+  vi.spyOn(GraphProjectionService.prototype, 'appendQuarantineApplyEvent').mockResolvedValue(null);
 });

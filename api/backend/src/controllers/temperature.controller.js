@@ -2,6 +2,9 @@ const temperatureService = require('../services/temperature.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+const { splitContractFields, auditStrippedFields } = require('../services/telemetryReadingContract');
+
+const { TEMPERATURE_API_READING_FIELDS } = temperatureService;
 
 const READING_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -69,6 +72,13 @@ class TemperatureController {
         });
       }
 
+      // RULE-025, RF009 AC8 (#1582): the body's non-contract fields are
+      // stripped at receipt, so no value of theirs reaches the organization
+      // lookup, the hash, the screen or the store, and the security audit is
+      // written here, before any refusal, naming them and never a value.
+      const { reading: receivedBody, strippedFields } = splitContractFields(req.body, TEMPERATURE_API_READING_FIELDS);
+      await auditStrippedFields(db, { ingestionService: 'temperature-api', strippedFields, sensorId: receivedBody.sensorId || receivedBody.sensorID || null });
+
       // #1071: stamp the organization from the caller's resolved scope.
       // #1080: req.organizationScope is undefined on POST /system/reading, the
       // machine-ingest sibling, which has no session. That route used to keep
@@ -76,9 +86,9 @@ class TemperatureController {
       // See resolveMachineIngestOrganization above for why an unknown sensor
       // is a 404 and an unscoped one is not.
       const temperatureData = req.organizationScope
-        ? { ...req.body, organizationId: resolveOrganizationIdForCreate(req.organizationScope, req.body?.organizationId) }
-        : await resolveMachineIngestOrganization(db, req.body);
-      const temperature = await temperatureService.createTemperatureReading(db, temperatureData);
+        ? { ...receivedBody, organizationId: resolveOrganizationIdForCreate(req.organizationScope, receivedBody.organizationId) }
+        : await resolveMachineIngestOrganization(db, receivedBody);
+      const temperature = await temperatureService.createTemperatureReading(db, temperatureData, { strippedFields });
 
       // RF009 AC7 (#1317): a replayed idempotencyKey wrote nothing, so it
       // answers 200 with the stored reading and records no CREATE.

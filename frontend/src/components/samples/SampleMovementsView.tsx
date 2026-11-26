@@ -11,7 +11,7 @@ interface SampleMovementsViewProps {
 
 export default function SampleMovementsView({ t, loading, error, errorCode, movements }: SampleMovementsViewProps) {
   return (
-    <div className="page">
+    <div className="page-shell">
       <h1>{t('samples.movements', 'Movimentações')}</h1>
 
       {loading && <p>{t('common.loading', 'Carregando...')}</p>}

@@ -1,7 +1,6 @@
 import React from 'react';
 import type { SampleLabelData } from '../types/labels';
 import Datamatrix from 'react-datamatrix-svg';
-import './CryoLabelPrinter.css';
 
 interface CryoLabelPrinterProps {
   samples: SampleLabelData[];

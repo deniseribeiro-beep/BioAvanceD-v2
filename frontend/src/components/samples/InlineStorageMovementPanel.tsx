@@ -74,6 +74,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
   const [treeLoading, setTreeLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
   const [selectedFreezerId, setSelectedFreezerId] = useState('');
   const [selectedShelfIndex, setSelectedShelfIndex] = useState('');
   const [selectedRackIndex, setSelectedRackIndex] = useState('');
@@ -106,6 +107,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
     const loadFreezers = async () => {
       setFreezersLoading(true);
       setError(null);
+      setConfirmError(null);
       try {
         const response = await storageApi.listFreezers();
         if (!active) return;
@@ -142,6 +144,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
     let active = true;
     setTreeLoading(true);
     setError(null);
+    setConfirmError(null);
     setFreezerTree(null);
     setSelectedShelfIndex('');
     setSelectedRackIndex('');
@@ -194,18 +197,9 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
   );
 
   const handleConfirm = async () => {
-    if (!selectedBoxId) {
-      setError(t('samples.storageInline.selectDestination'));
-      return;
-    }
-
-    if (useSpecificPosition && !positionValid) {
-      setError(t('samples.storageInline.invalidPosition'));
-      return;
-    }
-
+    // Destination / position validity is enforced by canConfirm (button disabled).
     setSaving(true);
-    setError(null);
+    setConfirmError(null);
 
     try {
       const response = useSpecificPosition
@@ -227,7 +221,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
       }
 
       const message = response.message || response.error || t('samples.storageInline.allocateError');
-      setError(message);
+      setConfirmError(message);
       notifyApiToast({
         message,
         type: 'error',
@@ -235,7 +229,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
       });
     } catch {
       const message = t('samples.storageInline.allocateError');
-      setError(message);
+      setConfirmError(message);
       notifyApiToast({
         message,
         type: 'error',
@@ -316,6 +310,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
                       setSelectedShelfIndex(event.target.value);
                       setSelectedRackIndex('');
                       setSelectedBoxId('');
+                      setConfirmError(null);
                     }}
                     options={shelfOptions}
                   />
@@ -326,6 +321,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
                     onChange={(event) => {
                       setSelectedRackIndex(event.target.value);
                       setSelectedBoxId('');
+                      setConfirmError(null);
                     }}
                     options={rackOptions}
                     disabled={!selectedShelf}
@@ -336,6 +332,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
                     value={selectedBoxId}
                     onChange={(event) => {
                       setSelectedBoxId(event.target.value);
+                      setConfirmError(null);
                     }}
                     options={boxOptions}
                     disabled={!selectedRack}
@@ -350,6 +347,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
                       onChange={(event) => {
                         setUseSpecificPosition(event.target.checked);
                         setTargetPosition('');
+                        setConfirmError(null);
                       }}
                     />
                     <span>{t('samples.storageInline.specifyPosition')}</span>
@@ -359,7 +357,10 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
                     <Input
                       label={t('samples.storageInline.targetPosition')}
                       value={targetPosition}
-                      onChange={(event) => setTargetPosition(event.target.value)}
+                      onChange={(event) => {
+                        setTargetPosition(event.target.value);
+                        setConfirmError(null);
+                      }}
                       placeholder="A1"
                       error={
                         targetPosition && !positionValid
@@ -374,6 +375,13 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
                   )}
                 </div>
               </>
+            ) : null}
+
+            {confirmError ? (
+              <div className="samples-inline-storage-state samples-inline-storage-state--error" role="alert">
+                <AlertCircle size={16} />
+                <span>{confirmError}</span>
+              </div>
             ) : null}
           </div>
 

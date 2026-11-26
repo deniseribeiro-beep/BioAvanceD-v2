@@ -58,6 +58,24 @@ export async function seedCustodyFixture(suffix: string, collectionSite: string)
   return fixture;
 }
 
+/** #1509 (RF026 AC6): an ethics approval in force, named by the fixture collection's governanceContext; returns its id. */
+export async function seedEthicsApproval(fixture: CustodyFixture): Promise<string> {
+  const db = await getDb();
+  const ethicsApprovalId = `${fixture.approvalId}-ETH`;
+  await db.collection('collectionGovernanceApprovals').insertOne({
+    approvalId: ethicsApprovalId,
+    collectionId: fixture.collectionId,
+    status: 'active',
+    effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null },
+    createdAt: new Date(),
+  });
+  await db.collection('collections').updateOne(
+    { collectionId: fixture.collectionId },
+    { $set: { 'governanceContext.ethicsApprovalId': ethicsApprovalId } }
+  );
+  return ethicsApprovalId;
+}
+
 /** RF021 AC6: withdraws (or restores) the approval the custody rests on. */
 export async function setApprovalStatus(approvalId: string, status: string): Promise<void> {
   const db = await getDb();
@@ -69,19 +87,35 @@ export async function countScanEvents(specimenId: string): Promise<number> {
   return db.collection('scanEvents').countDocuments({ targetId: specimenId });
 }
 
+/** RF016 AC1: every Specimen row, so a flow can show it created none. */
+export async function countSamples(): Promise<number> {
+  const db = await getDb();
+  return db.collection('samples').countDocuments({});
+}
+
+/** RF016 AC1: a container's content status and how many specimen assignments it ever held. */
+export async function containerContent(containerId: string): Promise<{ emptyStatus: string | null; specimenAssignments: number }> {
+  const db = await getDb();
+  const container = await db.collection('containers').findOne({ containerId });
+  const specimenAssignments = await db.collection('specimenContainerAssignments').countDocuments({ containerId });
+  return { emptyStatus: container ? (container.emptyStatus ?? null) : null, specimenAssignments };
+}
+
 /** Removes every row the spec wrote, the assignments its routes created included. */
 export async function cleanupCustodyFixture(fixture: CustodyFixture, containerIds: string[], rackIds: string[], labelValues: string[], deviceIds: string[], locationIds: string[] = []): Promise<void> {
   const db = await getDb();
   await Promise.all([
     db.collection('samples').deleteMany({ specimenId: fixture.specimenId }),
     db.collection('collections').deleteMany({ collectionId: fixture.collectionId }),
-    db.collection('collectionGovernanceApprovals').deleteMany({ approvalId: fixture.approvalId }),
+    db.collection('collectionGovernanceApprovals').deleteMany({ approvalId: { $in: [fixture.approvalId, `${fixture.approvalId}-ETH`] } }),
     db.collection('custodianshipAssignments').deleteMany({ specimenId: fixture.specimenId }),
     db.collection('specimenContainerAssignments').deleteMany({ specimenId: fixture.specimenId }),
     db.collection('scanEvents').deleteMany({ targetId: fixture.specimenId }),
     db.collection('containers').deleteMany({ containerId: { $in: containerIds } }),
     db.collection('containerPositionAssignments').deleteMany({ containerId: { $in: containerIds } }),
     db.collection('rackLocationAssignments').deleteMany({ storageRackId: { $in: rackIds } }),
+    db.collection('storageRacks').deleteMany({ storageRackId: { $in: rackIds } }),
+    db.collection('storagePositions').deleteMany({ storageRackId: { $in: rackIds } }),
     db.collection('labelIdentifiers').deleteMany({ encodedValue: { $in: labelValues } }),
     db.collection('devices').deleteMany({ deviceId: { $in: deviceIds } }),
     db.collection('deviceLifecycleEvents').deleteMany({ deviceId: { $in: deviceIds } }),
@@ -89,6 +123,12 @@ export async function cleanupCustodyFixture(fixture: CustodyFixture, containerId
     db.collection('legalHolds').deleteMany({ targetEntityIds: fixture.specimenId }),
     db.collection('telemetryExposureSummaries').deleteMany({ specimenId: fixture.specimenId }),
   ]);
+}
+
+/** #1514: removes the PhysicalIdentificationValidationProtocol rows the spec registered, by version. */
+export async function cleanupValidationProtocols(protocolVersions: string[]): Promise<void> {
+  const db = await getDb();
+  await db.collection('physicalIdentificationValidationProtocols').deleteMany({ protocolVersion: { $in: protocolVersions } });
 }
 
 /** #1392: the TelemetryExposureSummaries stored for a specimen, oldest window first. */

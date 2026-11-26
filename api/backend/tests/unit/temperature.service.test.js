@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
+import { createHash } from 'crypto';
 
 const require = createRequire(import.meta.url);
 
@@ -10,6 +11,7 @@ const influxTelemetryReadRepository = require('../../src/infrastructure/persiste
 const notificationServiceV2 = require('../../src/services/NotificationService');
 const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 const temperatureService = require('../../src/services/temperature.service');
+const { canonicalJson } = require('../../src/services/telemetryReadingContract');
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -205,6 +207,54 @@ describe('temperatureService.createTemperatureReading', () => {
     expect(errorSpy).toHaveBeenCalled();
     expect(result.telemetryReadingId).toBe(write.mock.calls[0][0].telemetryReadingId);
     expect(db.collection).not.toHaveBeenCalledWith('temperatures');
+  });
+});
+
+// RULE-025 (#1582): the route hands over a contract-only reading and the
+// names of the fields stripped from it. A trustworthy reading is stored and
+// flagged; an untrustworthy one is still refused whole.
+describe('RULE-025 in createTemperatureReading (#1582)', () => {
+  function screenedDb() {
+    const issues = [];
+    const db = makeDb({
+      telemetryIngestionEvents: { insertOne: vi.fn().mockResolvedValue({}) },
+      telemetryValidationIssues: { insertMany: vi.fn(async (docs) => { issues.push(...docs); return {}; }) }
+    });
+    return { db, issues };
+  }
+
+  it('(a) stores a contract-only reading and flags its stripped fields', async () => {
+    const { db, issues } = screenedDb();
+    const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+    const data = { sensorId: 's1', temperatureValue: 5 };
+
+    await temperatureService.createTemperatureReading(db, { ...data, organizationId: null }, { strippedFields: ['patientName'] });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    const flagged = issues.filter((issue) => issue.issueCode === 'personal_data_stripped');
+    expect(flagged).toEqual([expect.objectContaining({ fieldPath: 'patientName', disposition: 'quarantined' })]);
+    expect(write.mock.calls[0][0].payloadHash).toBe(createHash('sha256').update(canonicalJson(data)).digest('hex'));
+  });
+
+  it('(b) refuses an implausible reading whole', async () => {
+    const { db, issues } = screenedDb();
+    const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+
+    await expect(temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 900 }, { strippedFields: ['patientName'] }))
+      .rejects.toMatchObject({ statusCode: 422 });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(issues.map((issue) => issue.issueCode)).toEqual(expect.arrayContaining(['invalid_value', 'personal_data_stripped']));
+  });
+
+  it('(c) no stripped field raises no personal_data_stripped issue', async () => {
+    const { db, issues } = screenedDb();
+    const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+
+    await temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 5 });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(issues.filter((issue) => issue.issueCode === 'personal_data_stripped')).toHaveLength(0);
   });
 });
 

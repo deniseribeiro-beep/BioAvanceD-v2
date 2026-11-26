@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { FileDown, Printer } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import './DataDictionaryPage.css';
 
 export default function DataDictionaryPage() {
   const { t } = useLanguage();
@@ -61,13 +60,12 @@ export default function DataDictionaryPage() {
   };
 
   return (
-    <div className="dictionary-document-page">
-      <header className="dictionary-doc-header no-print">
+    <div className="page-shell dictionary-document-page">
+      <header className="page-header dictionary-doc-header no-print">
         <div>
-          <p className="doc-eyebrow">{t('dictionary.brand', 'BioAvanceD-v2')}</p>
-          <h1>{t('dictionary.title', 'Dicionário de Dados Integrado')}</h1>
-          <p className="doc-subtitle">
-            {t('dictionary.subtitle', 'Documento técnico de referência para pesquisa, auditoria e conformidade do biobanco.')}
+          <h1 className="page-title">{t('dictionary.title', 'Dicionário de Dados Integrado')}</h1>
+          <p className="page-subtitle">
+            {t('dictionary.subtitle', 'Documento técnico de referência para pesquisa, auditoria e conformidade do biobanco. Consulta MIABIS, Orphadata, ATC, SPREC e cadeia de custódia.')}
           </p>
         </div>
 

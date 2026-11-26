@@ -7,7 +7,6 @@ import { useSampleFiles } from '../hooks/useSampleFiles';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { SampleFile } from '../types/models';
-import './SampleFilesSection.css';
 
 // Botão Exportar removido conforme solicitado
 
@@ -61,10 +60,9 @@ export default function SampleFilesSection({ sampleID }: SampleFilesSectionProps
   };
 
   const handleUpload = async () => {
-    if (!selectedFile) {
-      setUploadError(t('sampleFiles.fileRequired') || 'Arquivo é obrigatório');
-      return;
-    }
+    // The submit button is disabled while no file is selected; this guard only
+    // narrows selectedFile for the type checker.
+    if (!selectedFile) return;
 
     try {
       setUploading(true);

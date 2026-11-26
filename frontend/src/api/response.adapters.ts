@@ -35,6 +35,17 @@ export function extractResponseItems<T = any>(input: unknown, collectionKeys: st
   return Array.isArray(found) ? (found as T[]) : [];
 }
 
+/** The list total, from `data.total` when the page is an object, else from the body. */
+export function extractResponseTotal(input: unknown, fallback: number): number {
+  const payload = unwrapApiPayload(input);
+  if (!isRecord(payload)) return fallback;
+  if (isRecord(payload.data) && typeof payload.data.total === 'number' && Number.isFinite(payload.data.total)) {
+    return payload.data.total;
+  }
+  if (typeof payload.total === 'number' && Number.isFinite(payload.total)) return payload.total;
+  return fallback;
+}
+
 export function extractResponseEntity<T extends ApiRecord = ApiRecord>(input: unknown, fallback: ApiRecord = {}): T {
   const payload = unwrapApiPayload(input);
   const candidate = isRecord(payload)

@@ -269,3 +269,54 @@ describe('RCS-002 mesma amostra, dois contextos, dois resultados', () => {
     expect(second.qualification_context).not.toEqual(first.qualification_context);
   });
 });
+
+// RNF018 AC5 (#1524): governanceEvidenceResolution comes only from the
+// server's evidence resolver, through evaluateQuality's option.
+describe('evaluateQuality governanceEvidenceResolution (RNF018 AC5, #1524)', () => {
+  const rcsService = require('../../src/services/rcs-certification.service');
+  const resolved = (kind) => [{ uri: `urn:bioavanced:${kind}:1`, hash: `sha256:${'0'.repeat(64)}`, status: 'resolved' }];
+  const resolution = {
+    traceability: resolved('custody-event'),
+    monitoring: resolved('telemetry-exposure-summary'),
+    documentation: resolved('collection-governance-approval'),
+  };
+  const evidenceFlags = (assessment) => {
+    const evidence = rcsService.evaluateGovernanceEvidence(assessment.rcs_input);
+    return [evidence.traceabilityOk, evidence.monitoringOk, evidence.documentationOk];
+  };
+
+  it('drops a client-sent resolution at the top level', () => {
+    const assessment = evaluateQuality({ matrixType: 'fluid', sprec: validFluidSprec, governanceEvidenceResolution: resolution });
+    expect(assessment.rcs_input).not.toHaveProperty('governanceEvidenceResolution');
+    expect(evidenceFlags(assessment)).toEqual([null, null, null]);
+  });
+
+  it('drops a client-sent resolution inside sample', () => {
+    const sample = { matrixType: 'fluid', sprec: validFluidSprec, governanceEvidenceResolution: resolution };
+    const payload = { sample };
+    const assessment = evaluateQuality(payload);
+    expect(assessment.rcs_input).not.toHaveProperty('governanceEvidenceResolution');
+    expect(evidenceFlags(assessment)).toEqual([null, null, null]);
+    expect(payload.sample).toBe(sample);
+    expect(sample.governanceEvidenceResolution).toBe(resolution);
+  });
+
+  it('carries the option resolution into rcs_input, at the top level and inside sample', () => {
+    const top = evaluateQuality({ matrixType: 'fluid', sprec: validFluidSprec }, { governanceEvidenceResolution: resolution });
+    expect(top.rcs_input.governanceEvidenceResolution).toEqual(resolution);
+    expect(evidenceFlags(top)).toEqual([true, true, true]);
+    const wrapped = evaluateQuality({ sample: { matrixType: 'fluid', sprec: validFluidSprec } }, { governanceEvidenceResolution: resolution });
+    expect(wrapped.rcs_input.governanceEvidenceResolution).toEqual(resolution);
+  });
+
+  it('refuses certification when the option resolution has a non-resolved reference', () => {
+    const failing = { ...resolution, monitoring: [{ ...resolution.monitoring[0], status: 'missing_hash' }] };
+    const assessment = evaluateQuality({ matrixType: 'fluid', sprec: validFluidSprec }, { governanceEvidenceResolution: failing });
+    expect(assessment).toMatchObject({ governance_status: 0, final_grade: 'E', governance_rule_codes: ['MISSING_REQUIRED_MONITORING'] });
+  });
+
+  it('ignores an option that is not a plain object', () => {
+    const assessment = evaluateQuality({ matrixType: 'fluid', sprec: validFluidSprec }, { governanceEvidenceResolution: [resolution] });
+    expect(assessment.rcs_input).not.toHaveProperty('governanceEvidenceResolution');
+  });
+});

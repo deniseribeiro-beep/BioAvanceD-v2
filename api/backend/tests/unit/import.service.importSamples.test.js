@@ -7,6 +7,9 @@ import fs from 'fs';
 const require2 = createRequire(import.meta.url);
 const importService = require2('../../src/services/import.service');
 const SampleGraphValidator = require2('../../src/services/SampleGraphValidator');
+const qualityDomain = require2('../../src/services/quality-domain.service');
+const governanceEvidenceResolver = require2('../../src/services/governance-evidence-resolver.service');
+const sampleCollectionGate = require2('../../src/services/sample-collection-gate.service');
 const { createMatchingCollection } = require2('../factories/filter.factory');
 const env = require2('../../src/config/env');
 
@@ -131,12 +134,34 @@ const validSample = (overrides = {}) => ({
   ...overrides,
 });
 
+// RF004 AC2 (#1538): every row passes the collection gate; the cases below
+// that are about other rules admit it, and the gate's own cases restore it.
+beforeEach(() => {
+  vi.spyOn(sampleCollectionGate, 'assertSampleCollectionAdmits').mockResolvedValue(null);
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   while (tmpFiles.length) {
     const f = tmpFiles.pop();
     try { fs.unlinkSync(f); } catch (_) { /* already gone */ }
   }
+});
+
+// RNF018 AC4 (#1537): the assessment certification returns, shaped as the
+// quality domain shapes it; a JSON row's own grade never stands in for it.
+const certifiedAssessment = () => ({
+  governance_status: 1,
+  final_grade: 'A',
+  rcs_score: 87.5,
+  score_based_grade: 'A',
+  model_version: 'v1',
+  matrix_type: 'PLASMA',
+  governance_failure_reasons: [],
+  governance_rule_codes: [],
+  grade_route: 'DIRECT',
+  axis_penalties: [],
+  calculation_trace: {},
 });
 
 describe('ImportService.importSamples (JSON)', () => {
@@ -153,7 +178,8 @@ describe('ImportService.importSamples (JSON)', () => {
 
     expect(result).toEqual({ success: 1, errors: [], total: 1 });
     expect(collection.inserted).toHaveLength(1);
-    expect(collection.updates).toHaveLength(1);
+    expect(collection.updates).toHaveLength(2);
+    expect(collection.updates.find((call) => call.update?.$set?.sealedRcsAssessmentId)).toBeDefined();
     // #1225: the imported sample reaches the graph under its Mongo _id with its donor.
     expect(db.outboxCollection.events).toHaveLength(1);
     expect(db.outboxCollection.events[0]).toMatchObject({
@@ -187,7 +213,8 @@ describe('ImportService.importSamples (JSON)', () => {
     const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'compliance-fails.json' });
 
     expect(result.success).toBe(1);
-    expect(collection.updates).toHaveLength(1);
+    expect(collection.updates).toHaveLength(2);
+    expect(collection.updates.find((call) => call.update?.$set?.sealedRcsAssessmentId)).toBeDefined();
     const sprecPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedSpecimenPreanalyticsId);
     expect(sprecPinUpdate.update.$set.sealedSpecimenPreanalyticsId).toBe('preanalytics-1');
   });
@@ -233,33 +260,89 @@ describe('ImportService.importSamples (JSON)', () => {
     ]);
   });
 
-  it('records a referenced RcsAssessment snapshot when the imported sample carries rcsEvaluation', async () => {
+  it('certifies a JSON row from its sprec and stores no grade the row carries (RNF018 AC4, #1537)', async () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
-    const filePath = writeTmpFile('with-rcs.json', JSON.stringify(validSample({
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue(certifiedAssessment());
+    const sprec = { sampleType: 'BLD', primaryContainer: 'SST' };
+    const filePath = writeTmpFile('forged-grade.json', JSON.stringify(validSample({
       specimenId: 'SPEC-JSON-1',
-      rcsEvaluation: { rcs_score: 87, score_based_grade: 'B' },
+      sprec,
+      rcsEvaluation: { rcs_score: 12, final_grade: 'E', score_based_grade: 'E' },
+      rcsScore: 12,
+      finalGrade: 'E',
     })));
     const collection = makeSamplesCollection();
     const rcsAssessmentsCollection = makeRcsAssessmentsCollection();
 
-    const result = await importService.importSamples(makeDb(collection, rcsAssessmentsCollection), { path: filePath, originalname: 'with-rcs.json' });
+    const result = await importService.importSamples(makeDb(collection, rcsAssessmentsCollection), { path: filePath, originalname: 'forged-grade.json' });
 
-    expect(result.success).toBe(1);
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(qualityDomain.resolveMethodologicalQuality).toHaveBeenCalledWith({ sprec });
+    expect(collection.inserted).toHaveLength(1);
+    expect(collection.inserted[0].rcsEvaluation).toEqual(certifiedAssessment());
+    expect(collection.inserted[0].rcsScore).toBe(87.5);
+    expect(collection.inserted[0].finalGrade).toBe('A');
     expect(rcsAssessmentsCollection.inserted).toHaveLength(1);
     expect(rcsAssessmentsCollection.inserted[0]).toEqual(expect.objectContaining({
       specimenId: 'SPEC-JSON-1',
-      rcsScore: 87,
-      scoreBasedGrade: 'B',
+      rcsScore: 87.5,
+      finalGrade: 'A',
     }));
     const rcsPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedRcsAssessmentId);
     expect(rcsPinUpdate.update.$set.sealedRcsAssessmentId).toBe('rcs-1');
+  });
+
+  it('stores no RCS result and records no RcsAssessment for a JSON row that carries a grade but no sprec (RNF018 AC4, #1537)', async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    const filePath = writeTmpFile('grade-no-sprec.json', JSON.stringify(validSample({
+      specimenId: 'SPEC-JSON-5',
+      rcsEvaluation: { rcs_score: 99, final_grade: 'A', score_based_grade: 'A' },
+      rcsScore: 99,
+      finalGrade: 'A',
+      sealedRcsAssessmentId: 'forged-assessment',
+    })));
+    const collection = makeSamplesCollection();
+    const rcsAssessmentsCollection = makeRcsAssessmentsCollection();
+
+    const result = await importService.importSamples(makeDb(collection, rcsAssessmentsCollection), { path: filePath, originalname: 'grade-no-sprec.json' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(rcsAssessmentsCollection.inserted).toEqual([]);
+    expect(collection.inserted).toHaveLength(1);
+    expect(collection.inserted[0].rcsEvaluation ?? null).toBeNull();
+    expect(collection.inserted[0].rcsScore ?? null).toBeNull();
+    expect(collection.inserted[0].sealedRcsAssessmentId ?? null).toBeNull();
+  });
+
+  it("resolves a JSON row's governanceEvidence before certification and never reads its governanceEvidenceResolution (RNF018 AC5, #1537)", async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    const resolution = { marker: 'resolved-by-the-server' };
+    vi.spyOn(governanceEvidenceResolver, 'resolveGovernanceEvidence').mockResolvedValue(resolution);
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue(certifiedAssessment());
+    const governanceEvidence = { documentation: [{ uri: 'urn:doc:1', hash: 'abc' }] };
+    const filePath = writeTmpFile('with-evidence.json', JSON.stringify(validSample({
+      specimenId: 'SPEC-JSON-6',
+      collectionId: 'COL-JSON-6',
+      sprec: { sampleType: 'BLD', primaryContainer: 'SST' },
+      governanceEvidence,
+      governanceEvidenceResolution: { forged: true },
+    })));
+    const collection = makeSamplesCollection();
+    const db = makeDb(collection);
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'with-evidence.json' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(governanceEvidenceResolver.resolveGovernanceEvidence).toHaveBeenCalledWith(db, { governanceEvidence, specimenId: 'SPEC-JSON-6', collectionId: 'COL-JSON-6' });
+    expect(qualityDomain.resolveMethodologicalQuality).toHaveBeenCalledTimes(1);
+    expect(qualityDomain.resolveMethodologicalQuality.mock.calls[0][1]).toEqual({ governanceEvidenceResolution: resolution });
   });
 
   it('logs a warning and still counts the row as success when recordAssessment rejects', async () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
     const filePath = writeTmpFile('rcs-record-fails.json', JSON.stringify(validSample({
       specimenId: 'SPEC-JSON-2',
-      rcsEvaluation: { rcs_score: 50, score_based_grade: 'C' },
+      sprec: { sampleType: 'BLD', primaryContainer: 'SST' },
     })));
     const collection = makeSamplesCollection();
     const rcsAssessmentsCollection = makeRcsAssessmentsCollection();
@@ -485,6 +568,57 @@ describe('ImportService.importSamples (CSV)', () => {
 
     await expect(importService.importSamples(makeDb(collection), { path: missingPath, originalname: 'missing.csv' }))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// RF004 AC2, ELM-0118 (Specimen.collectionId 1..1 Core, #1538): an imported
+// row enters only a collection the gate createSample runs admits.
+describe('ImportService.importSamples runs the collection gate (#1538)', () => {
+  const CSV_HEADER = 'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt,collectionId';
+
+  it('refuses a JSON row that names no collection and inserts nothing', async () => {
+    sampleCollectionGate.assertSampleCollectionAdmits.mockRestore();
+    const filePath = writeTmpFile('no-collection.json', JSON.stringify(validSample()));
+    const collection = makeSamplesCollection();
+    const insertOne = vi.spyOn(collection, 'insertOne');
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'no-collection.json' });
+
+    expect(result.success).toBe(0);
+    expect(result.total).toBe(1);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 1, error: expect.stringMatching(/collectionId é obrigatório/) }),
+    ]);
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses a CSV row whose collectionId cell is empty and inserts nothing', async () => {
+    sampleCollectionGate.assertSampleCollectionAdmits.mockRestore();
+    const filePath = writeTmpFile('no-collection.csv', `${CSV_HEADER}\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01,\n`);
+    const collection = makeSamplesCollection();
+    const insertOne = vi.spyOn(collection, 'insertOne');
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'no-collection.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.total).toBe(1);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 1, error: expect.stringMatching(/collectionId é obrigatório/) }),
+    ]);
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  it("hands the gate a CSV row's trimmed collectionId", async () => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    const filePath = writeTmpFile('collection.csv', `${CSV_HEADER}\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01, COL-1 \n`);
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'collection.csv' });
+
+    expect(result.success).toBe(1);
+    expect(sampleCollectionGate.assertSampleCollectionAdmits).toHaveBeenCalledTimes(1);
+    const [, sampleData] = sampleCollectionGate.assertSampleCollectionAdmits.mock.calls[0];
+    expect(sampleData.collectionId).toBe('COL-1');
   });
 });
 

@@ -5,7 +5,6 @@ import Input from './UI/Input';
 import AssinaturaDigitalTCLE from './AssinaturaDigitalTCLE';
 import { ConsentPermission } from '../types/models';
 import { useLanguage } from '../contexts/LanguageContext';
-import './ConsentForm.css';
 
 function sanitizeTemplateHtml(rawHtml: string) {
   const parser = new DOMParser();

@@ -25,6 +25,13 @@
  * Idempotent: a migrated record carries no old name, so the second run finds
  * nothing. `remaining` counts the records still holding one.
  *
+ * One-way: no rollback. Where the new name was already present the old
+ * envelope is unset, not kept, and a moved envelope cannot be told from one a
+ * writer stored under the new name since. Putting the old names back would
+ * leave those fields unreadable: decryptIdentity reads only the new names and
+ * no reader falls back to the old ones. Undo is restoring
+ * participantIdentities from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:participant-identity-ciphertext-names               applies
  *   npm run migrate:participant-identity-ciphertext-names -- --dry-run  counts, writes nothing

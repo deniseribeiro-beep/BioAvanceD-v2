@@ -79,6 +79,12 @@ if (isDev) {
     "http://127.0.0.1:5173",
     "http://localhost:4173",
     "http://127.0.0.1:4173",
+    // Access proxy / IAP tunnel (scripts/gcp-access-proxy): browser Origin is :8080
+    // even though /api is same-site through nginx; cors() still validates it.
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "https://bioadvanced.dev",
+    "https://www.bioadvanced.dev",
   ].forEach((origin) => {
     addAllowedOrigin(allowedOrigins, seenAllowedOrigins, origin);
   });
@@ -267,6 +273,7 @@ if (!isTest) {
   app.use("/api/e-consent/update", consentLimiter);
   app.use("/api/e-consent/consent-tokens", consentLimiter);
   app.use("/api/e-consent/import/fhir/consent", consentLimiter);
+  app.use("/api/e-consent/govbr", consentLimiter);
 }
 
 app.use("/api/auth", require("./src/interface/routes/auth.routes"));
@@ -443,6 +450,25 @@ app.use("/api/networks", createMasterDataRouter({
   model: require("./src/models/Network"),
   validateReferences: require("./src/services/institutionalReferenceValidator").validateNetworkReferences
 }));
+// RNF008 AC3 (#1496): ResearchResource and its links to a Collection and a
+// Biobank, the dictionary's only path from a collection to its biobank.
+app.use("/api/research-resources", createMasterDataRouter({
+  collectionName: "researchResources",
+  idField: "researchResourceId",
+  model: require("./src/models/ResearchResource")
+}));
+app.use("/api/research-resource-collections", createMasterDataRouter({
+  collectionName: "researchResourceCollections",
+  idField: "associationId",
+  model: require("./src/models/ResearchResourceCollection"),
+  validateReferences: require("./src/services/institutionalReferenceValidator").validateResearchResourceCollectionReferences
+}));
+app.use("/api/research-resource-biobanks", createMasterDataRouter({
+  collectionName: "researchResourceBiobanks",
+  idField: "associationId",
+  model: require("./src/models/ResearchResourceBiobank"),
+  validateReferences: require("./src/services/institutionalReferenceValidator").validateResearchResourceBiobankReferences
+}));
 // ELM-0275..0285 (#1206): BiomarkerAssociation reference data, entered by a
 // Coordenador or Administrador; each association names its evidence (1..*).
 app.use("/api/biomarker-associations", createMasterDataRouter({
@@ -523,6 +549,15 @@ app.use("/api/iot", require("./src/interface/routes/iot.routes"));
 // RF029 slice 1/6 (#669): test-support-only ingestion gateway probe, same
 // NODE_ENV+shared-secret gating as iot.routes.js's telemetry-monitor routes.
 app.use("/api/_test-support/ingestion", require("./src/interface/routes/ingestionTestSupport.routes"));
+// RF028/RNF032 (#1476): test-support-only reference import into an E2E_
+// dataset, under the same gates, so the e2e suite can promote and roll back.
+app.use("/api/_test-support/reference-import-runs",require("./src/interface/routes/referenceImportsTestSupport.routes"));
+// RF022/RNF031 (#1485): test-support-only Foundation job run on a scratch
+// database, under the same gates, so the e2e suite can roll back and fail a gate.
+app.use("/api/_test-support/foundation-runs", require("./src/interface/routes/foundationRunsTestSupport.routes"));
+// RF023/RNF019 (#1502): test-support-only scoped reconciliation, under the same
+// gates, so the e2e suite can delete a Sample node and see it replayed from the outbox.
+app.use("/api/_test-support/graph-projection", require("./src/interface/routes/graphProjectionTestSupport.routes"));
 // RF029 (#1318): the production ingestion route; it persists and audits.
 app.use("/api/ingestion", require("./src/interface/routes/ingestion.routes"));
 app.use("/api/temperature", require("./src/interface/routes/temperature.routes"));
@@ -536,6 +571,8 @@ app.use("/api/access-requests", require("./src/routes/accessRequest.js"));
 app.use("/api/access-policies", require("./src/routes/accessPolicy.js"));
 app.use("/api/reference-releases", require("./src/interface/routes/referenceRelease.routes"));
 app.use("/api/monitoring", require("./src/interface/routes/monitoring.routes"));
+// RNF003 C1, C2, C4 (#1468): outage and maintenance records and the monthly availability report.
+app.use("/api/availability", require("./src/interface/routes/availability.routes"));
 app.use("/api/notification-rules", require("./src/routes/notificationRule.js"));
 app.use("/api/notifications", require("./src/routes/notification.js"));
 app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));

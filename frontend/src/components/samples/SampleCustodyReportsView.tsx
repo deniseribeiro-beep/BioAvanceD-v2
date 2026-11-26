@@ -28,7 +28,7 @@ export default function SampleCustodyReportsView({
   ];
 
   return (
-    <div className="page">
+    <div className="page-shell">
       <div className="page-header">
         <h1 className="page-title">{t('navigation.custodyReports', 'Relatórios de Custódia')}</h1>
         <p className="page-subtitle">

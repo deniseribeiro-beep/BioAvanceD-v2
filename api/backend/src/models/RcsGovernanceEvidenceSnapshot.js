@@ -8,7 +8,8 @@ const crypto = require('crypto');
 //
 // capture is what the assessment write records: the six criteria the gate
 // evaluated on the frozen input, each true, false or null with its reason,
-// with no evidence reference yet, so no score, grade or route changes (see
+// with the references its evidence resolution resolved (none where the input
+// presents no evidence), so no score, grade or route changes (see
 // docs/decisions/2026-10-22-rcs-input-snapshot-structures.md and
 // docs/decisions/2026-10-23-rcs-governance-evidence.md).
 
@@ -111,10 +112,15 @@ class RcsGovernanceEvidenceSnapshotModel {
   // the calculation did not read is null with its reason in
   // `unresolvedReasons`, kept outside fieldsOf as RcsInputSnapshot.capture
   // keeps `inputs`; a null gateResult carries its reason there too.
-  // evidenceRefs is empty, since no custody, SOP or telemetry record is read
-  // yet, so a captured document does not pass validate().
+  // RNF018 AC5 (#1524), V2E-0532: evidenceRefs keeps the references the
+  // input's evidence resolution resolved, else it is empty, so a captured
+  // document with none still does not pass validate(). A present value that
+  // is not a list of non-empty references is refused.
   static capture(data = {}) {
-    const fields = this.fieldsOf({ ...data, evidenceRefs: [], evaluatedAt: data.evaluatedAt || new Date() });
+    if (data.evidenceRefs !== undefined && (!Array.isArray(data.evidenceRefs) || !data.evidenceRefs.every(isNonEmptyString))) {
+      throw new Error('evidenceRefs deve ser uma lista de referências não vazias para RCSGovernanceEvidenceSnapshot.capture');
+    }
+    const fields = this.fieldsOf({ ...data, evaluatedAt: data.evaluatedAt || new Date() });
     if (!isValidDate(fields.evaluatedAt)) {
       throw new Error('evaluatedAt deve ser uma data válida para RCSGovernanceEvidenceSnapshot.capture');
     }

@@ -44,6 +44,22 @@ const QUANTITY_STATUS_VALUES = ['full', 'partial', 'depleted'];
 // docs/decisions/2026-10-13-specimen-role.md.
 const SPECIMEN_ROLE_VALUES = ['primary', 'aliquot', 'derivative', 'pool', 'control'];
 
+// RNF018 AC4: the RCS result, set only by RCS certification, never by a caller.
+// That covers the governance outcome (modelVersion, matrixType, governanceStatus,
+// governanceFailureReasons, governanceRuleCodes) and the sealed-assessment pin
+// (sealedRcsAssessmentId) from the same certification.
+const RCS_DERIVED_FIELDS = Object.freeze(['biologicalPenalty', 'rcsScore', 'scoreBasedGrade', 'finalGrade', 'gradeRoute', 'axisPenalties', 'calculationTrace', 'rcsEvaluation', 'modelVersion', 'matrixType', 'governanceStatus', 'governanceFailureReasons', 'governanceRuleCodes', 'sealedRcsAssessmentId']);
+
+// RNF018 AC4: the RCS-derived fields a body names as own keys (null
+// included), and the refusal's detail per field; every write path reads these.
+function findRcsDerivedFields(source) {
+  const bag = source || {};
+  return RCS_DERIVED_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(bag, field));
+}
+function rcsDerivedWriteDetails(fields) {
+  return fields.map((field) => `${field}: derivado da certificação RCS e não pode ser informado`);
+}
+
 // The states that refuse withdrawal and return, and that no quantity change
 // moves.
 const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'quarantined', 'closed'];
@@ -146,6 +162,9 @@ const SampleSchema = new Schema({
   initialQuantity: { type: Number, default: null },
   totalWithdrawn: { type: Number, default: 0 },
   totalReturned: { type: Number, default: 0 },
+  // V2E-0438 / RF006 AC4: server-owned version of the quantity ledger, raised
+  // by one on every ledgered quantity change (withdrawal, return).
+  quantityLedgerVersion: { type: Number, default: 0 },
   accessionNumber: { type: String, default: null },
   orderNumber: { type: String, default: null },
   processingStatus: { type: String, default: null },
@@ -394,6 +413,7 @@ class SampleModel {
       initialQuantity,
       totalWithdrawn: data.totalWithdrawn || 0,
       totalReturned: data.totalReturned || 0,
+      quantityLedgerVersion: 0,
       accessionNumber: data.accessionNumber || null,
       orderNumber: data.orderNumber || null,
       processingStatus: data.processingStatus || null,
@@ -427,3 +447,6 @@ module.exports.LEGACY_SPECIMEN_STATUS_VALUES = LEGACY_SPECIMEN_STATUS_VALUES;
 module.exports.LEGACY_SPECIMEN_STATUS_MAP = LEGACY_SPECIMEN_STATUS_MAP;
 module.exports.QUANTITY_STATUS_VALUES = QUANTITY_STATUS_VALUES;
 module.exports.SPECIMEN_ROLE_VALUES = SPECIMEN_ROLE_VALUES;
+module.exports.RCS_DERIVED_FIELDS = RCS_DERIVED_FIELDS;
+module.exports.findRcsDerivedFields = findRcsDerivedFields;
+module.exports.rcsDerivedWriteDetails = rcsDerivedWriteDetails;

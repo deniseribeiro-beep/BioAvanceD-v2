@@ -3,6 +3,7 @@ const { mkdtemp, writeFile, readFile, rm } = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const env = require('../config/env');
+const { currentRequestId, requestIdHeaders } = require('../utils/requestContext');
 
 function execFileAsync(file, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -30,7 +31,11 @@ class AuditTsaService {
       const queryBuffer = await readFile(queryPath);
       const response = await fetch(tsaUrl, {
         method: 'POST',
-        headers: { 'content-type': 'application/timestamp-query' },
+        headers: {
+          'content-type': 'application/timestamp-query',
+          // #1468 (RNF015 C3): the caller's request or job id, so the call can be tied to it.
+          ...(requestIdHeaders(currentRequestId()) || {}),
+        },
         body: queryBuffer,
       });
       if (!response.ok) throw new Error(`tsa_http_${response.status}`);

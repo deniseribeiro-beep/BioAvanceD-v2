@@ -13,10 +13,24 @@ const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { GraphProjectionService } = require('./graphProjection.service');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const auditLogger = require('../utils/auditLogger');
+const { ensureTerminologyConceptIndexes, ensureTerminologyRelationIndexes } = require('../utils/terminologyIndexes');
 
 // A promotion claim older than this is taken to be from a crashed promotion,
 // and another call may retake it.
 const PROMOTION_CLAIM_STALE_MS = 10 * 60 * 1000;
+
+// #1561: records are looked up, inserted and their outbox events appended
+// this many at a time, one transaction per batch where the deployment runs
+// one.
+const PROMOTION_BATCH_SIZE = 500;
+
+function chunksOf(items, size) {
+  const chunks = [];
+  for (let start = 0; start < items.length; start += size) chunks.push(items.slice(start, start + size));
+  return chunks;
+}
+
+const relationKey = ({ sourceConceptId, targetConceptId, relationType }) => `${sourceConceptId}|${targetConceptId}|${relationType}`;
 
 async function auditRelease({ db, action, resourceId, message, payload, req }) {
   auditLogger.init(db);
@@ -71,7 +85,7 @@ async function refuseWithoutCoverageAndQuality({ db, releaseDoc, releaseId }) {
  * The records are written before the status flip, so a crash leaves the
  * release `approved` and a retry re-runs the idempotent record writes.
  */
-async function promoteRelease({ db, releaseId, approvedBy, req = null, graphProjection = new GraphProjectionService() }) {
+async function promoteRelease({ db, releaseId, approvedBy, req = null, graphProjection = new GraphProjectionService(), batchSize = PROMOTION_BATCH_SIZE }) {
   if (typeof approvedBy !== 'string' || approvedBy.trim() === '') {
     return { promoted: false, reason: 'approver_required' };
   }
@@ -110,6 +124,11 @@ async function promoteRelease({ db, releaseId, approvedBy, req = null, graphProj
   );
   const stagedRelations = stagedDocs.filter((doc) => doc.entityType === 'TerminologyRelation').map((doc) => doc.candidate);
 
+  // #1561: the natural-key indexes every lookup below reads, built before
+  // the claim; a failed build throws and the release stays approved.
+  await ensureTerminologyConceptIndexes(concepts);
+  await ensureTerminologyRelationIndexes(relations);
+
   // The release is claimed before the first record write, so of two calls in
   // flight only one writes records; the other writes nothing.
   const claimedAt = new Date();
@@ -139,27 +158,40 @@ async function promoteRelease({ db, releaseId, approvedBy, req = null, graphProj
   let recordsUpdated = 0;
   let recordsSkipped = 0;
 
-  for (const candidate of stagedConcepts.values()) {
-    const filter = { systemUri: releaseDoc.systemUri, code: candidate.code, version: releaseDoc.datasetVersion };
-    const existingConcept = await concepts.findOne(filter);
-    if (existingConcept) {
-      codeToConceptId.set(candidate.code, existingConcept.terminologyConceptId);
-      recordsSkipped += 1;
-      continue;
-    }
-    const conceptDoc = TerminologyConceptModel.create({
-      ...candidate,
+  const size = Math.max(1, Number(batchSize) || PROMOTION_BATCH_SIZE);
+  const sessionOptions = (session) => (session ? { session } : {});
+
+  for (const batch of chunksOf([...stagedConcepts.values()], size)) {
+    const existing = await concepts.find({
       systemUri: releaseDoc.systemUri,
       version: releaseDoc.datasetVersion,
-      referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId,
-    });
+      code: { $in: batch.map((candidate) => candidate.code) },
+    }).toArray();
+    const existingByCode = new Map(existing.map((concept) => [concept.code, concept]));
+    const conceptDocs = [];
+    for (const candidate of batch) {
+      const existingConcept = existingByCode.get(candidate.code);
+      if (existingConcept) {
+        codeToConceptId.set(candidate.code, existingConcept.terminologyConceptId);
+        recordsSkipped += 1;
+        continue;
+      }
+      conceptDocs.push(TerminologyConceptModel.create({
+        ...candidate,
+        systemUri: releaseDoc.systemUri,
+        version: releaseDoc.datasetVersion,
+        referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId,
+      }));
+    }
+    if (conceptDocs.length === 0) continue;
     // AC9: Mongo write is the source of truth, appended on the same request
     // the concept is actually inserted — never for the skip-existing branch
     // above, mirroring RF023's "append on write" outbox discipline. #1313
-    // (RF023 AC3): the insert and its event share one transaction.
+    // (RF023 AC3): the inserts and their events share one transaction, one
+    // per batch (#1561).
     await withTransactionWhereSupported(db, async (session) => {
-      await concepts.insertOne(conceptDoc, ...(session ? [{ session }] : []));
-      await graphProjection.appendTerminologyConceptEvent(db, {
+      await concepts.insertMany(conceptDocs, { ordered: true, ...sessionOptions(session) });
+      await graphProjection.appendTerminologyConceptEvents(db, conceptDocs.map((conceptDoc) => ({
         terminologyConceptId: conceptDoc.terminologyConceptId,
         systemUri: conceptDoc.systemUri,
         code: conceptDoc.code,
@@ -168,50 +200,60 @@ async function promoteRelease({ db, releaseId, approvedBy, req = null, graphProj
         conceptStatus: conceptDoc.conceptStatus,
         referenceDatasetReleaseId: conceptDoc.referenceDatasetReleaseId,
         sourceService: 'reference-imports-pipeline',
-      }, { session });
+      })), { session });
     });
-    codeToConceptId.set(candidate.code, conceptDoc.terminologyConceptId);
-    recordsInserted += 1;
+    for (const conceptDoc of conceptDocs) codeToConceptId.set(conceptDoc.code, conceptDoc.terminologyConceptId);
+    recordsInserted += conceptDocs.length;
   }
 
-  for (const candidate of stagedRelations) {
-    const sourceConceptId = codeToConceptId.get(candidate.sourceCode);
-    const targetConceptId = codeToConceptId.get(candidate.targetCode);
-    if (!sourceConceptId || !targetConceptId) {
-      // Endpoint existed in this run's concepts but wasn't newly promoted
-      // (e.g. reused from an existing release without a fresh lookup) —
-      // record rather than silently drop, per §7.3's no-orphan rule.
-      issues.push({
-        entityType: 'TerminologyRelation',
-        sourceRecordId: `${candidate.sourceCode}>${candidate.targetCode}`,
-        errorCode: 'ORPHAN_RELATION',
-        errorMessage: `Não foi possível resolver terminologyConceptId para ${candidate.sourceCode} ou ${candidate.targetCode}.`,
-        severity: 'error',
-      });
-      continue;
+  // A relation staged twice in this run is inserted once; the later copy
+  // counts as skipped, as its lookup found the first.
+  const promotedRelationKeys = new Set();
+  for (const batch of chunksOf(stagedRelations, size)) {
+    const resolved = [];
+    for (const candidate of batch) {
+      const sourceConceptId = codeToConceptId.get(candidate.sourceCode);
+      const targetConceptId = codeToConceptId.get(candidate.targetCode);
+      if (!sourceConceptId || !targetConceptId) {
+        // Endpoint existed in this run's concepts but wasn't newly promoted
+        // (e.g. reused from an existing release without a fresh lookup) —
+        // record rather than silently drop, per §7.3's no-orphan rule.
+        issues.push({
+          entityType: 'TerminologyRelation',
+          sourceRecordId: `${candidate.sourceCode}>${candidate.targetCode}`,
+          errorCode: 'ORPHAN_RELATION',
+          errorMessage: `Não foi possível resolver terminologyConceptId para ${candidate.sourceCode} ou ${candidate.targetCode}.`,
+          severity: 'error',
+        });
+        continue;
+      }
+      resolved.push({ sourceConceptId, targetConceptId, relationType: candidate.relationType });
     }
-    const filter = {
-      sourceConceptId,
-      targetConceptId,
-      relationType: candidate.relationType,
+    if (resolved.length === 0) continue;
+    const existing = await relations.find({
       relationVersion: releaseDoc.datasetVersion,
-    };
-    const existingRelation = await relations.findOne(filter);
-    if (existingRelation) {
-      recordsSkipped += 1;
-      continue;
+      sourceConceptId: { $in: [...new Set(resolved.map((relation) => relation.sourceConceptId))] },
+    }).toArray();
+    const existingKeys = new Set(existing.map(relationKey));
+    const relationDocs = [];
+    for (const relation of resolved) {
+      const key = relationKey(relation);
+      if (existingKeys.has(key) || promotedRelationKeys.has(key)) {
+        recordsSkipped += 1;
+        continue;
+      }
+      promotedRelationKeys.add(key);
+      relationDocs.push(TerminologyRelationModel.create({
+        ...relation,
+        relationVersion: releaseDoc.datasetVersion,
+        relationSystem: 'http://www.w3.org/2000/01/rdf-schema#subClassOf',
+        referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId,
+      }));
     }
-    const relationDoc = TerminologyRelationModel.create({
-      sourceConceptId,
-      targetConceptId,
-      relationType: candidate.relationType,
-      relationVersion: releaseDoc.datasetVersion,
-      relationSystem: 'http://www.w3.org/2000/01/rdf-schema#subClassOf',
-      referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId,
-    });
+    if (relationDocs.length === 0) continue;
     await withTransactionWhereSupported(db, async (session) => {
-      await relations.insertOne(relationDoc, ...(session ? [{ session }] : []));
-      await graphProjection.appendTerminologyRelationEvent(db, {
+      await relations.insertMany(relationDocs, { ordered: true, ...sessionOptions(session) });
+      await graphProjection.appendTerminologyRelationEvents(db, relationDocs.map((relationDoc) => ({
         terminologyRelationId: relationDoc.terminologyRelationId,
         sourceConceptId: relationDoc.sourceConceptId,
         targetConceptId: relationDoc.targetConceptId,
@@ -219,9 +261,9 @@ async function promoteRelease({ db, releaseId, approvedBy, req = null, graphProj
         relationVersion: relationDoc.relationVersion,
         referenceDatasetReleaseId: relationDoc.referenceDatasetReleaseId,
         sourceService: 'reference-imports-pipeline',
-      }, { session });
+      })), { session });
     });
-    recordsInserted += 1;
+    recordsInserted += relationDocs.length;
   }
 
   // INFERENCE, not a citation: previousReleaseId is set here, at promotion,
@@ -359,4 +401,4 @@ async function rollbackRelease({ db, datasetCode, initiatedBy = 'system:referenc
   return { rolledBack: true, run: runDoc, activeReleaseId: previousRelease.referenceDatasetReleaseId, rolledBackReleaseId: activeRelease.referenceDatasetReleaseId };
 }
 
-module.exports = { promoteRelease, rollbackRelease };
+module.exports = { promoteRelease, rollbackRelease, PROMOTION_BATCH_SIZE };

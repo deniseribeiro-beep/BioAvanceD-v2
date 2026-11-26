@@ -15,7 +15,7 @@ Only the screens this role adds are listed. The sidebar shows the `/logs` item (
 
 | Screen (pt-BR label) | Route | What you can do here | Backend gate |
 |---|---|---|---|
-| Logs | `/logs` | Search, filter and export the audit trail (CSV, XLSX), read session audit, and read and verify the daily audit report. | `requireAuditReader` (`logs.routes.js`); `requirePermission('viewReports')` (`audit.routes.js`) |
+| Logs | `/logs` | Search, filter and export the audit trail (XLSX), read session audit, and read and verify the daily audit report. | `requireAuditReader` (`logs.routes.js`); `requirePermission('viewReports')` (`audit.routes.js`) |
 | Detalhes do Log | `/logs/:id` | Read one audit entry. | `requireAuditReader` (`logs.routes.js`) |
 
 The daily audit report and its verification call `audit.routes.js`, which needs `viewReports`; every base role holds that code in its seed row, so the call is not refused for any base role.

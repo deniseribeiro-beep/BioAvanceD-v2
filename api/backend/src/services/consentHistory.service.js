@@ -40,6 +40,27 @@ function grantedKeysOf(responses = {}) {
   return Object.keys(responses).filter((key) => responses[key] === true);
 }
 
+/** Where the participant was when they revoked, plus the clock on their device.
+ *  The server's own clock stays on effectiveAt. A refusal or an unusable
+ *  reading is recorded as unavailable and never blocks the revocation. */
+function normalizeRevocationLocation(raw) {
+  if (!raw || raw.status === 'unavailable') return { status: 'unavailable' };
+  const latitude = Number(raw.latitude);
+  const longitude = Number(raw.longitude);
+  const inRange = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90
+    && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+  if (!inRange) return { status: 'unavailable' };
+  const accuracy = Number(raw.accuracyMeters ?? raw.accuracy);
+  const captured = raw.capturedAt ? new Date(raw.capturedAt) : null;
+  return {
+    status: 'captured',
+    latitude,
+    longitude,
+    accuracyMeters: Number.isFinite(accuracy) ? accuracy : null,
+    capturedAt: captured && !Number.isNaN(captured.getTime()) ? captured.toISOString() : null,
+  };
+}
+
 /**
  * Derive a consent's state at `at` from its history. A consent document is
  * only ever written as an acceptance, so the document itself is the
@@ -204,7 +225,9 @@ async function recordRevocation(db, consent, request = {}, actor, session = null
   if (!blocksSomething) return null;
 
   const effectiveAt = new Date();
+  const location = normalizeRevocationLocation(request.location);
   const revocation = ConsentRevocationModel.create({ ...draft, participantId: consent.participantId, effectiveAt });
+  revocation.location = location;
   const evidence = consentEvidence.storeRevocationEvidence({
     consentId: draft.consentId,
     consentRevocationId: revocation.consentRevocationId,
@@ -216,6 +239,7 @@ async function recordRevocation(db, consent, request = {}, actor, session = null
     signerRole: actor.signerRole,
     signerId: actor.signerId,
     channel: actor.channel,
+    location,
   });
   const event = await appendDecisionEvent(db, {
     ...actor,
@@ -305,4 +329,5 @@ module.exports = {
   recordSupersession,
   recordRevocation,
   getHistory,
+  normalizeRevocationLocation,
 };

@@ -2,8 +2,6 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
-import './App.css';
-
 const EConsentPage = lazy(() => import('./pages/patient/EConsentPage'));
 const EConsentImportPage = lazy(() => import('./pages/patient/EConsentImportPage'));
 const EConsentLinkPanel = lazy(() => import('./pages/patient/EConsentLinkPanel'));
@@ -13,7 +11,6 @@ const Dashboard = lazy(() => import('./views/Dashboard'));
 const PatientsPage = lazy(() => import('./views/PatientsPage'));
 const FhirImportPage = lazy(() => import('./views/FhirImportPage'));
 const ImportQuarantinePage = lazy(() => import('./views/ImportQuarantinePage'));
-const ImportLGPDPage = lazy(() => import('./views/ImportLGPDPage'));
 const ConsentTokenPage = lazy(() => import('./pages/patient/ConsentTokenPage'));
 const SamplesPage = lazy(() => import('./views/SamplesPage'));
 const SampleDetailsPage = lazy(() => import('./views/SampleDetailsPage'));
@@ -28,6 +25,9 @@ const SampleMovementsPage = lazy(() => import('./views/SampleMovementsPage'));
 const SampleWithdrawalReturnPage = lazy(() => import('./views/SampleWithdrawalReturnPage'));
 const SampleCustodyReportsPage = lazy(() => import('./views/SampleCustodyReportsPage'));
 const FacilityManagementPage = lazy(() => import('./views/FacilityManagementPage'));
+const EquipmentFormPage = lazy(() => import('./views/EquipmentFormPage'));
+const SensorFormPage = lazy(() => import('./views/SensorFormPage'));
+const PolicyFormPage = lazy(() => import('./views/PolicyFormPage'));
 const SystemManagementPage = lazy(() => import('./views/SystemManagementPage'));
 const ReportsPage = lazy(() => import('./views/ReportsPage'));
 const ReportViewPage = lazy(() => import('./views/ReportViewPage'));
@@ -45,6 +45,12 @@ const TcleBuilderPage = lazy(() => import('./views/TcleBuilderPage'));
 const AccessRequestsPage = lazy(() => import('./views/AccessRequestsPage'));
 const ConsentHistoryPage = lazy(() => import('./views/ConsentHistoryPage'));
 const BiomarkerAssociationsPage = lazy(() => import('./views/BiomarkerAssociationsPage'));
+const OrganizationFormPage = lazy(() => import('./views/OrganizationFormPage'));
+const CollectionFormPage = lazy(() => import('./views/CollectionFormPage'));
+const CollectionGovernancePage = lazy(() => import('./views/CollectionGovernancePage'));
+const QualityDescriptionFormPage = lazy(() => import('./views/QualityDescriptionFormPage'));
+const ReportTemplateFormPage = lazy(() => import('./views/ReportTemplateFormPage'));
+const BiomarkerAssociationFormPage = lazy(() => import('./views/BiomarkerAssociationFormPage'));
 const FoundationApp = lazy(() => import('./foundation/FoundationApp'));
 const IntakeWizardPage = lazy(() => import('./pages/v2/intake/IntakeWizardPage'));
 
@@ -166,15 +172,27 @@ function App() {
                   <Route path="samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
                   <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
                   <Route path="/system-management" element={<ProtectedRoute requiredRole="Administrador"><SystemManagementPage /></ProtectedRoute>} />
+                  <Route path="/organizations/new" element={<ProtectedRoute requiredRole="Administrador"><OrganizationFormPage /></ProtectedRoute>} />
+                  <Route path="/organizations/:id/edit" element={<ProtectedRoute requiredRole="Administrador"><OrganizationFormPage /></ProtectedRoute>} />
+                  <Route path="/collections/new" element={<ProtectedRoute requiredRole="Administrador"><CollectionFormPage /></ProtectedRoute>} />
+                  <Route path="/collections/:id/edit" element={<ProtectedRoute requiredRole="Administrador"><CollectionFormPage /></ProtectedRoute>} />
+                  <Route path="/collections/:id/governance" element={<ProtectedRoute requiredRole="Administrador"><CollectionGovernancePage /></ProtectedRoute>} />
                   <Route path="/users" element={<Navigate to="/system-management?tab=users" replace />} />
                   <Route path="/access" element={<Navigate to="/system-management?tab=users" replace />} />
                   <Route path="/security" element={<Navigate to="/system-management?tab=security" replace />} />
                   <Route path="/users/new" element={<ProtectedRoute requiredRole="Administrador"><NewUserPage /></ProtectedRoute>} />
                   <Route path="/users/new/success" element={<ProtectedRoute requiredRole="Administrador"><NewUserSuccessPage /></ProtectedRoute>} />
                   <Route path="/facility-management" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FacilityManagementPage /></ProtectedRoute>} />
+                  <Route path="/equipment/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><EquipmentFormPage /></ProtectedRoute>} />
+                  <Route path="/equipment/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><EquipmentFormPage /></ProtectedRoute>} />
+                  <Route path="/sensors/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SensorFormPage /></ProtectedRoute>} />
+                  <Route path="/sensors/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><SensorFormPage /></ProtectedRoute>} />
+                  <Route path="/policies/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><PolicyFormPage /></ProtectedRoute>} />
+                  <Route path="/policies/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><PolicyFormPage /></ProtectedRoute>} />
                   <Route path="/equipment" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/locations" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/temperature" element={<Navigate to="/facility-management?tab=temperature" replace />} />
+                  <Route path="/incidents" element={<Navigate to="/facility-management?tab=incidents" replace />} />
                   <Route path="/sensors" element={<Navigate to="/facility-management?tab=sensors" replace />} />
                   <Route path="/policies" element={<Navigate to="/facility-management?tab=policies" replace />} />
                   <Route path="/logs" element={<ProtectedRoute requireAuditReader><LogsPage /></ProtectedRoute>} />
@@ -183,29 +201,18 @@ function App() {
                   {/* #726 (RF008 AC#6): template management is Coordenador+Administrador
                       only (manageReportTemplates), narrower than /reports' own view-only gate. */}
                   <Route path="/reports/templates" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplatesPage /></ProtectedRoute>} />
+                  <Route path="/reports/templates/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplateFormPage /></ProtectedRoute>} />
+                  <Route path="/reports/templates/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplateFormPage /></ProtectedRoute>} />
                   <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
                   <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
-                  {/* #808: the LGPD import's own surface. `/import` posts to the
-                      *async* importer; #813 landed, so that importer now
-                      quarantines its rejected rows too, into
-                      import_staging_records with type ASYNC_BATCH_IMPORT. This
-                      posts to the LGPD importer, whose batches are the ones
-                      ImportQuarantinePage actually lists -- that page calls
-                      /import-lgpd/batches, which filters to LGPD quarantine
-                      types, so async batches are quarantined but not yet
-                      listable (#950). (RNF011 AC#4 / RF029 AC#6.) Same roles as
-                      /import and /import/quarantine -- the backend gates the two
-                      import routes on createPatient/createSample respectively,
-                      which these three roles hold. */}
-                  <Route
-                    path="/import/lgpd"
-                    element={
-                      <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
-                        <ImportLGPDPage />
-                      </ProtectedRoute>
-                    }
-                  />
+                  <Route path="/quality-descriptions/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionFormPage /></ProtectedRoute>} />
+                  <Route path="/quality-descriptions/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionFormPage /></ProtectedRoute>} />
+                  {/* Operational batch import is FHIR at /patients/import-fhir.
+                      /import/lgpd redirects there so bookmarks and old CTAs land
+                      on the lote flow; ImportLGPDPage remains in the repo for
+                      quarantine-linked spreadsheet history but is out of nav. */}
+                  <Route path="/import/lgpd" element={<Navigate to="/patients/import-fhir" replace />} />
                   {/* #794 item 2 (RNF011 AC#4): the quarantine review surface.
                       Same roles as /import — the backend gates both the list
                       and the batch read on createSample, which is the
@@ -222,7 +229,7 @@ function App() {
                     path="/import"
                     element={
                       <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
-                        <ImportForm onSuccess={() => {}} onError={() => {}} />
+                        <ImportForm />
                       </ProtectedRoute>
                     }
                   />
@@ -231,6 +238,8 @@ function App() {
                   <Route path="/consents" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ConsentHistoryPage /></ProtectedRoute>} />
                   {/* ELM-0275..0285 (#1402): BiomarkerAssociation entry, behind the backend's requireRole(3, 4). */}
                   <Route path="/biomarker-associations" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><BiomarkerAssociationsPage /></ProtectedRoute>} />
+                  <Route path="/biomarker-associations/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><BiomarkerAssociationFormPage /></ProtectedRoute>} />
+                  <Route path="/biomarker-associations/:id/edit" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><BiomarkerAssociationFormPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/edit/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />

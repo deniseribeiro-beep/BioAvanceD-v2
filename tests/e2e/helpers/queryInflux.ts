@@ -76,6 +76,91 @@ export async function queryFreezerReadingIds(
 }
 
 /**
+ * #1518 (RNF025 C7): each `temperature` point POST /api/iot/telemetry wrote
+ * for `sensorId`, with its reading id and the order and provenance fields
+ * saveTelemetryPoint.js keeps beside the device time (sequenceNumber,
+ * receivedAt, sourceEventId, payloadHash), oldest first.
+ */
+export async function queryTemperaturePointFields(
+  sensorId: string,
+  lookbackMinutes = 60
+): Promise<{
+  time: string;
+  telemetryReadingId: string;
+  sequenceNumber?: number;
+  receivedAt?: string;
+  sourceEventId?: string;
+  payloadHash?: string;
+}[]> {
+  const queryApi = getClient().getQueryApi(org);
+  const flux = `from(bucket: "${bucket}")
+    |> range(start: -${lookbackMinutes}m)
+    |> filter(fn: (r) => r._measurement == "temperature")
+    |> filter(fn: (r) => r.sensorId == "${sensorId}")
+    |> filter(fn: (r) => r._field == "telemetryReadingId" or r._field == "sequenceNumber" or r._field == "receivedAt" or r._field == "sourceEventId" or r._field == "payloadHash")
+    |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+    |> group()
+    |> sort(columns: ["_time"])`;
+
+  const rows = await queryApi.collectRows<{
+    _time: string;
+    telemetryReadingId: string;
+    sequenceNumber?: number | string | null;
+    receivedAt?: string | null;
+    sourceEventId?: string | null;
+    payloadHash?: string | null;
+  }>(flux);
+  return rows.map((row) => ({
+    time: row._time,
+    telemetryReadingId: row.telemetryReadingId,
+    ...(row.sequenceNumber !== undefined && row.sequenceNumber !== null && row.sequenceNumber !== ''
+      ? { sequenceNumber: Number(row.sequenceNumber) }
+      : {}),
+    ...(row.receivedAt ? { receivedAt: row.receivedAt } : {}),
+    ...(row.sourceEventId ? { sourceEventId: row.sourceEventId } : {}),
+    ...(row.payloadHash ? { payloadHash: row.payloadHash } : {}),
+  }));
+}
+
+/**
+ * #1518 (RNF025 C8): every `temperature` point POST /api/iot/telemetry wrote
+ * for `sensorId`, one row per point and series, with its value, id, source
+ * event, `revision` tag and supersedesTelemetryReadingId; null where absent.
+ */
+export async function queryTemperatureRevisions(sensorId: string, lookbackMinutes = 10): Promise<{
+  time: string; value: number; telemetryReadingId: string; sourceEventId: string | null;
+  revision: string | null; supersedesTelemetryReadingId: string | null;
+}[]> {
+  const queryApi = getClient().getQueryApi(org);
+  const flux = `from(bucket: "${bucket}")
+    |> range(start: -${lookbackMinutes}m)
+    |> filter(fn: (r) => r._measurement == "temperature")
+    |> filter(fn: (r) => r.sensorId == "${sensorId}")
+    |> filter(fn: (r) => r._field == "value" or r._field == "telemetryReadingId" or r._field == "sourceEventId" or r._field == "supersedesTelemetryReadingId")
+    |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+    |> group()
+    |> sort(columns: ["_time"])`;
+
+  const rows = await queryApi.collectRows<{
+    _time: string;
+    value: number | string;
+    telemetryReadingId: string;
+    sourceEventId?: string | null;
+    revision?: string | null;
+    supersedesTelemetryReadingId?: string | null;
+  }>(flux);
+  // An absent string column comes back as '', hence `|| null`.
+  return rows.map((row) => ({
+    time: row._time,
+    value: Number(row.value),
+    telemetryReadingId: row.telemetryReadingId,
+    sourceEventId: row.sourceEventId || null,
+    revision: row.revision || null,
+    supersedesTelemetryReadingId: row.supersedesTelemetryReadingId || null,
+  }));
+}
+
+/**
  * #1325: every point in the bucket, over the backup export's range. count()
  * runs per series first: group() before count() would merge `_value`
  * columns of different types into one table.
@@ -90,4 +175,25 @@ export async function countAllPoints(): Promise<number> {
 
   const rows = await queryApi.collectRows<{ _value: number }>(flux);
   return rows.length ? Number(rows[0]._value) : 0;
+}
+
+/** #1515: every point POST /api/iot/telemetry wrote for `sensorId`, one row per point, with its value, id and clockStatus tag. */
+export async function queryTelemetryReadingPoints(
+  sensorId: string,
+  lookbackMinutes = 10
+): Promise<{ time: string; value: number; telemetryReadingId: string; clockStatus: string | null }[]> {
+  const queryApi = getClient().getQueryApi(org);
+  const flux = `from(bucket: "${bucket}")
+    |> range(start: -${lookbackMinutes}m)
+    |> filter(fn: (r) => r._measurement == "temperature")
+    |> filter(fn: (r) => r.sensorId == "${sensorId}")
+    |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")`;
+
+  const rows = await queryApi.collectRows<{ _time: string; value: number; telemetryReadingId: string; clockStatus?: string }>(flux);
+  return rows.map((row) => ({
+    time: row._time,
+    value: row.value,
+    telemetryReadingId: row.telemetryReadingId,
+    clockStatus: row.clockStatus ?? null,
+  }));
 }

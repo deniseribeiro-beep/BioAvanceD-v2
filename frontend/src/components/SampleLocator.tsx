@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Search, MapPin, AlertCircle, Loader, QrCode } from 'lucide-react';
 import { storageApi } from '../services/storageApi';
 import type { SampleStorageLocationDTO } from '../types/models';
-import './SampleLocator.css';
 
 interface SampleLocatorProps {}
 
@@ -57,14 +56,19 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     inputRef.current?.focus();
   };
 
-  const handleRelease = async () => {
-    if (!result) return;
+  const handleNewSearch = () => {
+    setSearchInput('');
+    setResult(null);
+    setError(null);
+    inputRef.current?.focus();
+  };
 
+  const handleRelease = async (specimenId: string) => {
     setReleasing(true);
     setError(null);
 
     try {
-      const response = await storageApi.releaseSample(result.specimenId);
+      const response = await storageApi.releaseSample(specimenId);
       if (response.success) {
         setResult(null);
         setSearchInput('');
@@ -193,7 +197,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
 
           <div className="result-actions" data-testid="sample-locator-result-actions">
             <button
-              onClick={handleSearch}
+              onClick={handleNewSearch}
               className="btn-secondary"
               disabled={releasing}
               data-testid="sample-locator-new-search-button"
@@ -201,7 +205,7 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
               Nova Busca
             </button>
             <button
-              onClick={handleRelease}
+              onClick={() => handleRelease(result.specimenId)}
               disabled={releasing}
               className="btn-danger"
               data-testid="sample-locator-release-button"

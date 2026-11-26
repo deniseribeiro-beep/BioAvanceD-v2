@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const env = require('../../src/config/env');
 const auditWitnessService = require('../../src/services/audit-witness.service');
+const { runWithRequestId } = require('../../src/utils/requestContext');
 
 describe('audit-witness.service', () => {
   beforeEach(() => {
@@ -66,6 +67,22 @@ describe('audit-witness.service', () => {
       const result = await auditWitnessService.publish({ foo: 'bar' });
 
       expect(result).toEqual({ status: 'WITNESSED', receipt: null, witnessId: null, body });
+    });
+
+    // #1468 (RNF015 C3): the witness can tie the call to the request or job that made it.
+    it('envia X-Request-Id a testemunha dentro de um request e nenhum fora dele', async () => {
+      env.AUDIT_EXTERNAL_WITNESS_URL = 'https://witness.example.test/publish';
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await runWithRequestId('req-1468-0001', () => auditWitnessService.publish({ foo: 'bar' }));
+      await auditWitnessService.publish({ foo: 'bar' });
+
+      expect(fetchMock.mock.calls[0][1].headers).toEqual({
+        'content-type': 'application/json',
+        'X-Request-Id': 'req-1468-0001',
+      });
+      expect(fetchMock.mock.calls[1][1].headers).not.toHaveProperty('X-Request-Id');
     });
   });
 

@@ -30,6 +30,19 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
+// WSL's `bash` (WindowsApps) rewrites a bare `C:\...` argv into `C:Users...`
+// and fails; Git Bash accepts `C:/...`. Same rewrite as env-generator-behaviour.
+function toBashPath(winPath) {
+  if (process.platform !== 'win32') return winPath;
+  const resolved = path.resolve(winPath);
+  const uname = spawnSync('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
+  const kind = String(uname.stdout || '');
+  if (/MINGW|MSYS/i.test(kind)) return resolved.replace(/\\/g, '/');
+  const drive = /^([A-Za-z]):(.*)$/.exec(resolved);
+  if (drive) return `/mnt/${drive[1].toLowerCase()}${drive[2].replace(/\\/g, '/')}`;
+  return resolved.replace(/\\/g, '/');
+}
+
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const GENERATOR = path.resolve(REPO_ROOT, 'generate-env-production-secrets.sh');
 const EXAMPLE = path.resolve(REPO_ROOT, '.env.production.example');
@@ -54,6 +67,7 @@ const MINTED = [
   'CONSENT_SECRET',
   'ENCRYPTION_KEY',
   'USER_ANON_SALT',
+  'MONGO_REPLICA_SET_KEY',
 ];
 
 function makeSandbox() {
@@ -71,7 +85,11 @@ function makeSandbox() {
 function run(script, args, cwd) {
   // bash explicitly rather than relying on the executable bit, which does
   // not survive every checkout on every platform.
-  return spawnSync('bash', [script, ...args], { cwd, encoding: 'utf8' });
+  // cwd stays a host path (Node's spawnSync); argv paths are rewritten for
+  // WSL/Git Bash. Flags stay literal: path.resolve would turn them into
+  // cwd/--flag under win32.
+  const bashArgs = args.map((arg) => (String(arg).startsWith('-') ? arg : toBashPath(arg)));
+  return spawnSync('bash', [toBashPath(script), ...bashArgs], { cwd, encoding: 'utf8' });
 }
 
 function parseEnv(content) {
@@ -98,7 +116,12 @@ function withSandbox(fn) {
   try {
     fn(sandbox);
   } finally {
-    fs.rmSync(sandbox.dir, { recursive: true, force: true });
+    // WSL bash can briefly keep a handle on /mnt/c/... sandbox dirs after exit.
+    try {
+      fs.rmSync(sandbox.dir, { recursive: true, force: true });
+    } catch (err) {
+      if (err && err.code !== 'EPERM' && err.code !== 'EBUSY') throw err;
+    }
   }
 }
 
@@ -116,11 +139,14 @@ test('a fresh generate fills every minted secret and derives MONGO_URI from the 
       assert.match(env[name], /^[A-Za-z0-9_-]+$/, `${name} must be base64url with no CR`);
     }
     assert.equal(new Set(MINTED.map((n) => env[n])).size, MINTED.length, 'minted secrets must be pairwise distinct');
+    // RF023 AC3 (#1550): openssl rand -hex 48 prints 48 bytes as 96 hex digits, the
+    // base64 subset a mongod key file accepts.
+    assert.match(env.MONGO_REPLICA_SET_KEY, /^[0-9a-f]{96}$/, 'MONGO_REPLICA_SET_KEY must be 96 hex digits');
 
     assert.equal(
       env.MONGO_URI,
-      `mongodb://${env.MONGO_ROOT_USERNAME}:${env.MONGO_ROOT_PASSWORD}@mongodb:27017/${env.MONGO_DB}?authSource=admin`,
-      'MONGO_URI must embed the password written as MONGO_ROOT_PASSWORD',
+      `mongodb://${env.MONGO_ROOT_USERNAME}:${env.MONGO_ROOT_PASSWORD}@mongodb:27017/${env.MONGO_DB}?authSource=admin&replicaSet=rs0`,
+      'MONGO_URI must embed the password written as MONGO_ROOT_PASSWORD and name the replica set rs0',
     );
     assert.equal(env.MONGO_DB_NOVO, env.MONGO_DB);
     assert.ok(!content.includes('\r'), 'no line of the output may contain a carriage return');

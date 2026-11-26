@@ -374,13 +374,46 @@ class ParticipantIdentityService {
     }
   }
 
-  // RF005/RNF007 (#560/#566): the sole authorized re-identification access
-  // path (paciente.controller.js#reidentify) — decryption happens here, not
-  // in every caller.
+  // RF005/RNF007 (#560/#566): re-identification (paciente.controller.js#reidentify)
+  // decrypts the whole identity. The directory reads only the record number
+  // and the birth date, and only for the cadastro list.
   async getIdentityByParticipantId(db, participantId) {
     const collection = await this.getIdentityCollection(db);
     const identity = await collection.findOne({ participantId });
     return this.decryptIdentity(identity);
+  }
+
+  formatDirectoryBirthDate(value) {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      const day = String(value.getUTCDate()).padStart(2, '0');
+      const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+      return `${day}/${month}/${value.getUTCFullYear()}`;
+    }
+    if (typeof value === 'string') {
+      const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+      if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+      const calendar = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value.trim());
+      if (calendar) return value.trim();
+    }
+    return null;
+  }
+
+  async directoryFieldsByParticipantId(db, participantIds) {
+    const ids = [...new Set((participantIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
+    const fields = new Map();
+    if (ids.length === 0) return fields;
+
+    const collection = await this.getIdentityCollection(db);
+    const rows = await collection.find({ participantId: { $in: ids } }).toArray();
+    for (const row of rows) {
+      const identity = this.decryptIdentity(row) || {};
+      const recordNumber = this.normalizeRecordNumber(identity.recordNumber);
+      fields.set(String(identity.participantId), {
+        recordNumber,
+        birthDate: this.formatDirectoryBirthDate(identity.birthDate)
+      });
+    }
+    return fields;
   }
 }
 

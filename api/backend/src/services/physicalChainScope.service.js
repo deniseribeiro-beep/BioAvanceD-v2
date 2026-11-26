@@ -138,6 +138,26 @@ async function assertLocationInScope(db, storageLocationId, organizationScope) {
   return location;
 }
 
+// #1513 (RF016 AC2): a rack's grid is in scope through the location the rack
+// is open at, or else the location its StorageRack row names. A rack
+// located nowhere is a global caller's only, as an empty, unplaced
+// container is.
+async function assertRackInScope(db, storageRackId, organizationScope) {
+  assertScopePresent(organizationScope);
+  if (organizationScope.scope === 'global') return;
+  const id = String(storageRackId);
+  const open = await (await getCollection(db, 'rackLocationAssignments')).findOne({ storageRackId: id, ...OPEN });
+  const rack = open ? null : await (await getCollection(db, 'storageRacks')).findOne({ storageRackId: id });
+  const storageLocationId = open?.storageLocationId ?? rack?.storageLocationId ?? null;
+  const location = storageLocationId
+    ? await (await getCollection(db, 'storageLocations')).findOne({ storageLocationId: String(storageLocationId) })
+    : null;
+  const rackOrganizationId = location?.organizationId ?? null;
+  if (!inScope(organizationScope, rackOrganizationId)) {
+    throw new ScopeError(`Rack ${storageRackId} fora de local da organização do solicitante`, 'RACK_OUT_OF_SCOPE');
+  }
+}
+
 module.exports = {
   ScopeError,
   specimenInScope,
@@ -148,4 +168,5 @@ module.exports = {
   positionInScope,
   assertOrganizationInScope,
   assertLocationInScope,
+  assertRackInScope,
 };

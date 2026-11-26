@@ -439,7 +439,7 @@ describe('auditLogger', () => {
       await auditLogger.log({ action: 'X', resourceType: 'Y' });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.module).toBe('Sistema');
-      expect(logData.userID).toMatch(ANON_ID_RE);
+      expect(logData.userID).toBe('USR-SYSTEM');
     });
 
     it('builds errorStack and default message when an error is passed without a message', async () => {

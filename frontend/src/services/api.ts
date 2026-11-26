@@ -33,6 +33,7 @@ import {
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 import { fetchWithRequestId, withRequestId } from '../api/requestId';
+import { installTimingReporter } from '../api/timingReporter';
 import { getLanguage } from '../i18n';
 
 // Opt-out for background/speculative requests (e.g. a prefetch for a later
@@ -76,6 +77,16 @@ export type SpecimenCloseResult = {
   triggerEventId: string;
 };
 
+// GET /samples/:id/graph-status's 200 body `data` (#1559).
+export type SampleGraphStatus = {
+  sampleId: string;
+  projected: boolean;
+  status: string | null;
+  compromisedAt: string | null;
+  compromiseFreezerKey: string | null;
+  compromiseBreachedSince: string | null;
+};
+
 const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
 const TOKEN_OPTIONAL_ROUTES = [
   '/auth/login',
@@ -94,6 +105,9 @@ const TOKEN_OPTIONAL_ROUTES = [
   // (routes/eConsent.js:246-247, no `authenticate`).
   '/e-consent/consent-tokens/validate',
   '/e-consent/consent-tokens/accept',
+  '/e-consent/consent-tokens/revoke',
+  '/e-consent/consent-tokens/signed-tcle',
+  '/e-consent/govbr',
   // #822: the other two participant-facing pages, on the JWT token system.
   // Same reasoning as the pair above -- EConsentPage and EConsentImportPage
   // are entered by emailed link, so the visitor has no session and the token
@@ -308,6 +322,9 @@ api.interceptors.response.use(
   }
 );
 
+// RNF001 C4 (#1469): installed last, so it times each call around the other interceptors.
+installTimingReporter(api);
+
 // ========== PATIENT SERVICES ==========
 export const patientService = {
   // paciente.controller.js's listar() nests the page inside `data`
@@ -340,10 +357,14 @@ export const phoneCodeService = {
 
 // ========== SAMPLE SERVICES ==========
 export const sampleService = {
-  getAll: () => api.get<ApiEnvelope<Sample[]>>('/samples'),
-  // Deep-links and Mongo ObjectIds arrive as strings from the route param.
+  // Inventory mounts pass limit/specimenId (ui-mongo-binding); deep-links and
+  // Mongo ObjectIds arrive as strings on getById from the route param (#1425).
+  getAll: (params?: { limit?: number; skip?: number; specimenId?: string; participantId?: string; sampleType?: string }) =>
+    api.get<ApiEnvelope<Sample[]>>('/samples', { params }),
   getById: (id: number | string) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
+  // #1559: the sample's projected graph status and cold-chain compromise.
+  getGraphStatus: (id: number | string) => api.get<ApiEnvelope<SampleGraphStatus>>(`/samples/${id}/graph-status`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
   getResults: (id: number) => api.get<ApiEnvelope<Result[]>>(`/samples/${id}/results`), // Implementa Sample.getResults()
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
@@ -429,21 +450,13 @@ export const resultService = {
       
       // Se for JSON, pode ser uma resposta de erro ou redirecionamento
       if (contentType.includes('application/json')) {
+        let json: any;
         try {
           // Se response.data é um Blob, converte para texto
           const text = response.data instanceof Blob 
             ? await response.data.text()
             : response.data;
-          const json = typeof text === 'string' ? JSON.parse(text) : text;
-          
-          // Se for redirecionamento para URL externa
-          if (json.redirect && json.url) {
-            window.open(json.url, '_blank');
-            return;
-          }
-          
-          // Se for erro
-          throw new Error(json.error || json.message || 'Erro ao fazer download do arquivo');
+          json = typeof text === 'string' ? JSON.parse(text) : text;
         } catch (parseError: any) {
           // Se não conseguir parsear, verifica se é erro HTTP
           if (response.status >= 400) {
@@ -451,6 +464,15 @@ export const resultService = {
           }
           throw parseError;
         }
+
+        // Se for redirecionamento para URL externa
+        if (json?.redirect && json?.url) {
+          window.open(json.url, '_blank');
+          return;
+        }
+
+        // Se for erro (#1420: fora do try, o texto do servidor chega ao chamador)
+        throw new Error(json?.error || json?.message || 'Erro ao fazer download do arquivo');
       }
       
       // Cria blob URL para download
@@ -490,14 +512,16 @@ export const resultService = {
         
         // Se a resposta é um blob (pode ser JSON de erro dentro do blob)
         if (response.data instanceof Blob) {
+          let errorJson: any;
           try {
             const errorText = await response.data.text();
-            const errorJson = JSON.parse(errorText);
-            throw new Error(errorJson.error || errorJson.message || 'Erro ao fazer download do arquivo');
+            errorJson = JSON.parse(errorText);
           } catch {
             // Se não conseguir parsear, usa status HTTP
             throw new Error(`Erro ${response.status}: ${response.statusText || 'Erro ao fazer download do arquivo'}`);
           }
+          // #1420: fora do try, o texto do servidor chega ao chamador
+          throw new Error(errorJson?.error || errorJson?.message || 'Erro ao fazer download do arquivo');
         }
         
         // Se a resposta é um objeto JSON
@@ -543,10 +567,6 @@ export const temperatureService = {
   getAll: () => api.get<ApiEnvelope<{ temperatures: Temperature[]; total: number; limit: number; skip: number }>>('/temperature'),
   // #1391 (RF009 AC1): a reading is read from InfluxDB by its telemetryReadingId.
   getById: (telemetryReadingId: string) => api.get<ApiEnvelope<Temperature>>(`/temperature/${encodeURIComponent(telemetryReadingId)}`),
-  viewControl: (sensorID?: string, policyID?: string) => 
-    api.get<any>('/temperature/control', { 
-      params: { sensorID, policyID } 
-    }), // Implementa User.viewTemperatureControl()
 };
 
 // ========== SENSOR SERVICES ==========
@@ -789,7 +809,6 @@ export const logService = {
   getById: (id: number | string) => api.get<{ success: boolean; data: Log }>(`/logs/${id}`),
   getLogs: (filters?: any) => api.get<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs', { params: filters }),
   queryLogs: (filters: any) => api.post<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs/query', filters),
-  exportCSV: (filters?: any) => api.get('/logs/export/csv', { params: filters, responseType: 'blob' }),
   exportExcel: (filters?: any) => api.get('/logs/export/xlsx', { params: filters, responseType: 'blob' }),
   // #1005: every user's sessions, revoked ones included, pseudonymised.
   getSessions: (filters?: SessionAuditFilters) =>
@@ -956,10 +975,19 @@ export const consentService = {
   createPatientConsent: (data: {
     participantId: string;
     templateId: string;
+    consentTemplateId?: string;
     responses: Record<string, boolean>;
     signatureName?: string;
     signatureImageBase64?: string;
     signatureMimeType?: string;
+    collectionPlace?: string;
+    location?: {
+      status: 'unavailable' | 'captured';
+      latitude?: number;
+      longitude?: number;
+      accuracyMeters?: number | null;
+      capturedAt?: string | null;
+    };
   }) => api.post<PatientConsent>('/e-consent/consents', data),
   // RF010 AC6 (#1375): `consentId` is the consent's Mongo _id. No scope means
   // the whole consent; a scope names the permission codes to withdraw.
@@ -967,7 +995,9 @@ export const consentService = {
     api.post<{ success: boolean; data: PatientConsent }>(`/e-consent/consents/${consentId}/revoke`, request),
   getConsentHistory: (consentId: string) =>
     api.get<{ success: boolean; data: ConsentHistory }>(`/e-consent/consents/${consentId}/history`),
-  getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`)
+  getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`),
+  getSignedTcle: (consentId: string) =>
+    api.get<Blob>(`/e-consent/consents/${consentId}/signed-tcle`, { responseType: 'blob' }),
 };
 
 // #809: the bulk consent-token pair, consumed by ConsentTokenPage. Unlike the
@@ -985,7 +1015,24 @@ export type ConsentTokenTemplatePayload = {
 
 export const consentTokenService = {
   validate: (participantId: string, token: string) =>
-    api.post<{ success: boolean; data: { valid: boolean; participantId: string; template: ConsentTokenTemplatePayload | null } }>(
+    api.post<{
+      success: boolean;
+      data: {
+        valid: boolean;
+        participantId: string;
+        patientStatus?: string | null;
+        panel?: 'pending' | 'manage' | 'closed';
+        template: ConsentTokenTemplatePayload | null;
+        consent?: {
+          participantId: string;
+          status: string;
+          currentStateDerived: string | null;
+          signedAt?: string | null;
+          hasSignedTcle?: boolean;
+          effectivePermissions: Record<string, boolean>;
+        } | null;
+      };
+    }>(
       '/e-consent/consent-tokens/validate',
       { patientId: participantId, token }
     ),
@@ -994,7 +1041,12 @@ export const consentTokenService = {
   accept: (
     participantId: string,
     token: string,
-    manifestation: { consentTemplateId: string; responses: Record<string, boolean> }
+    manifestation: {
+      consentTemplateId: string;
+      responses: Record<string, boolean>;
+      location?: ConsentPanelLocation;
+      identityProof?: ConsentIdentityProof | null;
+    }
   ) =>
     api.post<{
       success: boolean;
@@ -1004,7 +1056,48 @@ export const consentTokenService = {
       '/e-consent/consent-tokens/accept',
       { patientId: participantId, token, ...manifestation }
     ),
+  revoke: (
+    participantId: string,
+    token: string,
+    revocation: { scope?: string[]; reason?: string; location: ConsentPanelLocation }
+  ) =>
+    api.post<{ success: boolean; data: { participantId: string; status: string; currentStateDerived: string | null; effectivePermissions: Record<string, boolean> } }>(
+      '/e-consent/consent-tokens/revoke',
+      { patientId: participantId, token, ...revocation }
+    ),
+  signedTcle: (participantId: string, token: string) =>
+    api.post<Blob>(
+      '/e-consent/consent-tokens/signed-tcle',
+      { patientId: participantId, token },
+      { responseType: 'blob' }
+    ),
 };
+
+export type ConsentIdentityProof =
+  | { provider: 'govbr'; sub: string; email?: string | null; name?: string | null; mock?: boolean; verifiedAt?: string }
+  | { provider: 'icp-brasil'; certificateThumbprint: string; signedTermHash?: string; subjectDn?: string; verifiedAt?: string }
+  | { provider: 'panel' };
+
+export const govbrConsentService = {
+  status: () =>
+    api.get<{ enabled: boolean; issuer: string | null; mock: boolean }>('/e-consent/govbr/status'),
+  start: (participantId: string, token: string) =>
+    api.post<{ authorizationUrl: string; state: string }>('/e-consent/govbr/start', {
+      patientId: participantId,
+      participantId,
+      token,
+    }),
+  callback: (code: string, state: string) =>
+    api.get<{
+      success: boolean;
+      participantId: string;
+      identityProof: ConsentIdentityProof;
+    }>('/e-consent/govbr/callback', { params: { code, state } }),
+};
+
+export type ConsentPanelLocation =
+  | { status: 'unavailable' }
+  | { status: 'captured'; latitude: number; longitude: number; accuracyMeters: number | null; capturedAt: string | null };
 
 // #822: the JWT consent-token pair behind EConsentPage, and the FHIR import
 // consent pair behind EConsentImportPage. Both pages previously called raw
@@ -1092,6 +1185,8 @@ export const securityService = {
   // rollback to one of them, recorded as a new release.
   getReleases: () => api.get('/security/config/releases'),
   rollbackConfig: (configurationReleaseId: string) => api.post('/security/config/rollback', { configurationReleaseId }),
+  // RF014 AC1: the setting catalog, each key with its type, scope and allowed values.
+  getCatalog: () => api.get('/security/config/catalog'),
   // #1149: read-only. The PUT it paired with wrote a store nothing enforced.
   getPermissions: () => api.get('/security/permissions'),
   getSessions: () => api.get('/auth/sessions'),

@@ -6,7 +6,7 @@ export default function NewUserSuccessPage() {
   const navigate = useNavigate();
 
   return (
-    <div className="page">
+    <div className="page-shell">
       <Card>
         <div style={{ padding: '2rem', textAlign: 'center' }}>
           <h1 style={{ marginBottom: '1rem' }}>Usuário Criado com Sucesso</h1>

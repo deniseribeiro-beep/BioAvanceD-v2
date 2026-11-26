@@ -1,0 +1,70 @@
+name: Deployed host TLS check
+
+# RNF020 C1 (TLS 1.2 or higher), proven against the deployed HTTPS host:
+# a TLS 1.1 handshake must be refused by the server and a TLS 1.2
+# handshake must complete with a verified certificate. The client offers
+# TLS 1.1 at security level 0, so a refusal is the server's and not
+# OpenSSL's default. Kept apart from ci-pipeline.yml so a red result points
+# at the deployment, not at the test suite (#1456,
+# docs/decisions/2026-11-06-rnf020-rnf021-proof-outside-e2e.md).
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+      - feature/docker-e2e-backend-integration
+
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  TLS_HOST: bioadvanced.dev
+
+jobs:
+  deployed-host-tls:
+    name: Deployed host refuses TLS 1.1, completes TLS 1.2
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: OpenSSL version
+        run: openssl version
+
+      - name: TLS 1.1 handshake is refused by the server
+        shell: bash
+        run: |
+          set -u
+          rc=0
+          out="$(timeout 30 openssl s_client -connect "$TLS_HOST:443" -servername "$TLS_HOST" -tls1_1 -cipher 'DEFAULT@SECLEVEL=0' -msg </dev/null 2>&1)" || rc=$?
+          printf '%s\n' "$out" | grep -E '^(>>>|<<<) ' || true
+          if ! printf '%s\n' "$out" | grep -qE '^>>> TLS 1\.1, Handshake \[length [0-9a-f]+\], ClientHello$'; then
+            echo "::error::no TLS 1.1 ClientHello went out (exit $rc), so this run proves nothing about $TLS_HOST"
+            exit 1
+          fi
+          if printf '%s\n' "$out" | grep -qE '^<<< [^,]+, Handshake \[length [0-9a-f]+\], ServerHello$'; then
+            echo "::error::$TLS_HOST answered the TLS 1.1 ClientHello with a ServerHello: TLS 1.1 is accepted"
+            exit 1
+          fi
+          if [ "$rc" -eq 0 ] || ! printf '%s\n' "$out" | grep -qE '^<<< [^,]+, Alert \[length [0-9a-f]+\], fatal [a-z_]+$'; then
+            echo "::error::$TLS_HOST sent no fatal alert to the TLS 1.1 ClientHello (exit $rc), so the refusal is not shown"
+            exit 1
+          fi
+          echo "TLS 1.1 refused by $TLS_HOST"
+
+      - name: TLS 1.2 handshake completes with a verified certificate
+        shell: bash
+        run: |
+          set -u
+          rc=0
+          out="$(timeout 30 openssl s_client -connect "$TLS_HOST:443" -servername "$TLS_HOST" -tls1_2 -verify_return_error -verify_hostname "$TLS_HOST" </dev/null 2>&1)" || rc=$?
+          printf '%s\n' "$out" | grep -E '^(verify error:|New,|    Protocol  :|    Verify return code:)' || true
+          if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -qE '^    Protocol  : TLSv1\.2$' || ! printf '%s\n' "$out" | grep -qE '^    Verify return code: 0 \(ok\)$'; then
+            echo "::error::TLS 1.2 handshake with $TLS_HOST did not complete with a verified certificate (exit $rc)"
+            exit 1
+          fi
+          echo "TLS 1.2 completed with $TLS_HOST"

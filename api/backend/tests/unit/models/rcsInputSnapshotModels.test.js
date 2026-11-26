@@ -428,8 +428,8 @@ describe('RcsInputSnapshotModel.capture', () => {
 });
 
 // RF018 AC7 (#1320): capture keeps the six criteria the gate evaluated, each
-// true, false or null with its reason, and evidenceRefs empty: no evidence
-// record exists yet to reference.
+// true, false or null with its reason, and the evidenceRefs it is given, empty
+// where none is given (RNF018 AC5 (#1524), V2E-0532).
 describe('RcsGovernanceEvidenceSnapshotModel.capture', () => {
   const UNREAD = 'não lido por este cálculo';
   const base = () => ({
@@ -467,10 +467,22 @@ describe('RcsGovernanceEvidenceSnapshotModel.capture', () => {
     expect(RcsGovernanceEvidenceSnapshotModel.validate(evidence).isValid).toBe(false);
   });
 
-  it('ignores a caller evidenceRefs and defaults evaluatedAt to now', () => {
+  // RNF018 AC5 (#1524), V2E-0532: the resolved references are kept.
+  it('keeps a caller evidenceRefs and defaults evaluatedAt to now', () => {
     const evidence = RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), evidenceRefs: ['custody-1'], evaluatedAt: undefined });
-    expect(evidence.evidenceRefs).toEqual([]);
+    expect(evidence.evidenceRefs).toEqual(['custody-1']);
     expect(evidence.evaluatedAt).toBeInstanceOf(Date);
+  });
+
+  // RNF018 AC5 (#1524), V2E-0532: a present evidenceRefs that is not a list
+  // of non-empty references is refused.
+  it.each([
+    ['a string', 'custody-1'],
+    ['a list with an empty reference', ['']],
+    ['a list with a number', [42]],
+  ])('throws when evidenceRefs is %s', (_name, evidenceRefs) => {
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), evidenceRefs }))
+      .toThrow('evidenceRefs deve ser uma lista de referências não vazias para RCSGovernanceEvidenceSnapshot.capture');
   });
 
   it('accepts a null gateResult with every null flag and gateResult given a reason', () => {

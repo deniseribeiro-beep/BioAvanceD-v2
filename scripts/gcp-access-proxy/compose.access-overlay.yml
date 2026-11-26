@@ -1,0 +1,22 @@
+# Homolog / public HTTPS access overlay: same-origin API behind the access proxy.
+# Usage (on VM, from BioAvanceD-v2-homolog):
+#   docker compose --env-file .env.test.example -f compose.test.yml \
+#     -f scripts/gcp-access-proxy/compose.access-overlay.yml \
+#     build frontend-app-test
+#   docker compose --env-file .env.test.example -f compose.test.yml \
+#     -f scripts/gcp-access-proxy/compose.access-overlay.yml \
+#     up -d frontend-app-test
+services:
+  frontend-app-test:
+    build:
+      args:
+        VITE_API_BASE_URL: /api
+
+  # Browser Origin is the public proxy/LB host, not :5173 — without these the
+  # cors() callback rejects with HTTP 500 (see app.js allowedOrigins).
+  backend-app-test:
+    environment:
+      ALLOWED_ORIGINS: >-
+        http://127.0.0.1:8080,http://localhost:8080,
+        https://bioadvanced.dev,https://www.bioadvanced.dev,
+        http://localhost:5173,http://127.0.0.1:5173

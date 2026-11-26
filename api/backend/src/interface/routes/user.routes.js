@@ -11,6 +11,7 @@ const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCas
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
 const { ObjectId } = require('mongodb');
+const { findRcsDerivedFields, rcsDerivedWriteDetails } = require('../../models/Sample');
 // #933: extraída para src/utils/userFilter.js para que os scripts de
 // manutenção em src/scripts/ usem exatamente esta regra em vez de uma cópia.
 const { buildUserFilterById } = require('../../utils/userFilter');
@@ -228,7 +229,7 @@ router.post('/register',
 // RF002 - Somente Coordenador/Administrador podem listar usuários (o backend
 // deve validar a permissão independentemente da ocultação da função no
 // frontend) — mesma permissão já aplicada a PUT/DELETE deste recurso.
-router.get('/', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
+router.get('/', authenticate, requirePermission('readUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -334,7 +335,7 @@ router.get('/logs', authenticate, async (req, res) => {
 
 // #1241: gated like GET / above. With authenticate alone any account could
 // read any other user's record (email, phone, organization, status, roles).
-router.get('/:id', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
+router.get('/:id', authenticate, requirePermission('readUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -384,7 +385,7 @@ router.get('/:id', authenticate, requirePermission('createUser'), requireOrganiz
   }
 });
 
-router.put('/:id', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
+router.put('/:id', authenticate, requirePermission('updateUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -957,7 +958,7 @@ async function sendOrganizationScopes(res, db, user, status = 200) {
   });
 }
 
-router.get('/:id/organizations', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
+router.get('/:id/organizations', authenticate, requirePermission('readUser'), requireOrganizationScope, async (req, res) => {
   try {
     const found = await findUserForScopeRoute(req, res);
     if (!found) return undefined;
@@ -969,7 +970,9 @@ router.get('/:id/organizations', authenticate, requirePermission('createUser'), 
 });
 
 // Granting a scope is a role assignment (#1008), so assignRole gates it too.
-router.post('/:id/organizations', authenticate, requirePermission('createUser'), requirePermission('assignRole'), requireOrganizationScope, async (req, res) => {
+// #1229: it changes an existing account, so updateUser is passed 'UPDATE'
+// rather than deriving CREATE from the POST.
+router.post('/:id/organizations', authenticate, requirePermission('updateUser', 'UPDATE'), requirePermission('assignRole'), requireOrganizationScope, async (req, res) => {
   try {
     const found = await findUserForScopeRoute(req, res);
     if (!found) return undefined;
@@ -1001,8 +1004,9 @@ router.post('/:id/organizations', authenticate, requirePermission('createUser'),
 });
 
 // assignRole allows CREATE and UPDATE; a removal revokes an assignment, an
-// UPDATE of it, as the revoke-sessions route passes its own action.
-router.delete('/:id/organizations/:organizationId', authenticate, requirePermission('createUser'), requirePermission('assignRole', 'UPDATE'), requireOrganizationScope, async (req, res) => {
+// UPDATE of it, as the revoke-sessions route passes its own action. The same
+// holds for updateUser (#1229).
+router.delete('/:id/organizations/:organizationId', authenticate, requirePermission('updateUser', 'UPDATE'), requirePermission('assignRole', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const found = await findUserForScopeRoute(req, res);
     if (!found) return undefined;
@@ -1040,7 +1044,7 @@ router.delete('/:id/organizations/:organizationId', authenticate, requirePermiss
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
+router.delete('/:id', authenticate, requirePermission('deleteUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1111,7 +1115,7 @@ router.delete('/:id', authenticate, requirePermission('createUser'), requireOrga
 
 // #1241: gated like GET /:id. With authenticate alone it told any account
 // whether an id existed and whether it was active.
-router.get('/:id/validate-status', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
+router.get('/:id/validate-status', authenticate, requirePermission('readUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1211,6 +1215,16 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
         error: 'Payload inválido',
         message: contextErrors.join(', '),
         details: contextErrors
+      });
+    }
+    // RNF018 AC4 (#1489): nor does it let a caller write the RCS result.
+    const rcsDerivedFields = findRcsDerivedFields(req.body);
+    if (rcsDerivedFields.length > 0) {
+      return res.status(422).json({
+        success: false,
+        error: 'RCS_DERIVED_WRITE_REFUSED',
+        fields: rcsDerivedFields,
+        details: rcsDerivedWriteDetails(rcsDerivedFields)
       });
     }
 

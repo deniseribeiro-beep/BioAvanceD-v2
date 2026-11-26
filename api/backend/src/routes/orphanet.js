@@ -2,6 +2,8 @@ const express = require('express');
 const logger = require('../utils/logger');
 const { isExternalTerminologySyncEnabled } = require('../services/terminologySync.service');
 
+const { authenticate } = require('../infrastructure/middleware/auth');
+
 const router = express.Router();
 const COLLECTION = 'orphanet_diseases';
 const ORPHADATA_BASE_URL = String(process.env.ORPHADATA_BASE_URL || '').replace(/\/$/, '');
@@ -302,7 +304,7 @@ async function searchRemote(search, limit) {
   return dedupeRecords(records, limit);
 }
 
-router.get('/search', async (req, res) => {
+router.get('/search', authenticate, async (req, res) => {
   const q = normalizeText(req.query.q);
   const lang = normalizeText(req.query.lang) || 'pt';
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);

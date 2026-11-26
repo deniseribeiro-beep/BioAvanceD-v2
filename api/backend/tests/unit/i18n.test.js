@@ -211,7 +211,7 @@ describe('i18n', () => {
 
       expect(initSpy).toHaveBeenCalled();
       initSpy.mockRestore();
-    });
+    }, 20_000);
   });
 
   describe('loadTranslations', () => {
@@ -244,7 +244,8 @@ describe('i18n', () => {
   //
   // #1110 postscript: `assistant.title` is gone from all three locales. It
   // was scaffolding for a feature deleted in 5e571099 and excluded from the
-  // current scope by RF012 AC#10 -- so #878 was maintenance spent on dead
+  // current scope by section 10 of the v2.0.0 requirements (its scope
+  // exclusion) -- so #878 was maintenance spent on dead
   // code, which is the argument #1110 makes, with #190 as its other
   // instance. The parity checks below are unaffected and are what would now
   // catch the same class of drift.

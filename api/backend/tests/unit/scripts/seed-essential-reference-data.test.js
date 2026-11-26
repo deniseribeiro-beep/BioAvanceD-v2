@@ -87,6 +87,31 @@ describe('Foundation job: apply', () => {
     expect(second.previousRunId).toBe(first.foundationDataRunId);
   });
 
+  it('records a step for each RF022 AC2 preparation, with a checkpoint on each it completed (AC2, AC5)', async () => {
+    const db = createFakeDb();
+    const { run } = await apply(db);
+
+    expect(run.steps.map((step) => step.step)).toEqual([
+      'entities', 'miabis-minimal', 'sprec-minimal', 'rcs-gov-1.0',
+      'governance-registry', 'rbac-catalog', 'report-templates', 'indexes',
+      'quarantine', 'outbox', 'audit', 'tests', 'rollback',
+    ]);
+    const stepOf = (name) => run.steps.find((step) => step.step === name);
+    expect(stepOf('entities')).toMatchObject({ status: 'completed', plannedCounts: { elements: 1644, entities: 146, historical: 929 } });
+    expect(stepOf('tests')).toMatchObject({ status: 'completed', plannedCounts: { failed: 0 } });
+    expect(stepOf('rollback')).toEqual({ step: 'rollback', status: 'prepared', plannedCounts: { removable: 0 } });
+    for (const name of ['quarantine', 'outbox', 'audit']) {
+      expect(stepOf(name)).toMatchObject({ status: 'deferred', builtIn: expect.any(String) });
+    }
+    const completed = run.steps.filter((step) => step.status === 'completed');
+    expect(completed.map((step) => step.step)).toEqual(['entities', 'governance-registry', 'rbac-catalog', 'report-templates', 'indexes', 'tests']);
+    expect(completed.map((step) => step.checkpoint.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    for (const step of completed) {
+      expect(step.checkpoint.completedAt).toBeInstanceOf(Date);
+      expect(step.checkpoint.insertedIds).toBeUndefined();
+    }
+  });
+
   it('blocks readiness when apply populates a reference collection (AC7)', async () => {
     const db = createFakeDb();
     const configurationSeeds = [{ step: 'leaky-seed', seed: async (fakeDb) => fakeDb.collection('sampleTypes').insertOne({ _id: 'leaked-reference' }), count: () => ({}) }];
@@ -177,6 +202,32 @@ describe('Foundation job: apply', () => {
     expect(OPERATIONAL_COLLECTIONS).toContain(CANONICAL_COLLECTIONS.samples);
     expect(report.status).toBe('blocked');
     expect(report.blockers).toContain('gate:zero-operational-data');
+  });
+
+  it('counts telemetry, file, study, assay and workflow-run collections in the zero-operational-data gate (AC8, RNF031 C7)', async () => {
+    const added = [
+      'telemetryIngestionEvents', 'telemetryValidationIssues',
+      CANONICAL_COLLECTIONS.telemetryExposureSummaries, CANONICAL_COLLECTIONS.telemetryDatastreams,
+      'sample_files', 'assayFiles', 'datasetFiles', 'AnalysisFile', CANONICAL_COLLECTIONS.dataFileVersions,
+      'studies', 'assays', 'workflowRuns',
+    ];
+    expect(OPERATIONAL_COLLECTIONS).toEqual(expect.arrayContaining(added));
+
+    const { report } = await apply(createFakeDb());
+    const gate = gateOf(report, 'zero-operational-data');
+    expect(gate.result).toBe('pass');
+    expect(Object.keys(gate.evidence.before)).toEqual(expect.arrayContaining(added));
+  });
+
+  it.each(['telemetryIngestionEvents', 'sample_files', 'studies'])('blocks readiness when apply creates a record in %s (AC8, RNF031 C7)', async (name) => {
+    const db = createFakeDb();
+    const configurationSeeds = [{ step: 'leaky-seed', seed: async (fakeDb) => fakeDb.collection(name).insertOne({ _id: `leaked-${name}` }), count: () => ({}) }];
+    const { report } = await runSeed({ db, args: parseArgs([]), ...quiet, configurationSeeds });
+
+    // A replaced configurationSeeds also fails governance-registry, so the
+    // status alone would read blocked whether or not this gate counts name.
+    expect(report.blockers).toContain('gate:zero-operational-data');
+    expect(gateOf(report, 'zero-operational-data').evidence).toMatchObject({ before: { [name]: 0 }, after: { [name]: 1 } });
   });
 
   it('registers the CanonicalModelRelease and its invariant catalog once, and a re-run writes neither again (#1304, F1.2)', async () => {

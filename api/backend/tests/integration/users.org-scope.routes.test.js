@@ -20,6 +20,12 @@ const { buildRbacCollections } = require('../factories/rbac.factory');
 // organizations are its active assignment scope ids. The Administrador
 // (global) manages every user. See
 // docs/decisions/2026-10-17-org-scoped-user-management.md.
+//
+// #1229: the seed no longer gives the Coordenador any user-account code
+// (RF003 names the Administrador only), so the organization-scoped caller
+// here is a Coordenador that an extra role grants them to. The tenancy
+// rule is the route's, whoever holds the codes; a plain seeded Coordenador
+// is refused at the gate (the last case).
 
 const COORD = 'qa-coord-a';
 const ADMIN = 'qa-admin-1';
@@ -35,6 +41,10 @@ function token({ userID, accessType, roleName }) {
 const coordToken = () => token({ userID: COORD, accessType: 3, roleName: 'Coordenador' });
 const adminToken = () => token({ userID: ADMIN, accessType: 4, roleName: 'Administrador' });
 
+const USER_CODES = ['createUser', 'readUser', 'updateUser', 'deleteUser'];
+const USER_MANAGER_ROLE = { roleCode: 'user_manager', hierarchyLevel: null, permissions: USER_CODES };
+const PLAIN_COORD = 'qa-coord-plain';
+
 // An org-a caller holding every user-management permission the Coordenador
 // lacks, so each target check is reached past its requirePermission.
 const OPERATOR = 'qa-operator-a';
@@ -42,15 +52,18 @@ const operatorToken = () => token({ userID: OPERATOR, accessType: 2, roleName: '
 const OPERATOR_ROLE = {
   roleCode: 'user_operator',
   hierarchyLevel: null,
-  permissions: ['createUser', 'assignRole', 'revokeSessions', 'forcePasswordReset', 'setUserPassword', 'disableMFA'],
+  permissions: [...USER_CODES, 'assignRole', 'revokeSessions', 'forcePasswordReset', 'setUserPassword', 'disableMFA'],
 };
 
 const DEFAULT_RBAC_USERS = [
   { userAccountId: ADMIN, accessType: 4 },
   { userAccountId: COORD, accessType: 3, organizationId: 'org-a' },
+  { userAccountId: COORD, roleCodes: ['user_manager'], organizationId: 'org-a' },
+  { userAccountId: PLAIN_COORD, accessType: 3, organizationId: 'org-a' },
   { userAccountId: 'user-in-org-a', accessType: 2, organizationId: 'org-a' },
   { userAccountId: 'user-in-org-b', accessType: 2, organizationId: 'org-b' },
   { userAccountId: ORPHAN_COORD, accessType: 3 },
+  { userAccountId: ORPHAN_COORD, roleCodes: ['user_manager'] },
 ];
 
 function matchesUser(doc, query = {}) {
@@ -83,7 +96,7 @@ describe('#1384: user management is limited to the caller\'s organizations', () 
     reportsCollection = createCollectionMock({
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'report-1' }),
     });
-    rbac = buildRbacCollections(rbacUsers || DEFAULT_RBAC_USERS, extraRoles);
+    rbac = buildRbacCollections(rbacUsers || DEFAULT_RBAC_USERS, [USER_MANAGER_ROLE, ...extraRoles]);
     // The factory defaults every organization assignment's scopeId; an
     // org-less Coordenador holds the role with no organization ('unassigned').
     for (const doc of await rbac.userRoleAssignments.find({ userAccountId: ORPHAN_COORD }).toArray()) {
@@ -344,5 +357,23 @@ describe('#1384: user management is limited to the caller\'s organizations', () 
 
     expect(response.status).toBe(403);
     expect(response.body.error).toBe('Sem organização atribuída');
+  });
+
+  // #1229: the seeded Coordenador holds no user-account code, so each user
+  // route refuses it at requirePermission, before any organization check.
+  it.each([
+    ['GET', '/api/users'],
+    ['GET', '/api/users/user-in-org-a'],
+    ['PUT', '/api/users/user-in-org-a'],
+    ['DELETE', '/api/users/user-in-org-a'],
+  ])('#1229: a seeded Coordenador with no user code gets 403 on %s %s, and nothing is written', async (method, path) => {
+    let call = request(app)[method.toLowerCase()](path)
+      .set('Authorization', `Bearer ${token({ userID: PLAIN_COORD, accessType: 3, roleName: 'Coordenador' })}`);
+    if (method === 'PUT') call = call.send({ name: 'Renamed' });
+    const response = await call;
+
+    expect(response.status).toBe(403);
+    expect(response.body.message).not.toBe('Este usuário pertence a outra organização');
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
   });
 });

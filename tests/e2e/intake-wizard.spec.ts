@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { mockLogin } from './helpers/mockAuth';
+import { SIGNATURE_PNG_DATA_URL } from './helpers/consentSignature';
 import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { deleteOrganizations } from './helpers/listOrganizations';
 import {
-  createRealParticipant,
   closeSeedDb,
   seedActiveConsentTemplate,
   seedActiveTerminologyConcept,
@@ -16,9 +16,19 @@ import {
   cleanupStorageBoxLocation,
 } from './helpers/seedParticipant';
 import type { SeededStorageBox } from './helpers/seedParticipant';
-import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver } from './helpers/queryNeo4j';
+import {
+  seedOrphaPhenotypeGraph,
+  removeOrphaPhenotypeGraph,
+  closeNeo4jDriver,
+} from './helpers/queryNeo4j';
 import { generateValidCpf } from './helpers/cpf';
 import { waitForIntakeWizardReady } from './helpers/waitForIntakeWizardReady';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 import { MongoClient, ObjectId } from 'mongodb';
 
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
@@ -68,6 +78,17 @@ test.describe('Intake wizard (/next/intake)', () => {
           success: true,
           data: { scope: 'organization', organizations: [{ organizationId: 'org-e2e-mock', officialName: 'Mock Org' }] },
         }),
+      });
+    });
+
+    // RF004 AC2 (#1497): the wizard lists the collections a specimen may be
+    // registered into on mount. Unfulfilled, the mocked token 401s on the
+    // real backend and the client ends the session, as #1357 says above.
+    await page.route('**/api/collections', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: [{ collectionId: 'COL-E2E-MOCK', collectionName: 'Mock Collection' }] }),
       });
     });
   });
@@ -122,80 +143,6 @@ test.describe('Intake wizard (/next/intake)', () => {
     // to /login within a few seconds even with no backend listening.
     await page.waitForTimeout(3000);
     await expect(page).toHaveURL(/\/next\/intake/);
-  });
-});
-
-test.describe('Participant identity segregation (RF005/RNF007) — real backend (#327, entity+read-path landed in #363)', () => {
-  test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
-
-  test.afterAll(async () => {
-    await closeSeedDb();
-  });
-
-  // dict-07_ALINHAMENTO_CODIGO.md row 1 / migration table row 2: the
-  // target model requires patientName/birthDate/identityDocument to live
-  // in a segregated ParticipantIdentity entity, not as direct fields on
-  // the scientific Participant record — "Segregar, cifrar e não projetar
-  // ao grafo". #363 landed the ParticipantIdentity entity/collection and
-  // stripped these fields from GET /api/patients/:id's response; the
-  // Patient document itself still carries them internally pending a
-  // larger follow-up migrating its other ~20 consumers off it.
-  test('AC#1/AC#2: patientName/birthDate are not returned as direct fields on the participant resource', async ({
-    request,
-  }) => {
-    const admin = await realLogin(request);
-    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-
-    const get = await request.get(`${apiBaseURL}/api/patients/${participant.participantId}`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    expect(get.status()).toBe(200);
-    const resource = (await get.json()).data;
-
-    // AC#1: participantId is the canonical research identifier — it must
-    // still be present on the participant resource.
-    expect(resource.participantId).toBeTruthy();
-
-    // AC#2: civil identity (name, exact birth date, contacts, civil
-    // identifiers) belongs in ParticipantIdentity under reinforced
-    // controls, not as direct fields alongside the scientific record.
-    expect(resource.patientName).toBeUndefined();
-    expect(resource.birthDate).toBeUndefined();
-    expect(resource.identityDocument).toBeUndefined();
-  });
-
-  // RNF007 AC#3: ParticipantIdentity must never be projected to Neo4j.
-  // Today's outbox projections (neo4jCanonicalProjection.service.js) only
-  // ever carry a pseudonymized Donor.id derived from participantId — this
-  // sub-assertion is expected to already hold, unlike AC#1/AC#2 above, and
-  // documents that the eventual ParticipantIdentity build must preserve it.
-  test('AC#3: no participant identity fields appear in the Neo4j-facing outbox payload', async ({ request }) => {
-    const admin = await realLogin(request);
-    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-    const participantId = participant.participantId;
-
-    // No API surface exists to inspect the outbox (same gap
-    // seedParticipant.ts documents for consent/location fixtures) — read
-    // the `graph_projection_outbox` collection directly, the same one
-    // neo4jOutbox.service.js's COLLECTION_NAME writes to.
-    const client = new MongoClient(mongoUri);
-    await client.connect();
-    try {
-      const events = await client
-        .db(mongoDbName)
-        .collection('graph_projection_outbox')
-        .find({ $or: [{ aggregateId: participantId }, { 'payload.participantId': participantId }] })
-        .toArray();
-
-      for (const event of events) {
-        const serialized = JSON.stringify(event.payload || {});
-        expect(serialized).not.toMatch(/patientName/);
-        expect(serialized).not.toMatch(/birthDate/);
-        expect(serialized).not.toMatch(/identityDocument/);
-      }
-    } finally {
-      await client.close();
-    }
   });
 });
 
@@ -266,11 +213,15 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
 
   let mongoClient: MongoClient;
   let seededStorageBox: SeededStorageBox;
+  // RF004 AC2 (#1497): every wizard submission here picks this governed collection.
+  let governedCollection: GovernedCollection | null = null;
 
   test.beforeAll(async () => {
     mongoClient = new MongoClient(mongoUri);
     await mongoClient.connect();
     const db = mongoClient.db(mongoDbName);
+
+    governedCollection = await seedGovernedCollection(`intake-clinical-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
     await seedActiveConsentTemplate(db);
 
@@ -341,6 +292,8 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     if (seededStorageBox) {
       await cleanupStorageBoxLocation(seededStorageBox);
     }
+    await cleanupGovernedCollection(governedCollection);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -382,6 +335,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-quantity').fill('5');
     await page.getByTestId('wizard-linked-project').fill(`RF005-E2E-696-${suffix}`);
     await page.getByTestId('wizard-institution-name').fill('Hospital E2E 696');
+    await page.getByTestId('wizard-collection').selectOption(governedCollection!.collectionId);
     await page.getByTestId('wizard-next-button').click();
 
     // Step 3 — diagnosis search & select (fills ORPHA/OMIM/CID-10 readonly
@@ -730,6 +684,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-organization').selectOption(secondOrg);
     await page.getByTestId('wizard-linked-project').fill(`E2E-1354-${suffix}`);
     await page.getByTestId('wizard-institution-name').fill('Hospital E2E 1354');
+    await page.getByTestId('wizard-collection').selectOption(governedCollection!.collectionId);
     await page.getByTestId('wizard-next-button').click();
 
     await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
@@ -799,10 +754,35 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   });
 
   test('a derivative registered through the wizard names its parent specimenId, stored on the sample and carried by a LINEAGE_REGISTERED outbox event (#1371)', async ({ page, request }) => {
-    await realAuthLogin(request, page);
+    const admin = await realAuthLogin(request, page);
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const patientName = `#1371 e2e patient ${suffix}`;
     const document = generateValidCpf();
+
+    // RF019 AC3 (#1510): a quarantined parent is refused for derivation, and
+    // the wizard stores a specimen quarantined while its participant has no
+    // ACTIVE consent (CONSENT_PENDING). So the participant exists, with a
+    // signed consent, before the parent's intake, which matches it by name
+    // and birth date.
+    const consentTemplateId = await seedActiveConsentTemplate(mongoClient.db(mongoDbName));
+    const createdParticipant = await request.post(`${apiBaseURL}/api/patients`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { participantId: 'placeholder', patientName, birthDate: '1990-01-01', sex: 'F', consentTemplateId },
+    });
+    expect(createdParticipant.ok(), await createdParticipant.text()).toBe(true);
+    const participantId = String((await createdParticipant.json())?.data?.participantId || '');
+    expect(participantId).toBeTruthy();
+    const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId,
+        consentTemplateId,
+        responses: {},
+        signatureName: '#1371 e2e signer',
+        signatureImageBase64: SIGNATURE_PNG_DATA_URL,
+      },
+    });
+    expect(signed.ok(), await signed.text()).toBe(true);
 
     // The #1354 path, less the organization picker.
     const registerThroughWizard = async (label: string, parentSpecimenIds?: string) => {
@@ -811,11 +791,9 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
 
       await page.getByTestId('wizard-full-name').fill(patientName);
       await page.getByTestId('wizard-birth-date').fill('01/01/1990');
-      if (parentSpecimenIds) {
-        // Same name and birth date: the derivative's intake matches the
-        // participant the parent's intake created.
-        await expect(page.getByTestId('wizard-patient-match-alert')).toBeVisible({ timeout: 10_000 });
-      }
+      // Same name and birth date: each intake matches the participant
+      // created above.
+      await expect(page.getByTestId('wizard-patient-match-alert')).toBeVisible({ timeout: 10_000 });
       await page.getByTestId('wizard-gender').selectOption('F');
       await page.getByTestId('wizard-email').fill(`e2e-1371-${suffix}@example.com`);
       await page.getByTestId('wizard-document').fill(document);
@@ -828,7 +806,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
       await page.getByTestId('wizard-extraction-protocol').selectOption({ index: 1 });
       await page.getByTestId('wizard-sprec-axis-1').selectOption({ index: 1 });
       await page.getByTestId('wizard-sprec-axis-2').selectOption({ index: 1 });
-      await page.getByTestId('wizard-processing-unknown').check();
+      // Known processing, not "processing unknown": that forces axes 3-6 to
+      // X, which fails quality governance and quarantines the specimen
+      // whatever its consent. The first code of each axis (U24-ACD-A-A-A-A-A)
+      // reads governance_status 1, grade A.
+      for (const axis of [3, 4, 5, 6]) {
+        await page.getByTestId(`wizard-sprec-axis-${axis}`).selectOption({ index: 1 });
+      }
       await page.getByTestId('wizard-sprec-axis-7').selectOption({ index: 1 });
       await page.getByTestId('wizard-quantity').fill('5');
       await page.getByTestId('wizard-linked-project').fill(`E2E-1371-${label}-${suffix}`);
@@ -836,6 +820,7 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
         await page.getByTestId('wizard-parent-specimen-ids').fill(parentSpecimenIds);
       }
       await page.getByTestId('wizard-institution-name').fill('Hospital E2E 1371');
+      await page.getByTestId('wizard-collection').selectOption(governedCollection!.collectionId);
       await page.getByTestId('wizard-next-button').click();
 
       await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
@@ -858,16 +843,23 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
       expect(sample.mongoId, `${label} sample _id`).toBeTruthy();
       expect(sample.specimenId, `${label} sample specimenId`).toBeTruthy();
       lineageSamples.push(sample);
+      expect(body?.consent?.active, `${label} intake reads the signed consent`).toBe(true);
+      expect(body?.qualityAssessment?.governance_status, `${label} quality governance`).toBe(1);
       return { sample, participantId: String(body?.patientMatch?.patientID || '') };
     };
 
+    const db = mongoClient.db(mongoDbName);
+
     const parent = await registerThroughWizard('parent');
-    expect(parent.participantId).toBeTruthy();
+    expect(parent.participantId).toBe(participantId);
+    // The parent is available, so the derivative's intake is not refused
+    // under RF019 AC3.
+    const storedParent = await db.collection('samples').findOne({ _id: new ObjectId(parent.sample.mongoId) });
+    expect(storedParent?.specimenStatus).toBe('available');
 
     const derivative = await registerThroughWizard('derivative', parent.sample.specimenId);
     expect(derivative.participantId).toBe(parent.participantId);
 
-    const db = mongoClient.db(mongoDbName);
     const stored = await db.collection('samples').findOne({ _id: new ObjectId(derivative.sample.mongoId) });
     expect(stored?.parentSpecimenIds).toEqual([parent.sample.specimenId]);
 

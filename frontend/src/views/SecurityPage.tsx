@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
 import ConfigurationReleasesPanel from '../components/security/ConfigurationReleasesPanel';
-import './SecurityPage.css';
+import SettingCatalogPanel from '../components/security/SettingCatalogPanel';
 
 // #1248: the retention keys are decided by the active RetentionPolicy, so
 // they render read-only with a line naming it.
@@ -29,7 +29,12 @@ function retentionGovernedHelp(t: (key: string, fallback?: string) => string, so
   return t('security.logging.governedByPolicy').replace('{{version}}', source.version ?? '');
 }
 
-export default function SecurityPage() {
+type SecurityPageProps = {
+  /** When true (system-management tab), skip the duplicate page title. */
+  embedded?: boolean;
+};
+
+export default function SecurityPage({ embedded = false }: SecurityPageProps) {
   const { user, isLoading: authLoading, hasRole } = useAuth();
   const { t } = useLanguage();
   const { showToast } = useToast();
@@ -186,17 +191,37 @@ export default function SecurityPage() {
     administrator: t('roles.administrator')
   };
 
+  const sectionNav = [
+    { id: 'authentication', label: t('security.sections.authentication'), testId: 'security-nav-authentication' },
+    { id: 'password', label: t('security.sections.password'), testId: 'security-nav-password' },
+    { id: 'session', label: t('security.sections.session'), testId: 'security-nav-session' },
+    { id: 'login', label: t('security.sections.login'), testId: 'security-nav-login' },
+    { id: 'logging', label: t('security.sections.logging'), testId: 'security-nav-logging' },
+    { id: 'permissions', label: t('security.sections.permissions'), testId: 'security-nav-permissions' },
+    { id: 'privacy', label: t('security.sections.privacy'), testId: 'security-nav-privacy' },
+    { id: 'enhanced', label: t('security.sections.enhanced'), testId: 'security-nav-enhanced' },
+    { id: 'lgpd', label: t('security.sections.lgpd'), testId: 'security-nav-lgpd' },
+    { id: 'policies', label: t('security.sections.policies'), testId: 'security-nav-policies' },
+    { id: 'releases', label: t('security.sections.releases'), testId: 'security-nav-releases' },
+    { id: 'catalog', label: t('security.sections.catalog'), testId: 'security-nav-catalog' },
+  ] as const;
+
   return (
-    <div className="security-page" data-testid="security-page">
-      <div className="security-header">
-        <h1 className="security-title">
-          <Shield size={32} /> {t('security.title')}
-        </h1>
-        <p className="security-subtitle">{t('security.subtitleFull')}</p>
-      </div>
+    <div
+      className={`security-page${embedded ? ' security-page--embedded' : ''}`}
+      data-testid="security-page"
+    >
+      {!embedded && (
+        <div className="security-header">
+          <h1 className="security-title">
+            <Shield size={28} /> {t('security.title')}
+          </h1>
+          <p className="security-subtitle">{t('security.subtitleFull')}</p>
+        </div>
+      )}
 
       {error && (
-        <div className="security-error">
+        <div className="security-error" data-testid="security-error">
           <AlertCircle size={20} />
           <span>{error}</span>
         </div>
@@ -210,86 +235,25 @@ export default function SecurityPage() {
       )}
 
       <div className="security-content">
-        {/* Menu de Navegação Lateral */}
         <div className="security-sidebar">
-          <nav className="security-nav">
-            <button
-              data-testid="security-nav-authentication"
-              className={activeSection === 'authentication' ? 'active' : ''}
-              onClick={() => setActiveSection('authentication')}
-            >
-              {t('security.sections.authentication')}
-            </button>
-            <button
-              data-testid="security-nav-password"
-              className={activeSection === 'password' ? 'active' : ''}
-              onClick={() => setActiveSection('password')}
-            >
-              {t('security.sections.password')}
-            </button>
-            <button
-              data-testid="security-nav-session"
-              className={activeSection === 'session' ? 'active' : ''}
-              onClick={() => setActiveSection('session')}
-            >
-              {t('security.sections.session')}
-            </button>
-            <button
-              data-testid="security-nav-login"
-              className={activeSection === 'login' ? 'active' : ''}
-              onClick={() => setActiveSection('login')}
-            >
-              {t('security.sections.login')}
-            </button>
-            <button
-              data-testid="security-nav-logging"
-              className={activeSection === 'logging' ? 'active' : ''}
-              onClick={() => setActiveSection('logging')}
-            >
-              {t('security.sections.logging')}
-            </button>
-            <button
-              data-testid="security-nav-permissions"
-              className={activeSection === 'permissions' ? 'active' : ''}
-              onClick={() => setActiveSection('permissions')}
-            >
-              {t('security.sections.permissions')}
-            </button>
-            <button
-              data-testid="security-nav-privacy"
-              className={activeSection === 'privacy' ? 'active' : ''}
-              onClick={() => setActiveSection('privacy')}
-            >
-              {t('security.sections.privacy')}
-            </button>
-            <button
-              data-testid="security-nav-enhanced"
-              className={activeSection === 'enhanced' ? 'active' : ''}
-              onClick={() => setActiveSection('enhanced')}
-            >
-              {t('security.sections.enhanced')}
-            </button>
-            <button
-              data-testid="security-nav-lgpd"
-              className={activeSection === 'lgpd' ? 'active' : ''}
-              onClick={() => setActiveSection('lgpd')}
-            >
-              {t('security.sections.lgpd')}
-            </button>
-            <button
-              data-testid="security-nav-policies"
-              className={activeSection === 'policies' ? 'active' : ''}
-              onClick={() => setActiveSection('policies')}
-            >
-              {t('security.sections.policies')}
-            </button>
-            <button
-              data-testid="security-nav-releases"
-              className={activeSection === 'releases' ? 'active' : ''}
-              onClick={() => setActiveSection('releases')}
-            >
-              {t('security.sections.releases')}
-            </button>
+          <nav
+            className="security-nav"
+            role="tablist"
+            aria-label={t('security.sectionsNavLabel', 'Seções de segurança')}
+          >
+            {sectionNav.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={activeSection === item.id}
+                data-testid={item.testId}
+                className={activeSection === item.id ? 'active' : ''}
+                onClick={() => setActiveSection(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
           </nav>
         </div>
 
@@ -338,6 +302,7 @@ export default function SecurityPage() {
                 <div className="config-field">
                   <label>{t('security.authentication.maxLoginAttempts')}</label>
                   <input title="security-input"
+                    data-testid="security-max-login-attempts-input"
                     type="number"
                     min="1"
                     max="10"
@@ -962,6 +927,7 @@ export default function SecurityPage() {
           {activeSection === 'releases' && (
             <ConfigurationReleasesPanel t={t} showToast={showToast} onRolledBack={loadConfig} />
           )}
+          {activeSection === 'catalog' && <SettingCatalogPanel t={t} />}
 
           {activeSection === 'policies' && (
             <div className="security-policies">

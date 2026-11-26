@@ -5,6 +5,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const SampleGraphValidator = require('../../src/services/SampleGraphValidator');
 const importService = require('../../src/services/import.service');
+const sampleCollectionGate = require('../../src/services/sample-collection-gate.service');
 
 describe('ImportService SPREC import', () => {
   let db;
@@ -12,7 +13,9 @@ describe('ImportService SPREC import', () => {
   let samplesCollection;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bioavanced-import-'));
+    // RF004 AC2 (#1538): these cases are about SPREC; the collection gate admits each row.
+    vi.spyOn(sampleCollectionGate, 'assertSampleCollectionAdmits').mockResolvedValue(null);
+    tempDir =fs.mkdtempSync(path.join(os.tmpdir(), 'bioavanced-import-'));
 
     samplesCollection = {
       findOne: vi.fn().mockResolvedValue(null),

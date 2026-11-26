@@ -28,7 +28,6 @@ import { getPasswordIssues, passwordRequirementItems, rulesForAccount } from '..
 import { usePasswordPolicy, usePasswordResetAllowed } from '../hooks/usePasswordPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { userSecurityService } from '../services/api';
-import './UserSecurityPage.css';
 
 export default function UserSecurityPage() {
   const { t } = useLanguage();
@@ -107,6 +106,23 @@ export default function UserSecurityPage() {
     setConfirmAction(() => action);
     setConfirmMessage(message);
     setShowConfirmModal(true);
+  };
+
+  // #1434: the hook's revoke mutations rethrow with the message to show.
+  const revokeOrToast = async (revoke: () => Promise<void>) => {
+    try {
+      await revoke();
+    } catch (err: unknown) {
+      showToast((err as Error).message, 'error');
+    }
+  };
+
+  // Remove os códigos do estado após fechar o modal (por segurança): o refresh
+  // atualiza o remaining e remove os códigos. #1434: Close and the overlay both
+  // close through here.
+  const closeRecoveryCodes = () => {
+    setShowRecoveryCodesModal(false);
+    refreshData();
   };
 
   const executeConfirmAction = () => {
@@ -483,7 +499,7 @@ export default function UserSecurityPage() {
               variant="danger" 
               data-testid="revoke-all-sessions-button"
               onClick={() => handleConfirmAction(
-                () => revokeAllSessions(),
+                () => revokeOrToast(revokeAllSessions),
                 t('userSecurity.sessions.revokeAllConfirm')
               )}
             >
@@ -526,7 +542,7 @@ export default function UserSecurityPage() {
                     className="btn-small"
                     data-testid={`revoke-session-button-${index}`}
                     onClick={() => handleConfirmAction(
-                      () => revokeSession(session.id),
+                      () => revokeOrToast(() => revokeSession(session.id)),
                       t('userSecurity.sessions.revokeConfirm')
                     )}
                   >
@@ -676,12 +692,7 @@ export default function UserSecurityPage() {
       {/* Recovery Codes Modal */}
       <Modal 
         isOpen={showRecoveryCodesModal} 
-        onClose={() => {
-          setShowRecoveryCodesModal(false);
-          // Remove os códigos do estado após fechar o modal (por segurança)
-          // Faz refresh para atualizar o remaining, mas remove os códigos
-          refreshData();
-        }}
+        onClose={closeRecoveryCodes}
         title={t('userSecurity.mfa.alternatives.recovery.codes')}
       >
         <div className="modal-content" style={{ padding: '1rem' }}>
@@ -705,7 +716,7 @@ export default function UserSecurityPage() {
             </div>
           )}
           <div className="modal-actions">
-            <Button variant="primary" data-testid="close-recovery-codes-button" onClick={() => setShowRecoveryCodesModal(false)}>
+            <Button variant="primary" data-testid="close-recovery-codes-button" onClick={closeRecoveryCodes}>
               {t('common.close')}
             </Button>
           </div>

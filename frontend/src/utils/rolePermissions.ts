@@ -108,6 +108,8 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   // Administration.
   ['/security', ADMIN],
   ['/system-management', ADMIN],
+  ['/organizations', ADMIN],
+  ['/collections', ADMIN],
   ['/users', ADMIN],
   ['/access-requests', ADMIN],
   ['/access', ADMIN],
@@ -151,6 +153,7 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   ['/locations', STAFF],
   ['/temperature', STAFF],
   ['/sensors', STAFF],
+  ['/incidents', STAFF],
   ['/policies', STAFF],
   ['/quality-descriptions', STAFF],
 

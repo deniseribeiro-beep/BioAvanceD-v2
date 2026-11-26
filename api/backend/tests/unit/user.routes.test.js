@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -113,9 +113,9 @@ describe('user.routes authorization gates (issue #921)', () => {
     // the gate factory.
     const CASES = [
       { label: 'POST /register (createUser) :40', method: 'post', path: '/register', expectedArgs: ['createUser'] },
-      { label: 'GET / (createUser) :124', method: 'get', path: '/', expectedArgs: ['createUser'] },
-      { label: 'PUT /:id (createUser) :215', method: 'put', path: '/u1', expectedArgs: ['createUser'] },
-      { label: 'DELETE /:id (createUser) :526', method: 'delete', path: '/u1', expectedArgs: ['createUser'] },
+      { label: 'GET / (readUser) :124', method: 'get', path: '/', expectedArgs: ['readUser'] },
+      { label: 'PUT /:id (updateUser) :215', method: 'put', path: '/u1', expectedArgs: ['updateUser'] },
+      { label: 'DELETE /:id (deleteUser) :526', method: 'delete', path: '/u1', expectedArgs: ['deleteUser'] },
       // :604 -- note this is a Patient code (createPatient) on a User
       // router, pinned as-is; whether it is the *right* code is #888's
       // question, not this slice's.
@@ -140,10 +140,12 @@ describe('user.routes authorization gates (issue #921)', () => {
       { label: 'POST /:id/revoke-sessions (revokeSessions, UPDATE)', method: 'post', path: '/u1/revoke-sessions', expectedArgs: ['revokeSessions', 'UPDATE'] },
       // #1241: GET /:id had authenticate only, so any account could read any
       // other user's record. It now carries the list's own gate.
-      { label: 'GET /:id (createUser)', method: 'get', path: '/u1', expectedArgs: ['createUser'] },
+      // #1229: the account verbs split createUser into four codes; each
+      // user-account route takes the one its verb needs.
+      { label: 'GET /:id (readUser)', method: 'get', path: '/u1', expectedArgs: ['readUser'] },
       // #1241: likewise answered "does this id exist, and is it active" for
       // any id to any account. Its one caller is the System Management screen.
-      { label: 'GET /:id/validate-status (createUser)', method: 'get', path: '/u1/validate-status', expectedArgs: ['createUser'] },
+      { label: 'GET /:id/validate-status (readUser)', method: 'get', path: '/u1/validate-status', expectedArgs: ['readUser'] },
       // #1013: the administrator's password set, off PUT /:id.
       { label: 'POST /:id/set-password (setUserPassword, UPDATE)', method: 'post', path: '/u1/set-password', expectedArgs: ['setUserPassword', 'UPDATE'] },
     ];
@@ -307,5 +309,371 @@ describe('user.routes authorization gates (issue #921)', () => {
       expect(res.status).toBe(200);
       expect(logsCalls).toBe(1);
     });
+  });
+});
+
+// #1337: the arms of user.routes.js no case above or in the integration
+// suites asserted. Every service the handlers reach is spied on its module
+// object (the handlers require them lazily, so a spy is observed), never
+// vi.mock'ed. A path an existing case already asserts is not repeated here.
+describe('user.routes paths (#1337)', () => {
+  const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+  const { buildRbacCollections } = require('../factories/rbac.factory');
+  const authService = require(require.resolve('../../src/services/auth.service'));
+  const sessionService = require(require.resolve('../../src/services/session.service'));
+  const auditLogger = require(require.resolve('../../src/utils/auditLogger'));
+  const patientService = require(require.resolve('../../src/services/patient.service'));
+  const sensorService = require(require.resolve('../../src/services/sensor.service'));
+  const sampleService = require(require.resolve('../../src/services/sample.service'));
+  const consentValidator = require(require.resolve('../../src/services/consent.validator'));
+  const RegisterSampleUseCase = require(require.resolve('../../src/core/use-cases/RegisterSampleUseCase'));
+
+  const TARGET = { _id: 'u1', name: 'Alvo', email: 'alvo@example.com', username: 'alvo', accountStatus: 'active' };
+
+  let auditLog;
+  beforeEach(() => {
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    auditLog = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    vi.spyOn(auditLogger, 'logUpdate').mockResolvedValue(undefined);
+    vi.spyOn(auditLogger, 'logPermissionChange').mockResolvedValue(undefined);
+    vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    currentRequireOrganizationScope = defaultRequireOrganizationScope;
+    loadRoute();
+  });
+
+  function asScope(organizationScope) {
+    currentRequireOrganizationScope = (req, res, next) => {
+      if (organizationScope !== undefined) req.organizationScope = organizationScope;
+      next();
+    };
+  }
+
+  function createResponse() {
+    return {
+      statusCode: 200,
+      payload: null,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.payload = body; return this; },
+    };
+  }
+
+  function usersDb(usersOverrides = {}, extra = {}) {
+    const users = createCollectionMock({
+      findOne: vi.fn(async () => ({ ...TARGET })),
+      find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      ...usersOverrides,
+    });
+    return { users, db: createDbMock({ users, ...extra }) };
+  }
+
+  function appWith(db, options) {
+    const { router } = loadRoute(options);
+    return buildApp(router, { db });
+  }
+
+  describe('with no database', () => {
+    const routes = router.stack.filter((l) => l.route).flatMap((l) => Object.keys(l.route.methods)
+      .map((m) => [m.toUpperCase(), l.route.path, l.route.stack[l.route.stack.length - 1].handle]));
+
+    it.each(routes)('%s %s answers 503 with no db', async (method, path, handle) => {
+      const res = createResponse();
+      const req = {
+        body: {},
+        query: {},
+        headers: {},
+        params: { id: 'u1', organizationId: 'o1' },
+        user: { userID: 'user-1', roleName: 'Administrador' },
+        organizationScope: { scope: 'global', organizationIds: [] },
+        t: (k) => k,
+        app: { locals: { db: null } },
+      };
+
+      await handle(req, res);
+
+      expect(res.statusCode).toBe(503);
+      expect(res.payload.success).toBe(false);
+    });
+  });
+
+  describe('the caller-scope check', () => {
+    // u1 is a Técnico holding org-a.
+    function scopedDb() {
+      return usersDb({}, buildRbacCollections([{ userAccountId: 'u1', accessType: 2, organizationId: 'org-a' }])).db;
+    }
+
+    it('refuses a /:id read when no organization scope was resolved', async () => {
+      asScope(undefined);
+      const res = await request(appWith(scopedDb())).get('/api/users/u1');
+      expect(res.status).toBe(403);
+      expect(res.body.message).toBe('Este usuário pertence a outra organização');
+    });
+
+    it('refuses an organization caller with no organizationIds a target in an organization, and reads it once it holds that one', async () => {
+      asScope({ scope: 'organization' });
+      const refused = await request(appWith(scopedDb())).get('/api/users/u1');
+      expect(refused.status).toBe(403);
+
+      asScope({ scope: 'organization', organizationIds: ['org-a'] });
+      const read = await request(appWith(scopedDb())).get('/api/users/u1');
+      expect(read.status).toBe(200);
+      expect(read.body.data.email).toBe('alvo@example.com');
+    });
+  });
+
+  describe('POST /register', () => {
+    let registerUser;
+    beforeEach(() => {
+      registerUser = vi.spyOn(authService, 'registerUser').mockResolvedValue({ _id: 'new-1', username: 'novo' });
+    });
+
+    it.each([
+      ['a phone of punctuation only', { phone: '(--)' }, { phone: null }],
+      ['a null phone', { phone: null }, { phone: null }],
+      ['an empty organizationId', { organizationId: '' }, { organizationId: null }],
+    ])('passes %s on as null', async (_label, sent, expected) => {
+      const res = await request(appWith({})).post('/api/users/register').send({ username: 'novo', ...sent });
+      expect(res.status).toBe(201);
+      expect(registerUser).toHaveBeenCalledWith({}, expect.objectContaining(expected), 'user-1');
+    });
+
+    it('writes no audit row when the request carries no user', async () => {
+      const authImpl = (req, res, next) => { req.t = (key) => key; next(); };
+      const res = await request(appWith({}, { authImpl })).post('/api/users/register').send({ username: 'novo' });
+      expect(res.status).toBe(201);
+      expect(registerUser).toHaveBeenCalledWith({}, expect.anything(), undefined);
+      expect(auditLog).not.toHaveBeenCalled();
+    });
+
+    it('audits a created user that carries only an id under that id', async () => {
+      registerUser.mockResolvedValue({ id: 'plain-id' });
+      const res = await request(appWith({})).post('/api/users/register').send({ username: 'novo' });
+      expect(res.status).toBe(201);
+      expect(auditLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'CREATE', resourceId: 'plain-id' }));
+    });
+  });
+
+  it('GET / fills roleName, id and auditorRole for a row stored with no status, no roleName and no id', async () => {
+    vi.spyOn(rbacService, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
+    vi.spyOn(rbacService, 'getActiveRoleCodes').mockResolvedValue(['auditor']);
+    const { db } = usersDb({ find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 'u9', email: 'u9@example.com' }]) })) });
+
+    const res = await request(appWith(db)).get('/api/users');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([{ _id: 'u9', id: 'u9', email: 'u9@example.com', roleName: 'Técnico', auditorRole: true }]);
+    expect(rbacService.resolveRoleDisplayName).toHaveBeenCalledWith(db, 'u9');
+  });
+
+  it('GET /:id answers 404 users.notFound for an unknown user', async () => {
+    const { db } = usersDb({ findOne: vi.fn().mockResolvedValue(null) });
+    const res = await request(appWith(db)).get('/api/users/nobody');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('users.notFound');
+  });
+
+  describe('PUT /:id', () => {
+    beforeEach(() => {
+      vi.spyOn(rbacService, 'isAdministrator').mockResolvedValue(false);
+      vi.spyOn(rbacService, 'userHasPermission').mockResolvedValue(true);
+      vi.spyOn(rbacService, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
+      vi.spyOn(rbacService, 'getActiveRoleCodes').mockResolvedValue([]);
+    });
+
+    it('answers 404 for an unknown target and writes nothing', async () => {
+      const { db, users } = usersDb({ findOne: vi.fn().mockResolvedValue(null) });
+      const res = await request(appWith(db)).put('/api/users/nobody').send({ name: 'X' });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('users.notFound');
+      expect(users.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('answers 422 with the validation errors for an invalid body and writes nothing', async () => {
+      const { db, users } = usersDb();
+      const res = await request(appWith(db)).put('/api/users/u1').send({ email: 'not-an-email' });
+      expect(res.status).toBe(422);
+      expect(res.body.details).toEqual(['email é obrigatório e deve ser um email válido']);
+      expect(users.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('stores a Portuguese status in English, and a blank or punctuation phone and a blank organizationId as null', async () => {
+      const { db, users } = usersDb();
+      const res = await request(appWith(db)).put('/api/users/u1').send({ status: 'Suspenso', phone: '(--)', organizationId: '' });
+      expect(res.status).toBe(200);
+      expect(users.updateOne.mock.calls[0][1].$set).toMatchObject({ accountStatus: 'suspended', phone: null, organizationId: null });
+
+      const blank = await request(appWith(db)).put('/api/users/u1').send({ phone: '' });
+      expect(blank.status).toBe(200);
+      expect(users.updateOne.mock.calls[1][1].$set.phone).toBeNull();
+    });
+
+    // A blank '' never gets here: UserModel.validate refuses it (Invalid Date)
+    // with 422, so a cleared validity date arrives as null.
+    it('stores a null roleValidFrom as null and a roleValidUntil string as a Date', async () => {
+      const { db, users } = usersDb();
+      const res = await request(appWith(db)).put('/api/users/u1').send({ roleValidFrom: null, roleValidUntil: '2027-01-01T00:00:00.000Z' });
+      expect(res.status).toBe(200);
+      const { $set } = users.updateOne.mock.calls[0][1];
+      expect($set.roleValidFrom).toBeNull();
+      expect($set.roleValidUntil).toEqual(new Date('2027-01-01T00:00:00.000Z'));
+    });
+
+    it('answers 404 when the update matches no document', async () => {
+      const { db } = usersDb({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }) });
+      const res = await request(appWith(db)).put('/api/users/u1').send({ name: 'Novo' });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Usuário não encontrado');
+    });
+
+    it('answers 404 users.updateNotFound when the updated user cannot be read back', async () => {
+      const findOne = vi.fn().mockResolvedValueOnce({ ...TARGET }).mockResolvedValueOnce(null);
+      const { db } = usersDb({ findOne });
+      const res = await request(appWith(db)).put('/api/users/u1').send({ name: 'Novo' });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('users.updateNotFound');
+    });
+  });
+
+  describe('/:id/organizations', () => {
+    it('GET answers 404 for an unknown user', async () => {
+      const { db } = usersDb({ findOne: vi.fn().mockResolvedValue(null) });
+      const res = await request(appWith(db)).get('/api/users/nobody/organizations');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('users.notFound');
+    });
+
+    it('POST passes a non-string organizationId on as sent', async () => {
+      const grant = vi.spyOn(rbacService, 'grantOrganizationScope').mockResolvedValue({ created: false });
+      vi.spyOn(rbacService, 'listOrganizationScopes').mockResolvedValue({ global: false, organizationIds: ['org-a'] });
+      const { db } = usersDb();
+      const res = await request(appWith(db)).post('/api/users/u1/organizations').send({ organizationId: 42 });
+      expect(res.status).toBe(200);
+      expect(grant).toHaveBeenCalledWith(db, { userAccountId: 'u1', organizationId: 42, grantedBy: 'user-1' });
+    });
+
+    it('POST answers 500 for an error with no statusCode and no "não encontrado"', async () => {
+      vi.spyOn(rbacService, 'grantOrganizationScope').mockRejectedValue(new Error('boom'));
+      const { db } = usersDb();
+      const res = await request(appWith(db)).post('/api/users/u1/organizations').send({ organizationId: 'org-b' });
+      expect(res.status).toBe(500);
+      expect(res.body.message).toBe('boom');
+    });
+
+    it('DELETE answers 500 for an error with no statusCode', async () => {
+      vi.spyOn(rbacService, 'revokeOrganizationScope').mockRejectedValue(new Error('boom'));
+      const { db } = usersDb();
+      const res = await request(appWith(db)).delete('/api/users/u1/organizations/org-b');
+      expect(res.status).toBe(500);
+      expect(res.body.message).toBe('boom');
+    });
+  });
+
+  describe('GET /:id/validate-status', () => {
+    it('answers 404 for an unknown user', async () => {
+      const { db } = usersDb({ findOne: vi.fn().mockResolvedValue(null) });
+      const res = await request(appWith(db)).get('/api/users/nobody/validate-status');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('users.notFound');
+    });
+
+    it('validate-status answers inactive for a user with no accountStatus', async () => {
+      const { db } = usersDb({ findOne: vi.fn().mockResolvedValue({ _id: 'u1' }) });
+      const res = await request(appWith(db)).get('/api/users/u1/validate-status');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, data: { status: 'inactive' } });
+    });
+  });
+
+  describe('POST /register-patient', () => {
+    it('stamps an organization caller\'s own organization as the clinical unit', async () => {
+      asScope({ scope: 'organization', organizationIds: ['org-a'] });
+      const createPatient = vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'p1' });
+      const res = await request(appWith({})).post('/api/users/register-patient').send({ clinicalUnitId: 'org-b' });
+      expect(res.status).toBe(201);
+      expect(createPatient).toHaveBeenCalledWith({}, expect.objectContaining({ clinicalUnitId: 'org-a' }));
+    });
+
+    it.each([[403, 403], [422, 422], [undefined, 400]])('maps an error with statusCode %s to %s', async (statusCode, expected) => {
+      vi.spyOn(patientService, 'createPatient').mockRejectedValue(Object.assign(new Error('falhou'), { statusCode }));
+      const res = await request(appWith({})).post('/api/users/register-patient').send({});
+      expect(res.status).toBe(expected);
+      expect(res.body.message).toBe('falhou');
+    });
+  });
+
+  describe('POST /register-sample', () => {
+    const handle = router.stack.find((l) => l.route?.path === '/register-sample').route.stack.at(-1).handle;
+
+    async function call(req) {
+      const res = createResponse();
+      await handle({
+        body: {},
+        headers: {},
+        organizationScope: { scope: 'global', organizationIds: [] },
+        t: (k) => k,
+        app: { locals: { db: createDbMock({}) } },
+        ...req,
+      }, res);
+      return res;
+    }
+
+    it.each([
+      ['only an _id', { _id: 'mongo-1' }, { userId: 'mongo-1', userName: null, userRole: null }],
+      ['only a username and role', { username: 'jdoe', role: 'Técnico' }, { userId: null, userName: 'jdoe', userRole: 'Técnico' }],
+    ])('takes the actor from a user with %s, the forwarded address and no user agent', async (_label, user, expected) => {
+      const execute = vi.spyOn(RegisterSampleUseCase.prototype, 'execute').mockResolvedValue({ sample: { _id: 's1' } });
+      const res = await call({ user, headers: { 'x-forwarded-for': '10.0.0.7' } });
+      expect(res.statusCode).toBe(201);
+      expect(execute.mock.calls[0][0].actor).toEqual({ ...expected, ipAddress: '10.0.0.7', userAgent: null });
+    });
+
+    it('answers 403 STRICT_MODE_BLOCKED for an error coded so whose message does not say it', async () => {
+      vi.spyOn(RegisterSampleUseCase.prototype, 'execute').mockRejectedValue(Object.assign(new Error('linhagem obrigatória'), { code: 'STRICT_MODE_BLOCKED' }));
+      const res = await call({ user: { userID: 'user-1' } });
+      expect(res.statusCode).toBe(403);
+      expect(res.payload).toEqual({ success: false, error: 'STRICT_MODE_BLOCKED', message: 'linhagem obrigatória' });
+    });
+  });
+
+  describe('POST /record-withdrawal', () => {
+    const SAMPLE_ID = '507f1f77bcf86cd799439013';
+
+    it('checks consent against consentScope when no requiredScope is sent', async () => {
+      vi.spyOn(sampleService, 'getSample').mockResolvedValue({ _id: SAMPLE_ID });
+      const validateAccess = vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+      const withdraw = vi.spyOn(sampleService, 'withdrawSample').mockResolvedValue({ withdrawn: true });
+      const res = await request(appWith({})).post('/api/users/record-withdrawal').send({ sampleID: SAMPLE_ID, consentScope: 'research' });
+      expect(res.status).toBe(200);
+      expect(validateAccess).toHaveBeenCalledWith(SAMPLE_ID, 'research');
+      expect(withdraw.mock.calls[0][2]).toEqual({ consentScope: 'research' });
+    });
+
+    it('answers 400 users.sampleIDRequired with no sampleID and withdraws nothing', async () => {
+      vi.spyOn(consentValidator, 'validateAccess').mockResolvedValue(true);
+      const withdraw = vi.spyOn(sampleService, 'withdrawSample').mockResolvedValue({});
+      const res = await request(appWith({})).post('/api/users/record-withdrawal').send({ reason: 'x' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('users.sampleIDRequired');
+      expect(withdraw).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([[403, 403], [422, 422], [undefined, 400]])('POST /register-sensor maps an error with statusCode %s to %s', async (statusCode, expected) => {
+    vi.spyOn(sensorService, 'createSensor').mockRejectedValue(Object.assign(new Error('falhou'), { statusCode }));
+    const res = await request(appWith({})).post('/api/users/register-sensor').send({});
+    expect(res.status).toBe(expected);
+    expect(res.body.message).toBe('falhou');
+  });
+
+  it('POST /:id/reset-mfa answers 404 for an unknown target and writes nothing', async () => {
+    const { db, users } = usersDb({ findOne: vi.fn().mockResolvedValue(null) });
+    const res = await request(appWith(db)).post('/api/users/nobody/reset-mfa').send({});
+    expect(res.status).toBe(404);
+    expect(users.updateOne).not.toHaveBeenCalled();
+    expect(sessionService.invalidateUserSessions).not.toHaveBeenCalled();
   });
 });

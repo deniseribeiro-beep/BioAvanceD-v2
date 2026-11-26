@@ -109,6 +109,11 @@ async function getUserAnonId(user, db = null) {
  * @param {Object} db - Instância do banco de dados (opcional)
  * @returns {Promise<Object>} Dados do log anonimizados
  */
+// #1530: the actor is often already a pseudonym: auditLogger resolves it before
+// the row arrives, and anonymizeLogs re-reads stored rows. Looking a pseudonym
+// up as a users _id misses and hashed it again, so it is kept as is.
+const LOG_USER_PSEUDONYM = /^USR-(?:[0-9A-F]{8}|SYSTEM)$/;
+
 async function anonymizeLogUser(logData, db = null) {
   if (!logData) return logData;
 
@@ -119,7 +124,9 @@ async function anonymizeLogUser(logData, db = null) {
   
   if (userID && userID !== 'system') {
     // Obtém identificador anonimizado
-    const anonId = await getUserAnonId({ _id: userID }, db);
+    const anonId = LOG_USER_PSEUDONYM.test(String(userID))
+      ? String(userID)
+      : await getUserAnonId({ _id: userID }, db);
     
     // Substitui userName pelo identificador anonimizado
     anonymized.userName = anonId;

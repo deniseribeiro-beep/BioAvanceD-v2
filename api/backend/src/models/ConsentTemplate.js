@@ -8,19 +8,32 @@ const CONSENT_MODELS = ['specific', 'broad', 'tiered', 'dynamic'];
 // BCP 47 (P1X-0093), the shape only: a primary language subtag and optional subtags.
 const BCP47 = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/;
 
+function isUri(value) {
+  if (typeof value !== 'string' || value.trim() === '') return false;
+  try {
+    // eslint-disable-next-line no-new
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * RF010 AC1 (dict v2.0.0 P1X-0093, V2E-0430, V2E-0432): the term's language,
  * jurisdiction and the checksum of the exact text, plus the consent
  * modality it offers, which each Consent signed on it records (ELM-0095).
  * Language and jurisdiction default to this deployment's: Portuguese, under
  * Brazilian law. The checksum is always computed from the text, never taken
- * from the caller.
+ * from the caller. The controlled document's URI (P1X-0095) is optional, as
+ * caae is, until the builder sends one (#1492).
  */
 function documentControlOf(data, text) {
   return {
     language: typeof data.language === 'string' && data.language.trim() ? data.language.trim() : 'pt-BR',
     jurisdiction: typeof data.jurisdiction === 'string' && data.jurisdiction.trim() ? data.jurisdiction.trim() : 'BR',
     consentModel: data.consentModel ?? null,
+    documentUri: typeof data.documentUri === 'string' && data.documentUri.trim() ? data.documentUri.trim() : null,
     checksum: `sha256:${crypto.createHash('sha256').update(String(text || ''), 'utf8').digest('hex')}`,
   };
 }
@@ -37,6 +50,9 @@ function documentControlErrors(data) {
   }
   if (data.consentModel !== undefined && data.consentModel !== null && !CONSENT_MODELS.includes(data.consentModel)) {
     errors.push(`consentModel deve ser um de: ${CONSENT_MODELS.join(', ')}`);
+  }
+  if (data.documentUri !== undefined && data.documentUri !== null && !isUri(String(data.documentUri).trim())) {
+    errors.push('documentUri deve ser uma URI');
   }
   return errors;
 }

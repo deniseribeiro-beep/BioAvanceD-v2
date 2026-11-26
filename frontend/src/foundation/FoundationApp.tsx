@@ -1,4 +1,4 @@
-import { lazy, useMemo } from 'react';
+import { useMemo } from 'react';
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import { ChevronRight, LayoutDashboard, ShieldCheck, Sparkles, Workflow } from 'lucide-react';
 import {
@@ -11,15 +11,12 @@ import {
   LEGACY_SAMPLE_STATUS_LABELS,
   USER_STATUSES,
 } from './contracts';
-import './foundation.css';
 
 const foundationRoutes = [
-  { path: '', label: 'Visão geral', icon: LayoutDashboard },
-  { path: 'contracts', label: 'Contratos', icon: ShieldCheck },
-  { path: 'intake', label: 'Cadastro Integrado', icon: Workflow },
+  { path: '/next', label: 'Visão geral', icon: LayoutDashboard },
+  { path: '/next/contracts', label: 'Contratos', icon: ShieldCheck },
+  { path: '/next/intake', label: 'Cadastro Integrado', icon: Workflow },
 ];
-
-const IntakeWizardPage = lazy(() => import('../pages/v2/intake/IntakeWizardPage'));
 
 function FoundationShell({ children }: { children: React.ReactNode }) {
   return (
@@ -46,9 +43,9 @@ function FoundationShell({ children }: { children: React.ReactNode }) {
             const Icon = route.icon;
             return (
               <NavLink
-                key={route.path || 'overview'}
-                to={route.path || '/next'}
-                end={route.path === ''}
+                key={route.path}
+                to={route.path}
+                end={route.path === '/next'}
                 className={({ isActive }) => `foundation-nav__item ${isActive ? 'is-active' : ''}`}
               >
                 <Icon size={16} />
@@ -257,8 +254,7 @@ export default function FoundationApp() {
       <Routes>
         <Route index element={<FoundationOverviewPage />} />
         <Route path="contracts" element={<ContractsPage />} />
-        <Route path="intake" element={<IntakeWizardPage />} />
-        <Route path="*" element={<Navigate to="." replace />} />
+        <Route path="*" element={<Navigate to="/next" replace />} />
       </Routes>
     </FoundationShell>
   );

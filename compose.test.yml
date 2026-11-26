@@ -5,7 +5,20 @@ name: bioavanced-test
 # drift into a silent signature_unknown_key_id.
 x-audit-key-id: &audit-key-id audit-ed25519-test-1
 
+# #1419 (RF007 AC2, RNF016 C4): the stack stores DataFile binaries in the
+# S3-compatible s3-test service, not the filesystem store.
+x-object-store-env: &object-store-env
+  OBJECT_STORE_DRIVER: s3
+  OBJECT_STORE_S3_ENDPOINT: http://s3-test:9000
+  OBJECT_STORE_S3_BUCKET: bioavanced-test-files
+  OBJECT_STORE_S3_REGION: us-east-1
+  OBJECT_STORE_S3_ACCESS_KEY_ID: bioavanced-s3-test
+  OBJECT_STORE_S3_SECRET_ACCESS_KEY: bioavanced-s3-test-secret
+
 x-test-env: &test-env
+  # #1419: on the shared anchor, so every container built from it (the API and
+  # worker-test included) reads and writes the one S3 store.
+  <<: *object-store-env
   NODE_ENV: test
   MONGO_URI: mongodb://mongodb-test:27017/bioavanced_test?replicaSet=rs0
   MONGO_DB: bioavanced_test
@@ -31,8 +44,17 @@ x-test-env: &test-env
   ENCRYPTION_KEY_ID: vitest-key-001
   RESEND_API_KEY: vitest-resend-api-key
   EMAIL_FROM: onboarding@resend.dev
+  ALERT_EMAIL_TO: e2e-admin@bioavanced.test
   USER_ANON_SALT: vitest-user-anon-salt
   CONSENT_SECRET: vitest-consent-secret-key
+  # PHR TCLE remote identity (ADR 2026-11-26): enable gov.br OIDC in mock mode
+  # on the test stack so e2e can exercise start/callback without Login Único.
+  CONSENT_GOVBR_OIDC_ENABLED: "true"
+  GOVBR_OIDC_MOCK: "true"
+  GOVBR_OIDC_CLIENT_ID: e2e-govbr-client
+  GOVBR_OIDC_CLIENT_SECRET: e2e-govbr-secret
+  GOVBR_OIDC_REDIRECT_URI: https://e2e.bioavanced.test/patients/consent/govbr/callback
+  CONSENT_ICP_BRASIL_ENABLED: "true"
   # #829: required by NotificationService.getFrontendUrl(), which throws when
   # it is empty -- and POST /e-consent/generate-link had no try/catch, so that
   # throw exited the API process. It was set nowhere in this file or
@@ -127,7 +149,30 @@ services:
     # this early gets refused, seemingly a hairpin-NAT limitation), whereas
     # a separate container connecting in normally, after the healthcheck
     # confirms the port is reachable, does not.
-    command: ["--replSet", "rs0", "--bind_ip_all"]
+    #
+    # #1440 / lab GCP e2-highcpu-16 (~16 GiB): mongod's default WiredTiger
+    # cache is ~half of host RAM (~7 GiB). Under the full compose.test stack
+    # (Neo4j, Influx, backend, Playwright Chromium, …) that balloons into
+    # OOM pressure. Cap the cache and container so the gate can finish on
+    # this machine size.
+    #
+    # Same issue #1440 (exit 14): RF013 restore e2e creates a scratch DB with
+    # many collections; with Docker's default nofile=1024 WiredTiger hits
+    # EMFILE ("Too many open files"), panics, and mongod fasserts. Raise
+    # nofile for this service.
+    command:
+      [
+        "--replSet",
+        "rs0",
+        "--bind_ip_all",
+        "--wiredTigerCacheSizeGB",
+        "1.5",
+      ]
+    mem_limit: 2500m
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     volumes:
       - mongodb-test-data:/data/db
     ports:
@@ -206,6 +251,14 @@ services:
 
   mqtt-test:
     image: eclipse-mosquitto:2.1.2-alpine
+    # #1516: the image's default config listens on loopback only, so no other
+    # container could reach this broker. Its bundled no-auth config listens on
+    # 1883 on every interface and takes anonymous clients: test-only broker,
+    # reachable on the compose network and the host's loopback alone.
+    command: ["mosquitto", "-c", "/mosquitto-no-auth.conf"]
+    ports:
+      # #1516: host-side e2e runs publish here, in influxdb-test's loopback form.
+      - "127.0.0.1:${MQTT_HOST_PORT:-1883}:1883"
     healthcheck:
       test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -t '$$SYS/broker/version' -C 1 >/dev/null 2>&1 || exit 0"]
       interval: 10s
@@ -246,11 +299,53 @@ services:
 
   smtp-test:
     image: axllent/mailpit:v1.21.8
+    environment:
+      MP_WEBROOT: /mailpit
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/api/v1/info >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8025/mailpit/api/v1/info >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
+    networks: [bioavanced-test]
+
+  # #1419 (RF007 AC2, RNF016 C4): the S3-compatible store the backend's S3
+  # driver writes DataFile binaries to. Not minio/minio: pulls of minio/minio
+  # and quay.io/minio/minio were refused as unauthorized on 2026-10-30 (#1419).
+  # pgsty/minio is a maintained MinIO build on docker.io that ships curl for the
+  # healthcheck, pinned to an exact release as every third-party image here is.
+  # Host loopback only (docs/decisions/2026-10-23-compose-ports-loopback.md),
+  # and S3_HOST_PORT moves it as the other published ports move (#1156).
+  s3-test:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: bioavanced-s3-test
+      MINIO_ROOT_PASSWORD: bioavanced-s3-test-secret
+    ports:
+      - "127.0.0.1:${S3_HOST_PORT:-9000}:9000"
+    volumes:
+      - s3-test-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [bioavanced-test]
+
+  # #1419: creates the s3-test bucket once, before the backend starts. It signs
+  # the CreateBucket PUT with the backend's own awsSigV4.js (mounted read-only at
+  # /s3), so no S3 client image is pulled; a bucket this stack already made is
+  # reused. Not named *bootstrap*: scripts/e2e-gate.sh waits on those by name.
+  s3-bucket-init-test:
+    image: node:22.23.4-alpine
+    command: ["node", "/init/s3-bucket-init.cjs"]
+    environment: *object-store-env
+    volumes:
+      - ./tests/e2e/docker:/init:ro
+      - ./api/backend/src/infrastructure/objectStorage:/s3:ro
+    depends_on:
+      s3-test:
+        condition: service_healthy
     networks: [bioavanced-test]
 
   # #959 item 2: mints the Merkle signing key this stack signs tree heads with.
@@ -365,6 +460,14 @@ services:
       # unsuffixed value that #959 item 4 had just finished fixing. Removed.
       # RF022 AC9, RNF014 C7: refuse to start without a ready ReadinessReport.
       FOUNDATION_READINESS_REQUIRED: "true"
+      # #1467: the platform alert check runs every 10 s on the test stack so the
+      # RNF015 C2 e2e proof sees a tick inside one test; the code default stays */5 * * * *.
+      PLATFORM_ALERT_CRON: "*/10 * * * * *"
+      # #1516: the API subscribes to mqtt-test so the e2e stack proves MQTT
+      # telemetry beside HTTPS (RF009, RNF004 C6). This overrides the anchor's
+      # "false" for this service only; worker-test and the bootstraps keep it off.
+      MQTT_ENABLED: "true"
+      MQTT_URL: mqtt://mqtt-test:1883
     command: ["npm", "start"]
     # #828: the API writes the uploaded staging file to /app/uploads and the
     # worker reads it back by absolute path (staging-import.service.js ->
@@ -379,6 +482,10 @@ services:
     # real fix, and that change deletes this mount.
     volumes:
       - uploads-test-data:/app/uploads
+      # The signed TCLE and its evidence live under STORAGE_BASE (/app/storage).
+      # Without this mount a backend recreate drops the ciphertext the consent
+      # still points at, and Ver/Baixar answers 404.
+      - storage-test-data:/app/storage
       # #959 item 2: read-only -- the app signs with this key and must never be
       # able to rewrite it. POST /api/audit/anchor runs in THIS process and
       # reaches the same signing chains as the nightly worker job, so the backend
@@ -409,6 +516,13 @@ services:
         condition: service_healthy
       witness-test:
         condition: service_healthy
+      # #1419: the S3 store and its bucket before the first upload.
+      s3-bucket-init-test:
+        condition: service_completed_successfully
+      # #1516: started, not healthy: mqtt-test's healthcheck ends in
+      # `|| exit 0` and proves nothing, and the API's client reconnects every 5 s.
+      mqtt-test:
+        condition: service_started
     ports:
       - "127.0.0.1:${BACKEND_HOST_PORT:-3000}:3000"
       # #1263: trusted-hop-test shares this service's network namespace, so
@@ -748,9 +862,9 @@ services:
 
   reference-data-bootstrap-edam-test:
     # RF028 (#374): one-shot, idempotent EDAM reference-data import —
-    # sixteenth and final of the Fase 2 sources, closing out the chain.
-    # Runs after reference-data-bootstrap-cl-test completes, matching the
-    # dev stack's documented recommended order.
+    # sixteenth of the Fase 2 sources. Runs after
+    # reference-data-bootstrap-cl-test completes, matching the
+    # documented recommended order. Biomarker associations follow EDAM.
     build:
       context: ./api/backend
       dockerfile: Dockerfile.dev
@@ -759,6 +873,25 @@ services:
     command: ["npm", "run", "reference:import:edam"]
     depends_on:
       reference-data-bootstrap-cl-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  reference-data-bootstrap-biomarker-associations-test:
+    # SRC_MARKERDB curated/full JSONL → biomarkerAssociations (ELM-0275..0285).
+    # After HGNC/LOINC/EDAM so analyte codes resolve against promoted refs.
+    # ADR 2026-11-25: official import, not fictitious #1206 seed.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:import:biomarker-associations"]
+    depends_on:
+      reference-data-bootstrap-edam-test:
+        condition: service_completed_successfully
+      reference-data-bootstrap-hgnc-test:
+        condition: service_completed_successfully
+      reference-data-bootstrap-loinc-test:
         condition: service_completed_successfully
     networks: [bioavanced-test]
 
@@ -774,6 +907,7 @@ services:
     # #828: same volume as backend-app-test -- this is the reading half.
     volumes:
       - uploads-test-data:/app/uploads
+      - storage-test-data:/app/storage
       # #959 item 2: the nightly daily-merkle job signs here.
       - audit-signing-test-data:/run/secrets:ro
     healthcheck:
@@ -930,6 +1064,9 @@ services:
       # which reaches the published ports only from the host, not from here.
       E2E_NEO4J_URI: bolt://neo4j-test:7687
       E2E_INFLUXDB_URL: http://influxdb-test:8086
+      # #1516: same reason for the MQTT publisher helper (#1233): its
+      # localhost default reaches only the host-side published port.
+      E2E_MQTT_URL: mqtt://mqtt-test:1883
       # #1263: the trusted hop. Reached by service name, not through the
       # loopback forwarder: only API calls go to it, never the browser. The
       # spec's default, http://localhost:3100, is the host-side form.
@@ -956,7 +1093,11 @@ volumes:
   influxdb-test-data:
   # #828: shared /app/uploads for backend-app-test and worker-test.
   uploads-test-data:
+  # Signed TCLE ciphertext (objstore://consents/...) survives a backend recreate.
+  storage-test-data:
   # #959 item 2: holds the Merkle signing key audit-keygen-test mints. Named, so
   # it survives a down/up and the key stays stable across runs of this stack.
   audit-signing-test-data:
+  # #1419: the s3-test bucket and the DataFile objects in it.
+  s3-test-data:
 

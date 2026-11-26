@@ -8,7 +8,12 @@ import { realAuthLogin } from './helpers/realAuth';
 // The shell cases log in for real when PLAYWRIGHT_API_BASE_URL is set and
 // seed a mock session otherwise, so the spec runs in both modes.
 
-const SECURITY_LINK = 'nav.sidebar-nav a[href="/user/security"]';
+// Prefer the permanent desktop aside — a closed Sheet may still leave a
+// second `nav.sidebar-nav` in the DOM that is not visible, and Playwright's
+// strict first-match then times out on toBeVisible (#1440 follow-up).
+const DESKTOP_SECURITY_LINK = 'aside#app-sidebar nav.sidebar-nav a[href="/user/security"]';
+const MOBILE_SECURITY_LINK =
+  '[role="dialog"] nav.sidebar-nav a[href="/user/security"], [data-state="open"] nav.sidebar-nav a[href="/user/security"]';
 const LANGUAGE_SELECT = '[data-testid="language-selector-container"] select';
 
 async function authenticate(request: APIRequestContext, page: Page): Promise<void> {
@@ -105,9 +110,15 @@ test.describe('RNF027 interface', () => {
     await authenticate(request, page);
     await page.goto('/dashboard');
 
-    const link = page.locator(SECURITY_LINK);
+    const link = page.locator(DESKTOP_SECURITY_LINK);
     await expect(link).toBeVisible();
-    await page.locator('body').focus();
+    await link.scrollIntoViewIfNeeded();
+
+    // Start inside the desktop aside so header/chrome tab stops do not
+    // exhaust the budget before /user/security (Firefox was the outlier).
+    const firstNav = page.locator('aside#app-sidebar nav.sidebar-nav a').first();
+    await firstNav.focus();
+    await expect(firstNav).toBeFocused();
 
     let reached = false;
     for (let i = 0; i < 40; i += 1) {
@@ -146,18 +157,18 @@ test.describe('RNF027 interface', () => {
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
       await page.goto('/dashboard');
-      const link = page.locator(SECURITY_LINK);
       const toggle = page.locator('button.sidebar-toggle');
-      await expect(page.locator('nav.sidebar-nav')).toBeAttached();
+      await expect(page.locator('aside#app-sidebar nav.sidebar-nav')).toBeAttached();
       expect(await noOverflow(), `/dashboard at ${viewport.width}x${viewport.height}`).toBe(true);
 
-      if (viewport.width > 1024) {
+      // xl = 1280px: desktop aside visible; 1024 uses the sheet toggle.
+      if (viewport.width >= 1280) {
         await expect(toggle).toBeHidden();
-        await expect(link).toBeVisible();
+        await expect(page.locator(DESKTOP_SECURITY_LINK)).toBeVisible();
       } else {
         await expect(toggle).toBeVisible();
         await toggle.click();
-        await expect(link).toBeVisible();
+        await expect(page.locator(MOBILE_SECURITY_LINK).first()).toBeVisible();
       }
     }
   });

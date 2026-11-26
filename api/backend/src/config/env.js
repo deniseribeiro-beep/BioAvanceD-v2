@@ -185,6 +185,9 @@ module.exports = {
   ALERT_HTTP_ERROR_RATE: process.env.ALERT_HTTP_ERROR_RATE,
   ALERT_HTTP_P95_MS: process.env.ALERT_HTTP_P95_MS,
   ALERT_QUEUE_BACKLOG: process.env.ALERT_QUEUE_BACKLOG,
+  // RNF015 C2 (#1468): fraction 0-1 of memory and disk in use.
+  ALERT_MEMORY_RATIO: process.env.ALERT_MEMORY_RATIO,
+  ALERT_DISK_RATIO: process.env.ALERT_DISK_RATIO,
 
   // Notification
   ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,
@@ -243,9 +246,12 @@ module.exports = {
   COLL_RACK_LOCATION_ASSIGNMENTS: process.env.COLL_RACK_LOCATION_ASSIGNMENTS || 'rackLocationAssignments',
   COLL_TELEMETRY_EXPOSURE_SUMMARIES: process.env.COLL_TELEMETRY_EXPOSURE_SUMMARIES || 'telemetryExposureSummaries',
   COLL_STORAGE_LOCATIONS: process.env.COLL_STORAGE_LOCATIONS || 'storageLocations',
+  COLL_STORAGE_RACKS: process.env.COLL_STORAGE_RACKS || 'storageRacks',
+  COLL_STORAGE_POSITIONS: process.env.COLL_STORAGE_POSITIONS || 'storagePositions',
   COLL_OPERATIONAL_STATE_DECISIONS: process.env.COLL_OPERATIONAL_STATE_DECISIONS || 'operationalStateDecisions',
   COLL_LABEL_IDENTIFIERS: process.env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
   COLL_SCAN_EVENTS: process.env.COLL_SCAN_EVENTS || 'scanEvents',
+  COLL_PHYSICAL_IDENTIFICATION_VALIDATION_PROTOCOLS: process.env.COLL_PHYSICAL_IDENTIFICATION_VALIDATION_PROTOCOLS || 'physicalIdentificationValidationProtocols',
   COLL_CUSTODIANSHIP_ASSIGNMENTS: process.env.COLL_CUSTODIANSHIP_ASSIGNMENTS || 'custodianshipAssignments',
   COLL_SHIPMENTS: process.env.COLL_SHIPMENTS || 'shipments',
   COLL_DEVICES: process.env.COLL_DEVICES || 'devices',

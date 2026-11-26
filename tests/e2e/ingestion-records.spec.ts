@@ -33,6 +33,13 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { deleteOrganizations } from './helpers/listOrganizations';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
+import { waitForEthicalConsentStatus, readConsentProjection, closeNeo4jDriver } from './helpers/queryNeo4j';
 
 // RF029 (#1318): POST /api/ingestion/records against the real backend, its
 // writes read back from the stack's Mongo. Real backend only — see
@@ -50,6 +57,8 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
   let auth: { Authorization: string };
   // CFG-004: the configuration release every outcome must name.
   let inForce: string;
+  // #1497 (RF004 AC2): the collection the Assay cases' specimens enter.
+  let governed: GovernedCollection | null = null;
 
   test.beforeAll(async ({ request }) => {
     admin = await realLogin(request);
@@ -87,6 +96,7 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(typeof config.configurationReleaseId).toBe('string');
     expect(config.configurationReleaseId).not.toBe('');
     inForce = config.configurationReleaseId;
+    governed = await seedGovernedCollection(`rf029-ingest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   });
 
   // #1318: what the Assay cases seed for their references.
@@ -94,6 +104,8 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
   const organizationIdsToDelete: string[] = [];
   const participantIdsToDelete: string[] = [];
   const consentIdsToDelete: string[] = [];
+  // #1523: the AccessPolicy rows the RF029 AC2 case creates.
+  const accessPolicyIdsToDelete: string[] = [];
 
   test.afterAll(async ({ request }) => {
     await Promise.all(
@@ -103,8 +115,14 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     // Before the organizations their clinicalUnitId names.
     await deleteIngestedParticipants(participantIdsToDelete);
     await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
+    if (accessPolicyIdsToDelete.length > 0) {
+      await (await ingestionDb()).collection('accessPolicies').deleteMany({ accessPolicyId: { $in: accessPolicyIdsToDelete } });
+    }
     await closeIngestionDb();
+    await closeNeo4jDriver();
   });
 
   function provenance(sourceRecordId: string) {
@@ -147,10 +165,12 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(typeof body.outboxEventId).toBe('string');
 
     const stored = await findIngestedRecord('datasets', 'datasetId', body.entityId);
+    // RNF023 AC1 (#1489): the document and its event carry schemaVersion beside the release id.
     expect(stored).toMatchObject({
       createdBy: `Actor/${admin.user._id}`,
       sourceRecordId,
       canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID,
+      schemaVersion: '2.0.0',
       configurationReleaseId: inForce,
     });
 
@@ -160,6 +180,7 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
       eventId: body.outboxEventId,
       aggregateType: 'Dataset',
       canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID,
+      schemaVersion: 1,
     });
     expect(events[0].payload.configurationReleaseId).toBe(inForce);
 
@@ -167,6 +188,66 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ resourceType: 'Dataset', status: 'success', severity: 'info' });
     expect(rows[0].payload.configurationReleaseId).toBe(inForce);
+  });
+
+  test('#1523 RF029 AC2: provenance.accessPolicyId naming a policy in force for the entityType is stamped on the document; one not applicable, or unknown, quarantines', async ({ request }) => {
+    // #1545: an AccessPolicy's organizationScopeIds must name an existing organization, else 422.
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName: `RF029 AC2 Org ${Date.now()} ${Math.random().toString(36).slice(2, 6)}`, acronym: 'RF029', organizationType: 'biobank', countryCode: 'BR' },
+    });
+    expect(orgRes.status(), await orgRes.text()).toBe(201);
+    const organizationId: string = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
+
+    const createPolicy = async (applicableEntityTypes: string[]) => {
+      const res = await request.post(`${apiBaseURL}/api/access-policies`, {
+        headers: auth,
+        data: {
+          policyName: `RF029 AC2 e2e ${applicableEntityTypes[0]} ${Date.now()}`,
+          policyVersion: '1.0.0',
+          applicableEntityTypes,
+          decisionEffect: 'permit',
+          ruleExpression: 'all-conditions',
+          effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+          roleCodes: ['researcher'],
+          organizationScopeIds: [organizationId],
+          resourceScopes: ['Specimen'],
+          conditions: [{ consent: 'compatible', study: 'active' }],
+          decisionReasonsRequired: true,
+        },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+      const accessPolicyId: string = (await res.json()).data.accessPolicyId;
+      accessPolicyIdsToDelete.push(accessPolicyId);
+      return accessPolicyId;
+    };
+    const datasetPolicyId = await createPolicy(['Dataset']);
+    const accessRequestPolicyId = await createPolicy(['AccessRequest']);
+
+    const sourceRecordId = `rf1523-e2e-${Date.now()}-dataset-policy`;
+    const accepted = await ingest(request, {
+      entityType: 'Dataset',
+      payload: datasetPayload(),
+      provenance: { ...provenance(sourceRecordId), accessPolicyId: [datasetPolicyId] },
+    });
+    expect(accepted.status(), await accepted.text()).toBe(201);
+    const acceptedBody = await accepted.json();
+    const stored = await findIngestedRecord('datasets', 'datasetId', acceptedBody.entityId);
+    expect(stored).toMatchObject({ accessPolicyId: [datasetPolicyId] });
+
+    for (const [label, accessPolicyId] of [['not-applicable', accessRequestPolicyId], ['unknown', `rf1523-unknown-${Date.now()}`]]) {
+      const res = await ingest(request, {
+        entityType: 'Dataset',
+        payload: datasetPayload(),
+        provenance: { ...provenance(`rf1523-e2e-${Date.now()}-${label}`), accessPolicyId: [accessPolicyId] },
+      });
+      expect(res.status(), await res.text()).toBe(422);
+      const body = await res.json();
+      expect(body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+      const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+      expect(record?.violations).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'ACCESS_POLICY_NOT_APPLICABLE' })]));
+    }
   });
 
   test('an accepted WorkflowRun is stored with the server actor as createdBy, not the payload value', async ({ request }) => {
@@ -323,6 +404,47 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows).toHaveLength(before + 1);
   });
 
+  test('#1481 RF029 AC4: a DataFileVersion, an Object Storage binary, is refused 422 INGESTION_STORE_UNSUPPORTED naming the trusted replace routes, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-data-file-version`;
+    // A delta, not an absolute: the stack's logs persist across runs.
+    const before = (await findIngestionRefusalRows('DataFileVersion')).length;
+
+    const payload = { fileUri: 'objstore://rf029-e2e/data-file/sha256/ab', checksum: 'ab', fileSizeBytes: 10 };
+    const res = await ingest(request, { entityType: 'DataFileVersion', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_STORE_UNSUPPORTED');
+    expect(body.details).toEqual([expect.stringContaining('Object Storage')]);
+    expect(body.details[0]).toContain('/replace');
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+    // The route awaits this row before it answers.
+    const rows = await findIngestionRefusalRows('DataFileVersion');
+    expect(rows).toHaveLength(before + 1);
+  });
+
+  test('#1481 RF029 AC4: a proteomics or metabolomics OmicsRun, an Object Storage entity, is refused 422 INGESTION_STORE_UNSUPPORTED and persists nothing', async ({ request }) => {
+    for (const modality of ['proteomics', 'metabolomics']) {
+      const sourceRecordId = `rf029-e2e-${Date.now()}-omics-run-${modality}`;
+      // A delta, not an absolute: the stack's logs persist across runs.
+      const before = (await findIngestionRefusalRows('OmicsRun')).length;
+
+      const res = await ingest(request, { entityType: 'OmicsRun', payload: { modality }, provenance: provenance(sourceRecordId) });
+
+      expect(res.status(), await res.text()).toBe(422);
+      const body = await res.json();
+      expect(body.error).toBe('INGESTION_STORE_UNSUPPORTED');
+      expect(body.details).toEqual([expect.stringContaining(modality)]);
+      expect(await countIngestedBySourceRecordId('omicsRuns', sourceRecordId)).toBe(0);
+      expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+      // The route awaits this row before it answers.
+      const rows = await findIngestionRefusalRows('OmicsRun');
+      expect(rows).toHaveLength(before + 1);
+    }
+  });
+
   // #1318: an Assay's references resolve against real records (#664), so its
   // specimen, study, protocol and laboratory are seeded as
   // specimen-quality-inventory.spec.ts seeds an assay's, by the admin, whose
@@ -351,6 +473,7 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
         registeredAt: new Date().toISOString(),
         boxId,
         positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
@@ -451,6 +574,8 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
       quantity: 5,
       registeredAt: new Date().toISOString(),
       collectionSite: organizationId,
+      // #1538 (RF004 AC2, ELM-0118): the target runs the mount's collection gate.
+      collectionId: governed!.collectionId,
     };
   }
 
@@ -499,6 +624,36 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
 
     const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
     expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['CONSENT_NOT_ACTIVE']);
+    expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
+  });
+
+  test('#1538 RF004 AC2: a Specimen that names no collection answers 422 INGESTION_QUARANTINED with COLLECTION_REQUIRED and writes no sample', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-specimen-no-collection`;
+    const { collectionId: _collectionId, ...payload } = await seedSpecimenReferences(request);
+
+    const res = await ingest(request, { entityType: 'Specimen', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['COLLECTION_REQUIRED']);
+    expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
+  });
+
+  test('#1523 RNF011 AC1: a Specimen whose unit is no active UCUM code answers 422 INGESTION_QUARANTINED with INACTIVE_OR_UNKNOWN_CODE and writes no sample', async ({ request }) => {
+    const sourceRecordId = `rf1523-e2e-${Date.now()}-specimen-unit`;
+    const payload = { ...(await seedSpecimenReferences(request)), unit: `rf1523-not-ucum-${Date.now()}` };
+
+    const res = await ingest(request, { entityType: 'Specimen', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['INACTIVE_OR_UNKNOWN_CODE']);
     expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
   });
 
@@ -653,6 +808,34 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(prior).toMatchObject({ status: 'REVOKED', currentStateDerived: 'superseded', supersededByConsentId: body.entityId });
     const priorDecisions = await findConsentDecisionEvents(priorId);
     expect(priorDecisions.map((row: { decision: string }) => row.decision).sort()).toEqual(['accepted', 'superseded']);
+  });
+
+  test('#1481 RF029 AC6: an ingested Consent projects into Neo4j as an ACTIVE EthicalConsent under a pseudonymized Donor, and its ingestion outbox event is consumed', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-consent-graph`;
+    const payload = await seedConsentReferences(request);
+
+    const res = await ingest(request, { entityType: 'Consent', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    consentIdsToDelete.push(body.entityId);
+
+    // The graph node's id is the consent's Mongo _id, not its consentId
+    // (consentTarget.js, graphProjection.service.js).
+    const stored = await findIngestedRecord('patientConsents', 'consentId', body.entityId);
+    const consentNodeId = String(stored._id);
+    await waitForEthicalConsentStatus(consentNodeId, 'ACTIVE');
+
+    const { consent, donorIds } = await readConsentProjection(consentNodeId);
+    expect(donorIds).toEqual([expect.stringMatching(/^DONOR_[0-9a-f]{24}$/)]);
+    expect(consent).not.toBeNull();
+    expect(Object.keys(consent!)).not.toContain('participantId');
+    expect(Object.values(consent!).filter((v) => typeof v === 'string').some((v) => (v as string).includes(payload.participantId))).toBe(false);
+    expect(donorIds.some((id) => id.includes(payload.participantId))).toBe(false);
+
+    // The projector skips INGESTION_RECORD_PERSISTED, and the worker marks a
+    // skipped event projected all the same.
+    await expect.poll(async () => (await findOutboxEvents(body.entityId))[0]?.status, { timeout: 15_000 }).toBe('PROJECTED');
   });
 
   test('#1318: a Consent carrying signatureName answers 422 INGESTION_STORE_UNSUPPORTED, persists nothing, and audits no name', async ({ request }) => {
@@ -848,6 +1031,135 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(await countDataQualityAssessmentsByScope(scopeId)).toBe(1);
   });
 
+  test('#1481 RF029 AC1: a Dataset with a non-canonical field name, no datasetTitle and empty creators is quarantined with its contract violations and a failed assessment', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-dataset-alias`;
+    const payload = { title: 'RF029 e2e alias', datasetVersion: '1.0.0', creators: [], license: 'CC BY 4.0' };
+
+    const res = await ingest(request, { entityType: 'Dataset', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toEqual([
+      "must have required property 'datasetTitle'",
+      'must NOT have additional properties',
+      'must NOT have fewer than 1 items',
+      'datasetTitle é obrigatório',
+      'creators é obrigatório e deve ser um array não vazio',
+    ]);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: any) => [v.code, v.field, v.ajvKeyword ?? null])).toEqual([
+      ['CONTRACT_VIOLATION', 'datasetTitle', 'required'],
+      ['CONTRACT_VIOLATION', 'title', 'additionalProperties'],
+      ['CONTRACT_VIOLATION', 'creators', 'minItems'],
+      ['ENTITY_VALIDATION_FAILED', null, null],
+      ['ENTITY_VALIDATION_FAILED', null, null],
+    ]);
+    expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+
+    const assessment = await findDataQualityAssessment(body.dataQualityAssessmentId);
+    expect(assessment.status).toBe('failed');
+    const results = Object.fromEntries(assessment.results.map((result: any) => [result.metric, result]));
+    expect(results.completeness).toMatchObject({ numerator: 2, denominator: 4 });
+    expect(results.validity.value).toBe(0);
+    expect(results.consistency.value).toBe(0);
+  });
+
+  function workflowRunPayload() {
+    return {
+      workflowId: 'rf029-e2e-variant-calling-pipeline',
+      workflowVersion: '2.3.1',
+      createdBy: 'User/e2e-suite',
+      startedAt: new Date().toISOString(),
+      runStatus: 'succeeded',
+      hardwareProfile: { cpu: 'synthetic', gpu: null },
+      randomSeed: 0,
+      environmentManifestUri: 'object://synthetic/environment.json',
+    };
+  }
+
+  test('#1481 RNF011 AC1: a WorkflowRun with an unknown runStatus and a non-integer randomSeed is quarantined with its enum and type violations', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-workflow-enum-type`;
+    const payload = { ...workflowRunPayload(), runStatus: 'finished', randomSeed: '7' };
+
+    const res = await ingest(request, { entityType: 'WorkflowRun', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toEqual([
+      'must be equal to one of the allowed values',
+      'must be integer',
+      'runStatus deve ser um de: queued, running, succeeded, failed, cancelled',
+      'randomSeed deve ser um inteiro',
+    ]);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: any) => [v.code, v.field, v.ajvKeyword ?? null])).toEqual([
+      ['CONTRACT_VIOLATION', 'runStatus', 'enum'],
+      ['CONTRACT_VIOLATION', 'randomSeed', 'type'],
+      ['ENTITY_VALIDATION_FAILED', null, null],
+      ['ENTITY_VALIDATION_FAILED', null, null],
+    ]);
+    expect(await countIngestedBySourceRecordId('workflowRuns', sourceRecordId)).toBe(0);
+  });
+
+  test('#1481 RNF011 AC1: a succeeded WorkflowRun carrying a failureReason is quarantined under the conditional rule', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-workflow-conditional`;
+    const payload = { ...workflowRunPayload(), failureReason: 'OOM' };
+
+    const res = await ingest(request, { entityType: 'WorkflowRun', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    // The canonical schema refuses the field itself; the second message is
+    // the model's conditional rule on runStatus (WorkflowRun.js).
+    expect(body.details).toEqual([
+      'must NOT have additional properties',
+      'failureReason só é permitido quando runStatus é failed ou cancelled',
+    ]);
+    expect(await countIngestedBySourceRecordId('workflowRuns', sourceRecordId)).toBe(0);
+  });
+
+  test('#1481 RF029 AC2: a record without provenance.sourceSystem or provenance.retrievedAt is quarantined, its assessment scoring provenance 2 of 4 and timeliness not assessed', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-no-origin`;
+
+    const res = await ingest(request, { entityType: 'Dataset', payload: datasetPayload(), provenance: { purpose: 'e2e_proof', sourceRecordId } });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toEqual(['provenance.sourceSystem é obrigatório', 'provenance.retrievedAt é obrigatório']);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['PROVENANCE_FIELD_MISSING', 'PROVENANCE_FIELD_MISSING']);
+    expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+
+    const assessment = await findDataQualityAssessment(body.dataQualityAssessmentId);
+    expect(assessment.status).toBe('failed');
+    const results = Object.fromEntries(assessment.results.map((result: any) => [result.metric, result]));
+    expect(results.provenance).toMatchObject({ numerator: 2, denominator: 4 });
+    expect(results.timeliness).toMatchObject({ value: null, notAssessed: 'no_retrieved_at' });
+  });
+
+  test('#1481 RNF011 AC2: a Consent writing the derived currentStateDerived is quarantined and writes no consent', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-consent-derived`;
+    const payload = { ...(await seedConsentReferences(request)), currentStateDerived: 'active' };
+
+    const res = await ingest(request, { entityType: 'Consent', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toEqual(['must NOT have additional properties']);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string; field: string }) => [v.code, v.field])).toEqual([['CONTRACT_VIOLATION', 'currentStateDerived']]);
+    expect(await countIngestedBySourceRecordId('patientConsents', sourceRecordId)).toBe(0);
+  });
+
   test('RF029 AC10: an unsupported entityType is refused 422, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
     const sourceRecordId = `rf029-e2e-${Date.now()}-unsupported`;
     // Unique per run, so the stack's persistent logs hold one row for it.
@@ -870,6 +1182,38 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows[0]).toMatchObject({ status: 'warning', severity: 'warning' });
     expect(rows[0].payload.canonicalModelReleaseId).toBeNull();
     expect(rows[0].payload.configurationReleaseId).toBeNull();
+  });
+
+  // The v2.0.0 release defines Specimen, not Sample (a v1.3.0 name).
+  test('RNF028 C7: an entityType outside the approved release (Sample, a v1.3.0 name) is refused 422, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
+    const sourceRecordId = `rnf028-c7-${Date.now()}-sample`;
+    // The name is fixed, so the stack's persistent logs may already hold rows
+    // for it: the new row is counted by difference.
+    const before = await findIngestionRefusalRows('Sample');
+
+    const res = await ingest(request, {
+      entityType: 'Sample',
+      payload: { sampleId: sourceRecordId, specimenType: 'blood' },
+      provenance: provenance(sourceRecordId),
+    });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_TARGET_UNSUPPORTED');
+    expect(body.details).toEqual(expect.arrayContaining([expect.stringContaining('Sample')]));
+    expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+    // The route awaits this row before it answers. Refused before the
+    // releases are read, so the row names none.
+    const after = await findIngestionRefusalRows('Sample');
+    expect(after).toHaveLength(before.length + 1);
+    const known = new Set(before.map((row) => String(row._id)));
+    const fresh = after.filter((row) => !known.has(String(row._id)));
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]).toMatchObject({ status: 'warning', severity: 'warning' });
+    expect(fresh[0].payload.canonicalModelReleaseId).toBeNull();
+    expect(fresh[0].payload.configurationReleaseId).toBeNull();
   });
 
   test('RF029 AC10: a Técnico is refused 403, persists nothing, and the denial is audited as FORBIDDEN', async ({ request }) => {

@@ -68,7 +68,11 @@ const CONFIGURATION_SEEDS = [
 ];
 
 // Operational collections the Foundation must leave untouched (RF022 AC8,
-// RNF031 C7): it counts them before and after apply.
+// RNF031 C7): it counts them before and after apply. AC8 names participants,
+// identities, consents, specimens, telemetry, files, studies, assays and
+// operational workflows. Telemetry readings themselves live in InfluxDB and
+// file binaries in the object store: the job loads no client for either,
+// which tests/architecture/foundation-job-stores.arch.test.js checks.
 const OPERATIONAL_COLLECTIONS = [
   CANONICAL_COLLECTIONS.patients,
   CANONICAL_COLLECTIONS.participantIdentities,
@@ -78,6 +82,23 @@ const OPERATIONAL_COLLECTIONS = [
   CANONICAL_COLLECTIONS.encounters,
   CANONICAL_COLLECTIONS.rcsAssessments,
   CANONICAL_COLLECTIONS.accessRequests,
+  // Telemetry: each reading's receipt and its validation issues (written by
+  // src/services/telemetryReadingContract.js), the exposure summaries and
+  // the datastreams a device's readings bind to.
+  'telemetryIngestionEvents',
+  'telemetryValidationIssues',
+  CANONICAL_COLLECTIONS.telemetryExposureSummaries,
+  CANONICAL_COLLECTIONS.telemetryDatastreams,
+  // Files: each uploaded file's metadata and its versions.
+  'sample_files',
+  'assayFiles',
+  'datasetFiles',
+  'AnalysisFile',
+  CANONICAL_COLLECTIONS.dataFileVersions,
+  // Studies, assays and workflow runs.
+  'studies',
+  'assays',
+  'workflowRuns',
 ];
 
 function parseArgs(argv) {
@@ -126,6 +147,24 @@ function mechanismsGate(plan) {
     loaders: plan.map(({ entry, plannedCounts, keyless }) => ({ key: entry.key, plannedCounts, keyless })),
   });
 }
+
+// RF022 AC5: a step the apply completed records its checkpoint, the order
+// and time it completed, so the run reads back where it got to. It names no
+// insertedIds: Foundation inserts no reference docs (AC7), so --rollback
+// still removes only what an older apply checkpointed.
+function completeStep(steps, step) {
+  const sequence = steps.filter((entry) => entry.checkpoint).length + 1;
+  steps.push({ ...step, status: 'completed', checkpoint: { sequence, completedAt: new Date() } });
+}
+
+// RF022 AC2 preparations this job does not build yet: each is recorded as a
+// step with the phase that brings it, as DEFERRED_P0_GATES does for the
+// readiness gates, so the run names every preparation.
+const DEFERRED_PREPARATIONS = [
+  { step: 'quarantine', builtIn: 'later phase' },
+  { step: 'outbox', builtIn: 'W7 · outbox v2' },
+  { step: 'audit', builtIn: 'later phase' },
+];
 
 function contractChecksums(selected) {
   return {
@@ -261,7 +300,10 @@ async function runApply({ db, args, environment, deploymentId, selected, configu
   // Phase 2 job will load.
   const operationalBefore = await countOperational(db);
   const referencesBefore = await countReferences(db, plan);
-  const steps = plan.map(({ entry, plannedCounts, keyless }) => ({ step: entry.key, system: entry.system, version: entry.version, status: 'prepared', plannedCounts, keyless }));
+  const steps = [];
+  // F1.3: the dictionary's entities, validated by the dry-run above.
+  completeStep(steps, { step: 'entities', plannedCounts: { elements: dictionaryCompleteness.loadedTotal, entities: dictionaryCompleteness.entityTotal, historical: dictionaryCompleteness.historicalTotal } });
+  steps.push(...plan.map(({ entry, plannedCounts, keyless }) => ({ step: entry.key, system: entry.system, version: entry.version, status: 'prepared', plannedCounts, keyless })));
   let builds = [];
   let currentStep = null;
   try {
@@ -272,11 +314,11 @@ async function runApply({ db, args, environment, deploymentId, selected, configu
     for (const { step, seed, count } of configurationSeeds) {
       currentStep = step;
       const result = await seed(db);
-      steps.push({ step, status: 'completed', plannedCounts: count(result) });
+      completeStep(steps, { step, plannedCounts: count(result) });
     }
     currentStep = 'indexes';
     builds = await buildFoundationIndexes(db);
-    steps.push({ step: 'indexes', status: 'completed', plannedCounts: { indexes: builds.length } });
+    completeStep(steps, { step: 'indexes', plannedCounts: { indexes: builds.length } });
   } catch (error) {
     const run = finishRun({
       ...base, startedAt, completedAt: new Date(), runStatus: 'failed', dryRunResult: 'pass', applyResult: 'fail', verifyResult: 'not_run', rollbackResult: 'not_required',
@@ -309,6 +351,16 @@ async function runApply({ db, args, environment, deploymentId, selected, configu
   ];
   const gateResults = [...versionGates, ...verifyGates];
   const verifyPassed = verifyGates.every((g) => g.result !== 'fail');
+
+  steps.push(...DEFERRED_PREPARATIONS.map(({ step, builtIn }) => ({ step, status: 'deferred', builtIn })));
+  // F1.10: the verify gates are the run's tests.
+  const testCounts = { gates: verifyGates.length, failed: verifyGates.filter((g) => g.result === 'fail').length };
+  if (verifyPassed) completeStep(steps, { step: 'tests', plannedCounts: testCounts });
+  else steps.push({ step: 'tests', status: 'failed', plannedCounts: testCounts });
+  // F1.11: what a --rollback of this run would remove, read from the
+  // checkpoints above.
+  const removable = steps.reduce((sum, step) => sum + Object.values(step.checkpoint?.insertedIds || {}).reduce((n, ids) => n + ids.length, 0), 0);
+  steps.push({ step: 'rollback', status: 'prepared', plannedCounts: { removable } });
 
   const run = finishRun({
     ...base, startedAt, completedAt: new Date(),

@@ -166,13 +166,16 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
     expect(response.status()).toBe(422);
   });
 
-  // RF010 AC1: a term records its language, jurisdiction, consent modality
+  // RF010 AC1: a term records its language, jurisdiction, consent modality,
+  // CAAE (P1X-0367), the URI of its controlled document (P1X-0095, #1492)
   // and the checksum of its exact text, computed by the server. Posted
   // inactive, so no other spec's active term changes.
-  test('AC1: a published term records language, jurisdiction, modality and its text checksum', async ({ request }) => {
+  test('AC1: a published term records language, jurisdiction, modality, CAAE, document URI and its text checksum', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const htmlContent = `<p>Termo RF010 AC1 ${Date.now()}</p>`;
+    const caae = `RF010-AC1-${Date.now()}`;
+    const documentUri = 'https://example.org/tcle/rf010-ac1.pdf';
 
     const created = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
       headers: auth,
@@ -184,23 +187,35 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
         active: false,
         language: 'en-US',
         consentModel: 'broad',
+        caae,
+        documentUri,
         checksum: 'sha256:forged',
         permissions: [{ key: 'storage', label: 'Armazenamento', required: false }],
       },
     });
     expect(created.status()).toBe(201);
     const term = (await created.json()).data;
-    // GET /consent-templates lists every term on the kept test volume, so
-    // this one does not outlive the test.
-    const client = new MongoClient(mongoUri);
-    await client.connect();
     try {
-      await client.db(mongoDbName).collection('consent_templates').deleteOne({ _id: new ObjectId(term._id) });
+      const expected = createHash('sha256').update(htmlContent, 'utf8').digest('hex');
+      expect(term).toMatchObject({
+        language: 'en-US', jurisdiction: 'BR', consentModel: 'broad', caae, documentUri, checksum: `sha256:${expected}`,
+      });
+
+      // The stored term keeps both, read back through the API.
+      const stored = await request.get(`${apiBaseURL}/api/e-consent/consent-templates/${term._id}`, { headers: auth });
+      expect(stored.status()).toBe(200);
+      expect((await stored.json()).data).toMatchObject({ caae, documentUri });
     } finally {
-      await client.close();
+      // GET /consent-templates lists every term on the kept test volume, so
+      // this one does not outlive the test.
+      const client = new MongoClient(mongoUri);
+      await client.connect();
+      try {
+        await client.db(mongoDbName).collection('consent_templates').deleteOne({ _id: new ObjectId(term._id) });
+      } finally {
+        await client.close();
+      }
     }
-    const expected = createHash('sha256').update(htmlContent, 'utf8').digest('hex');
-    expect(term).toMatchObject({ language: 'en-US', jurisdiction: 'BR', consentModel: 'broad', checksum: `sha256:${expected}` });
 
     const refused = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
       headers: auth,
@@ -209,6 +224,13 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
     expect(refused.status()).toBe(422);
     // Refused for its modality, not for a missing field.
     expect((await refused.json()).message).toContain('consentModel');
+
+    const refusedUri = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
+      headers: auth,
+      data: { title: 'RF010 AC1 refused URI', content: htmlContent, htmlContent, active: false, documentUri: 'not a uri' },
+    });
+    expect(refusedUri.status()).toBe(422);
+    expect((await refusedUri.json()).message).toContain('documentUri');
   });
 
   // RF010 AC4-AC6: every manifestation is an appended ConsentDecisionEvent, a

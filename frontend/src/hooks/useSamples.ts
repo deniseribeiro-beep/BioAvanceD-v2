@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Sample, Result } from '../types/models';
 import { samplesApi } from '../services/samples/samplesApi';
-import { extractResponseItems } from '../api/response.adapters';
+import { extractResponseItems, extractResponseTotal } from '../api/response.adapters';
 import { notifyDashboardDataChanged } from '../utils/dashboardRefresh';
 import { onClientLogout } from '../utils/sessionCleanup';
 import { useRequestSequence } from './useRequestSequence';
@@ -36,25 +36,34 @@ function unwrapData<T>(payload: unknown): T | unknown {
 
 export function useSamples() {
   const [samples, setSamples] = useState<Sample[]>([]);
+  const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // #901: discards a stale response when loadSamples is called again
   // before a previous in-flight call resolves.
   const requestSeq = useRequestSequence();
 
-  const loadSamples = async () => {
+  const loadSamples = async (params?: { specimenId?: string; participantId?: string; limit?: number }) => {
     const seq = requestSeq.next();
     try {
       setLoading(true);
-      const response = await samplesApi.getAll();
+      // Default newest-first page is 50 server-side; pull a wider window on
+      // the inventory mount so a just-created specimen is not lost behind
+      // that cap before a specimenId search runs (ui-mongo-binding).
+      const response = await samplesApi.getAll({
+        limit: 200,
+        ...params,
+      });
       if (!requestSeq.isCurrent(seq)) return;
       const samplesData = extractSamples(response.data);
       setSamples(samplesData);
+      setTotal(extractResponseTotal(response.data, samplesData.length));
       setError(null);
     } catch (err: unknown) {
       if (!requestSeq.isCurrent(seq)) return;
       setError(extractErrorMessage(err, 'Erro ao carregar amostras'));
-      setSamples([]); // Garante array vazio em caso de erro
+      setSamples([]);
+      setTotal(0);
     } finally {
       if (requestSeq.isCurrent(seq)) setLoading(false);
     }
@@ -68,6 +77,7 @@ export function useSamples() {
   useEffect(() => {
     return onClientLogout(() => {
       setSamples([]);
+      setTotal(null);
       setError(null);
       setLoading(false);
     });
@@ -116,6 +126,7 @@ export function useSamples() {
 
   return {
     samples,
+    total,
     loading,
     error,
     loadSamples,

@@ -17,6 +17,11 @@ class SecurityAlertsService {
 
   init(db) {
     this.db = db;
+    const to = String(process.env.ALERT_EMAIL_TO || '').trim();
+    if (!to || this.mailHandlerRegistered) return;
+    const notificationService = require('./NotificationService');
+    this.registerAlertHandler(this.constructor.createEmailHandler(notificationService, { to }));
+    this.mailHandlerRegistered = true;
   }
 
   /**
@@ -317,7 +322,9 @@ class SecurityAlertsService {
           await nodemailer.sendEmail({
             to: emailConfig.to,
             subject,
-            html
+            html,
+            text: `${alert.type}: ${alert.reason}`,
+            notificationType: 'SECURITY_ALERT',
           });
 
           logger.info('[ALERTS] Email de alerta enviado');

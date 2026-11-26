@@ -1,6 +1,7 @@
 const { flux, fluxExpression, fluxFloat } = require('@influxdata/influxdb-client');
 const influxConnection = require('../../database/influxdb/connection');
 const TemperatureModel = require('../../../models/Temperature');
+const { CURRENT_REVISION_FLUX } = require('./telemetryRevisions');
 
 // The report's stop when the caller gives none: InfluxDB's maximum time
 // (2262), not now(). A reading whose device clock ran ahead (clockStatus
@@ -8,7 +9,7 @@ const TemperatureModel = require('../../../models/Temperature');
 // replaces listed it whatever its timestamp.
 const REPORT_UNBOUNDED_STOP = new Date('2262-01-01T00:00:00Z');
 
-const OPTIONAL_REPORT_TAGS =['locationId', 'facility', 'zone', 'clockStatus', 'datastreamId', 'storageLocationId'];
+const OPTIONAL_REPORT_TAGS =['locationId', 'facility', 'zone', 'clockStatus', 'datastreamId', 'storageLocationId', 'revision'];
 
 function mapReportRow(row) {
   const unit = row.temperatureUnit || '°C';
@@ -52,6 +53,11 @@ class InfluxTelemetryReadRepository {
   // readingsAtLocation reads every reading bound to one storage location over
   // [start, stop), oldest first and unlimited, for the exposure summary
   // (RF009 AC5/AC6, #1392): Flux's range is start-inclusive and stop-exclusive.
+  // #1518 (RNF025 C8): the report, the history and the exposure summary read
+  // the current revision of each reading only (CURRENT_REVISION_FLUX), before
+  // the critical filter, so a corrected in-range reading leaves no
+  // out-of-range original behind; readingById reads every revision, so a
+  // superseded reading stays readable by its id.
   async lastReadingAtBySensor() {
     await influxConnection.connectInfluxDB();
     const queryApi = influxConnection.getInfluxQueryApi();
@@ -117,7 +123,7 @@ class InfluxTelemetryReadRepository {
       |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
       |> map(fn: (r) => ({r with reading: if exists r.temperatureValue then r.temperatureValue else r.value}))
       |> filter(fn: (r) => exists r.reading)
-      |> map(fn: (r) => ({r with celsius: if exists r.temperatureUnit and r.temperatureUnit == "°F" then (r.reading - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == "K" then r.reading - 273.15 else r.reading}))${fluxExpression(criticalFilter)}
+      |> map(fn: (r) => ({r with celsius: if exists r.temperatureUnit and r.temperatureUnit == "°F" then (r.reading - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == "K" then r.reading - 273.15 else r.reading}))${fluxExpression(CURRENT_REVISION_FLUX)}${fluxExpression(criticalFilter)}
       |> group()`;
 
     const rawRows = await queryApi.collectRows(flux`${pipeline}
@@ -163,7 +169,7 @@ class InfluxTelemetryReadRepository {
       |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
       |> map(fn: (r) => ({r with reading: if exists r.temperatureValue then r.temperatureValue else r.value}))
       |> filter(fn: (r) => exists r.reading)
-      |> map(fn: (r) => ({r with celsius: if exists r.temperatureUnit and r.temperatureUnit == "°F" then (r.reading - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == "K" then r.reading - 273.15 else r.reading}))
+      |> map(fn: (r) => ({r with celsius: if exists r.temperatureUnit and r.temperatureUnit == "°F" then (r.reading - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == "K" then r.reading - 273.15 else r.reading}))${fluxExpression(CURRENT_REVISION_FLUX)}
       |> group()
       |> sort(columns: ["_time"])`);
 

@@ -17,6 +17,14 @@
  * Idempotent: a sensor with a temperature datastream open or valid now is
  * counted in alreadyBound, so a second run writes nothing.
  *
+ * One-way: no rollback. The datastreams it creates carry no field marking
+ * this run apart from those bound since (they share the run instant as
+ * validityPeriod.start, which the run does not print), and telemetry
+ * readings written since carry their telemetryDatastreamId, so deleting the
+ * datastreams would orphan those readings. sensorMetadata, storageContainers
+ * and storageLocations are only read, so SensorMetadata stays the readers'
+ * fallback. Undo is restoring the datastream collection from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:sensor-metadata-to-datastreams -- --sampling-policy-id <profileId>
  *     applies; the sampling policy must be a stored ConfigurationProfile

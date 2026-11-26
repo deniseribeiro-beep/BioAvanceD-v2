@@ -114,7 +114,8 @@ class ImportAsyncController {
         });
       }
 
-      // Retorna metadata (arquivo será processado depois)
+      // Nenhuma etapa posterior lê este upload: a resposta leva só os metadados (#1556)
+      importAsyncService.cleanupFile(file.path);
       return res.status(200).json({
         success: true,
         message: 'Arquivo validado com sucesso',

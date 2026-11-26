@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
 import { AlertCircle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import { fetchWithRequestId } from '../api/requestId';
-import './AssinaturaDigitalTCLE.css';
 
 const canvasToBlob = (canvas) =>
   new Promise((resolve) => {

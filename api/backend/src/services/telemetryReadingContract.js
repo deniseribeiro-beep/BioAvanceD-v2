@@ -17,8 +17,12 @@ const { createHash, randomUUID } = require('crypto');
  *   readings a device sent with the same timestamp and value, and nothing
  *   tells those apart from a replay.
  * - clockStatus: `[inference]` the dictionary names only `synchronized`.
- *   `synchronized` when observedAt is within CLOCK_SKEW_TOLERANCE_MS of
- *   receipt, `drift` beyond it (either side), `unknown` with no device time.
+ *   `synchronized` when observedAt is within the configured limit
+ *   (`telemetry.clockDriftLimitMinutes`, RNF025 AC6, #1520;
+ *   CLOCK_SKEW_TOLERANCE_MS by default) of receipt, `drift` beyond it
+ *   (either side), `unknown` with no device time. readingIdentityOf stamps
+ *   it at the default limit, and screenReading re-derives it at the
+ *   configured one.
  *
  * persistedAt (V2E-0550) is the confirmation of the authoritative InfluxDB
  * write, so the write path stamps it once that write returns.
@@ -43,9 +47,12 @@ const TemperatureModel = require('../models/Temperature');
 const TelemetryIngestionEventModel = require('../models/TelemetryIngestionEvent');
 const TelemetryValidationIssueModel = require('../models/TelemetryValidationIssue');
 const logger = require('../utils/logger');
+const auditLogger = require('../utils/auditLogger');
 const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
 
-const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+const { DEFAULT_CLOCK_DRIFT_LIMIT_MS, resolveClockDriftLimitMs } = require('./clockDriftLimit');
+
+const CLOCK_SKEW_TOLERANCE_MS = DEFAULT_CLOCK_DRIFT_LIMIT_MS;
 // RF009 AC7: a temperature outside this range, in Celsius, is not a
 // physically possible reading of a storage environment. The floor is
 // absolute zero. The ceiling is `[inference]`: no repo constant or profile
@@ -84,9 +91,9 @@ function validationError(message) {
   return Object.assign(new Error(message), { statusCode: 422, auditReason: 'invalid_payload' });
 }
 
-function clockStatusOf(deviceTime, receivedAt) {
+function clockStatusOf(deviceTime, receivedAt, limitMs = CLOCK_SKEW_TOLERANCE_MS) {
   if (!deviceTime) return 'unknown';
-  return Math.abs(receivedAt.getTime() - deviceTime.getTime()) <= CLOCK_SKEW_TOLERANCE_MS ? 'synchronized' : 'drift';
+  return Math.abs(receivedAt.getTime() - deviceTime.getTime()) <= limitMs ? 'synchronized' : 'drift';
 }
 
 /**
@@ -243,6 +250,120 @@ function clientContractFieldsOf(payload) {
   return fields;
 }
 
+// RF009 AC8, RNF004 C7 (#1540): the top-level fields POST /api/iot/telemetry
+// reads into a reading (readingIdentityOf, validationIssuesOf and the
+// route's own sensorId and temperature), and organizationId, V2E-0561.
+const IOT_API_READING_FIELDS = [
+  'sensorId', 'sensorID', 'temperature', 'temperatureValue', 'temperatureUnit', 'timestamp',
+  ...CLIENT_TEXT_FIELDS, 'sequenceNumber', 'organizationId',
+];
+// A field name the issue may list. Any other name is counted, never written.
+const LISTABLE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+/**
+ * RF009 AC8, RNF004 C7 (#1540): splits a received payload into the reading
+ * (its contract fields) and the names of the other top-level fields, sorted.
+ * Those fields may carry personal data, so they are stripped before the
+ * reading is hashed, screened or stored; an absent or null one is not
+ * counted. A payload that is not a plain object has no fields.
+ */
+function splitContractFields(payload, contractFields) {
+  const reading = {};
+  const strippedFields = [];
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { reading, strippedFields };
+  const allowed = new Set(contractFields);
+  for (const [field, value] of Object.entries(payload)) {
+    if (allowed.has(field)) reading[field] = value;
+    else if (value !== undefined && value !== null) strippedFields.push(field);
+  }
+  return { reading, strippedFields: strippedFields.sort() };
+}
+
+// RULE-025, RF009 AC8 (#1582): the AuditEvent source (P1X-0331's closed
+// vocabulary) of each ingestion path. `[inference]` the queue and the import
+// run off the request, as auditLogger's own note says of worker callers.
+const AUDIT_SOURCE_BY_SERVICE = {
+  'iot-api': 'api', 'temperature-api': 'api', mqtt: 'mqtt', 'iot-queue': 'worker', 'temperature-import': 'worker',
+};
+
+/**
+ * RULE-025, RF009 AC8 (#1582): the security audit of a received payload that
+ * carried fields outside its path's reading contract, written once at
+ * receipt, whatever the reading's fate. It names the listable field names
+ * and counts the rest, never a value. `db` may be a function resolving it.
+ * Returns true once written; false for no stripped field or a failed write,
+ * which is logged and never changes the reading's fate.
+ */
+async function auditStrippedFields(db, { ingestionService, strippedFields = [], sensorId = null } = {}) {
+  if (!Array.isArray(strippedFields) || !strippedFields.length) return false;
+  const fieldNames = strippedFields.filter((field) => typeof field === 'string' && LISTABLE_FIELD_NAME.test(field));
+  const unlistedFieldCount = strippedFields.length - fieldNames.length;
+  try {
+    const store = typeof db === 'function' ? await db() : db;
+    auditLogger.init(store);
+    await auditLogger.log({
+      action: 'TELEMETRY_PII_STRIPPED',
+      resourceType: 'TelemetryReading',
+      resourceId: sensorId ? String(sensorId) : null,
+      status: 'warning',
+      severity: 'warning',
+      module: 'Segurança',
+      source: AUDIT_SOURCE_BY_SERVICE[ingestionService] || 'system',
+      message: `Leitura de telemetria recebida com ${strippedFields.length} campo(s) fora do contrato, removidos antes de hash, triagem e armazenamento (RULE-025, RF009 AC8)`,
+      payload: { ingestionService: ingestionService || null, fieldNames, unlistedFieldCount },
+    });
+    return true;
+  } catch (error) {
+    logger.error(`[ISO20387][TELEMETRY] Falha ao registrar a auditoria de segurança dos campos removidos: ${error.message || error}`);
+    return false;
+  }
+}
+
+// RF009 AC8 (#1540): the issue that flags a reading whose non-contract
+// fields were stripped. The reading is kept (quarantined, as a clock drift
+// is), since cold-chain availability wins over refusing it.
+function personalDataDraftsOf(strippedFields = []) {
+  if (!strippedFields.length) return [];
+  const listed = strippedFields.filter((field) => LISTABLE_FIELD_NAME.test(field));
+  const unlisted = strippedFields.length - listed.length;
+  const names = [...listed, ...(unlisted ? [`${unlisted} campo(s) de nome não listável`] : [])].join(', ');
+  return [{
+    issueCode: 'personal_data_stripped',
+    severity: 'error',
+    fieldPath: listed.length ? listed.join(',') : null,
+    details: `Campos fora do contrato da leitura descartados sem armazenamento, por poderem conter dados pessoais: ${names} (RF009 AC8, RNF004 C7)`,
+    disposition: 'quarantined',
+  }];
+}
+
+/**
+ * RNF004 C4 (#1521): whether the payloadHash a client sent matches the
+ * reading's own (identity.payloadHash, the SHA-256 of the canonical contract
+ * fields received). `absent` when it sent none (null counts as none),
+ * `match` only for a text equal to it (case-insensitive hex, trimmed), and
+ * `mismatch` for every other value, a number or an empty text included.
+ */
+function payloadHashCheckOf(clientPayloadHash, identity) {
+  if (clientPayloadHash === undefined || clientPayloadHash === null) return 'absent';
+  if (typeof clientPayloadHash === 'string' && typeof identity?.payloadHash === 'string'
+    && clientPayloadHash.trim().toLowerCase() === identity.payloadHash) return 'match';
+  return 'mismatch';
+}
+
+// RNF004 C4 (#1521): a message whose payloadHash does not match is corrupted,
+// so it is refused, as an implausible value is. Only `absent` and `match`
+// add no issue.
+function payloadHashDraftsOf(payloadHashCheck) {
+  if (payloadHashCheck === 'absent' || payloadHashCheck === 'match') return [];
+  return [{
+    issueCode: 'payload_hash_mismatch',
+    severity: 'error',
+    fieldPath: 'payloadHash',
+    details: 'payloadHash enviado não confere com o SHA-256 do payload canônico recebido: mensagem corrompida (RNF004 C4)',
+    disposition: 'rejected',
+  }];
+}
+
 /**
  * RF009 AC7 (#1317): the TelemetryValidationIssues a reading carries, as
  * drafts without their ingestion event.
@@ -258,14 +379,14 @@ function clientContractFieldsOf(payload) {
  *   a gap the missing-reading monitoring sees.
  * A payload without a value is left to the path's own required-field check.
  */
-function validationIssuesOf(identity, payload = {}) {
+function validationIssuesOf(identity, payload = {}, { clockDriftLimitMs = CLOCK_SKEW_TOLERANCE_MS } = {}) {
   const issues = [];
   if (identity?.clockStatus === 'drift') {
     issues.push({
       issueCode: 'clock_drift',
       severity: 'error',
       fieldPath: 'observedAt',
-      details: `observedAt ${identity.observedAt.toISOString()} difere de receivedAt ${identity.receivedAt.toISOString()} além da tolerância de ${CLOCK_SKEW_TOLERANCE_MS / 60000} minutos`,
+      details: `observedAt ${identity.observedAt.toISOString()} difere de receivedAt ${identity.receivedAt.toISOString()} além da tolerância de ${clockDriftLimitMs / 60000} minutos`,
       disposition: 'quarantined',
     });
   }
@@ -398,7 +519,7 @@ async function readingBindingOf(storeOf, identity, payload = {}) {
  * quarantined one returns its issues and goes on to be stored. A failed
  * issue write is logged and does not change the reading's fate.
  */
-async function screenReading(db, identity, payload = {}) {
+async function screenReading(db, identity, payload = {}, { strippedFields = [], payloadHashCheck = 'absent' } = {}) {
   // `db` may be a function resolving it, so a path that opens its
   // connection lazily opens it once, here.
   let store;
@@ -410,7 +531,15 @@ async function screenReading(db, identity, payload = {}) {
   const binding = await readingBindingOf(storeOf, identity, payload);
   identity.datastreamId = binding.datastreamId;
   identity.storageLocationId = binding.storageLocationId;
-  const drafts = [...validationIssuesOf(identity, payload), ...binding.drafts];
+  // RNF025 AC6 (#1520): the clock status at the configured drift limit.
+  // A reading with no device time stays `unknown` and reads no
+  // configuration. storeOf, not db, so a lazy db still resolves once.
+  let clockDriftLimitMs = CLOCK_SKEW_TOLERANCE_MS;
+  if (identity.clockStatus !== 'unknown') {
+    clockDriftLimitMs = await resolveClockDriftLimitMs(storeOf);
+    identity.clockStatus = clockStatusOf(identity.observedAt, identity.receivedAt, clockDriftLimitMs);
+  }
+  const drafts = [...payloadHashDraftsOf(payloadHashCheck), ...validationIssuesOf(identity, payload, { clockDriftLimitMs }), ...binding.drafts, ...personalDataDraftsOf(strippedFields)];
   if (!drafts.length) return [];
 
   const rejected = drafts.filter((draft) => draft.disposition === 'rejected');
@@ -437,8 +566,9 @@ async function screenReading(db, identity, payload = {}) {
 
   if (rejected.length) {
     const error = validationError(rejected.map((issue) => issue.details).join('; '));
-    // The first rejecting issue's code: `invalid_value`, `unbound_datastream`,
-    // `device_not_registered` or `device_unusable`.
+    // The first rejecting issue's code: `payload_hash_mismatch` (#1521, drafted
+    // first), `invalid_value`, `unbound_datastream`, `device_not_registered`
+    // or `device_unusable`.
     error.auditReason = rejected[0].issueCode;
     error.details = rejected.map((issue) => issue.details);
     throw error;
@@ -452,6 +582,10 @@ module.exports = {
   findClientReplay,
   recordClientReplay,
   clientContractFieldsOf,
+  splitContractFields,
+  auditStrippedFields,
+  IOT_API_READING_FIELDS,
+  payloadHashCheckOf,
   validationIssuesOf,
   screenReading,
   canonicalJson,

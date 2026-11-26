@@ -1,15 +1,40 @@
 import { InputHTMLAttributes, useId } from 'react';
-import './Input.css';
-import { getMaxLengthFor, getMinLengthFor, getPatternFor } from '../../config/constants/validation.constants';
+import { Input as ShadcnInput } from '@/components/shadcn/input';
+import { Label } from '@/components/shadcn/label';
+import { cn } from '@/lib/utils';
+import {
+  getMaxLengthFor,
+  getMinLengthFor,
+  getPatternFor,
+} from '../../config/constants/validation.constants';
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
   helperText?: string;
-  constraintKey?: 'name' | 'username' | 'password' | 'patientId' | 'cpf' | 'mfaCode' | 'phone' | 'birthDate' | 'email' | 'genericText';
+  constraintKey?:
+    | 'name'
+    | 'username'
+    | 'password'
+    | 'patientId'
+    | 'cpf'
+    | 'mfaCode'
+    | 'phone'
+    | 'birthDate'
+    | 'email'
+    | 'genericText';
 }
 
-export default function Input({ label, error, helperText, className = '', id, name, constraintKey, ...props }: InputProps) {
+export default function Input({
+  label,
+  error,
+  helperText,
+  className = '',
+  id,
+  name,
+  constraintKey,
+  ...props
+}: InputProps) {
   const generatedId = useId();
   const inputId = id || generatedId;
   const inputName = name || inputId;
@@ -18,16 +43,16 @@ export default function Input({ label, error, helperText, className = '', id, na
   const pattern = props.pattern ?? (constraintKey ? getPatternFor(constraintKey) : undefined);
 
   return (
-    <div className="input-group">
-      {label && (
-        <label htmlFor={inputId} className="input-label mb-1.5 text-sm font-semibold text-gray-700">
+    <div className="flex w-full flex-col gap-1.5">
+      {label ? (
+        <Label htmlFor={inputId} className="text-sm font-medium text-foreground">
           {label}
-        </label>
-      )}
-      <input
+        </Label>
+      ) : null}
+      <ShadcnInput
         id={inputId}
         name={inputName}
-        className={`input w-full rounded-lg border border-gray-300 px-3 py-2 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${error ? 'input-error' : ''} ${className}`}
+        className={cn(error && 'border-destructive focus-visible:ring-destructive', className)}
         aria-label={label || props.placeholder || 'Campo de entrada'}
         aria-describedby={error ? `${inputId}-error` : helperText ? `${inputId}-helper` : undefined}
         maxLength={maxLength}
@@ -35,18 +60,16 @@ export default function Input({ label, error, helperText, className = '', id, na
         pattern={pattern instanceof RegExp ? pattern.source : pattern}
         {...(props as any)}
       />
-      {error && (
-        <span id={`${inputId}-error`} className="input-error-message" role="alert">
+      {error ? (
+        <span id={`${inputId}-error`} className="text-xs text-destructive" role="alert">
           {error}
         </span>
-      )}
-      {helperText && !error && (
-        <span id={`${inputId}-helper`} className="input-helper-text">
+      ) : null}
+      {helperText && !error ? (
+        <span id={`${inputId}-helper`} className="text-xs text-muted-foreground">
           {helperText}
         </span>
-      )}
+      ) : null}
     </div>
   );
 }
-
-

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { Fragment, useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
@@ -30,10 +30,36 @@ import { extractPayloadSummary } from '../utils/logFormatter';
 import { formatEntityID } from '../utils/entityIdFormatter';
 import { useLanguage } from '../contexts/LanguageContext';
 import SessionAuditPanel from '../components/audit/SessionAuditPanel';
-import './LogsPage.css';
 
-type SortField = 'timestamp' | 'userName' | 'action' | 'entity' | 'severity' | 'result' | 'ipSource' | 'module';
+type SortField = 'timestamp' | 'action' | 'severity' | 'result';
 type SortOrder = 'asc' | 'desc';
+
+// The one reader of a log's time for the date filters, the sort and the
+// table (#1429): timestampISO, else timestamp, else dateTime, with a
+// serialized { _type: 'Date', _value } unwrapped. null when it does not parse,
+// or when the serialized _value is null or undefined (not the epoch).
+function readLogDate(log: Log): Date | null {
+  const raw: any = log.timestampISO || log.timestamp || log.dateTime;
+  if (!raw) return null;
+  const value = typeof raw === 'object' && !(raw instanceof Date) && raw._type === 'Date' ? raw._value : raw;
+  if (value === null || value === undefined) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return isNaN(date.getTime()) ? null : date;
+}
+
+// The one reader of a log's id for its row key and its detail route (#1451):
+// a string or number as is, a serialized { _type: 'ObjectId', _value } or a
+// bare { _value } unwrapped, and an extended-JSON { $oid } read as its hex.
+// null for anything else, so a plain object never becomes "[object Object]".
+function readLogId(id: unknown): string | null {
+  if (id === null || id === undefined || id === '') return null;
+  if (typeof id !== 'object') return String(id);
+  const obj = id as Record<string, unknown>;
+  if (obj._type === 'ObjectId') return typeof obj._value === 'string' && obj._value ? obj._value : null;
+  if (obj._value) return String(obj._value);
+  if (typeof obj.$oid === 'string' && obj.$oid) return obj.$oid;
+  return null;
+}
 
 export default function LogsPage() {
   const navigate = useNavigate();
@@ -167,23 +193,8 @@ export default function LogsPage() {
         if (!isNaN(start.getTime())) {
           filtered = filtered.filter(log => {
             try {
-              let logDate: Date | null = null;
-              if (log.timestampISO) {
-                logDate = new Date(log.timestampISO);
-              } else if (log.timestamp) {
-                if (typeof log.timestamp === 'string') {
-                  logDate = new Date(log.timestamp);
-                } else if (log.timestamp instanceof Date) {
-                  logDate = log.timestamp;
-                } else if (typeof log.timestamp === 'object' && (log.timestamp as any)?._type === 'Date') {
-                  logDate = new Date((log.timestamp as any)._value);
-                } else {
-                  logDate = new Date(log.timestamp);
-                }
-              } else if (log.dateTime) {
-                logDate = typeof log.dateTime === 'string' ? new Date(log.dateTime) : new Date(log.dateTime);
-              }
-              return logDate && !isNaN(logDate.getTime()) && logDate >= start;
+              const logDate = readLogDate(log);
+              return logDate !== null && logDate >= start;
             } catch (e) {
               return false;
             }
@@ -200,23 +211,8 @@ export default function LogsPage() {
         if (!isNaN(end.getTime())) {
           filtered = filtered.filter(log => {
             try {
-              let logDate: Date | null = null;
-              if (log.timestampISO) {
-                logDate = new Date(log.timestampISO);
-              } else if (log.timestamp) {
-                if (typeof log.timestamp === 'string') {
-                  logDate = new Date(log.timestamp);
-                } else if (log.timestamp instanceof Date) {
-                  logDate = log.timestamp;
-                } else if (typeof log.timestamp === 'object' && (log.timestamp as any)?._type === 'Date') {
-                  logDate = new Date((log.timestamp as any)._value);
-                } else {
-                  logDate = new Date(log.timestamp);
-                }
-              } else if (log.dateTime) {
-                logDate = typeof log.dateTime === 'string' ? new Date(log.dateTime) : new Date(log.dateTime);
-              }
-              return logDate && !isNaN(logDate.getTime()) && logDate <= end;
+              const logDate = readLogDate(log);
+              return logDate !== null && logDate <= end;
             } catch (e) {
               return false;
             }
@@ -235,30 +231,7 @@ export default function LogsPage() {
       switch (sortField) {
         case 'timestamp':
           try {
-            const getTime = (log: Log) => {
-              if (log.timestampISO) {
-                const d = new Date(log.timestampISO);
-                return isNaN(d.getTime()) ? 0 : d.getTime();
-              }
-              if (log.timestamp) {
-                let d: Date;
-                if (typeof log.timestamp === 'string') {
-                  d = new Date(log.timestamp);
-                } else if (log.timestamp instanceof Date) {
-                  d = log.timestamp;
-                } else if (typeof log.timestamp === 'object' && (log.timestamp as any)?._type === 'Date') {
-                  d = new Date((log.timestamp as any)._value || log.timestamp);
-                } else {
-                  d = new Date(log.timestamp);
-                }
-                return isNaN(d.getTime()) ? 0 : d.getTime();
-              }
-              if (log.dateTime) {
-                const d = typeof log.dateTime === 'string' ? new Date(log.dateTime) : new Date(log.dateTime);
-                return isNaN(d.getTime()) ? 0 : d.getTime();
-              }
-              return 0;
-            };
+            const getTime = (log: Log) => readLogDate(log)?.getTime() ?? 0;
             aValue = getTime(a);
             bValue = getTime(b);
           } catch (e) {
@@ -266,17 +239,9 @@ export default function LogsPage() {
             bValue = 0;
           }
           break;
-        case 'userName':
-          aValue = (a.userName || '').toLowerCase();
-          bValue = (b.userName || '').toLowerCase();
-          break;
         case 'action':
           aValue = (a.action || '').toLowerCase();
           bValue = (b.action || '').toLowerCase();
-          break;
-        case 'entity':
-          aValue = (a.entity || '').toLowerCase();
-          bValue = (b.entity || '').toLowerCase();
           break;
         case 'severity':
           aValue = (a.severity || '').toLowerCase();
@@ -286,16 +251,6 @@ export default function LogsPage() {
           aValue = (a.result || '').toLowerCase();
           bValue = (b.result || '').toLowerCase();
           break;
-        case 'ipSource':
-          aValue = (a.ipSource || a.sourceIP || '').toLowerCase();
-          bValue = (b.ipSource || b.sourceIP || '').toLowerCase();
-          break;
-        case 'module':
-          aValue = (a.module || '').toLowerCase();
-          bValue = (b.module || '').toLowerCase();
-          break;
-        default:
-          return 0;
       }
 
       if (aValue < bValue) return sortOrder === 'asc' ? -1 : 1;
@@ -386,7 +341,7 @@ export default function LogsPage() {
     }
   };
 
-  const handleExport = async (format: 'csv' | 'xlsx') => {
+  const handleExport = async () => {
     setExporting(true);
     setExportError(null);
     
@@ -394,9 +349,7 @@ export default function LogsPage() {
       const queryFilters: any = { ...filters };
       if (searchTerm) queryFilters.search = searchTerm;
 
-      const response = format === 'xlsx'
-        ? await logService.exportExcel(queryFilters)
-        : await logService.exportCSV(queryFilters);
+      const response = await logService.exportExcel(queryFilters);
 
       // Verifica se a resposta é realmente um blob ou se é JSON de erro
       const contentType = String(response.headers['content-type'] || '');
@@ -427,18 +380,14 @@ export default function LogsPage() {
       }
 
       const blob = new Blob([response.data], {
-        type: format === 'xlsx' 
-          ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-          : 'text/csv;charset=utf-8;'
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
       
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       const dateStr = new Date().toISOString().split('T')[0];
-      const fileName = format === 'xlsx' 
-        ? `logs_${dateStr}.xlsx` 
-        : `logs_${dateStr}.csv`;
+      const fileName = `logs_${dateStr}.xlsx`;
       link.download = fileName;
       document.body.appendChild(link);
       link.click();
@@ -546,39 +495,9 @@ export default function LogsPage() {
 
   const formatTimestamp = (log: Log) => {
     try {
-      let date: Date | null = null;
-
-      // Tenta usar timestampISO primeiro e sempre renderiza em timezone local do cliente.
-      if (log.timestampISO) {
-        date = new Date(log.timestampISO);
-      }
-      // Tenta usar timestamp
-      else if (log.timestamp) {
-        if (typeof log.timestamp === 'string') {
-          date = new Date(log.timestamp);
-        } else if (log.timestamp instanceof Date) {
-          date = log.timestamp;
-        } else if (typeof log.timestamp === 'object' && (log.timestamp as any)?._type === 'Date') {
-          // Se for um objeto Date serializado
-          date = new Date((log.timestamp as any)._value || log.timestamp);
-        } else {
-          date = new Date(log.timestamp);
-        }
-      }
-      // Tenta usar dateTime
-      else if (log.dateTime) {
-        if (typeof log.dateTime === 'string') {
-          date = new Date(log.dateTime);
-        } else if (log.dateTime instanceof Date) {
-          date = log.dateTime;
-        } else if (typeof log.dateTime === 'object' && (log.dateTime as any)?._type === 'Date') {
-          date = new Date((log.dateTime as any)._value || log.dateTime);
-        } else {
-          date = new Date(log.dateTime);
-        }
-      }
-      
-      if (!date || isNaN(date.getTime())) return 'N/A';
+      // Renderiza sempre em timezone local do cliente.
+      const date = readLogDate(log);
+      if (!date) return 'N/A';
 
       return new Intl.DateTimeFormat(undefined, {
         year: 'numeric',
@@ -786,7 +705,7 @@ export default function LogsPage() {
   }, [logs]);
 
   return (
-    <div className="page logs-page">
+    <div className="page-shell logs-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t('logs.title')}</h1>
@@ -803,7 +722,7 @@ export default function LogsPage() {
           </Button>
           <Button
             variant="secondary"
-            onClick={() => handleExport('xlsx')}
+            onClick={() => handleExport()}
             disabled={exporting || loading}
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
             title={t('logs.exportExcel')}
@@ -1142,21 +1061,8 @@ export default function LogsPage() {
                   </tr>
                 ) : (
                   filteredLogs.map((log, index) => {
-                    // Extrai ID de forma segura, tratando ObjectIds serializados
-                    const getIdString = (id: any): string => {
-                      if (!id) return '';
-                      if (typeof id === 'string') return id;
-                      if (typeof id === 'object' && id._type === 'ObjectId') {
-                        return id._value || String(id);
-                      }
-                      if (typeof id === 'object' && id.toString) {
-                        return id.toString();
-                      }
-                      return String(id);
-                    };
-                    
-                    const rawId = log._id || log.logID;
-                    const logId = getIdString(rawId) || `log-${index}`;
+                    const navId = readLogId(log._id || log.logID);
+                    const logId = navId ?? `log-${index}`;
                     const isMessageExpanded = expandedMessages.has(logId);
                     const isRowExpanded = expandedRows.has(logId);
                     const message = log.message || 'N/A';
@@ -1179,8 +1085,8 @@ export default function LogsPage() {
                     }
                     
                     return (
-                      <>
-                        <tr 
+                      <Fragment key={logId}>
+                        <tr
                           key={logId}
                           className={`log-row severity-${(log.severity || 'info').toLowerCase()} ${isRowExpanded ? 'expanded' : ''}`}
                         >
@@ -1438,23 +1344,6 @@ export default function LogsPage() {
                                       e.preventDefault();
                                       e.stopPropagation();
                                       try {
-                                        // Extrai ID de forma segura para navegação
-                                        const getIdForNavigation = (id: any): string | null => {
-                                          if (!id) return null;
-                                          if (typeof id === 'string') return id;
-                                          if (typeof id === 'object' && (id as any)?._type === 'ObjectId') {
-                                            return (id as any)._value || null;
-                                          }
-                                          if (typeof id === 'object' && (id as any)?._value) {
-                                            return String((id as any)._value);
-                                          }
-                                          if (typeof id === 'object' && (id as any).toString) {
-                                            return (id as any).toString();
-                                          }
-                                          return String(id);
-                                        };
-                                        
-                                        const navId = getIdForNavigation(log._id || log.logID);
                                         if (navId) {
                                           navigate(`/logs/${navId}`);
                                         } else {
@@ -1475,7 +1364,7 @@ export default function LogsPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })
                 )}

@@ -28,6 +28,7 @@ const notificationServicePath = require.resolve('../../src/services/notification
 const iotStreamingServicePath = require.resolve('../../src/services/iot-streaming.service');
 const loggerPath = require.resolve('../../src/utils/logger');
 const neo4jConnectionPath = require.resolve('../../src/infrastructure/database/neo4j/connection');
+const jobMetricsPath = require.resolve('../../src/infrastructure/metrics/jobMetrics');
 
 let FakeWorker;
 let fakeWorkerInstances;
@@ -48,6 +49,10 @@ let fakeIotStreamingService;
 let fakeDb;
 let fakeLogger;
 let fakeNeo4jConnection;
+// #1468: what the fake withJobMetrics saw per processed job. The real
+// recordJob would add an updateOne to fakeDb's shared collection; its own
+// behaviour is proven in tests/unit/infrastructure/metrics/jobMetrics.test.js.
+let metricCalls;
 
 function makeWorkerResult(overrides = {}) {
   return {
@@ -257,6 +262,20 @@ function installFakes() {
     loaded: true,
     exports: fakeNeo4jConnection,
   };
+
+  metricCalls = [];
+  const { currentRequestId } = require('../../src/utils/requestContext');
+  require.cache[jobMetricsPath] = {
+    id: jobMetricsPath,
+    filename: jobMetricsPath,
+    loaded: true,
+    exports: {
+      withJobMetrics: (worker, getDb, processor) => (job, ...rest) => {
+        metricCalls.push({ worker, job: job && job.name, requestId: currentRequestId() });
+        return processor(job, ...rest);
+      },
+    },
+  };
 }
 
 function freshImportWorkerModule() {
@@ -283,6 +302,7 @@ function clearAllCaches() {
   delete require.cache[iotStreamingServicePath];
   delete require.cache[loggerPath];
   delete require.cache[neo4jConnectionPath];
+  delete require.cache[jobMetricsPath];
 }
 
 describe('workers/import-worker', () => {
@@ -371,6 +391,69 @@ describe('workers/import-worker', () => {
       } finally {
         delete process.env.WORKER_CONCURRENCY;
       }
+    });
+  });
+
+  // RF022 AC4/AC9, RNF014 C7: with FOUNDATION_READINESS_REQUIRED, initWorker
+  // consumes no queue unless the newest ReadinessReport is ready for this
+  // build's release. The real readiness module reads an in-memory db.
+  describe('#1551 initWorker Foundation readiness gate', () => {
+    const env = require('../../src/config/env');
+    const { createFakeDb } = require('./foundation/helpers/fake-db');
+    const ReadinessReportModel = require('../../src/models/ReadinessReport');
+    const { CANONICAL_MODEL_RELEASE_ID } = require('../../src/foundation/readiness');
+    let requiredBefore;
+
+    beforeEach(() => {
+      requiredBefore = env.FOUNDATION_READINESS_REQUIRED;
+      env.FOUNDATION_READINESS_REQUIRED = true;
+      process.env.NODE_ENV = 'test';
+    });
+    afterEach(() => {
+      env.FOUNDATION_READINESS_REQUIRED = requiredBefore;
+    });
+
+    async function dbWithReport(gateResults, canonicalModelReleaseId = CANONICAL_MODEL_RELEASE_ID) {
+      const db = createFakeDb();
+      if (gateResults) {
+        await db.collection('readinessReports').insertOne(ReadinessReportModel.create({
+          foundationDataRunId: 'run-1',
+          canonicalModelReleaseId,
+          environment: env.NODE_ENV,
+          gateResults,
+        }));
+      }
+      return db;
+    }
+
+    async function expectRefusal(db) {
+      fakeMongo.connectDB.mockResolvedValue(db);
+      const importWorker = freshImportWorkerModule();
+
+      await expect(importWorker.initWorker()).rejects.toMatchObject({ name: 'FoundationNotReadyError' });
+      expect(FakeWorker).not.toHaveBeenCalled();
+      expect(fakeQueueConfig.initRedis).not.toHaveBeenCalled();
+      expect(fakeMongooseConnection.connectMongoDB).not.toHaveBeenCalled();
+    }
+
+    it('refuses with no ReadinessReport before any Worker is built', async () => {
+      await expectRefusal(await dbWithReport(null));
+    });
+
+    it('refuses a blocked ReadinessReport before any Worker is built', async () => {
+      await expectRefusal(await dbWithReport([{ gate: 'version', result: 'fail', p0: true }]));
+    });
+
+    it('refuses a ready ReadinessReport of another release before any Worker is built', async () => {
+      await expectRefusal(await dbWithReport([{ gate: 'version', result: 'pass', p0: true }], 'release-1.3.0'));
+    });
+
+    it('builds both Workers on a ready ReadinessReport for this release', async () => {
+      fakeMongo.connectDB.mockResolvedValue(await dbWithReport([{ gate: 'version', result: 'pass', p0: true }]));
+      const importWorker = freshImportWorkerModule();
+
+      await expect(importWorker.initWorker()).resolves.toBeTruthy();
+      expect(FakeWorker).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -477,6 +560,28 @@ describe('workers/import-worker', () => {
       expect(seen).toBe('req-job-0002');
     });
 
+    // #1468: RNF015 C1/C3 -- each processed job is recorded under its queue
+    // and name, inside its request context.
+    it('#1468 records the processed job as import-queue:<name> under its request id', async () => {
+      const processor = await getProcessor();
+      const job = {
+        id: 'j-metric',
+        name: 'import',
+        data: {
+          jobID: 'j-metric',
+          dataType: 'patients',
+          filePath: '/tmp/p.csv',
+          fileName: 'p.csv',
+          options: {},
+          requestId: 'req-job-0003',
+        },
+      };
+
+      await processor(job);
+
+      expect(metricCalls).toEqual([{ worker: 'import-queue', job: 'import', requestId: 'req-job-0003' }]);
+    });
+
     it('routes "samples" to the sample worker with userID and a connected Neo4j driver threaded through options (#483)', async () => {
       const processor = await getProcessor();
       const job = {
@@ -566,7 +671,8 @@ describe('workers/import-worker', () => {
 
       expect(fakeIotStreamingService.processTemperatureData).toHaveBeenCalledWith(
         fakeDb,
-        { sensorId: 's1', value: 4.2 }
+        { sensorId: 's1', value: 4.2 },
+        { strippedFields: [] }
       );
       expect(fakeTemperatureWorker.process).not.toHaveBeenCalled();
       expect(result).toEqual({
@@ -578,6 +684,60 @@ describe('workers/import-worker', () => {
         fhirResourcesUpdated: 0,
         fhirResources: [],
       });
+    });
+
+    // RULE-025 (#1582): the queued job carries the names of the fields the
+    // socket handler stripped, so processTemperatureData audits and flags them.
+    it("passes the queued job's stripped field names on and drops non-text entries", async () => {
+      const processor = await getProcessor();
+      const job = {
+        id: 'j6b',
+        name: 'import',
+        data: {
+          jobID: 'j6b',
+          userID: 'u1',
+          dataType: 'temperature-iot',
+          fileName: 'iot.json',
+          temperatureData: { sensorId: 's1', value: 4.2 },
+          strippedFields: ['cpf', 7, 'patientName'],
+        },
+      };
+
+      await processor(job);
+
+      expect(fakeIotStreamingService.processTemperatureData).toHaveBeenCalledWith(
+        fakeDb,
+        { sensorId: 's1', value: 4.2 },
+        { strippedFields: ['cpf', 'patientName'] }
+      );
+    });
+
+    // RULE-025 (#1582): a non-listable name is queued only as a count; the
+    // worker passes one unnamed entry per such field, so the reading's issue
+    // counts it without naming it.
+    it("rebuilds one unnamed entry per counted non-listable field and ignores a bad count", async () => {
+      const processor = await getProcessor();
+      const jobOf = (id, unlistedFieldCount) => ({
+        id,
+        name: 'import',
+        data: {
+          jobID: id,
+          userID: 'u1',
+          dataType: 'temperature-iot',
+          fileName: 'iot.json',
+          temperatureData: { sensorId: 's1', value: 4.2 },
+          strippedFields: ['patientName'],
+          unlistedFieldCount,
+        },
+      });
+
+      await processor(jobOf('j6c', 2));
+      await processor(jobOf('j6d', '3'));
+
+      expect(fakeIotStreamingService.processTemperatureData.mock.calls.map((call) => call[2])).toEqual([
+        { strippedFields: ['patientName', '', ''] },
+        { strippedFields: ['patientName'] },
+      ]);
     });
 
     it('on success: updates job status to completed, saves metrics, logs import, and notifies completion', async () => {
@@ -1226,6 +1386,20 @@ describe('workers/import-worker', () => {
 
       expect(result).toBeNull();
       expect(fakeNotificationService.processConsentNotificationJob).not.toHaveBeenCalled();
+    });
+
+    it('#1468 records a notification job as notification-queue:<name> under a fresh id when it carries none', async () => {
+      process.env.NODE_ENV = 'test';
+      const { WELL_FORMED } = require('../../src/utils/requestContext');
+      const importWorker = freshImportWorkerModule();
+      await importWorker.initWorker();
+      const notificationProcessor = fakeWorkerInstances[1].processor;
+
+      await notificationProcessor({ name: 'consent-notification' });
+
+      expect(metricCalls).toHaveLength(1);
+      expect(metricCalls[0]).toMatchObject({ worker: 'notification-queue', job: 'consent-notification' });
+      expect(WELL_FORMED.test(metricCalls[0].requestId)).toBe(true);
     });
   });
 });

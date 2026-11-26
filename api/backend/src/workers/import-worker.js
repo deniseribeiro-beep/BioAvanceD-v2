@@ -6,6 +6,7 @@ const { initRedis } = require('../config/queue');
 const { validateRedisOnly } = require('../config/validateEnv');
 const logger = require('../utils/logger');
 const { withJobRequestContext } = require('../utils/requestContext');
+const { withJobMetrics } = require('../infrastructure/metrics/jobMetrics');
 const patientWorker = require('./workers/patient-worker');
 const sampleWorker = require('./workers/sample-worker');
 const resultWorker = require('./workers/result-worker');
@@ -14,6 +15,8 @@ const importAsyncService = require('../services/import-async.service');
 const batchValidationEngine = require('../services/batch-validation-engine.service');
 const { connectDB } = require('../database/mongo');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
+const env = require('../config/env');
+const { assertReadiness } = require('../foundation/readiness');
 
 // #1040: observability-only, matching this file's own fatal-error style
 // (logger.error + process.exit(1), same as the require.main block's
@@ -76,6 +79,15 @@ async function initWorker() {
     // Conecta ao banco
     db = await connectDB();
 
+    // RF022 AC4/AC9, RNF014 C7 (#1551): as the API does, the worker consumes
+    // no queue unless the newest ReadinessReport is `ready` for this build's
+    // release. A refusal throws into the catch below, which rethrows; the
+    // entry points (worker.js, the require.main block) exit 1.
+    if (env.FOUNDATION_READINESS_REQUIRED) {
+      const report = await assertReadiness(db, { environment: env.NODE_ENV });
+      logger.info(`[RF022] ReadinessReport ${report.readinessReportId} ready (${report.canonicalModelReleaseId})`);
+    }
+
     // #826: connectDB() abre apenas a conexão do driver nativo. Um modelo
     // Mongoose sem conexão enfileira cada operação e a rejeita após 10s, em
     // silêncio. #830 levou StagingImport para o driver nativo; o único modelo
@@ -102,7 +114,9 @@ async function initWorker() {
     // Cria worker
     worker = new Worker(
       'import-queue',
-      withJobRequestContext(async (job) => {
+      // #1468 (RNF015 C1/C3): the context is outermost, so the metrics record
+      // carries the job's correlation id.
+      withJobRequestContext(withJobMetrics('import-queue', () => db, async (job) => {
         const { jobID, userID, dataType, filePath, fileName, options } = job.data;
         const dataTypeNormalized = (dataType || '').toString().trim().toLowerCase();
         const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot']);
@@ -210,7 +224,13 @@ async function initWorker() {
               // Processa dados de IoT streaming
               const iotStreamingService = require('../services/iot-streaming.service');
               const temperatureData = job.data.temperatureData;
-              await iotStreamingService.processTemperatureData(db, temperatureData);
+              // RULE-025 (#1582): the listable names of the fields stripped at
+              // receipt, and one unlisted entry ('') per other field, so the
+              // reading's issue counts them without naming them.
+              const listedFields = Array.isArray(job.data.strippedFields) ? job.data.strippedFields.filter((field) => typeof field === 'string') : [];
+              const unlistedFieldCount = Number.isInteger(job.data.unlistedFieldCount) && job.data.unlistedFieldCount > 0 ? job.data.unlistedFieldCount : 0;
+              const strippedFields = [...listedFields, ...Array(unlistedFieldCount).fill('')];
+              await iotStreamingService.processTemperatureData(db, temperatureData, { strippedFields });
               result = {
                 total: 1,
                 success: 1,
@@ -401,7 +421,7 @@ async function initWorker() {
 
           throw error;
         }
-      }),
+      })),
       {
         connection,
         // #971: default 1, NOT 2. Every duplicate check on the import path is a
@@ -455,7 +475,7 @@ async function initWorker() {
     if (!notificationWorker) {
       notificationWorker = new Worker(
         'notification-queue',
-        withJobRequestContext(async (job) => {
+        withJobRequestContext(withJobMetrics('notification-queue', () => db, async (job) => {
           if (job.name !== 'consent-notification') {
             logger.warn(`Job desconhecido em notification-queue: ${job.name}`);
             return null;
@@ -463,7 +483,7 @@ async function initWorker() {
 
           const notificationService = getNotificationService();
           return notificationService.processConsentNotificationJob(job.data, db);
-        }),
+        })),
         {
           connection,
           concurrency: parseInt(process.env.NOTIFICATION_WORKER_CONCURRENCY || '3', 10),

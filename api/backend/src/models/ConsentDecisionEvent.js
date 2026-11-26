@@ -12,7 +12,7 @@ const isNonEmptyString = (value) => typeof value === 'string' && value.trim().le
 // The dictionary marks each vocabulary "internal governed" and names only an
 // example: V2E-0124 `paper`, V2E-0126 `participant`, V2E-0127 `basic`,
 // V2E-0128 `accepted`. The rest name the paths that record a manifestation.
-const CHANNELS = ['paper', 'electronic_link', 'staff_portal', 'fhir_import'];
+const CHANNELS = ['paper', 'electronic_link', 'staff_portal', 'fhir_import', 'term_expiry'];
 const SIGNER_ROLES = ['participant', 'legal_representative', 'staff_on_behalf'];
 // basic: no authentication beyond the signature; token: a signed consent
 // link; session: an authenticated staff session.

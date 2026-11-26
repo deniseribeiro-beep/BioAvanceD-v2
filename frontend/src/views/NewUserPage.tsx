@@ -13,7 +13,6 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { validatePassword } from '../utils/passwordValidator';
 import { getPasswordIssues, passwordRequirementItems } from '../utils/passwordRules';
 import { usePasswordPolicy } from '../hooks/usePasswordPolicy';
-import './NewUserPage.css';
 
 /**
  * Monta o payload a ser enviado ao backend a partir do formData bruto:
@@ -125,7 +124,9 @@ export default function NewUserPage() {
       organizationId: null,
       username: '',
       password: '',
-      accessType: 1,
+      // #1464: the access type of the role the select shows; 1 registered an
+      // external user while the form said Técnico.
+      accessType: getAccessTypeForRole('Técnico'),
       roleName: 'Técnico' as RoleName,
       accessIDs: [],
       status: 'Ativo',

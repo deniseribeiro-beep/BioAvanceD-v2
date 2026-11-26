@@ -18,7 +18,6 @@ import {
   isSpecimenBlocked,
   resolveQuantityStatus,
 } from '../utils/sampleHelpers';
-import './SampleWithdrawalReturnPage.css';
 
 // #539: shared with every other specimenStatus reader (SampleDetailsPage,
 // ReportViewPage, ...) via sampleHelpers.ts — re-exported here so this
@@ -130,8 +129,7 @@ export default function SampleWithdrawalReturnPage() {
     return match?.label || String(quality);
   };
 
-  const getRcsQualityLabel = (currentSample: Sample | null) => {
-    if (!currentSample) return '-';
+  const getRcsQualityLabel = (currentSample: Sample) => {
     const rcs = currentSample.rcs_evaluation || currentSample;
     const grade = String(rcs.final_grade || '').trim();
     const score = rcs.rcs_score ?? null;
@@ -170,14 +168,15 @@ export default function SampleWithdrawalReturnPage() {
   });
 
   // Buscar amostra por código de barras
-  const handleSearch = async () => {
+  // #1431: the reload after a withdrawal or return keeps its success message.
+  const handleSearch = async (options: { keepMessage?: boolean } = {}) => {
     if (!searchBarcode.trim()) {
       setMessage({ type: 'error', text: t('samples.barcodeRequired') || 'Código de barras é obrigatório' });
       return;
     }
 
     setSearchLoading(true);
-    setMessage(null);
+    if (!options.keepMessage) setMessage(null);
     setSample(null);
     setPatientInfo(null);
     setMovements([]);
@@ -186,21 +185,21 @@ export default function SampleWithdrawalReturnPage() {
     try {
       const response = await sampleService.getByBarcode(searchBarcode.trim());
       
-      // Compatibilidade com estrutura { success, data: { sample, patient } }
+      // Compatibilidade com estrutura { success, data: { sample, participant } }
       const responseData = response.data as any;
       const result = responseData?.data || responseData;
       
       if (result?.sample) {
         setSample(result.sample);
-        if (result.patient) {
+        if (result.participant) {
           setPatientInfo({
-            patientID: String(result.patient.patientID),
-            patientName: result.patient.patientName
+            patientID: String(result.participant.participantId),
+            patientName: result.participant.patientName
           });
         }
         // Preencher projeto vinculado automaticamente
         if (result.sample.linkedProject) {
-          setWithdrawForm(prev => ({ ...prev, linkedProject: result.sample.linkedProject || '' }));
+          setWithdrawForm(prev => ({ ...prev, linkedProject: result.sample.linkedProject }));
         }
         // Carregar movimentações
         await loadMovements(result.sample._id || '');
@@ -267,9 +266,6 @@ export default function SampleWithdrawalReturnPage() {
   // Validar formulário de devolução
   const validateReturnForm = (): string | null => {
     const pendingQty = getPendingReturnQuantity(sample);
-    if (pendingQty <= 0) {
-      return 'Não há quantidade pendente de devolução';
-    }
     if (!returnForm.returnType) {
       return 'Tipo de devolução é obrigatório';
     }
@@ -332,7 +328,7 @@ export default function SampleWithdrawalReturnPage() {
           text: `Retirada registrada com sucesso! Quantidade retirada: ${response.data.data?.withdrawnQuantity || '-'} ${sample.unit || 'µL'}` 
         });
         // Recarregar dados da amostra
-        await handleSearch();
+        await handleSearch({ keepMessage: true });
         // Limpar formulário
         setWithdrawForm({
           withdrawalType: '',
@@ -377,7 +373,7 @@ export default function SampleWithdrawalReturnPage() {
           text: `Devolução registrada com sucesso! Quantidade devolvida: ${response.data.data?.returnedQuantity || '-'} ${sample.unit || 'µL'}` 
         });
         // Recarregar dados da amostra
-        await handleSearch();
+        await handleSearch({ keepMessage: true });
         // Limpar formulário
         setReturnForm({
           returnType: '',
@@ -414,7 +410,7 @@ export default function SampleWithdrawalReturnPage() {
 
 
   return (
-    <div className="page withdrawal-return-page">
+    <div className="page-shell withdrawal-return-page">
       <h1>{t('samples.withdrawalReturn') || 'Retirada e Devolução de Amostras'}</h1>
       <p className="page-subtitle">{t('samples.withdrawalReturnSubtitle') || 'Registre retiradas e devoluções de amostras biológicas'}</p>
 
@@ -436,7 +432,7 @@ export default function SampleWithdrawalReturnPage() {
             onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
           />
           <Button 
-            onClick={handleSearch} 
+            onClick={() => handleSearch()}
             disabled={searchLoading}
             variant="primary"
           >

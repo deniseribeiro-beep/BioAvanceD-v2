@@ -12,12 +12,10 @@ const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { schemas } = require('../contracts/canonical/v1');
 const { REQUIRED_FIELDS } = require('./provenanceEnvelope');
 const { isAbsent } = require('./missingness');
+const { DEFAULT_CLOCK_DRIFT_LIMIT_MS } = require('../services/clockDriftLimit');
 
-const ASSESSMENT_VERSION = '1.0.0';
-
-// A copy of CLOCK_SKEW_TOLERANCE_MS in services/telemetryReadingContract.js:
-// a retrievedAt past assessedAt by more than this is not timely.
-const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+// 1.1.0 (#1520): timeliness reads the configured clock drift limit.
+const ASSESSMENT_VERSION = '1.1.0';
 
 // The codes the gateway raises for a provenance or model failure; every
 // other code (contract, reference, code, missingness declaration) is validity.
@@ -28,7 +26,7 @@ const METRICS = Object.freeze([
   { metric: 'validity', definition: '1 sem violação de contrato, referência ou código; senão 0', denominator: null },
   { metric: 'consistency', definition: '1 sem ENTITY_VALIDATION_FAILED do validate() do modelo (obrigatórios, formato e checagem cruzada); senão 0', denominator: null },
   { metric: 'uniqueness', definition: '1 sem outro registro de mesmo sourceSystem e sourceRecordId; senão 0; null sem sourceRecordId', denominator: null },
-  { metric: 'timeliness', definition: '1 quando retrievedAt <= assessedAt + 5 min; senão 0; null sem retrievedAt', denominator: null },
+  { metric: 'timeliness', definition: '1 quando retrievedAt <= assessedAt + o limite de desvio de relógio configurado (telemetry.clockDriftLimitMinutes, padrão 5 min); senão 0; null sem retrievedAt', denominator: null },
   { metric: 'provenance', definition: 'campos obrigatórios do envelope de provenance presentes', denominator: 'provenance required fields' },
 ]);
 
@@ -70,18 +68,20 @@ function uniquenessOf(duplicateFound) {
   return binary('uniqueness', duplicateFound !== true);
 }
 
-function timelinessOf(envelope, assessedAt) {
+// RNF025 AC6 (#1520): a retrievedAt past assessedAt by more than the
+// configured clock drift limit is not timely.
+function timelinessOf(envelope, assessedAt, limitMs) {
   const retrievedAt = envelope?.retrievedAt;
   if (!isValidDate(retrievedAt)) {
     return { metric: 'timeliness', value: null, numerator: null, denominator: null, notAssessed: 'no_retrieved_at' };
   }
-  return binary('timeliness', retrievedAt.getTime() <= assessedAt.getTime() + CLOCK_SKEW_TOLERANCE_MS, {
+  return binary('timeliness', retrievedAt.getTime() <= assessedAt.getTime() + limitMs, {
     ageSeconds: Math.round((assessedAt.getTime() - retrievedAt.getTime()) / 1000),
   });
 }
 
 /** Pure: the create()d assessment of one ingested record. */
-function assessIngestedRecord({ target, entityType, payload, violations = [], envelope, duplicateFound, scopeId, releases = {}, actorId, assessedAt = new Date() }) {
+function assessIngestedRecord({ target, entityType, payload, violations = [], envelope, duplicateFound, scopeId, releases = {}, actorId, assessedAt = new Date(), clockDriftLimitMs = DEFAULT_CLOCK_DRIFT_LIMIT_MS }) {
   const validityViolations = violations.filter((v) => !NON_VALIDITY_CODES.includes(v?.code));
   const consistencyViolations = violations.filter((v) => v?.code === 'ENTITY_VALIDATION_FAILED');
 
@@ -90,7 +90,7 @@ function assessIngestedRecord({ target, entityType, payload, violations = [], en
     validity: binary('validity', validityViolations.length === 0, { violationCount: validityViolations.length }),
     consistency: binary('consistency', consistencyViolations.length === 0, { violationCount: consistencyViolations.length }),
     uniqueness: uniquenessOf(duplicateFound),
-    timeliness: timelinessOf(envelope, assessedAt),
+    timeliness: timelinessOf(envelope, assessedAt, clockDriftLimitMs),
     provenance: provenanceOf(envelope),
   };
   const thresholds = DataQualityAssessmentModel.DIMENSIONS.map((metric) => ({ metric, minimum: 1 }));

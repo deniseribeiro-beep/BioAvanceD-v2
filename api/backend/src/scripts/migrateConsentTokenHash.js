@@ -15,6 +15,12 @@
  * não encontra nada. Um `consentToken: null` (o que acceptConsentToken
  * gravava ao aceitar) é apenas removido.
  *
+ * Irreversível: sem rollback. O SHA-256 não devolve o token, e o mesmo
+ * updateOne que grava consentTokenHash remove o consentToken ($unset), então
+ * depois da execução nada no banco guarda o token em claro; o código atual
+ * só valida contra o hash (utils/consentTokenHash.js). Desfazer é restaurar
+ * patients de um backup feito antes da execução.
+ *
  * Uso: npm run migrate:consent-token-hash  (a partir de api/backend)
  */
 

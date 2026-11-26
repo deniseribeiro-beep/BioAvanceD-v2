@@ -16,17 +16,20 @@ module.exports = defineConfig({
     isolate: true,
     pool: 'forks',
     coverage: {
-      provider: 'v8',
+      // The stock v8 provider misreads files loaded through `require` (#1337).
+      provider: 'custom',
+      customProviderModule: './tests/support/coverage-native-require.mjs',
       reportOnFailure: true,
       reporter: ['text', 'html', 'json', 'json-summary', 'lcov'],
       reportsDirectory: './coverage',
       include: ['src/**/*.js'],
       exclude: ['**/node_modules/**', 'tests/**', 'src/seeders/**'],
+      // The 90% floor on all four metrics (#1337).
       thresholds: {
-        statements: 25,
-        branches: 25,
-        functions: 27,
-        lines: 25,
+        statements: 90,
+        branches: 90,
+        functions: 90,
+        lines: 90,
       },
     },
     exclude: [

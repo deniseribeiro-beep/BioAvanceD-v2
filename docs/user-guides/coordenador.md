@@ -20,9 +20,9 @@ The screens the Técnico also opens are summarised; where the flow is the same, 
 | Modelos de Relatório | `/reports/templates` | List report templates; create, edit and delete them. | `requirePermission('viewReports')`, `requirePermission('manageReportTemplates')` (`reportTemplates.routes.js`) |
 | Dashboard | `/dashboard` | The cards `DASHBOARD_CARDS` gives the Coordenador (`frontend/src/views/dashboardCards.ts`): the Técnico's six, as described in [tecnico.md](tecnico.md) (Pacientes, Amostras, Relatórios de Custódia, Armazenamento, Arquivos de Análise, Alertas de Temperatura), then Relatórios de Governança, which counts the saved reports and opens `/reports`. The Armazenamento card opens `/locations`, which redirects to Gerenciamento de Instalações. The consent queue card is the Administrador's. | `requireOrganizationScope` (`patient.routes.js`, `sample.routes.js`, `result.routes.js`); `requirePermission('viewTemperature')` (`incident.routes.js`); `requirePermission('viewReports')` (`reports.routes.js`) |
 | Novo Cadastro | `/next/intake` | Register a participant and their samples through the intake wizard. `/pacientes/novo-atendimento` redirects here. | `requirePermission('createSample')`, `requireOrganizationScope` (`intakeWizard.routes.js`) |
-| Diretório de Pacientes | `/patients` | List, search and open participants; create, edit and delete them; resend a consent notification. | `requireOrganizationScope`, `requirePermission('createPatient')` (`patient.routes.js`) |
+| Diretório de Pacientes | `/patients` | The list shows the participant id, the record number, the birth date as a calendar day and the consent badge, and refreshes that badge while the page stays open. Name, document, email and phone stay off the list. Create, edit and delete a participant, collect an in-person signature (the place of collection is required) and send the TCLE by email while no consent is in force. | `requireOrganizationScope`, `requirePermission('createPatient')` (`patient.routes.js`) |
 | Importação Inteligente de Dados FHIR | `/patients/import-fhir` | Stage, validate and commit a FHIR bundle, and send its consent invitations. `/import/fhir` redirects here. | `requirePermission('uploadFiles')`, `requireOrganizationScope` (`import.routes.js`) |
-| Consentimentos (TCLE) | `/consents` | Read a participant's consent, revoke it, read its history. | `requireOrganizationScope` (`patient.routes.js`); `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
+| Consentimentos (TCLE) | `/consents` | Read a participant's consent, its revocation (time, channel, scope and place) and its messages. Open or download the signed term when a file is stored. The page refreshes that state while it stays open. The TCLE email opens the participant panel at `/patients/:participantId/consent`. | `requireOrganizationScope` (`patient.routes.js`); `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
 | Construtor de TCLE | `/admin/tcle/new` | List consent templates and purpose codes, and create a consent template. | `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
 | Construtor de TCLE | `/admin/tcle/edit/:templateId` | Open a consent template and update it. | `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
 | Associações de Biomarcadores | `/biomarker-associations` | List biomarker associations; create and edit them. | authenticated only for the list; `requireRole(3, 4)` (`master-data.routes.js`, mounted at `/api/biomarker-associations` in `api/backend/app.js`) |
@@ -37,7 +37,7 @@ The screens the Técnico also opens are summarised; where the flow is the same, 
 | Equipamentos | `/facility-management?tab=equipment` | List equipment; create, edit and delete it. `/equipment` redirects here; `/locations` also redirects here. | `requirePermission('viewEquipment')`, `requirePermission('manageStorageTopology')`, `requireOrganizationScope` (`equipment.routes.js`) |
 | Controle de Temperatura | `/facility-management?tab=temperature` | Read the stored temperature readings, as cards and a chart. `/temperature` redirects here. | `requirePermission('viewTemperature')`, `requireOrganizationScope` (`temperature.routes.js`) |
 | Histórico de Leituras | `/facility-management?tab=history` | Read the temperature readings. | `requirePermission('viewTemperature')`, `requireOrganizationScope` (`temperature.routes.js`) |
-| Gerenciamento de Incidentes | `/facility-management?tab=incidents` | List temperature incidents, add notes, acknowledge, resolve and escalate them. | `requirePermission('viewTemperature')`, `requirePermission('manageTemperature')` (`incident.routes.js`) |
+| Gerenciamento de Incidentes | `/facility-management?tab=incidents` | List temperature incidents, add notes, acknowledge, resolve and escalate them. `/incidents` redirects here. | `requirePermission('viewTemperature')`, `requirePermission('manageTemperature')` (`incident.routes.js`) |
 | Sensores | `/facility-management?tab=sensors` | List, create, edit and delete sensors. `/sensors` redirects here. | `requirePermission('viewTemperature')`, `requirePermission('manageSensor')`, `requireOrganizationScope` (`sensor.routes.js`) |
 | Políticas de Temperatura | `/facility-management?tab=policies` | List, create, edit and delete temperature policies. `/policies` redirects here. | `requirePermission('viewTemperature')`, `requirePermission('manageTemperaturePolicy')` (`policy.routes.js`) |
 | Descrições de Qualidade | `/quality-descriptions` | List quality descriptions; create, edit and delete them. | authenticated only for reads; `requireRole(3, 4)` (`master-data.routes.js`, mounted at `/api/quality-descriptions` in `api/backend/app.js`) |
@@ -51,7 +51,6 @@ The screens the Técnico also opens are summarised; where the flow is the same, 
 
 Exactly the Coordenador row of `LEGACY_ROLES_SEED`, with each code's `displayName` and `allowedActions` from `PERMISSION_CATALOG`:
 
-- `createUser`: Criar usuário; CREATE, READ, UPDATE, DELETE
 - `createSample`: Criar amostra; CREATE, READ
 - `editSample`: Editar amostra; UPDATE
 - `createPatient`: Criar paciente; CREATE, READ, UPDATE, DELETE
@@ -83,11 +82,10 @@ Exactly the Coordenador row of `LEGACY_ROLES_SEED`, with each code's `displayNam
 
 A Coordenador gets no system management (users, organizations, collections, security), user creation or editing, backup, parameter, data dictionary or access request screen: those routes admit the Administrador only in `frontend/src/App.tsx` and `ROUTE_ACCESS`.
 
-On the screens it does reach, the backend refuses every action that needs a code or level outside the list above: deleting a sample (deleteSample), re-identifying a participant (reidentifyParticipant, `patient.routes.js`), managing access requests (manageAccessRequests) and the user-account actions that need assignRole, resetMFA, disableMFA, forcePasswordReset, revokeSessions or setUserPassword.
+On the screens it does reach, the backend refuses every action that needs a code or level outside the list above: deleting a sample (deleteSample), re-identifying a participant (reidentifyParticipant, `patient.routes.js`), managing access requests (manageAccessRequests) and every user-account action: listing, reading, creating, editing and deleting a user (createUser, readUser, updateUser, deleteUser, which RF003 gives the Administrador only, #1229), and those that need assignRole, resetMFA, disableMFA, forcePasswordReset, revokeSessions or setUserPassword.
 
 Some codes in the seed have no screen that calls the routes they gate, so the Coordenador can exercise them only through the API:
 
-- createUser gates the user routes of `user.routes.js`; the only screens that call them (`SystemManagementPage`, `NewUserPage`) are Administrador-only.
 - requestConsent gates `POST /api/e-consent/generate-link` (`api/backend/src/routes/eConsent.js`); no frontend file calls it.
 - viewStorageTopology and manageCustody gate the routes of `physical-chain.routes.js`; no frontend file calls `/api/physical-chain`.
 - The Arquivos de Análise screen lists and downloads results but offers no create, edit or delete of a result record, although the seed holds createResult, editResult and deleteResult (`result.routes.js`).

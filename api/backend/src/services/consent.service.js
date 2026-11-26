@@ -18,6 +18,7 @@ const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const participantIdentityService = require('./participantIdentity.service');
 const notificationDispatchService = require('./notificationDispatch.service');
 const { hashConsentToken } = require('../utils/consentTokenHash');
+const consentPanel = require('./consentPanel.service');
 
 const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'failing' });
 addFormats(ajv);
@@ -1002,6 +1003,9 @@ class ConsentService {
         delete normalizedPayload[field];
       }
       Object.assign(normalizedPayload, normalizedSignature);
+      if (!normalizedPayload.consentTemplateId && normalizedPayload.templateId) {
+        normalizedPayload.consentTemplateId = String(normalizedPayload.templateId);
+      }
 
       this.validatePatientConsentPayload(normalizedPayload);
 
@@ -1086,6 +1090,8 @@ class ConsentService {
       // refuses rather than recording a consent with no evidence.
       const consentId = crypto.randomUUID();
       const signedAt = new Date();
+      const { normalizeRevocationLocation } = require('./consentHistory.service');
+      const collectionLocation = normalizeRevocationLocation(normalizedPayload.location);
       const evidence = consentEvidence.storeConsentEvidence({
         consentId,
         participantId,
@@ -1093,6 +1099,12 @@ class ConsentService {
         responses: normalizedPayload.responses || {},
         decisionDateTime: signedAt,
         signatureHash: normalizedPayload.signatureHash || null,
+        signatureImageBase64: normalizedPayload.signatureImageBase64 || null,
+        collectionPlace: typeof normalizedPayload.collectionPlace === 'string'
+          ? normalizedPayload.collectionPlace.trim()
+          : null,
+        location: collectionLocation,
+        identityProof: normalizedPayload.identityProof || null,
         ipAddress: normalizedPayload.ipAddress,
         userAgent: normalizedPayload.userAgent
       });
@@ -1105,6 +1117,7 @@ class ConsentService {
         consentVersion: template.version != null ? String(template.version) : null,
         // RF010 AC1/ELM-0095: the modality of the term signed, as it offers it.
         consentModel: template.consentModel || null,
+        location: collectionLocation,
         ...evidence,
         status: 'ACTIVE'
       });
@@ -1126,13 +1139,13 @@ class ConsentService {
         : null;
       // #1313 (RF023 AC3): the consent, its permissions, its decision events
       // and its outbox event commit together, or none of them does.
-      return withTransactionWhereSupported(db, async (session) => {
+      const recorded = await withTransactionWhereSupported(db, async (session) => {
         const sessionArg = session ? [{ session }] : [];
         const insertResult = await consentsCollection.insertOne(consent, ...sessionArg);
         if (permissionsCollection) {
           await permissionsCollection.insertMany(permissionRows, ...sessionArg);
         }
-        const recorded = await consentHistory.recordAcceptance(
+        const accepted = await consentHistory.recordAcceptance(
           db, { _id: insertResult.insertedId, ...consent }, decisionActor, session
         );
         for (const prior of supersededConsents) {
@@ -1145,8 +1158,17 @@ class ConsentService {
           signedAt: consent.signedAt || new Date(),
         }, session);
 
-        return recorded;
+        return accepted;
       });
+
+      if (normalizedPayload.signatureImageBase64) {
+        try {
+          await consentPanel.issueInPersonPanelLink(db, participantId, template, recorded);
+        } catch (linkError) {
+          logger.error('Erro ao gravar o link do painel do TCLE:', linkError.message);
+        }
+      }
+      return recorded;
     } catch (error) {
       logger.error('Erro ao criar consentimento do paciente:', error.message);
       throw error;
@@ -1225,29 +1247,58 @@ class ConsentService {
     // was revoked, from when, and its prospective effect, recorded as a
     // ConsentCommunicationEvent. The revocation is already committed; this
     // never throws, and a failed send is recorded `failed` without undoing it.
-    await consentCommunication.confirmRevocationToHolder(db, {
-      consent: recorded.consent,
-      revocation: recorded.revocation,
-    });
+    // A term that reached validTo uses the closure notice instead, once.
+    const decisionActor = this.resolveDecisionActor(actor, consent.participantId);
+    if (decisionActor.channel === 'term_expiry') {
+      await consentCommunication.notifyTermExpiry(db, {
+        consent: recorded.consent,
+        validTo: request.validTo,
+      });
+    } else {
+      await consentCommunication.confirmRevocationToHolder(db, {
+        consent: recorded.consent,
+        revocation: recorded.revocation,
+      });
+    }
 
     return recorded.consent;
   }
 
   /** RF010 AC5: a consent's derived state with the history it derives from. */
-  async getConsentHistory(db, consentId) {
+  async findConsentById(db, consentId) {
     let objectId;
     try {
       objectId = new ObjectId(consentId);
     } catch (error) {
-      throw new Error('ID de consentimento inválido');
+      const invalid = new Error('ID de consentimento inválido');
+      invalid.statusCode = 400;
+      throw invalid;
     }
-    const consent = await (await getCollection(db, 'consents')).findOne({ _id: objectId });
-    if (!consent) {
+    return (await getCollection(db, 'consents')).findOne({ _id: objectId });
+  }
+
+  async getConsentHistory(db, consentId) {
+    const found = await this.findConsentById(db, consentId);
+    if (!found) {
       return null;
     }
+    if (found.participantId) {
+      await this.expireDueConsents(db, { participantId: found.participantId });
+    }
+    const consent = (await this.findConsentById(db, consentId)) || found;
     const { events, revocations } = await consentHistory.getHistory(db, consent);
     const permissions = await (await getCollection(db, 'consentPermissions'))
       .find({ consentId: consentHistory.consentKeyOf(consent) }).toArray();
+    const channelByEvent = new Map(events.map((event) => [event.consentDecisionEventId, event.channel]));
+    let communications = [];
+    try {
+      communications = await (await getCollection(db, 'consentCommunicationEvents'))
+        .find({ consentId: consentHistory.consentKeyOf(consent) })
+        .sort({ sentAt: 1 })
+        .toArray();
+    } catch (error) {
+      logger.error('Erro ao ler comunicações do consentimento:', error.message);
+    }
     return {
       consentId: consentHistory.consentKeyOf(consent),
       permissions,
@@ -1256,11 +1307,80 @@ class ConsentService {
       supersededByConsentId: consent.supersededByConsentId || null,
       supersedesConsentId: consent.supersedesConsentId || null,
       decisionEvents: events,
-      revocations
+      revocations: revocations.map((revocation) => ({
+        ...revocation,
+        channel: channelByEvent.get(revocation.decisionEventId) || null,
+        location: revocation.location || { status: 'unavailable' },
+      })),
+      communications: communications.map((event) => ({
+        consentCommunicationEventId: event.consentCommunicationEventId,
+        participantId: event.participantId || consent.participantId || null,
+        communicationType: event.communicationType,
+        contentTemplateId: event.contentTemplateId,
+        purpose: event.purpose || null,
+        deliveryStatus: event.deliveryStatus,
+        sentAt: event.sentAt,
+      })),
     };
   }
 
+  /**
+   * Close every in-force consent whose term validTo has passed. A term
+   * without validTo is left alone. The holder is told once, and specimens
+   * follow the same quarantine as a full revocation.
+   */
+  async expireDueConsents(db, filter = {}) {
+    const closed = { closed: 0 };
+    try {
+      const consentsCollection = await getCollection(db, 'consents');
+      const query = { status: 'ACTIVE' };
+      if (filter.participantId) query.participantId = filter.participantId;
+      const rows = await consentsCollection.find(query).toArray();
+      const templatesCollection = await getCollection(db, 'consentTemplates');
+      const now = Date.now();
+      const consentQuarantineService = require('./consentQuarantine.service');
+      for (const consent of rows) {
+        const template = await this.findTemplateById(templatesCollection, consent.consentTemplateId);
+        if (!template || template.validTo == null || template.validTo === '') continue;
+        const validTo = new Date(template.validTo);
+        if (Number.isNaN(validTo.getTime()) || validTo.getTime() > now) continue;
+        const updated = await this.revokeConsent(db, String(consent._id), {
+          reason: 'Vencimento do termo',
+          validTo,
+          location: { status: 'unavailable' },
+        }, {
+          channel: 'term_expiry',
+          signerRole: 'staff_on_behalf',
+          signerId: 'system',
+          authenticationLevel: 'basic',
+        });
+        if (!updated || updated.status !== 'REVOKED') continue;
+        closed.closed += 1;
+        try {
+          await consentQuarantineService.quarantineForRevocation(db, consent.participantId);
+        } catch (quarantineError) {
+          logger.error('Erro ao quarentenar amostras no vencimento do TCLE:', quarantineError.message);
+        }
+      }
+    } catch (error) {
+      logger.error('Erro ao encerrar consentimentos vencidos:', error.message);
+    }
+    return closed;
+  }
+
+  async findTemplateById(templatesCollection, templateId) {
+    if (templateId == null || templateId === '') return null;
+    const direct = await templatesCollection.findOne({ _id: templateId });
+    if (direct) return direct;
+    try {
+      return await templatesCollection.findOne({ _id: new ObjectId(String(templateId)) });
+    } catch (error) {
+      return null;
+    }
+  }
+
   async getPatientConsent(db, participantId) {
+    await this.expireDueConsents(db, { participantId });
     const consentsCollection = await getCollection(db, 'consents');
     const consent = await consentsCollection
       .find({ participantId })

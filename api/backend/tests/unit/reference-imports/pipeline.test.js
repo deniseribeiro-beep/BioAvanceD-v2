@@ -27,6 +27,7 @@ function createFakeCollection() {
       return Object.entries(cond).every(([op, arg]) => {
         if (op === '$exists') return (value !== undefined) === arg;
         if (op === '$lt') return value !== undefined && value !== null && value < arg;
+        if (op === '$in') return arg.includes(value);
         throw new Error(`unsupported operator: ${op}`);
       });
     }
@@ -41,7 +42,8 @@ function createFakeCollection() {
       docs.push(doc);
       return { insertedId: doc._id || 'fake-id' };
     },
-    async insertMany(newDocs) {
+    async insertMany(newDocs, options = {}) {
+      calls.push({ method: 'insertMany', count: newDocs.length, session: options.session });
       docs.push(...newDocs);
       return { insertedCount: newDocs.length };
     },
@@ -77,6 +79,22 @@ function createFakeCollection() {
       for (const [key, by] of Object.entries(update.$inc || {})) doc[key] = (doc[key] || 0) + by;
       if (update.$set) Object.assign(doc, update.$set);
       return doc;
+    },
+    // #1561: the batched promotion's upserting updateOne operations: the
+    // outbox's version counters ($inc) and its events ($setOnInsert).
+    async bulkWrite(operations, options = {}) {
+      calls.push({ method: 'bulkWrite', count: operations.length, session: options.session });
+      for (const { updateOne: { filter, update, upsert } } of operations) {
+        let doc = docs.find((d) => matches(d, filter));
+        if (!doc) {
+          if (!upsert) continue;
+          doc = { ...filter, ...(update.$setOnInsert || {}) };
+          docs.push(doc);
+        }
+        for (const [key, by] of Object.entries(update.$inc || {})) doc[key] = (doc[key] || 0) + by;
+        if (update.$set) Object.assign(doc, update.$set);
+      }
+      return { ok: 1 };
     },
     async countDocuments(filter = {}) {
       return docs.filter((doc) => matches(doc, filter)).length;
@@ -194,9 +212,10 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       });
     });
 
-    // #1313 (RF023 AC3): on a replica set each promoted record and its event
-    // are written in one transaction, a transaction per record.
-    it('writes each promoted record and its outbox event in the same transaction on a replica set', async () => {
+    // #1313 (RF023 AC3), #1561: on a replica set each batch of promoted
+    // records and their events are written in one transaction, a
+    // transaction per batch.
+    const replicaSetDb = () => {
       const fakeDb = createFakeDb();
       let sessionCount = 0;
       fakeDb.client = {
@@ -211,29 +230,135 @@ describe('reference-imports pipeline runImport (HPO)', () => {
           };
         },
       };
-      const sessionsOf = (collection) => {
-        const seen = [];
-        const { insertOne, updateOne } = collection;
-        collection.insertOne = async (doc, options) => { seen.push(options?.session?.id); return insertOne.call(collection, doc, options); };
-        collection.updateOne = async (filter, update, options) => { seen.push(options?.session?.id); return updateOne.call(collection, filter, update, options); };
-        return seen;
-      };
-      const conceptSessions = sessionsOf(fakeDb.collections.terminologyConcepts);
-      const relationSessions = sessionsOf(fakeDb.collections.terminologyRelations);
-      const outboxSessions = sessionsOf(fakeDb.collections.graph_projection_outbox);
+      return fakeDb;
+    };
+    const writesOf = (fakeDb, name, method) => fakeDb.collections[name].calls
+      .filter((call) => call.method === method)
+      .map((call) => ({ session: call.session?.id, count: call.count }));
 
-      await promote(fakeDb, await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' }));
+    it('writes each batch of promoted records and their outbox events in one transaction on a replica set', async () => {
+      const fakeDb = replicaSetDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
 
-      const recordSessions = [...conceptSessions, ...relationSessions];
-      expect(recordSessions).toHaveLength(15);
-      expect(recordSessions.every((id) => typeof id === 'number')).toBe(true);
-      expect(new Set(recordSessions).size).toBe(15);
-      expect(outboxSessions).toEqual(recordSessions);
+      await promoteRelease({ db: fakeDb, releaseId: result.releaseId, approvedBy: 'test-approver', batchSize: 3 });
+
+      const conceptWrites = writesOf(fakeDb, 'terminologyConcepts', 'insertMany');
+      const relationWrites = writesOf(fakeDb, 'terminologyRelations', 'insertMany');
+      expect(conceptWrites).toEqual([{ session: 1, count: 3 }, { session: 2, count: 3 }, { session: 3, count: 2 }]);
+      expect(relationWrites).toEqual([{ session: 4, count: 3 }, { session: 5, count: 3 }, { session: 6, count: 1 }]);
+      const recordWrites = [...conceptWrites, ...relationWrites];
+      expect(writesOf(fakeDb, 'graph_projection_outbox', 'bulkWrite')).toEqual(recordWrites);
       // #1313: each event's aggregateVersion is taken in the same transaction.
-      const versionSessions = fakeDb.collections.graph_projection_outbox_aggregate_versions.calls
-        .filter((call) => call.method === 'findOneAndUpdate')
-        .map((call) => call.session?.id);
-      expect(versionSessions).toEqual(recordSessions);
+      expect(writesOf(fakeDb, 'graph_projection_outbox_aggregate_versions', 'bulkWrite')).toEqual(recordWrites);
+      expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(15);
+      expect(fakeDb.collections.graph_projection_outbox.docs.every((doc) => doc.aggregateVersion === 1)).toBe(true);
+    });
+
+    // #1561: a generated set, the measurement standing in for the full-lab
+    // run: 400 concepts in an is_a chain promote in four batches each,
+    // with no per-record lookup or transaction.
+    it('promotes a generated 400-concept set in batches of 100, one transaction per batch', async () => {
+      const fixturePath = path.join(storageRoot, 'generated-1561.jsonl');
+      const lines = [];
+      for (let index = 0; index < 400; index += 1) {
+        const id = `HP:${9000000 + index}`;
+        const parent = index === 0 ? [] : [`HP:${9000000 + index - 1}`];
+        lines.push(JSON.stringify({ id, lbl: `Generated ${index}`, is_a: parent, synonyms: [], obsolete: false }));
+      }
+      fs.writeFileSync(fixturePath, `${lines.join('\n')}\n`);
+      const source = {
+        ...hpoSource,
+        datasetVersion: 'generated-1561',
+        fixturePath,
+        retrievalUri: 'file://generated-1561.jsonl',
+        expectedChecksum: crypto.createHash('sha256').update(fs.readFileSync(fixturePath)).digest('hex'),
+      };
+      const fakeDb = replicaSetDb();
+      const conceptLookups = [];
+      const concepts = fakeDb.collections.terminologyConcepts;
+      const { findOne } = concepts;
+      concepts.findOne = async (filter) => { conceptLookups.push(filter); return findOne.call(concepts, filter); };
+      const result = await runImport({ db: fakeDb, source, normalizeRecord, initiatedBy: 'test-actor' });
+      expect(result.approved).toBe(true);
+
+      const promotion = await promoteRelease({ db: fakeDb, releaseId: result.releaseId, approvedBy: 'test-approver', batchSize: 100 });
+
+      expect(promotion).toMatchObject({ promoted: true, recordsInserted: 799, recordsSkipped: 0 });
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(400);
+      expect(fakeDb.collections.terminologyRelations.docs).toHaveLength(399);
+      expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(799);
+      expect(writesOf(fakeDb, 'terminologyConcepts', 'insertMany').map((write) => write.count)).toEqual([100, 100, 100, 100]);
+      expect(writesOf(fakeDb, 'terminologyRelations', 'insertMany').map((write) => write.count)).toEqual([100, 100, 100, 99]);
+      expect(new Set(writesOf(fakeDb, 'graph_projection_outbox', 'bulkWrite').map((write) => write.session)).size).toBe(8);
+      expect(conceptLookups).toEqual([]);
+    });
+
+    // #1561: a promotion re-run on its own release (a crash after the record
+    // writes, before the status flip) inserts nothing and appends nothing.
+    it('re-running the promotion of one release inserts no record and appends no event', async () => {
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      await promote(fakeDb, result);
+      Object.assign(fakeDb.collections.referenceDatasetReleases.docs[0], { releaseStatus: 'approved', promotionClaimedAt: null });
+      const insertCalls = () => [...fakeDb.collections.terminologyConcepts.calls, ...fakeDb.collections.terminologyRelations.calls]
+        .filter((call) => call.method === 'insertMany').length;
+      const insertsBefore = insertCalls();
+
+      const rerun = await promote(fakeDb, result);
+
+      expect(rerun).toMatchObject({ promoted: true, recordsInserted: 0, recordsSkipped: 15 });
+      expect(insertCalls()).toBe(insertsBefore);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+      expect(fakeDb.collections.terminologyRelations.docs).toHaveLength(7);
+      expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(15);
+    });
+
+    // #1561: a relation staged twice in one run is inserted once, the second
+    // copy counted as skipped, as the per-record lookup did before batching.
+    it('inserts a relation staged twice in one batch once', async () => {
+      const fixturePath = path.join(storageRoot, 'duplicate-parent-1561.jsonl');
+      fs.writeFileSync(fixturePath, [
+        JSON.stringify({ id: 'HP:9100000', lbl: 'Root', is_a: [], synonyms: [], obsolete: false }),
+        JSON.stringify({ id: 'HP:9100001', lbl: 'Child', is_a: ['HP:9100000', 'HP:9100000'], synonyms: [], obsolete: false }),
+      ].join('\n') + '\n');
+      const source = {
+        ...hpoSource,
+        datasetVersion: 'duplicate-parent-1561',
+        fixturePath,
+        retrievalUri: 'file://duplicate-parent-1561.jsonl',
+        expectedChecksum: crypto.createHash('sha256').update(fs.readFileSync(fixturePath)).digest('hex'),
+      };
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source, normalizeRecord, initiatedBy: 'test-actor' });
+
+      const promotion = await promote(fakeDb, result);
+
+      expect(fakeDb.collections.referenceImportStaging.docs.filter((doc) => doc.entityType === 'TerminologyRelation')).toHaveLength(2);
+      expect(promotion).toMatchObject({ promoted: true, recordsInserted: 3, recordsSkipped: 1 });
+      expect(fakeDb.collections.terminologyRelations.docs).toHaveLength(1);
+      expect(fakeDb.collections.graph_projection_outbox.docs).toHaveLength(3);
+    });
+
+    // #1561: the natural-key indexes exist before the first record write,
+    // whichever caller runs the promotion (a script runs no Foundation job).
+    it('builds the concept and relation natural-key indexes before its claim and first record write', async () => {
+      const fakeDb = createFakeDb();
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+      const order = [];
+      for (const name of ['terminologyConcepts', 'terminologyRelations']) {
+        fakeDb.collections[name].createIndex = async (keys, options) => { order.push(`${name}:${options.name}:${options.unique}`); };
+      }
+      const releases = fakeDb.collections.referenceDatasetReleases;
+      const { updateOne } = releases;
+      releases.updateOne = async (...args) => { order.push('claim-or-flip'); return updateOne.apply(releases, args); };
+
+      await promote(fakeDb, result);
+
+      expect(order.slice(0, 3)).toEqual([
+        'terminologyConcepts:uniq_terminologyConcept_systemUri_code_version:true',
+        'terminologyRelations:uniq_terminologyRelation_source_target_type_version:true',
+        'claim-or-flip',
+      ]);
     });
 
     it('does not append duplicate outbox events on a second, idempotent run', async () => {

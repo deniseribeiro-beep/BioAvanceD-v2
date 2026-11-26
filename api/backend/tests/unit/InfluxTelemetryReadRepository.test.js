@@ -229,6 +229,32 @@ describe('InfluxTelemetryReadRepository - temperatureReport (RF009 AC1, #1317)',
     }
   });
 
+  // #1518 (RNF025 C8): a corrected in-range reading leaves no out-of-range
+  // original matching the critical filter, and the count is of current readings.
+  it('temperatureReport keeps the current revision of each reading before the critical filter, in the rows and the count', async () => {
+    await repository.temperatureReport({
+      critical: { boundsBySensor: new Map([['S1', { min: 2, max: 8 }]]), flaggedSensorIds: [] },
+    });
+
+    for (const query of [queryAt(0), queryAt(1)]) {
+      const current = query.indexOf('max(column: "_revision")');
+      expect(current).toBeGreaterThan(-1);
+      expect(current).toBeLessThan(query.indexOf('(r.sensorId == "S1" and (r.celsius < 2.0 or r.celsius > 8.0))'));
+    }
+  });
+
+  it('temperatureReport maps a correction\'s revision tag', async () => {
+    collectRows
+      .mockResolvedValueOnce([
+        { _time: '2026-10-01T10:00:00Z', _measurement: 'temperature', sensorId: 'S1', reading: -70, telemetryReadingId: 'R-2', revision: '1' },
+      ])
+      .mockResolvedValueOnce([{ celsius: 1 }]);
+
+    const { rows } = await repository.temperatureReport();
+
+    expect(rows[0]).toMatchObject({ telemetryReadingId: 'R-2', revision: '1' });
+  });
+
   it('temperatureReport with a critical filter but no bounds or flagged sensors returns nothing and runs no query', async () => {
     const result = await repository.temperatureReport({
       critical: { boundsBySensor: new Map([['S1', {}]]), flaggedSensorIds: [] },
@@ -272,6 +298,13 @@ describe('InfluxTelemetryReadRepository - readingById (RF009 AC1, #1391)', () =>
     expect(query).toContain('pivot(rowKey: ["_time"]');
     expect(query).toContain('filter(fn: (r) => r.telemetryReadingId == "0b6f7e2c-4a1d-4c3e-9f0a-1b2c3d4e5f60")');
     expect(query.trimEnd().endsWith('limit(n: 1)')).toBe(true);
+  });
+
+  // #1518 (RNF025 C8): a superseded reading stays readable by its id.
+  it('readingById reads every revision, keeping no current revision only', async () => {
+    await repository.readingById('R-1');
+
+    expect(queryAt(0)).not.toContain('max(column: "_revision")');
   });
 
   it('readingById escapes the id through the flux template', async () => {
@@ -338,6 +371,13 @@ describe('InfluxTelemetryReadRepository - readingsAtLocation (RF009 AC5/AC6, #13
     expect(query).toContain('filter(fn: (r) => r.storageLocationId == "loc-1")');
     expect(query).toContain('range(start: 2026-09-01T00:00:00.000Z, stop: 2026-09-02T00:00:00.000Z)');
     expect(query.indexOf('r.storageLocationId ==')).toBeLessThan(query.indexOf('pivot('));
+  });
+
+  // #1518 (RNF025 C8): the exposure summary reads the current revisions.
+  it('readingsAtLocation keeps the current revision of each reading', async () => {
+    await repository.readingsAtLocation({ storageLocationId: 'loc-1', ...window });
+
+    expect(queryAt(0)).toContain('max(column: "_revision")');
   });
 
   it('readingsAtLocation sorts ascending and sets no limit', async () => {

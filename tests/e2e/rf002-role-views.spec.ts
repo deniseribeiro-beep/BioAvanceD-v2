@@ -4,10 +4,13 @@ import { realLogin, seedRealAuth, RealAuthSession } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { deleteOrganizations } from './helpers/listOrganizations';
 
-// RF002 (Requisitos v4.0.0), real backend: what the Técnico and the Usuário
-// Externo see.
+// RF002 (Requisitos v4.0.0), real backend: what the Técnico, the Coordenador
+// and the Usuário Externo see.
 //   AC1  the Técnico's dashboard shows registration, custody and storage
 //        operations, and no governance or administration card.
+//   AC2  the Coordenador's dashboard shows the operational indicators, the
+//        active temperature alerts the backend holds and the governance
+//        reports of its organization, and no administration card.
 //   AC4  the Usuário Externo sees only the reports a grant authorizes: the
 //        API lists and reads only the granted one, and the dashboard shows
 //        only the authorized-reports card, counting it.
@@ -148,6 +151,68 @@ test.describe('RF002: role views on the real backend', () => {
     }
     for (const key of ['governanceReports', 'authorizedReports', 'users', 'security', 'audit', 'settings']) {
       await expect(page.getByTestId(`dashboard-card-${key}`)).toHaveCount(0);
+    }
+  });
+
+  test('AC2: the Coordenador dashboard shows operational indicators, active alerts and governance reports, and no admin card', async ({ request, page }) => {
+    const admin = await realLogin(request);
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { officialName: `RF002 AC2 ${Date.now()}`, countryCode: 'BR' },
+    });
+    expect(orgRes.ok(), await orgRes.text()).toBeTruthy();
+    const organizationId = (await orgRes.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+
+    const coordinator = await provision(request, admin.token, 3, 'Coordenador', organizationId);
+    const coordAuth = { Authorization: `Bearer ${coordinator.token}` };
+
+    // Two governance reports in the new organization: the card counts the
+    // reports GET /api/reports lists for the Coordenador, which the backend
+    // limits to its organization.
+    for (let i = 0; i < 2; i += 1) {
+      const res = await request.post(`${apiBaseURL}/api/reports/generate`, { headers: coordAuth, data: { reportType: 'equipment' } });
+      expect(res.status(), await res.text()).toBe(201);
+    }
+    const listed = await request.get(`${apiBaseURL}/api/reports`, { headers: coordAuth });
+    expect(listed.status(), await listed.text()).toBe(200);
+    expect(((await listed.json()) as unknown[]).length).toBe(2);
+
+    // An open temperature incident, so the alerts panel has a backend alert
+    // to show (#1397: the dashboard reads GET /api/incidents, never a
+    // browser-side alert).
+    const sensorName = `RF002 AC2 sensor ${Date.now()}`;
+    const client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
+    await client.connect();
+    const incidents = client.db(mongoDbName).collection('temperatureIncidents');
+    const now = new Date();
+    const inserted = await incidents.insertOne({
+      sensorKey: `rf002-ac2-${Date.now()}`, sensorName, openedAt: now, closedAt: null, excursionStartedAt: null,
+      acknowledgedAt: null, acknowledgedBy: null, currentTemperature: 12, maxTemperature: 12, minTemperature: 12,
+      samplesOutOfRange: 0, status: 'open', notes: [], escalationLevel: 0, lastEscalatedAt: null, emailsSent: [],
+      createdAt: now, updatedAt: now,
+    });
+    try {
+      await seedRealAuth(page, coordinator);
+      await page.goto('/dashboard');
+
+      for (const key of ['patients', 'samples', 'custodyReports', 'storage', 'results', 'temperatureAlerts', 'governanceReports']) {
+        await expect(page.getByTestId(`dashboard-card-${key}`)).toBeVisible();
+      }
+      for (const key of ['authorizedReports', 'users', 'security', 'audit', 'settings']) {
+        await expect(page.getByTestId(`dashboard-card-${key}`)).toHaveCount(0);
+      }
+      await expect(page.locator('[data-testid^="dashboard-card-"]')).toHaveCount(7);
+
+      await expect(page.getByTestId('dashboard-card-governanceReports').locator('.kpi-value')).toHaveText('2');
+      await expect(page.getByTestId('dashboard-card-temperatureAlerts').locator('.kpi-value')).toHaveText(/^[1-9][0-9]*$/);
+      const alert = page.getByTestId(`dashboard-alert-${inserted.insertedId.toHexString()}`);
+      await expect(alert).toBeVisible();
+      await expect(alert).toContainText(sensorName);
+      await expect(page.getByTestId('dashboard-alerts-error')).toHaveCount(0);
+    } finally {
+      await incidents.deleteOne({ _id: inserted.insertedId });
+      await client.close();
     }
   });
 });

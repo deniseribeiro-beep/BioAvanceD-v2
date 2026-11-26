@@ -19,7 +19,7 @@ export interface SpecimenStatusLike {
   quantity?: number | null;
 }
 
-export type QuantityStatus = 'full' | 'partial' | 'depleted';
+export type QuantityStatus = 'full' | 'partial' | 'depleted' | 'unknown';
 
 // The states that refuse withdrawal and return; mirrors the backend's
 // BLOCKED_SPECIMEN_STATUSES.
@@ -57,12 +57,14 @@ const QUANTITY_STATUS_LABELS: Record<QuantityStatus, string> = {
   full: 'Íntegra',
   partial: 'Parcialmente Retirada',
   depleted: 'Totalmente Retirada',
+  unknown: 'Não registrada',
 };
 
 const QUANTITY_STATUS_COLORS: Record<QuantityStatus, string> = {
   full: 'var(--success)',
   partial: 'var(--warning)',
   depleted: 'var(--danger)',
+  unknown: 'var(--text-secondary)',
 };
 
 // Specimen documents always default specimenStatus to 'available' at write
@@ -75,19 +77,38 @@ export function resolveSpecimenStatus(sample: SpecimenStatusLike | null | undefi
 
 // The quantityStatus the API sent, or, when a record carries none, the same
 // derivation the backend uses (current 0 -> depleted, below initial ->
-// partial, otherwise full). A record with no quantity at all reads full: an
-// unknown amount is not evidence of depletion.
+// partial, otherwise full). A record with no quantity at all is unknown:
+// missing amounts are not evidence of a full or depleted vial (#1436).
 export function resolveQuantityStatus(sample: SpecimenStatusLike | null | undefined): QuantityStatus {
   const stored = String(sample?.quantityStatus || '').toLowerCase();
-  if (stored === 'full' || stored === 'partial' || stored === 'depleted') return stored;
+  if (stored === 'full' || stored === 'partial' || stored === 'depleted' || stored === 'unknown') {
+    return stored as QuantityStatus;
+  }
   const initialRaw = sample?.initialQuantity ?? sample?.quantity;
   const currentRaw = sample?.currentQuantity ?? sample?.quantity;
-  if (initialRaw == null && currentRaw == null) return 'full';
+  if (initialRaw == null && currentRaw == null) return 'unknown';
   const initial = Number(initialRaw ?? 0);
   const current = Number(currentRaw ?? 0);
   if (!(current > 0)) return 'depleted';
   if (initial > 0 && current < initial) return 'partial';
   return 'full';
+}
+
+/** Raw quantity fields without coercing a missing value to 0 (#1436). */
+export function readSampleQuantities(sample: {
+  volumeInitial?: number | null;
+  volumeCurrent?: number | null;
+  initialQuantity?: number | null;
+  currentQuantity?: number | null;
+  quantity?: number | null;
+} | null | undefined): { initial: number | null; current: number | null } {
+  // Prefer canonical *Quantity over stale volume* aliases (#1436 / sample detail tests).
+  const initialRaw = sample?.initialQuantity ?? sample?.volumeInitial ?? sample?.quantity;
+  const currentRaw = sample?.currentQuantity ?? sample?.volumeCurrent ?? sample?.quantity;
+  return {
+    initial: initialRaw == null ? null : Number(initialRaw),
+    current: currentRaw == null ? null : Number(currentRaw),
+  };
 }
 
 export function isSpecimenBlocked(sample: SpecimenStatusLike | null | undefined): boolean {

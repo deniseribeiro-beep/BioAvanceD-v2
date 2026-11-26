@@ -63,6 +63,66 @@ export async function closeSeedDb(): Promise<void> {
   }
 }
 
+/**
+ * RF007 AC2 / RNF016 C4 (#1419): reads where a sample_files row says its
+ * binary lives. A row the S3 store wrote has storagePath null; one the
+ * filesystem store wrote names a local path.
+ */
+export interface SampleFileStorage {
+  storagePath?: string | null;
+  storageUri?: string | null;
+  storageObjectVersion?: string | null;
+}
+
+export async function readSampleFileStorage(fileId: string): Promise<SampleFileStorage | null> {
+  const db = await getDb();
+  return db.collection('sample_files').findOne<SampleFileStorage>(
+    { _id: new ObjectId(fileId) },
+    { projection: { _id: 0, storagePath: 1, storageUri: 1, storageObjectVersion: 1 } },
+  );
+}
+
+/**
+ * RF007 AC3-6, RNF029 (#1477): the whole sample_files row, so a spec can show
+ * its retention policy, its malware verdict, its logical delete and that it
+ * holds no file bytes. No route returns the row as stored.
+ */
+export async function readSampleFileRow(fileId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('sample_files').findOne({ _id: new ObjectId(fileId) });
+}
+
+/** RF010 AC7 (#1492): a stored ConsentAuthorizationDecision. No route reads these rows. */
+export async function readConsentAuthorizationDecision(consentAuthorizationDecisionId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('consentAuthorizationDecisions').findOne({ consentAuthorizationDecisionId });
+}
+
+/** RF007 AC4 (#1477): a file's DataFileVersion rows, oldest first. No route lists them. */
+export async function readDataFileVersions(fileId: string): Promise<Array<Record<string, any>>> {
+  const db = await getDb();
+  return db.collection('dataFileVersions').find({ fileId }).sort({ versionNumber: 1 }).toArray();
+}
+
+/** RF007 AC6/AC7 (#1477): the audit rows one file action wrote, e.g. FILE_DELETE. */
+export async function findSampleFileAuditRows(action: string, fileId: string): Promise<Array<Record<string, any>>> {
+  const db = await getDb();
+  return db.collection('logs').find({ action, resourceType: 'SampleFile', resourceId: fileId }).toArray();
+}
+
+/** RF024 AC7 (#1493): the audit rows the access-request controller wrote for one request, oldest first. */
+export async function findAccessRequestAuditRows(accessRequestId: string): Promise<Array<Record<string, any>>> {
+  const db = await getDb();
+  return db.collection('logs').find({ resourceType: 'AccessRequest', resourceId: accessRequestId }).sort({ timestamp: 1, _id: 1 }).toArray();
+}
+
+/** Removes the retention policies a spec created, so a kept volume does not gather them. */
+export async function deleteRetentionPolicies(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const db = await getDb();
+  await db.collection('retentionPolicies').deleteMany({ _id: { $in: ids.map((id) => new ObjectId(id)) } });
+}
+
 export async function seedActiveConsentTemplate(db: Db): Promise<string> {
   // Canonical name is `consent_templates` (snake_case), not the
   // `consentTemplates` field/param name used throughout the API layer —
@@ -571,6 +631,11 @@ export async function seedActiveTerminologyConcept(
     updatedAt: new Date(),
   });
 
+  // #1561: terminologyConcepts is unique on (systemUri, code, version), so
+  // the fixture's own row for this key (version 'e2e-696' is the fixture's)
+  // that a crashed run left behind is replaced, not duplicated. It stays an
+  // insertOne literal so the #886 model-fidelity guard still validates it.
+  await db.collection('terminologyConcepts').deleteMany({ systemUri, code, version: 'e2e-696' });
   await db.collection('terminologyConcepts').insertOne({
     terminologyConceptId: `e2e-696-${code}-${Date.now()}`,
     systemUri,

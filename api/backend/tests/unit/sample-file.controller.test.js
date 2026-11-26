@@ -179,6 +179,41 @@ describe('sample-file.controller', () => {
       expect(typeof mw).toBe('function');
     });
 
+    describe('multer rejection', () => {
+      function runWithMulterError(err, req) {
+        const fresh = new controller.constructor();
+        fresh.upload = { single: () => (_req, _res, cb) => cb(err) };
+        const res = createRes();
+        const next = vi.fn();
+        fresh.uploadMiddleware()(req, res, next);
+        return { res, next };
+      }
+
+      it('answers 400 with the error text and does not call next', () => {
+        const { res, next } = runWithMulterError(new Error('File too large'), {});
+
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({ success: false, error: 'File too large' });
+      });
+
+      it('answers with the translated fallback when the error has no message and req.t exists', () => {
+        const t = vi.fn((key) => `t:${key}`);
+        const { res } = runWithMulterError(new Error(''), { t });
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(t).toHaveBeenCalledWith('sampleFiles.uploadError');
+        expect(res.json).toHaveBeenCalledWith({ success: false, error: 't:sampleFiles.uploadError' });
+      });
+
+      it('answers with the Portuguese fallback when the error has no message and there is no req.t', () => {
+        const { res } = runWithMulterError(new Error(''), {});
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Erro ao processar upload do arquivo' });
+      });
+    });
+
     // #1321 (RF007 AC1, RNF029 C1): the written file's leading bytes must
     // match its extension's format, or the upload is removed.
     describe('content signature (#1321)', () => {
@@ -516,6 +551,35 @@ describe('sample-file.controller', () => {
       );
     });
 
+    it('answers the translated 403 and removes the staging file for a sample out of scope when req.t exists', async () => {
+      const specimenId = new ObjectId().toString();
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const t = vi.fn((key) => `t:${key}`);
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        file: { path: '/tmp/file.csv', originalname: 'file.csv', size: 100 },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+        t
+      };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 't:samples.accessDenied',
+        message: 'Esta amostra pertence a outra organização'
+      });
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/file.csv');
+    });
+
     it('catches thrown error, cleans up req.file, and returns 400', async () => {
       const specimenId = new ObjectId().toString();
       const db = createDb({
@@ -600,6 +664,31 @@ describe('sample-file.controller', () => {
       await controller.listFiles(req, res);
 
       expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('answers the translated 403 for a sample out of scope when req.t exists', async () => {
+      const specimenId = new ObjectId().toString();
+      const sample = { _id: new ObjectId(specimenId), collectionSite: 'org-9' };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const t = vi.fn((key) => `t:${key}`);
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+        t
+      };
+      const res = createRes();
+
+      await controller.listFiles(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 't:samples.accessDenied',
+        message: 'Esta amostra pertence a outra organização'
+      });
     });
 
     // RF007 AC6 (#1321): a logically deleted file is not listed.
@@ -993,6 +1082,40 @@ describe('sample-file.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
     });
+
+    describe('access-token subject by caller shape', () => {
+      async function download(user) {
+        const fileID = new ObjectId().toString();
+        const specimenId = new ObjectId().toString();
+        const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
+        const db = createDb({
+          sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+        });
+        const req = { app: { locals: { db } }, params: { specimenId, fileID }, user };
+        const res = createRes();
+        vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+        vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+        vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+
+        await controller.downloadFile(req, res);
+
+        return expectFileAccessRedirect(res, fileID);
+      }
+
+      it('binds the token to the string form of the caller _id when there is no userID', async () => {
+        const _id = new ObjectId();
+
+        const payload = await download({ _id });
+
+        expect(payload.s).toBe(String(_id));
+      });
+
+      it('binds the token to no subject when there is no caller', async () => {
+        const payload = await download(undefined);
+
+        expect(payload.s).toBeNull();
+      });
+    });
   });
 
   describe('deleteFile', () => {
@@ -1200,8 +1323,9 @@ describe('sample-file.controller', () => {
     });
   });
 
-  // RF007 AC#7 (#334): "substituição" is the audited verb that was
-  // missing alongside upload/access/logical-removal.
+  // RF007 AC4/AC6 (#334): a substitution writes a DataFileVersion that keeps
+  // the previous checksum, and the version it creates is audited alongside
+  // upload, access and logical removal.
   describe('replaceFile', () => {
     it('returns 503 when db is missing', async () => {
       const req = { app: { locals: {} }, params: { specimenId: '1', fileID: '2' }, file: { path: '/tmp/new.csv' } };

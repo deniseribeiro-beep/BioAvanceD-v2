@@ -4,26 +4,36 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import UserModel from '../../../src/models/User';
+import { createRequire } from 'node:module';
+
+// #1337: the model is loaded through createRequire, not `import`, the way the
+// route and controller tests load what they test. Measured: while this file
+// imported it, the merged v8 coverage of src/models/User.js dropped from
+// 97.14% to 86.85% of branches in a run of the same tests, because the
+// vite-loaded copy and the natively required copy were merged as one. For
+// the same reason the password service is stubbed with vi.spyOn on its CJS
+// module object (the one validate() requires), since vi.mock does not reach
+// a native require.
+const require2 = createRequire(import.meta.url);
+const UserModel = require2('../../../src/models/User');
+const passwordService = require2('../../../src/services/password.service');
 
 // Mock do password.service
-vi.mock('../../../src/services/password.service', () => ({
-  validateStrength: vi.fn((password) => {
-    // Simula validação: deve ter mínimo 8 caracteres, uma maiúscula, um número e um símbolo
-    if (password.length < 8) {
-      throw new Error('Password deve ter no mínimo 8 caracteres');
-    }
-    if (!/[A-Z]/.test(password)) {
-      throw new Error('Password deve conter pelo menos uma letra maiúscula');
-    }
-    if (!/[0-9]/.test(password)) {
-      throw new Error('Password deve conter pelo menos um número');
-    }
-    if (!/[!@#$%^&*]/.test(password)) {
-      throw new Error('Password deve conter pelo menos um símbolo especial');
-    }
-  })
-}));
+vi.spyOn(passwordService, 'validateStrength').mockImplementation((password) => {
+  // Simula validação: deve ter mínimo 8 caracteres, uma maiúscula, um número e um símbolo
+  if (password.length < 8) {
+    throw new Error('Password deve ter no mínimo 8 caracteres');
+  }
+  if (!/[A-Z]/.test(password)) {
+    throw new Error('Password deve conter pelo menos uma letra maiúscula');
+  }
+  if (!/[0-9]/.test(password)) {
+    throw new Error('Password deve conter pelo menos um número');
+  }
+  if (!/[!@#$%^&*]/.test(password)) {
+    throw new Error('Password deve conter pelo menos um símbolo especial');
+  }
+});
 
 describe('UserModel - Unit Tests', () => {
   let validUserData;
@@ -527,5 +537,174 @@ describe('UserModel - Unit Tests', () => {
     it('deve retornar Ativo para status desconhecido', () => {
       expect(UserModel.translateStatus('desconhecido')).toBe('Ativo');
     });
+  });
+});
+
+// #1337: the cases below cover validate()'s and the stored-name helpers'
+// remaining branches. Passwords meet the strength stub above.
+const STRONG = 'Senha@123456789';
+
+function base(extra = {}) {
+  return { name: 'Ana', email: 'ana@example.com', username: 'ana', password: STRONG, ...extra };
+}
+
+describe('UserModel.validate branch arms (#1337)', () => {
+  it('accepts a complete body', () => {
+    expect(UserModel.validate(base())).toEqual({ isValid: true, errors: [] });
+  });
+
+  it('requires name, email and username as strings', () => {
+    const r = UserModel.validate({ name: 1, email: 'not-an-email', username: 2, password: STRONG });
+    expect(r.isValid).toBe(false);
+    expect(r.errors).toEqual(expect.arrayContaining([
+      'name é obrigatório e deve ser string',
+      expect.stringContaining('email'),
+      'username é obrigatório e deve ser string',
+    ]));
+  });
+
+  it('turns a blank phone and organizationId into null, and keeps non-blank ones', () => {
+    const blank = base({ phone: '   ', organizationId: '  ' });
+    UserModel.validate(blank);
+    expect(blank.phone).toBeNull();
+    expect(blank.organizationId).toBeNull();
+    const kept = base({ phone: '119', organizationId: 'org-1' });
+    UserModel.validate(kept);
+    expect(kept.phone).toBe('119');
+    expect(kept.organizationId).toBe('org-1');
+  });
+
+  it('requires a password on create only', () => {
+    const { password, ...noPassword } = base();
+    expect(UserModel.validate(noPassword).errors).toContain('password é obrigatório');
+    expect(UserModel.validate({ ...noPassword, _id: 'x' }).isValid).toBe(true);
+  });
+
+  it('reports a weak password through the strength check', () => {
+    const r = UserModel.validate(base({ password: 'a' }));
+    expect(r.isValid).toBe(false);
+    expect(r.errors.some((e) => e.startsWith('password: '))).toBe(true);
+  });
+
+  it.each([
+    ['passwordHistory', 'x', 'passwordHistory deve ser um array'],
+    ['passwordChangedAt', 'not-a-date', 'passwordChangedAt deve ser uma data válida'],
+    ['forceReset', 'sim', 'forceReset deve ser booleano'],
+    ['failedLoginAttempts', '3', 'failedLoginAttempts deve ser número'],
+    ['accountLockedUntil', 'not-a-date', 'accountLockedUntil deve ser uma data válida'],
+    ['status', 'unknown', 'status deve ser: active/Ativo, inactive/Inativo, blocked/Bloqueado ou suspended/Suspenso'],
+    ['roleValidFrom', 'not-a-date', 'roleValidFrom deve ser uma data válida'],
+    ['roleValidUntil', 'not-a-date', 'roleValidUntil deve ser uma data válida'],
+    ['organizationIds', ['ok', 3], 'organizationIds deve ser um array de strings'],
+    ['organizationIds', 'org-1', 'organizationIds deve ser um array de strings'],
+  ])('rejects %s = %j', (field, value, message) => {
+    const r = UserModel.validate(base({ [field]: value }));
+    expect(r.isValid).toBe(false);
+    expect(r.errors).toContain(message);
+  });
+
+  it.each([
+    ['passwordHistory', ['h1']],
+    ['passwordChangedAt', '2026-01-01'],
+    ['forceReset', false],
+    ['failedLoginAttempts', 0],
+    ['accountLockedUntil', null],
+    ['accountLockedUntil', '2026-01-01'],
+    ['status', 'Bloqueado'],
+    ['roleValidFrom', null],
+    ['roleValidUntil', null],
+    ['organizationIds', null],
+    ['organizationIds', ['org-1']],
+  ])('accepts %s = %j', (field, value) => {
+    expect(UserModel.validate(base({ [field]: value })).errors).toEqual([]);
+  });
+
+  it('requires roleValidUntil after roleValidFrom', () => {
+    const msg = 'roleValidUntil deve ser posterior a roleValidFrom';
+    expect(UserModel.validate(base({ roleValidFrom: '2026-02-01', roleValidUntil: '2026-01-01' })).errors).toContain(msg);
+    expect(UserModel.validate(base({ roleValidFrom: '2026-01-01', roleValidUntil: '2026-01-01' })).errors).toContain(msg);
+    expect(UserModel.validate(base({ roleValidFrom: '2026-01-01', roleValidUntil: '2026-02-01' })).errors).toEqual([]);
+    // One side invalid: only that side's own error, not the ordering one.
+    const bad = UserModel.validate(base({ roleValidFrom: 'nope', roleValidUntil: '2026-02-01' })).errors;
+    expect(bad).toContain('roleValidFrom deve ser uma data válida');
+    expect(bad).not.toContain(msg);
+  });
+});
+
+describe('UserModel.fieldsOf / create (#1337)', () => {
+  it('converts the date fields and keeps an array organizationIds', () => {
+    const f = UserModel.fieldsOf({
+      accountLockedUntil: '2026-01-01', roleValidFrom: '2026-01-02', roleValidUntil: '2026-01-03',
+      organizationIds: ['o1'], passwordHistoryHashes: ['h'],
+    });
+    expect(f.accountLockedUntil).toEqual(new Date('2026-01-01'));
+    expect(f.roleValidFrom).toEqual(new Date('2026-01-02'));
+    expect(f.roleValidUntil).toEqual(new Date('2026-01-03'));
+    expect(f.organizationIds).toEqual(['o1']);
+    expect(f.passwordHistoryHashes).toEqual(['h']);
+  });
+
+  it('defaults every optional field with no data', () => {
+    const f = UserModel.fieldsOf();
+    expect(f.accountStatus).toBe('active');
+    expect(f.accountLockedUntil).toBeNull();
+    expect(f.organizationIds).toEqual([]);
+    expect(f.passwordHistoryHashes).toEqual([]);
+  });
+
+  it('create keeps a given passwordChangedAt and stamps one otherwise', () => {
+    const given = new Date('2025-05-05');
+    expect(UserModel.create({ passwordChangedAt: given }).passwordChangedAt).toBe(given);
+    expect(UserModel.create({}).passwordChangedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('UserModel stored-name helpers (#1337)', () => {
+  it('storedUpdateOf renames legacy keys and unsets both names', () => {
+    expect(UserModel.storedUpdateOf({ status: 'blocked', note: 'n' }, { unset: ['forceReset', 'other'] })).toEqual({
+      $set: { accountStatus: 'blocked', note: 'n' },
+      $unset: { status: '', forcePasswordReset: '', forceReset: '', other: '' },
+    });
+    expect(UserModel.storedUpdateOf()).toEqual({});
+    expect(UserModel.storedUpdateOf({}, { unset: ['name'] })).toEqual({ $unset: { displayName: '', name: '' } });
+  });
+
+  it('the stored-value accessors read the canonical name and are undefined for no user', () => {
+    expect(UserModel.storedValueOf(null, 'displayName')).toBeUndefined();
+    expect(UserModel.displayNameOf({ displayName: 'a', name: 'legacy' })).toBe('a');
+    expect(UserModel.lastLoginAtOf({ lastLogin: 'legacy' })).toBeUndefined();
+  });
+
+  it('storedNamesOf renames API keys, drops password, and keeps a canonical value over a legacy one', () => {
+    expect(UserModel.storedNamesOf({ name: 'a', password: 'p', status: 'active', accountStatus: 'blocked', email: 'e' }))
+      .toEqual({ displayName: 'a', accountStatus: 'blocked', email: 'e' });
+    expect(UserModel.storedNamesOf()).toEqual({});
+  });
+
+  it('canonicalMoveOf moves only legacy-only fields, honours except, and is null when nothing moves', () => {
+    expect(UserModel.canonicalMoveOf(null)).toBeNull();
+    expect(UserModel.canonicalMoveOf({ name: 'x' })).toBeNull();
+    expect(UserModel.canonicalMoveOf({ _id: 1, displayName: 'x' })).toBeNull();
+    const move = UserModel.canonicalMoveOf({ _id: 1, name: 'x', status: 'active', displayName: undefined }, { except: ['accountStatus'] });
+    expect(move).toEqual({
+      filter: { _id: 1, displayName: { $exists: false }, name: { $exists: true } },
+      update: { $set: { displayName: 'x' }, $unset: { name: '' } },
+    });
+  });
+
+  it('apiViewOf passes a non-object through and renames a document', () => {
+    expect(UserModel.apiViewOf(null)).toBeNull();
+    expect(UserModel.apiViewOf('x')).toBe('x');
+    expect(UserModel.apiViewOf({ displayName: 'a', email: 'e' })).toEqual({ name: 'a', email: 'e' });
+  });
+
+  it('normalizeStatus and translateStatus fall back on an unknown value', () => {
+    expect(UserModel.normalizeStatus('weird')).toBe('active');
+    expect(UserModel.translateStatus('weird')).toBe('Ativo');
+  });
+
+  it('stripSecrets passes non-objects through and maps an array', () => {
+    expect(UserModel.stripSecrets(null)).toBeNull();
+    expect(UserModel.stripSecrets([{ displayName: 'a', passwordHash: 'h', mfaSecret: 's' }])).toEqual([{ name: 'a' }]);
   });
 });

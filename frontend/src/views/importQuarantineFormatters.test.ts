@@ -52,6 +52,24 @@ describe('formatBatchSummary', () => {
     expect(summary.createdAtLabel).toBe('--');
   });
 
+  // #1419: the file is in the object store; on S3 it has no local path.
+  it('reads a batch retained in the object store with no storedPath as retained', () => {
+    const summary = formatBatchSummary({
+      _id: 'b5',
+      sourceFile: {
+        storageUri: `objstore://import-sources/b5/sha256/${'a'.repeat(64)}`,
+        storedPath: null,
+        originalName: 'amostras.csv',
+      },
+    });
+
+    expect(summary.sourceFileRetained).toBe(true);
+  });
+
+  it('reads a sourceFile with neither storageUri nor storedPath as not retained', () => {
+    expect(formatBatchSummary({ _id: 'b6', sourceFile: {} }).sourceFileRetained).toBe(false);
+  });
+
   it('renders an invalid date as -- rather than "Invalid Date"', () => {
     expect(formatBatchSummary({ _id: 'b3', createdAt: 'not-a-date' }).createdAtLabel).toBe('--');
   });

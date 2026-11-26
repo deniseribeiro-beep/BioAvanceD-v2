@@ -14,11 +14,11 @@ The administration screens come first. The shared staff screens follow with a sh
 
 | Screen (pt-BR label) | Route | What you can do here | Backend gate |
 |---|---|---|---|
-| Usuários | `/system-management?tab=users` | List, edit and delete users; reset or disable a user's two-factor authentication, force a password reset, revoke a user's sessions. `/users` and `/access` redirect here; the tab is the landing screen after sign-in. | `requirePermission('createUser')`, `requirePermission('resetMFA')`, `requirePermission('disableMFA')`, `requirePermission('forcePasswordReset')`, `requirePermission('revokeSessions')` (`user.routes.js`) |
+| Usuários | `/system-management?tab=users` | List, edit and delete users; reset or disable a user's two-factor authentication, force a password reset, revoke a user's sessions. `/users` and `/access` redirect here; the tab is the landing screen after sign-in. | `requirePermission('readUser')`, `requirePermission('updateUser')`, `requirePermission('deleteUser')`, `requirePermission('resetMFA')`, `requirePermission('disableMFA')`, `requirePermission('forcePasswordReset')`, `requirePermission('revokeSessions')` (`user.routes.js`) |
 | Organizações | `/system-management?tab=organizations` | List organizations; create, edit and delete them. | authenticated only for the list; `requirePermission('manageOrganizations')` (`organization.routes.js`) |
 | Coleções | `/system-management?tab=collections` | List collections; create, edit and delete them; record governance approvals, approval status changes and events. | authenticated only for reads; `requireRole(3, 4)` (`master-data.routes.js`, mounted at `/api/collections` in `api/backend/app.js`; `collection-governance.routes.js`) |
 | Segurança | `/system-management?tab=security` | Read and change the security configuration, roll it back to an earlier release, read role permissions and the consent queue, export security logs. `/security` redirects here. | `requireRole(4)` (`security.routes.js`) |
-| Novo Usuário / Editar Usuário | `/users/new` | Create a user (which also assigns a role), edit a user (a role change also needs assignRole, checked in the handler), set a user's password. | `requirePermission('createUser')`, `requirePermission('assignRole')`, `requirePermission('setUserPassword')` (`user.routes.js`) |
+| Novo Usuário / Editar Usuário | `/users/new` | Create a user (which also assigns a role), edit a user (a role change also needs assignRole, checked in the handler), set a user's password. | `requirePermission('createUser')`, `requirePermission('updateUser')`, `requirePermission('assignRole')`, `requirePermission('setUserPassword')` (`user.routes.js`) |
 | Usuário Criado com Sucesso | `/users/new/success` | Confirmation after creating a user; makes no API call. | none (no API call) |
 | Solicitações de acesso e distribuição | `/access-requests` | Create access requests, evaluate their compatibility, record the decision, distribute, revoke, and check access. | `requirePermission('manageAccessRequests')` (`api/backend/src/routes/accessRequest.js`); `requireRole(3, 4)` for purpose codes (`api/backend/src/routes/eConsent.js`) |
 | Gerenciamento de Backup | `/backup` | Run a backup, list backups, restore one, read and change the backup policy. The procedure is in `docs/operations/backup-restore-runbook.md`. | `requirePermission('manageBackup')` (`backup.routes.js`); `requireRole(4)` (`backupPolicy.routes.js`) |
@@ -26,17 +26,17 @@ The administration screens come first. The shared staff screens follow with a sh
 | Dicionário de Dados Integrado | `/admin/dicionario` | Read, print and export the built-in data dictionary reference; makes no API call. `/admin/dictionary` and `/admin/master-data` redirect here. | none (no API call) |
 | Construtor de TCLE | `/admin/tcle/new` | List consent templates and purpose codes; create a consent template. | `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
 | Construtor de TCLE | `/admin/tcle/edit/:templateId` | Open and update an existing consent template. | `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
-| Consentimentos (TCLE) | `/consents` | Read a participant's consent, revoke it, read its history. | `requireOrganizationScope` (`patient.routes.js`); `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
+| Consentimentos (TCLE) | `/consents` | Read a participant's consent, its revocation (time, channel, scope and place) and its messages. Open or download the signed term when a file is stored. The page refreshes that state while it stays open. | `requireOrganizationScope` (`patient.routes.js`); `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
 | Associações de Biomarcadores | `/biomarker-associations` | List biomarker associations; create and edit them. | authenticated only for the list; `requireRole(3, 4)` (`master-data.routes.js`, mounted at `/api/biomarker-associations` in `api/backend/app.js`) |
 | Central de Relatórios | `/reports` | Open the report catalogue and generate reports. | `requirePermission('viewReports')` (`reports.routes.js`) |
 | (the report's name) | `/reports/:id` | Read a generated report and delete it. | `requirePermission('viewReports')`, `requireRole(3, 4)` to delete (`reports.routes.js`) |
 | (the report type's name) | `/reports/query/:type` | Filter, preview and export a report as CSV or PDF. | `requirePermission('viewReports')`, `requireDataExportAllowed` for export (`reports.routes.js`) |
 | Modelos de Relatório | `/reports/templates` | List report templates; create, edit and delete them. | `requirePermission('viewReports')`, `requirePermission('manageReportTemplates')` (`reportTemplates.routes.js`) |
-| Logs | `/logs` | Search, filter and export the audit trail (CSV, XLSX), read session audit, read and verify the daily audit report. Opens because the Administrador is an audit reader (`requireAuditReader` in `frontend/src/App.tsx`). | `requireAuditReader` (`logs.routes.js`); `requirePermission('viewReports')` (`audit.routes.js`) |
+| Logs | `/logs` | Search, filter and export the audit trail (XLSX), read session audit, read and verify the daily audit report. Opens because the Administrador is an audit reader (`requireAuditReader` in `frontend/src/App.tsx`). | `requireAuditReader` (`logs.routes.js`); `requirePermission('viewReports')` (`audit.routes.js`) |
 | Detalhes do Log | `/logs/:id` | Read one audit entry. | `requireAuditReader` (`logs.routes.js`) |
 | Dashboard | `/dashboard` | The cards `DASHBOARD_CARDS` gives the Administrador (`frontend/src/views/dashboardCards.ts`). The Técnico's six, as described in [tecnico.md](tecnico.md): Pacientes, Amostras, Relatórios de Custódia, Armazenamento, Arquivos de Análise and Alertas de Temperatura (active temperature incidents). Then Relatórios de Governança, which counts the saved reports; Usuários, Segurança, Auditoria and Configurações open their screens. The page also shows the consent queue status. | `requireOrganizationScope` (`patient.routes.js`, `sample.routes.js`, `result.routes.js`); `requirePermission('viewTemperature')` (`incident.routes.js`); `requirePermission('viewReports')` (`reports.routes.js`); `requireRole(4)` (`security.routes.js`) |
 | Novo Cadastro | `/next/intake` | The intake wizard, as for the Técnico. | `requirePermission('createSample')`, `requireOrganizationScope` (`intakeWizard.routes.js`) |
-| Diretório de Pacientes | `/patients` | List, search and open participants; create and edit them; resend a consent notification. | `requireOrganizationScope`, `requirePermission('createPatient')` (`patient.routes.js`) |
+| Diretório de Pacientes | `/patients` | The list shows the participant id, the record number, the birth date as a calendar day and the consent badge, and refreshes that badge while the page stays open. Name, document, email and phone stay off the list. Create and edit a participant, collect an in-person signature (the place of collection is required) and send the TCLE by email while no consent is in force. | `requireOrganizationScope`, `requirePermission('createPatient')` (`patient.routes.js`) |
 | Importação Inteligente de Dados FHIR | `/patients/import-fhir` | The FHIR import, as for the Técnico. | `requirePermission('uploadFiles')`, `requireOrganizationScope` (`import.routes.js`) |
 | Inventário de Amostras | `/samples` | The sample inventory as for the Técnico, plus deleting a sample. | `requireOrganizationScope`, `requirePermission('deleteSample')` (`sample.routes.js`); `requirePermission('manageStorageAllocation')`, `requireStorageTargetsInScope` (`storage.routes.js`) |
 | Detalhes da Amostra | `/samples/:id` | As for the Técnico, plus uploading and deleting sample files, closing the specimen, and sending an analysis file for the sample (Enviar Arquivo, shown to Administrador and Coordenador only), which lists the analytical equipment. | `requireOrganizationScope`, `requirePermission('uploadSampleFiles')`, `requirePermission('deleteSampleFiles')`, `requirePermission('editSample')` (`sample.routes.js`); `requirePermission('manageStorageAllocation')` (`storage.routes.js`); `requirePermission('uploadFiles')`, `requireOrganizationScope` (`result.routes.js`); `requirePermission('viewEquipment')` (`equipment.routes.js`) |
@@ -49,7 +49,7 @@ The administration screens come first. The shared staff screens follow with a sh
 | Equipamentos | `/facility-management?tab=equipment` | List equipment; create, edit and delete it. `/equipment` redirects here; `/locations` also redirects here. | `requirePermission('viewEquipment')`, `requirePermission('manageStorageTopology')`, `requireOrganizationScope` (`equipment.routes.js`) |
 | Controle de Temperatura | `/facility-management?tab=temperature` | Read the stored temperature readings, as cards and a chart. `/temperature` redirects here. | `requirePermission('viewTemperature')` (`temperature.routes.js`) |
 | Histórico de Leituras | `/facility-management?tab=history` | The temperature readings. | `requirePermission('viewTemperature')` (`temperature.routes.js`) |
-| Gerenciamento de Incidentes | `/facility-management?tab=incidents` | Temperature incidents, as for the Técnico. | `requirePermission('viewTemperature')`, `requirePermission('manageTemperature')` (`incident.routes.js`) |
+| Gerenciamento de Incidentes | `/facility-management?tab=incidents` | Temperature incidents, as for the Técnico. `/incidents` redirects here. | `requirePermission('viewTemperature')`, `requirePermission('manageTemperature')` (`incident.routes.js`) |
 | Sensores | `/facility-management?tab=sensors` | Sensors, as for the Técnico. `/sensors` redirects here. | `requirePermission('viewTemperature')`, `requirePermission('manageSensor')` (`sensor.routes.js`) |
 | Políticas de Temperatura | `/facility-management?tab=policies` | Temperature policies, as for the Técnico. `/policies` redirects here. | `requirePermission('viewTemperature')`, `requirePermission('manageTemperaturePolicy')` (`policy.routes.js`) |
 | Descrições de Qualidade | `/quality-descriptions` | List quality descriptions; create, edit and delete them. | authenticated only for reads; `requireRole(3, 4)` (`master-data.routes.js`) |
@@ -63,7 +63,10 @@ The administration screens come first. The shared staff screens follow with a sh
 
 Exactly the Administrador row of `LEGACY_ROLES_SEED`, with each code's `displayName` and `allowedActions` from `PERMISSION_CATALOG`:
 
-- `createUser`: Criar usuário; CREATE, READ, UPDATE, DELETE
+- `createUser`: Criar usuário; CREATE
+- `readUser`: Visualizar usuários; READ
+- `updateUser`: Editar usuário; UPDATE
+- `deleteUser`: Excluir usuário; DELETE
 - `assignRole`: Atribuir papel; CREATE, UPDATE
 - `createSample`: Criar amostra; CREATE, READ
 - `editSample`: Editar amostra; UPDATE
@@ -119,6 +122,10 @@ manageAccessGrants gates the report-access grant routes of `access.routes.js` (#
 ## Account security
 
 `/user/security` (Segurança da Conta) and `/security/mfa-setup` (Configurar 2FA) are open to every role (`ROUTE_ACCESS` entries `ALL_ROLES`). On them you manage your own password, recovery codes, sessions and two-factor authentication; the routes check only that you are signed in (`user-security.routes.js`, `auth.routes.js`). The first sign-in that requires two-factor setup uses `/mfa-setup`, outside the signed-in layout.
+
+The header keeps a chevron on the Administrador's name, including when the name itself is hidden on a narrow screen. That menu opens Segurança and Configurações. Other roles keep a static name.
+
+The TCLE email carries a link to `/patients/:participantId/consent`. That page follows the consent in force, shows the term text and the signed file when one is stored, and lets the participant revoke the permissions in force. The decision keeps the server time. A term past `validTo` closes on read and on the hourly sweep, with one closure message.
 
 Acting on another user's account is the Administrador's alone. Each action is on the Usuários tab of `/system-management` (set password on `/users/new`), and each route in `user.routes.js` also passes `requireOrganizationScope`:
 

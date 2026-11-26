@@ -228,7 +228,7 @@ describe('backup.service', () => {
       vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
 
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
-        cb({ message: 'ENOENT' }, '', '');
+        cb({ message: 'mongodump: not found' }, '', '');
       });
 
       const fakeClient = {
@@ -291,8 +291,9 @@ describe('backup.service', () => {
       expect(JSON.parse(manifestWrite[1]).stores).toEqual(EXPORTED_STORES);
     });
 
-    // #1325: the outer catch's dumpBinaryMissing test matches ENOENT, so a
-    // store error carrying it must be answered before that catch.
+    // #1325: the outer catch's dumpBinaryMissing test matched ENOENT before
+    // #1437, so a store error carrying it was answered before that catch;
+    // the inner catch also keeps the result shape.
     it('fails the run naming the store, with no manifest and no JSON fallback, when a store export rejects with ENOENT (#1325)', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = undefined;
@@ -386,8 +387,9 @@ describe('backup.service', () => {
       expect(result.offsite).toEqual({ status: 'skipped', reason: 'not_configured' });
     });
 
-    // #1325: the outer catch's dumpBinaryMissing test matches ENOENT, so an
-    // off-site error carrying it must be answered before that catch.
+    // #1325: the outer catch's dumpBinaryMissing test matched ENOENT before
+    // #1437, so an off-site error carrying it was answered before that catch;
+    // the inner catch also keeps the result shape.
     it('fails the run keeping path and checksum, with no retention and no JSON fallback, when the off-site upload rejects with ENOENT (#1325)', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = undefined;
@@ -942,7 +944,7 @@ describe('backup.service', () => {
       vi.spyOn(fs.promises, 'readdir').mockResolvedValue(['samples.json', 'manifest.json']);
 
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
-        cb({ message: 'ENOENT' }, '', '');
+        cb({ message: 'mongorestore: not found' }, '', '');
       });
 
       const fakeCollection = {
@@ -1474,6 +1476,73 @@ describe('backup.service', () => {
       }));
     });
 
+    // RNF010 C3 (#1484): each restore test's wall time against the policy's rtoHours.
+    function rtoPolicyDb() {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'restore-test-history-1' });
+      const findOne = vi.fn().mockResolvedValue({ _id: 'main', rtoHours: 12 });
+      return {
+        db: { collection: vi.fn((name) => (name === 'backup_policy' ? { findOne } : { insertOne })) },
+        insertOne,
+      };
+    }
+
+    function mockSuccessfulRestore() {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum });
+        throw new Error('unexpected');
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+      const fakeDb = { listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })), dropDatabase: vi.fn().mockResolvedValue() };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() }; });
+    }
+
+    const T0 = Date.UTC(2026, 10, 1, 3, 0, 0);
+
+    it('records the restore test wall time within rtoHours', async () => {
+      mockSuccessfulRestore();
+      const backupService = freshBackupService();
+      const { db, insertOne } = rtoPolicyDb();
+      vi.spyOn(Date, 'now').mockReturnValueOnce(T0).mockReturnValue(T0 + 60000);
+
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'), db);
+
+      expect(result.success).toBe(true);
+      expect(insertOne.mock.calls[0][0]).toEqual(expect.objectContaining({
+        status: 'success', durationMs: 60000, rtoHours: 12, withinRto: true,
+      }));
+    });
+
+    it('records withinRto false and logs an error past rtoHours', async () => {
+      mockSuccessfulRestore();
+      const backupService = freshBackupService();
+      const { db, insertOne } = rtoPolicyDb();
+      vi.spyOn(Date, 'now').mockReturnValueOnce(T0).mockReturnValue(T0 + 13 * 3600000);
+
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'), db);
+
+      expect(result.success).toBe(true);
+      expect(insertOne.mock.calls[0][0]).toEqual(expect.objectContaining({
+        status: 'success', durationMs: 46800000, rtoHours: 12, withinRto: false,
+      }));
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('excedeu o RTO'), 'backup');
+    });
+
+    it('records withinRto null when the restore test fails', async () => {
+      env.MONGO_URI = undefined;
+      const backupService = freshBackupService();
+      const { db, insertOne } = rtoPolicyDb();
+
+      await backupService.testRestoreBackup('/some/backup', db);
+
+      const row = insertOne.mock.calls[0][0];
+      expect(row).toEqual(expect.objectContaining({ status: 'error', rtoHours: 12, withinRto: null }));
+      expect(typeof row.durationMs).toBe('number');
+      expect(row.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
     // #1325 (RNF010 C5): the restore test also checks the Neo4j and InfluxDB
     // exports through backupStores.verifySecondaryStores.
     const NEO4J_FAILED = 'Teste de restauração de Neo4j falhou: neo4j/nodes.ndjson não pôde ser descriptografado';
@@ -1619,7 +1688,8 @@ describe('backup.service', () => {
     // JSON backup" test above uses.
     function mockMongodumpAndMongorestoreMissing() {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
-        cb({ message: "'mongodump' is not recognized as an internal or external command" }, '', 'is not recognized');
+        const binary = command.startsWith('mongorestore') ? 'mongorestore' : 'mongodump';
+        cb({ message: `'${binary}' is not recognized as an internal or external command` }, '', 'is not recognized');
       });
     }
 
@@ -1942,10 +2012,10 @@ describe('backup.service', () => {
       }
     });
 
-    // #1325 (RNF010 C1): mongodump writes a plaintext dump file, its
-    // encryption throws ENOENT, and the JSON fallback reuses the folder. The
-    // leftover dump file is in no manifest entry, so the off-site copy sends
-    // nothing and the run fails.
+    // #1325 (RNF010 C1): a missing mongodump leaves a plaintext dump file
+    // behind, and the JSON fallback reuses the folder. The leftover dump file
+    // is in no manifest entry, so the off-site copy sends nothing and the run
+    // fails.
     it('sends no leftover plaintext dump file off-site when the JSON fallback reuses the folder (#1325)', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = 'mydb';
@@ -1977,10 +2047,8 @@ describe('backup.service', () => {
           const outDir = /--out="([^"]+)"/.exec(command)[1];
           fs.mkdirSync(path.join(outDir, 'biobank'), { recursive: true });
           fs.writeFileSync(path.join(outDir, 'biobank', 'patients.bson'), 'PLAINTEXT-PATIENT-RECORD');
-          cb(null, 'ok', '');
+          cb({ message: 'mongodump: not found' }, '', '');
         });
-        vi.spyOn(backupStores, 'encryptFileInPlace')
-          .mockRejectedValueOnce(new Error('ENOENT: no such file or directory, open patients.bson'));
         const fakeCollection = {
           find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 1, name: 'x' }]) }))
         };

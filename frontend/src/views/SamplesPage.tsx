@@ -9,7 +9,6 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { patientService, sampleService } from '../services/api';
 import { attachExternalDocument, type ExternalDocumentSampleApi } from '../hooks/samples/attachExternalDocument';
-import './SamplesPage.css';
 
 export default function SamplesPage() {
   const navigate = useNavigate();
@@ -21,12 +20,12 @@ export default function SamplesPage() {
   const {
     loading,
     error,
-    search,
     searchInput,
     setSearchInput,
     submitSearch,
     selectedSampleIds,
     filteredSamples,
+    pagedSamples,
     selectedSamples,
     allSelected,
     toggleSelectAll,
@@ -36,6 +35,10 @@ export default function SamplesPage() {
     openPrintModal,
     closePrintModal,
     refreshSamples,
+    currentPage,
+    totalPages,
+    pageSize,
+    setCurrentPage,
   } = useSamplesPage();
 
   const canEdit = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
@@ -95,7 +98,7 @@ export default function SamplesPage() {
   }
 
   return (
-    <>
+    <div className="page-shell">
       <div className="samples-view-switch" data-testid="samples-view-switch">
         <button
           type="button"
@@ -126,10 +129,14 @@ export default function SamplesPage() {
         search={searchInput}
         selectedSampleIds={selectedSampleIds}
         filteredSamples={filteredSamples}
+        pagedSamples={pagedSamples}
         selectedSamples={selectedSamples}
         allSelected={allSelected}
         canEdit={canEdit}
         printModalOpen={printModalOpen}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        pageSize={pageSize}
         onSearchChange={setSearchInput}
         onSearchSubmit={submitSearch}
         onToggleSelectAll={toggleSelectAll}
@@ -151,9 +158,10 @@ export default function SamplesPage() {
         onResendConsent={handleResendConsent}
         onAttachExternalDocument={handleAttachExternalDocument}
         onViewPending={handleViewPending}
+        onPageChange={setCurrentPage}
       />
       )}
-    </>
+    </div>
   );
 }
 

@@ -8,6 +8,7 @@ const {
   getInfluxQueryApi,
   getInfluxConfig
 } = require('../database/influxdb/connection');
+const { CURRENT_REVISION_FLUX } = require('../persistence/influxdb/telemetryRevisions');
 const EnvironmentalExcursionModel = require('../../models/EnvironmentalExcursion');
 const { quarantineByColdChainIncident } = require('../../services/equipment-sensor-quarantine.service');
 const { currentDatastreamsBySensor, datastreamEquipmentIdsBySensor, policiesByProfileId, freezerContainerIdOf } = require('../../services/sensorDatastream.service');
@@ -128,6 +129,8 @@ class TelemetryMonitor {
   // point by its `temperatureUnit` tag ('°F', 'K', else Celsius) into
   // `_value` before the threshold filter; a `temperature` point has no unit
   // tag and stays as it is. Everything below `_value` is therefore Celsius.
+  // #1518 (RNF025 C8): only the current revision of each reading is read
+  // (CURRENT_REVISION_FLUX), so a corrected reading's original is no breach.
   //
   // #688: the excursion threshold itself is per-sensor now -- each sensor's
   // bound TemperaturePolicy.minimumDuration (minutes) governs when present
@@ -139,7 +142,7 @@ class TelemetryMonitor {
     const queryApi = getInfluxQueryApi();
     const fluxQuery = `from(bucket: \"${getInfluxConfig().bucket}\")
       |> range(start: -${this.lookbackHours}h)
-      |> filter(fn: (r) => (r._measurement == \"freezer_temperature\" and r._field == \"temperatureValue\") or (r._measurement == \"temperature\" and r._field == \"value\"))
+      |> filter(fn: (r) => (r._measurement == \"freezer_temperature\" and r._field == \"temperatureValue\") or (r._measurement == \"temperature\" and r._field == \"value\"))${CURRENT_REVISION_FLUX}
       |> map(fn: (r) => ({r with _value: if exists r.temperatureUnit and r.temperatureUnit == \"°F\" then (r._value - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == \"K\" then r._value - 273.15 else r._value}))
       |> filter(fn: (r) => r._value > ${this.criticalTemp})
       |> sort(columns: [\"_time\"])`;
