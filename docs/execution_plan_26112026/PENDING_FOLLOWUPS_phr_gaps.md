@@ -42,9 +42,9 @@ Marque `[x]` **somente** com evidência (contagem Mongo, log, MANUAL_VERIFY, com
 | ID | Item | Critério de done | Seção | Tip (re-auditoria) |
 |----|------|------------------|-------|---------------------|
 | **G0** | Sanitização docs/históricos wave 1 | Inventário keep/archive/delete; `docs/_archive/pre-2.1/`; SoT 2.1 limpo; sem rewrite de git | §3 | **DONE** `d16f093a` + GCP `W1_GCP_SYNC_OK` |
-| **G1** | Crosswalk MarkerDB → ORPHA/MONDO + suggest real | Dump mapeado; suggest clínico ≠ só 16 fixture | §4 P0 | **W2 tip** scripts+tests; reimport homolog na sync |
-| **G2** | SIGTAP (+ fluxos BR críticos) no prod | Typeahead + dump full (`TabelaUnificada_202611_*`) | §5 P1 | **W2 tip** convert 5068 + typeahead; import Mongo na sync |
-| **G3** | CPATH / FDA_PGX | Import real **ou** ADR “N/A nesta release” assinado | §5 P1 | **W2 tip** ADR N/A |
+| **G1** | Crosswalk MarkerDB → ORPHA/MONDO + suggest real | Dump mapeado; suggest clínico ≠ só 16 fixture | §4 P0 | **DONE tip** scripts+tests (`b409ca2c`+); reimport ORPHA edges ainda residual se unmatched |
+| **G2** | SIGTAP (+ fluxos BR críticos) no prod | Typeahead + dump full (`TabelaUnificada_202611_*`) | §5 P1 | **DONE** convert+import homolog **sigtap=5068** (`W2_SIGTAP_FINAL`) |
+| **G3** | CPATH / FDA_PGX | Import real **ou** ADR “N/A nesta release” assinado | §5 P1 | **DONE** ADR N/A merged |
 | **G4** | Smokes humanos TRACE/P4 | Sessão, rascunho, Fabry E2E, ATC/SIGTAP/TCLE geo PASS | §6 P2/P4 | **PENDING** W5 |
 | **G5** | Busca única inventário (P5.3) | Uma busca; armazenagem acoplada | §7 P5.3 | **PENDING** W3 |
 | **G6** | Etiqueta → scan → consulta (P5.4) | Code128 + DataMatrix → acha amostra | §7 P5.4 | **PENDING** W3 |

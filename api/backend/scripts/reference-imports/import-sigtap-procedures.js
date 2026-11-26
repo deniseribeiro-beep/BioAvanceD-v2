@@ -23,7 +23,7 @@ function parseArgs(argv) {
   return args;
 }
 
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 100;
 
 async function importFile(db, filePath, dryRun) {
   const coll = dryRun ? null : db.collection('terminologyConcepts');
@@ -37,7 +37,8 @@ async function importFile(db, filePath, dryRun) {
 
   async function flush() {
     if (!batch.length || dryRun) return;
-    await coll.bulkWrite(batch, { ordered: false });
+    // Lab/standalone Mongo stalls on default w:majority; force acknowledged writes.
+    await coll.bulkWrite(batch, { ordered: false, writeConcern: { w: 1 } });
     batch = [];
   }
 

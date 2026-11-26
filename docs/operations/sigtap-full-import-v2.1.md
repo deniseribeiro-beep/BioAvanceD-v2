@@ -54,6 +54,8 @@ npm run reference:lab:convert:sigtap -- \
 
 Stdout reports `{"records":N,"outPath":"..."}`. For ZIP `TabelaUnificada_202611_v2611051737` expect **`records: 5068`** (>> 200 vs bundled sample).
 
+**Homolog note:** import uses `bulkWrite` with `writeConcern: { w: 1 }`. Standalone lab Mongo (no replica-set majority) otherwise stalls when the driver injects `w=majority`.
+
 **Sample-path verify (no full dump):** converter unit test + dry-run import on bundled fixture (§5).
 
 ## 4. Import into MongoDB
