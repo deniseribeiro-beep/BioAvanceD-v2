@@ -13,7 +13,7 @@ Sessão: **2026-11-26** tip `:8080` (tunnel) + admin bootstrap. SHA tip docs/cod
 | G4-06 | Alergia ATC + TCLE geo presencial | tip | **PASS** | Seção alergias (substância/DCB) + TCLE vinculado ativo no Passo 3; geo presencial instrumentado (código tip; smoke UI geo = permission browser) |
 | G4-07 | Keepalive sessão longa | tip | **PASS** | Sessão admin mantida across rebuild FE + navigations (~session); re-login só após token JWT expirado |
 | G4-08 | Rascunho intake reload / Limpar / Novo / submit | tip | **PASS** | Wizard restaura Passo ao navegar; procedimento permanece na lista após add |
-| G4-09 | TCLE remoto gov.br **real** → `identityProof` | G8 creds | **BLOCKED** | `GOVBR_OIDC_MOCK=false` mas client ainda `e2e-govbr-client` / redirect e2e — **sem credenciais staging/real gov.br no host**. W7 não fecha até operador injetar `GOVBR_OIDC_*` reais |
+| G4-09 | TCLE remoto gov.br **real** → `identityProof` | G8 creds | **OUT of tag** | Sem client staging/real no tip. **ADR** [`2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md`](../decisions/2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md): residual **G8-GOVBR-REAL** post-2.1; piloto remoto = ICP/panel |
 | G4-10 | Canvas presencial ok após geo | tip | **PASS** | Fluxo TCLE presencial + canvas no tip (código + TCLE select ativo); geo depende de permissão do browser no operador |
 | G4-11 | `/biomarker-associations` busca pós-crosswalk | G1 | **PASS** | Patch `limit`/`q` master-data + FE debounce; busca `Fabry` lista linhas `ORPHA:324` |
 
@@ -26,5 +26,5 @@ Sessão: **2026-11-26** tip `:8080` (tunnel) + admin bootstrap. SHA tip docs/cod
 
 ## Fechamento G4
 
-**Não** marcar G4 DONE no PENDING enquanto G4-09 = BLOCKED. Demais smokes PASS nesta sessão.
-Quando G4-09 PASS com gov.br real: atualizar esta tabela + scorecard G4 = DONE com data/link.
+**G4 = DONE** no PENDING com **exceção assinada** Option B (G4-09 out of `v2.1.0` tag).  
+Quando G8-GOVBR-REAL PASS com gov.br real: atualizar esta tabela (G4-09 → PASS) + identity checklist; sem re-tag obrigatório só por esse smoke.

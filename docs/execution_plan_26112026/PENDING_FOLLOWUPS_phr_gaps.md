@@ -45,11 +45,11 @@ Marque `[x]` **somente** com evidência (contagem Mongo, log, MANUAL_VERIFY, com
 | **G1** | Crosswalk MarkerDB → ORPHA/MONDO + suggest real | Dump mapeado; suggest clínico ≠ só 16 fixture | §4 P0 | **DONE** reimport tip `:8080` ORPHA **16→13222**; suggest Fabry 135; unmatched HITL 16893 (`MANUAL_VERIFY_v2.1_G1_crosswalk.md`) |
 | **G2** | SIGTAP (+ fluxos BR críticos) no prod | Typeahead + dump full (`TabelaUnificada_202611_*`) | §5 P1 | **DONE** tip `bioavanced_test` **sigtap=5068** + API/UI (`MANUAL_VERIFY_v2.1_G2_sigtap.md`) |
 | **G3** | CPATH / FDA_PGX | Import real **ou** ADR “N/A nesta release” assinado | §5 P1 | **DONE** ADR N/A merged |
-| **G4** | Smokes humanos TRACE/P4 | Sessão, rascunho, Fabry E2E, ATC/SIGTAP/TCLE geo PASS | §6 P2/P4 | **10/11 PASS** 2026-11-26; **G4-09 BLOCKED** (gov.br real creds) — `MANUAL_VERIFY_v2.1_G4_smokes.md` |
+| **G4** | Smokes humanos TRACE/P4 | Sessão, rascunho, Fabry E2E, ATC/SIGTAP/TCLE geo PASS | §6 P2/P4 | **DONE** 2026-11-26 (10/11 PASS + G4-09 **out** via ADR Option B) — `MANUAL_VERIFY_v2.1_G4_smokes.md` + `2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md` |
 | **G5** | Busca única inventário (P5.3) | Uma busca; armazenagem acoplada | §7 P5.3 | **DONE** `dc8a79c6` + GCP sync |
 | **G6** | Etiqueta → scan → consulta (P5.4) | Code128 + DataMatrix → acha amostra | §7 P5.4 | **DONE** `dc8a79c6` |
 | **G7** | TCLE builder + import claros (P5.1/P5.2) | Instruções + smoke publicar/import | §7 | **DONE** tip; smoke humano residual G4 |
-| **G8** | TCLE remoto ouro | gov.br Login Único real + evidência humana; ICP conforme ADR | §8 P6 | **TIP DONE** mock só CI (`5e78b750`); smoke gov.br real residual G4 |
+| **G8** | TCLE remoto ouro | gov.br Login Único real + evidência humana; ICP conforme ADR | §8 P6 | **TIP DONE** mock só CI (`5e78b750`); **G8-GOVBR-REAL** residual **post-2.1** (ADR Option B) |
 | **G9** | Acesso produto tenant-only | Sem OAuth Google / IAP como auth de produto | §8 | **DONE** invite tip+GCP (`5e78b750`) |
 | **G10** | ADR padrão ouro acesso + identidade | Aprovado **antes** de G8/G9 | §8 | **DONE** ADR + `d16f093a` / GCP sync |
 | **G11** | Empacotamento comercial | Onboarding, suporte, SLA, TLS (#1465), install runbook | §9 | **DONE** `6b98a5fc` (TLS ADR defer) |
@@ -144,7 +144,7 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 - [x] Procedimentos SIGTAP + alergia ATC + TCLE geo presencial
 - [x] Keepalive
 - [x] Rascunho intake
-- [ ] TCLE remoto gov.br **real** → `identityProof` — **BLOCKED** sem client staging/real
+- [x] TCLE remoto gov.br **real** → `identityProof` — **OUT of tag** ADR Option B (`2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md`); residual = G8-GOVBR-REAL
 - [x] Canvas presencial após geo
 - [x] Lista `/biomarker-associations` pós-crosswalk
 
@@ -196,7 +196,7 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 - [x] IAP fora do caminho comercial documentado
 - [x] `GOVBR_OIDC_MOCK` só test/CI (`isGovbrOidcMockActive`)
 - [x] Docs: `runtime-mock-hygiene-v2.1.md` + `MANUAL_VERIFY_v2.1_identity.md`
-- [ ] Evidência humana gov.br real + `identityProof` no aceite
+- [ ] Evidência humana gov.br real + `identityProof` no aceite — **post-2.1** (ADR Option B); piloto tag = ICP/panel
 
 ### Higienização runtime
 
@@ -241,9 +241,9 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 **Entrada:**
 
-- [x] Scorecard tip + ADRs out (G1/G2 live DONE; G4 10/11)
+- [x] Scorecard tip + ADRs out (G0–G13 tip; G4 DONE com exceção assinada Option B)
 - [x] Protocolo + hygiene docs (`GOVBR_OIDC_MOCK=false` no tip)
-- [ ] Smokes G4 verdes — falta **G4-09** gov.br real
+- [x] Smokes G4 verdes sob ADR — G4-09 **out of tag**; residual G8-GOVBR-REAL post-2.1
 - [x] Issues G12 zeradas no escopo
 
 **Ensaio / produção:** checklist `docs/qa/MANUAL_VERIFY_v2.1_ex_ante_gate.md`
@@ -252,7 +252,7 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 - [ ] Relatório PASS
 - [ ] Tag `v2.1.0` + deploy + smoke pós-deploy
 
-**Bloqueio atual:** G4-09 sem credenciais gov.br staging/real — **não** taguear `v2.1.0`.
+**Gate G4-09:** desbloqueado por ADR `2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md`. Piloto remoto = ICP/panel até G8-GOVBR-REAL PASS.
 
 ---
 
@@ -270,7 +270,7 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 1. Executar na ordem das waves (§2); não pular G10 antes de G8/G9.  
 2. Cada `[x]`: evidência inline ou link.  
-3. Residual tip→homolog: G1/G2 DONE; G4-09 gov.br real → W7.  
+3. Residual tip→homolog: G1/G2/G4 tip DONE (G4-09 out ADR); W7 ensaio/tag; G8-GOVBR-REAL post-2.1.  
 4. Zenodo DOI: archive; não misturar com go-live.
 
 ---
@@ -287,4 +287,4 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 | Runbook + Termos | Ausente | DONE |
 | Ex ante porta | Ausente | Protocolo; promote blocked |
 | ANVISA apto | Ausente | Matriz + gap rascunho |
-| Residual | — | G4 humano; G1/G2 live import; W7 tag/prod |
+| Residual | — | W7 RF016/tag/prod; G8-GOVBR-REAL post-2.1 (ADR Option B) |

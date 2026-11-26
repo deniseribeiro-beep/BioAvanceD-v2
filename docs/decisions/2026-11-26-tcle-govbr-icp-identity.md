@@ -20,3 +20,7 @@ For remote (e-mail) consent acceptance, how should the participant prove identit
 - Routes under `/api/e-consent/govbr/*` (start, callback) bind gov.br `sub` to the consent token session
 - Evidence JSON gains `identityProvider: govbr|icp-brasil|panel` and optional `govbrSub` / certificate thumbprint
 - Feature flag `CONSENT_GOVBR_OIDC_ENABLED` fails closed when unset
+
+## Clarification (tag `v2.1.0`)
+
+Human evidence of **real** gov.br OIDC (G4-09 / G8-GOVBR-REAL) is **out of the tag gate** per [`2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md`](2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md). Design above unchanged; pilot remote for go-live uses ICP/panel until that residual PASSes.

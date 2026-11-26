@@ -24,6 +24,7 @@ Release comercial **2.1.0**: tenant invite, Runbook + Termos/Privacidade, busca 
 
 - SRC_CPATH / SRC_FDA_PGX import — ADR N/A 2.1
 - TLS #1465 — ADR defer post-2.1
+- G4-09 / G8-GOVBR-REAL (Login Único gov.br real) — ADR Option B out of tag; pilot remote TCLE = ICP/panel
 - Zenodo DOI — not a go-live gate
 
 ## Upgrade notes
@@ -31,4 +32,4 @@ Release comercial **2.1.0**: tenant invite, Runbook + Termos/Privacidade, busca 
 1. Align env with `runtime-mock-hygiene-v2.1.md` (mock off on acceptance).
 2. Re-run MarkerDB crosswalk + biomarker import for ORPHA graph edges.
 3. Import SIGTAP full dump when staged (`sigtap-full-import-v2.1.md`).
-4. Complete G4 human smokes before production promote.
+4. G4 tip closed with ADR Option B; for remote TCLE pilot use ICP/panel until `GOVBR_OIDC_*` staging/prod + G8-GOVBR-REAL PASS.

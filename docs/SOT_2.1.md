@@ -16,6 +16,7 @@
 |------|------|------|
 | Acesso + identidade (G10) | [decisions/2026-11-26-access-tenant-only-identity.md](decisions/2026-11-26-access-tenant-only-identity.md) | **W1** |
 | TCLE gov.br / ICP | [decisions/2026-11-26-tcle-govbr-icp-identity.md](decisions/2026-11-26-tcle-govbr-icp-identity.md) | pré-2.1 |
+| G4-09 gov.br real out of tag (Option B) | [decisions/2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md](decisions/2026-11-26-g4-09-govbr-real-out-of-v2.1-tag.md) | **W5/W7** |
 | MarkerDB provisional | [decisions/2026-11-26-biomarker-condition-markerdb-provisional.md](decisions/2026-11-26-biomarker-condition-markerdb-provisional.md) | pré-2.1 |
 | Outbox biomarcador | [decisions/2026-11-26-biomarker-association-neo4j-outbox.md](decisions/2026-11-26-biomarker-association-neo4j-outbox.md) | pré-2.1 |
 | Import oficial biomarcador | [decisions/2026-11-25-biomarker-association-official-import.md](decisions/2026-11-25-biomarker-association-official-import.md) | pré-2.1 |
@@ -42,12 +43,14 @@ ADRs W2+ (G3 N/A, Runbook/Termos, drawer, TLS defer, issues-out) entram no SoT *
 
 | Wave | Escopo | Tip `main` |
 |------|--------|------------|
-| W1 | G0 + G10 | Em curso / merge desta wave |
-| W2–W7 | G1–G13 restante | Pendente auditoria + merge sequencial |
+| W1 | G0 + G10 | DONE |
+| W2–W6 | G1–G13 tip | DONE (G4 com ADR Option B) |
+| W7 | Ex ante → tag → prod | Entrada liberada; ensaio RF016 / tag pendente |
 
 ## Fora do go-live 2.1
 
 - DOI Zenodo e packs acadêmicos → archive / evidências históricas; **não** bloqueiam tag.
+- G8-GOVBR-REAL (Login Único real) → residual pós-tag; ADR Option B; piloto remoto = ICP/panel.
 - Mocks de runtime (`GOVBR_OIDC_MOCK`) → só CI; **proibidos** no aceite comercial.
 - Corpus `docs/mestrado/*` → keep acadêmico; não é SoT de produto.
 - Packs Zenodo sob `_archive/pre-2.1/zenodo-stages/` podem existir só no filesystem; tip git mantém inventário + `ZENODO.md` movido (binários/ui-live não precisam entrar no git).
