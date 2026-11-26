@@ -19,7 +19,8 @@ for i in $(seq 1 60); do
   [ "$(docker ps --format '{{.Names}}' | grep -c bootstrap)" -eq 0 ] && break
   sleep 5
 done
-docker ps -a --format '{{.Names}} {{.Status}}' | grep -E 'bootstrap|projection-worker' > "$OUT/oneshots.txt"
+# Scope to the test compose project only (lab bioavanced-*-bootstrap must not trip exit 5).
+docker ps -a --format '{{.Names}} {{.Status}}' | grep -E 'bioavanced-test-.*(bootstrap|projection-worker)' > "$OUT/oneshots.txt"
 grep bootstrap "$OUT/oneshots.txt" | grep -vq 'Exited (0)' && exit 5
 grep -qE 'neo4j-projection-worker-test-[0-9]+ Up' "$OUT/oneshots.txt" || exit 6
 docker rm -f e2e-gate > /dev/null 2>&1
