@@ -49,8 +49,8 @@ Marque `[x]` **somente** com evidência (contagem Mongo, log, MANUAL_VERIFY, com
 | **G5** | Busca única inventário (P5.3) | Uma busca; armazenagem acoplada | §7 P5.3 | **DONE** `dc8a79c6` + GCP sync |
 | **G6** | Etiqueta → scan → consulta (P5.4) | Code128 + DataMatrix → acha amostra | §7 P5.4 | **DONE** `dc8a79c6` |
 | **G7** | TCLE builder + import claros (P5.1/P5.2) | Instruções + smoke publicar/import | §7 | **DONE** tip; smoke humano W5 |
-| **G8** | TCLE remoto ouro | gov.br Login Único real + evidência humana; ICP conforme ADR | §8 P6 | **PENDING** W4 |
-| **G9** | Acesso produto tenant-only | Sem OAuth Google / IAP como auth de produto | §8 | **PENDING** W4 (ADR G10 em W1) |
+| **G8** | TCLE remoto ouro | gov.br Login Único real + evidência humana; ICP conforme ADR | §8 P6 | **TIP DONE** mock só CI (`5e78b750`); smoke gov.br real → W5 |
+| **G9** | Acesso produto tenant-only | Sem OAuth Google / IAP como auth de produto | §8 | **DONE** invite tip+GCP (`5e78b750`) |
 | **G10** | ADR padrão ouro acesso + identidade | Aprovado **antes** de G8/G9 | §8 | **DONE** ADR + `d16f093a` / GCP sync |
 | **G11** | Empacotamento comercial | Onboarding, suporte, SLA, TLS (#1465), install runbook | §9 | **PENDING** W6 |
 | **G12** | Issues GitHub escopo 2.1 = 0 open | Close com evidência ou ADR out-of-scope | §9 P3 | **PENDING** W6 |

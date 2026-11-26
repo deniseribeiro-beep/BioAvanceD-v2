@@ -192,7 +192,9 @@ async function loadServerAndStart() {
   await startServer();
 }
 
-describe('#1098 server.js startServer() -- pinning the pre-I/O boot prologue', () => {
+// #1583: under a loaded machine the suite exceeds vitest's default 5000 ms
+// even though each case passes alone — raise the suite budget.
+describe('#1098 server.js startServer() -- pinning the pre-I/O boot prologue', { timeout: 20000 }, () => {
   beforeEach(() => {
     signalListenersBefore = {
       SIGINT: process.listeners('SIGINT').slice(),
