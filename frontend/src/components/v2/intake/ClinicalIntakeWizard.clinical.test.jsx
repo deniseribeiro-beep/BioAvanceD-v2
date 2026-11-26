@@ -44,6 +44,12 @@ const SUGGESTED_CASCADE = {
 
 const MEDICATION = { name: 'Agalsidase beta', atc_code: 'ATC:a16ab04', atc_level_1: 'a' };
 
+const SIGTAP_PROCEDURE = {
+  code: '0201010208',
+  display: 'BIOPSIA DE FIGADO EM CUNHA / FRAGMENTO',
+  source: 'SIGTAP',
+};
+
 // Routes apiClient.get by URL. The diagnosis search and the ORPHA relation
 // lookup share /terminologies; the relation lookup's q starts with "ORPHA:".
 function mockApiClient({
@@ -52,6 +58,7 @@ function mockApiClient({
   profileImpl = () => Promise.resolve({ data: { disease: null }, status: 200 }),
   suggestImpl = () => Promise.resolve({ data: {}, status: 200 }),
   atcImpl = () => Promise.resolve({ data: { medications: [MEDICATION] } }),
+  proceduresImpl = () => Promise.resolve({ data: { procedures: [SIGTAP_PROCEDURE] } }),
   templates = [],
 } = {}) {
   apiClient.get.mockImplementation((url, config) => {
@@ -66,6 +73,9 @@ function mockApiClient({
     }
     if (url === '/dictionary/atc/search') {
       return atcImpl(config);
+    }
+    if (url === '/dictionary/procedures/search') {
+      return proceduresImpl(config);
     }
     if (url === '/intake-wizard/patient-match') {
       return Promise.resolve({ data: { matched: false }, status: 200 });
@@ -545,6 +555,20 @@ describe('ClinicalIntakeWizard step 3 -- clinical lists', () => {
 
     fireEvent.click(screen.getByTestId('wizard-remove-family-history-0'));
     expect(screen.queryByTestId('wizard-family-history-item-0')).not.toBeInTheDocument();
+  });
+
+  it('searches /dictionary/procedures/search and selecting a row fills the SIGTAP code', async () => {
+    mockApiClient();
+    await reachStep3();
+
+    change('wizard-procedure-name', 'BIOP');
+    await waitFor(() => expect(screen.getByTestId('wizard-procedure-option-0')).toHaveTextContent('BIOPSIA DE FIGADO'));
+    expect(getCalls('/dictionary/procedures/search').at(-1)[1].params).toEqual({ query: 'BIOP', limit: 20 });
+
+    fireEvent.mouseDown(screen.getByTestId('wizard-procedure-option-0'));
+    expect(screen.getByTestId('wizard-procedure-code')).toHaveValue('0201010208');
+    expect(screen.getByTestId('wizard-procedure-name')).toHaveValue('BIOPSIA DE FIGADO EM CUNHA / FRAGMENTO');
+    expect(screen.queryByTestId('wizard-procedure-results')).not.toBeInTheDocument();
   });
 
   it('does not add a procedure without a code or date; adds, resets and removes one with both', async () => {

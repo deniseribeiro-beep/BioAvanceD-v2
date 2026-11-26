@@ -24,7 +24,7 @@ function parseArgs(argv) {
 }
 
 async function importFile(db, filePath, dryRun) {
-  const coll = db.collection('terminologyConcepts');
+  const coll = dryRun ? null : db.collection('terminologyConcepts');
   const rl = readline.createInterface({
     input: fs.createReadStream(filePath, { encoding: 'utf8' }),
     crlfDelay: Infinity,
@@ -68,18 +68,29 @@ async function importFile(db, filePath, dryRun) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const filePath = args.inPath || DEFAULT_FIXTURE;
+  if (!fs.existsSync(filePath)) {
+    console.error(JSON.stringify({ error: 'input file not found', filePath }));
+    process.exit(2);
+  }
+  if (args.dryRun) {
+    const result = await importFile(null, filePath, true);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
   const db = await connectNewDB();
   try {
-    const result = await importFile(db, filePath, args.dryRun);
+    const result = await importFile(db, filePath, false);
     console.log(JSON.stringify(result, null, 2));
   } finally {
     await closeConnection().catch(() => {});
   }
 }
 
-main().catch((err) => {
-  console.error(err.message || err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err.message || err);
+    process.exit(1);
+  });
+}
 
-module.exports = { importFile, SYSTEM_URI };
+module.exports = { importFile, SYSTEM_URI, parseArgs, main, DEFAULT_FIXTURE };

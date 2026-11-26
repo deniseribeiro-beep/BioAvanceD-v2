@@ -11,6 +11,14 @@ MarkerDB Downloads (2024-09-12) name diseases in free text (`Diabetes Mellitus T
 3. Import **requires** at least one associatedCondition coding (governed or provisional) **and** at least one DOI|PMID evidence reference. Rows without evidence are rejected (no fictitious PMID).
 4. A later wave may replace provisional codings with ORPHA/MONDO via terminology crosswalk; until then `/dictionary/suggest` only surfaces associations whose `associatedCondition` includes an ORPHA coding (existing Mongo finder already filters by orpha).
 
+## Crosswalk (G1, 2026-11-26)
+
+**Decisão:** híbrido — matching automático offline (texto ORPHA embutido → rótulo ORPHA exato → sinônimo ORPHA → rótulo/sinônimo MONDO → ponte MONDO→ORPHA por xref ou rótulo alinhado). Sem inventar código (#1206). Entradas provisórias `https://markerdb.ca/condition` e evidência permanecem; codings governados são **acrescentados** em `associatedCondition`.
+
+**Fila HITL:** linhas ainda sem match vão para `docs/data/markerdb/crosswalk-unmatched-<YYYY-MM-DD>.jsonl` (versão de fila `1.0.0`).
+
+**Script:** `api/backend/src/reference-data/reference-imports/lab/crosswalkMarkerDbConditions.js` (wrapper CLI `api/backend/scripts/reference-imports/crosswalk-markerdb-conditions.js`). Terminologia offline via JSONL ORPHA/MONDO (`--orpha-jsonl`, `--mondo-jsonl`) ou `--mongo` em `terminologyConcepts`. Reimport com `import-biomarker-associations.js` re-emite outbox ORPHA via `orphaCodesOf`.
+
 ## Consequences
 
 - `BiomarkerAssociationModel.CONDITION_SYSTEMS` includes the provisional URI.

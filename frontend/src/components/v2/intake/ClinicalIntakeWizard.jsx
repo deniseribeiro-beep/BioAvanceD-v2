@@ -1459,6 +1459,9 @@ export default function ClinicalIntakeWizard(props) {
   const [allergyDraft, setAllergyDraft] = useState({ allergenName: '', allergenCode: '', reaction: '' });
   const [familyHistoryDraft, setFamilyHistoryDraft] = useState({ relationship: '', conditionName: '', orphaCode: '', onset: '' });
   const [procedureDraft, setProcedureDraft] = useState({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
+  const [procedureResults, setProcedureResults] = useState([]);
+  const [procedureLoading, setProcedureLoading] = useState(false);
+  const [procedureError, setProcedureError] = useState('');
   const [observationDraft, setObservationDraft] = useState({ testName: '', loincCode: '', value: '', unit: '', effectiveDate: '' });
   const [outcomeDraft, setOutcomeDraft] = useState({ outcomeType: '', outcomeDate: '' });
   const [sampleMerkleRoot, setSampleMerkleRoot] = useState('');
@@ -2035,6 +2038,19 @@ export default function ClinicalIntakeWizard(props) {
     setProcedureDraft((previous) => ({ ...previous, [field]: value }));
   };
 
+  const handleProcedureSelect = (procedure) => {
+    setTouched(true);
+    const display = String(procedure?.display || procedure?.name || '').trim();
+    const code = String(procedure?.code || '').trim();
+    setProcedureDraft((previous) => ({
+      ...previous,
+      procedureName: display,
+      procedureCode: code,
+    }));
+    setProcedureResults([]);
+    setProcedureError('');
+  };
+
   const handleAddProcedure = () => {
     const procedureName = String(procedureDraft.procedureName || '').trim();
     const procedureCode = procedureDraft.procedureCode.trim();
@@ -2046,6 +2062,8 @@ export default function ClinicalIntakeWizard(props) {
       procedures: [...previous.procedures, { procedureName, procedureCode, performed, bodySite }],
     }));
     setProcedureDraft({ procedureName: '', procedureCode: '', performed: '', bodySite: '' });
+    setProcedureResults([]);
+    setProcedureError('');
   };
 
   const handleRemoveProcedure = (index) => {
@@ -2404,6 +2422,55 @@ export default function ClinicalIntakeWizard(props) {
       active = false;
     };
   }, [formData.treatmentStatus, formData.medicationSearchQuery, diseaseProfile]);
+
+  useEffect(() => {
+    const query = String(procedureDraft.procedureName || '').trim();
+    if (query.length < 2) {
+      setProcedureResults([]);
+      setProcedureError('');
+      setProcedureLoading(false);
+      return;
+    }
+
+    let active = true;
+
+    const loadProcedures = async () => {
+      try {
+        setProcedureLoading(true);
+        setProcedureError('');
+
+        const response = await apiClient.get('/dictionary/procedures/search', {
+          params: {
+            query,
+            limit: 20,
+          },
+          suppressErrorToast: true,
+        });
+
+        if (!active) {
+          return;
+        }
+
+        const payload = extractResponseItems(response, ['procedures']);
+        setProcedureResults(payload);
+      } catch (_) {
+        if (active) {
+          setProcedureResults([]);
+          setProcedureError(t('wizard.errors.procedureSearch', 'Não foi possível consultar procedimentos SIGTAP neste momento.'));
+        }
+      } finally {
+        if (active) {
+          setProcedureLoading(false);
+        }
+      }
+    };
+
+    void loadProcedures();
+
+    return () => {
+      active = false;
+    };
+  }, [procedureDraft.procedureName, t]);
 
   const handleNext = () => {
     setTouched(true);
@@ -3265,25 +3332,56 @@ export default function ClinicalIntakeWizard(props) {
                 <h4 className="text-xl font-bold text-gray-800">{t('wizard.sections.procedures', 'Procedimentos')}</h4>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <Input
-                  id="procedureName"
-                  name="procedureName"
-                  data-testid="wizard-procedure-name"
-                  className="w-full rounded-lg px-3 py-2"
-                  label={t('wizard.fields.procedureName', 'Procedimento')}
-                  value={procedureDraft.procedureName}
-                  onChange={handleProcedureDraftChange('procedureName')}
-                  placeholder={t('wizard.placeholders.procedureName', 'Ex.: Biópsia hepática')}
-                />
+                <div className="md:col-span-2 relative">
+                  <Input
+                    id="procedureName"
+                    name="procedureName"
+                    data-testid="wizard-procedure-name"
+                    className="w-full rounded-lg px-3 py-2"
+                    label={t('wizard.fields.procedureName', 'Procedimento')}
+                    value={procedureDraft.procedureName}
+                    onChange={handleProcedureDraftChange('procedureName')}
+                    placeholder={t('wizard.placeholders.procedureName', 'Buscar procedimento SIGTAP (nome ou código)')}
+                  />
+                  {procedureLoading && (
+                    <p className="mt-1 text-sm text-slate-500">{t('wizard.status.loadingProcedures', 'Buscando procedimentos...')}</p>
+                  )}
+                  {procedureError && <p className="mt-1 text-sm text-red-600">{procedureError}</p>}
+                  {!procedureLoading && procedureResults.length > 0 && (
+                    <div
+                      className="absolute z-20 mt-2 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg"
+                      data-testid="wizard-procedure-results"
+                    >
+                      {procedureResults.map((item, index) => (
+                        <button
+                          key={`${item.code}-${item.display || item.name}-${index}`}
+                          type="button"
+                          data-testid={`wizard-procedure-option-${index}`}
+                          className="mb-1 block w-full rounded-md px-3 py-2 text-left hover:bg-slate-100"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            handleProcedureSelect(item);
+                          }}
+                        >
+                          <span className="block text-sm font-semibold text-slate-800">{item.display || item.name}</span>
+                          <span className="block text-xs text-slate-500">
+                            SIGTAP: {item.code || '-'}
+                            {item.source === 'INSTITUTIONAL' ? ' • Institucional' : ''}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <Input
                   id="procedureCode"
                   name="procedureCode"
                   data-testid="wizard-procedure-code"
-                  className="w-full rounded-lg px-3 py-2"
-                  label={t('wizard.fields.procedureCode', 'Código')}
+                  className="w-full rounded-lg px-3 py-2 bg-gray-100"
+                  label={t('wizard.fields.procedureCode', 'Código SIGTAP')}
                   value={procedureDraft.procedureCode}
                   onChange={handleProcedureDraftChange('procedureCode')}
-                  placeholder={t('wizard.placeholders.procedureCode', 'Código institucional')}
+                  placeholder={t('wizard.placeholders.procedureCode', 'Preenchido pela busca ou manual')}
                 />
                 <Input
                   id="procedurePerformed"

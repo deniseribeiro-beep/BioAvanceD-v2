@@ -41,17 +41,17 @@ Marque `[x]` **somente** com evidência (contagem Mongo, log, MANUAL_VERIFY, com
 
 | ID | Item | Critério de done | Seção | Tip (re-auditoria) |
 |----|------|------------------|-------|---------------------|
-| **G0** | Sanitização docs/históricos wave 1 | Inventário keep/archive/delete; `docs/_archive/pre-2.1/`; SoT 2.1 limpo; sem rewrite de git | §3 | **W1 PASS** — merge após sync GCP |
-| **G1** | Crosswalk MarkerDB → ORPHA/MONDO + suggest real | Dump mapeado; suggest clínico ≠ só 16 fixture | §4 P0 | **PENDING** W2 |
-| **G2** | SIGTAP (+ fluxos BR críticos) no prod | Typeahead + dump full (`TabelaUnificada_202611_*`) | §5 P1 | **PENDING** W2 (dump local presente) |
-| **G3** | CPATH / FDA_PGX | Import real **ou** ADR “N/A nesta release” assinado | §5 P1 | **PENDING** W2 |
+| **G0** | Sanitização docs/históricos wave 1 | Inventário keep/archive/delete; `docs/_archive/pre-2.1/`; SoT 2.1 limpo; sem rewrite de git | §3 | **DONE** `d16f093a` + GCP `W1_GCP_SYNC_OK` |
+| **G1** | Crosswalk MarkerDB → ORPHA/MONDO + suggest real | Dump mapeado; suggest clínico ≠ só 16 fixture | §4 P0 | **W2 tip** scripts+tests; reimport homolog na sync |
+| **G2** | SIGTAP (+ fluxos BR críticos) no prod | Typeahead + dump full (`TabelaUnificada_202611_*`) | §5 P1 | **W2 tip** convert 5068 + typeahead; import Mongo na sync |
+| **G3** | CPATH / FDA_PGX | Import real **ou** ADR “N/A nesta release” assinado | §5 P1 | **W2 tip** ADR N/A |
 | **G4** | Smokes humanos TRACE/P4 | Sessão, rascunho, Fabry E2E, ATC/SIGTAP/TCLE geo PASS | §6 P2/P4 | **PENDING** W5 |
 | **G5** | Busca única inventário (P5.3) | Uma busca; armazenagem acoplada | §7 P5.3 | **PENDING** W3 |
 | **G6** | Etiqueta → scan → consulta (P5.4) | Code128 + DataMatrix → acha amostra | §7 P5.4 | **PENDING** W3 |
 | **G7** | TCLE builder + import claros (P5.1/P5.2) | Instruções + smoke publicar/import | §7 | **PENDING** W3 |
 | **G8** | TCLE remoto ouro | gov.br Login Único real + evidência humana; ICP conforme ADR | §8 P6 | **PENDING** W4 |
 | **G9** | Acesso produto tenant-only | Sem OAuth Google / IAP como auth de produto | §8 | **PENDING** W4 (ADR G10 em W1) |
-| **G10** | ADR padrão ouro acesso + identidade | Aprovado **antes** de G8/G9 | §8 | **W1 PASS** — ADR tip |
+| **G10** | ADR padrão ouro acesso + identidade | Aprovado **antes** de G8/G9 | §8 | **DONE** ADR + `d16f093a` / GCP sync |
 | **G11** | Empacotamento comercial | Onboarding, suporte, SLA, TLS (#1465), install runbook | §9 | **PENDING** W6 |
 | **G12** | Issues GitHub escopo 2.1 = 0 open | Close com evidência ou ADR out-of-scope | §9 P3 | **PENDING** W6 |
 | **G13** | Runbook in-app + Termos/Políticas | Substitui hub “Dicionário”; aceite versionado ≠ TCLE | §9 P8 | **PENDING** W3 |
