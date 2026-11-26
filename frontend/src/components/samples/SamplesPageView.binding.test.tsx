@@ -16,6 +16,8 @@ function renderList(samples: SampleWithId[], overrides: Partial<ComponentProps<t
       loading={false}
       error={null}
       search=""
+      searchInput=""
+      lookupDrawerOpen={false}
       selectedSampleIds={[]}
       filteredSamples={samples}
       pagedSamples={samples}
@@ -28,6 +30,12 @@ function renderList(samples: SampleWithId[], overrides: Partial<ComponentProps<t
       pageSize={10}
       onSearchChange={noop}
       onSearchSubmit={noop}
+      onOpenLookupDrawer={noop}
+      onCloseLookupDrawer={noop}
+      onLookupOpenDetail={noop}
+      onLookupOpenStorage={noop}
+      onLookupOpenLabel={noop}
+      onOpenWithdrawalReturn={noop}
       onToggleSelectAll={noop}
       onToggleSelect={noop}
       onBatchDelete={asyncNoop}
@@ -225,7 +233,10 @@ describe('SamplesPageView print labels', () => {
     expect(labels[0].querySelector('.qr-label__patient')).toHaveTextContent('P-1');
     expect(labels[1].querySelector('.qr-label__code')).toHaveTextContent('SP-2');
     expect(labels[1].querySelector('.qr-label__title')).toHaveTextContent('samples.sampleFallback');
-    expect(labels[2].querySelector('.qr-label__code')).toHaveTextContent('p3');
+    expect(screen.getByTestId('batch-label-code128-p1')).toBeInTheDocument();
+    expect(screen.getByTestId('batch-label-datamatrix-p1')).toBeInTheDocument();
+    expect(screen.getByTestId('batch-label-datamatrix-p2')).toBeInTheDocument();
+    expect(screen.getByTestId('batch-label-empty-p3')).toHaveTextContent('Sem código de barras');
     expect(labels[2].querySelector('.qr-label__patient')).toHaveTextContent('N/A');
   });
 });

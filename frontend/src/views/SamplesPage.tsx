@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import SamplesPageView from '../components/samples/SamplesPageView';
 import SamplesStorageSection from '../components/samples/SamplesStorageSection';
@@ -17,9 +17,11 @@ export default function SamplesPage() {
   const { user } = useAuth();
   const [activeSection, setActiveSection] = useState<'inventory' | 'storage'>('inventory');
   const [expandedStorageSample, setExpandedStorageSample] = useState<SampleWithId | null>(null);
+  const [lookupDrawerOpen, setLookupDrawerOpen] = useState(false);
   const {
     loading,
     error,
+    search,
     searchInput,
     setSearchInput,
     submitSearch,
@@ -42,6 +44,17 @@ export default function SamplesPage() {
   } = useSamplesPage();
 
   const canEdit = user?.roleName === 'Administrador' || user?.roleName === 'Coordenador';
+
+  const storageLookupKey = useMemo(() => {
+    const toKey = (sample: SampleWithId) => String(sample.barcode || sample.specimenId || sample.id);
+    if (expandedStorageSample) return toKey(expandedStorageSample);
+    if (selectedSampleIds.length === 1) {
+      const selected = filteredSamples.find((sample) => sample.id === selectedSampleIds[0]);
+      if (selected) return toKey(selected);
+    }
+    if (search.trim() && filteredSamples.length === 1) return toKey(filteredSamples[0]);
+    return null;
+  }, [expandedStorageSample, selectedSampleIds, filteredSamples, search]);
 
   const handleResendConsent = async (sample: SampleWithId) => {
     const participantId = String(sample.participantId || (sample as any).patient?.participantId || '').trim();
@@ -119,14 +132,16 @@ export default function SamplesPage() {
       </div>
 
       {activeSection === 'storage' ? (
-        <SamplesStorageSection />
+        <SamplesStorageSection selectionLookupKey={storageLookupKey} />
       ) : (
       <SamplesPageView
         t={t}
         language={language}
         loading={loading}
         error={error}
-        search={searchInput}
+        search={search}
+        searchInput={searchInput}
+        lookupDrawerOpen={lookupDrawerOpen}
         selectedSampleIds={selectedSampleIds}
         filteredSamples={filteredSamples}
         pagedSamples={pagedSamples}
@@ -139,6 +154,22 @@ export default function SamplesPage() {
         pageSize={pageSize}
         onSearchChange={setSearchInput}
         onSearchSubmit={submitSearch}
+        onOpenLookupDrawer={() => setLookupDrawerOpen(true)}
+        onCloseLookupDrawer={() => setLookupDrawerOpen(false)}
+        onLookupOpenDetail={(sampleId) => {
+          setLookupDrawerOpen(false);
+          navigate(`/samples/${sampleId}`);
+        }}
+        onLookupOpenStorage={(sample) => {
+          setLookupDrawerOpen(false);
+          setExpandedStorageSample(sample);
+          setActiveSection('storage');
+        }}
+        onLookupOpenLabel={(sampleId) => {
+          setLookupDrawerOpen(false);
+          navigate(`/samples/${sampleId}/label`);
+        }}
+        onOpenWithdrawalReturn={() => navigate('/samples/withdrawal-return')}
         onToggleSelectAll={toggleSelectAll}
         onToggleSelect={toggleSelect}
         onBatchDelete={handleBatchDelete}

@@ -122,9 +122,23 @@ export default function SampleLabelPage() {
   }
 
   if (error || !label) {
+    const noBarcode = (error || '').toLowerCase().includes('código de barras') || (error || '').toLowerCase().includes('barcode');
     return (
       <div className="page-shell" data-testid="sample-label-error">
-        <p>{error || 'Amostra não encontrada.'}</p>
+        <h1 className="page-title">Etiqueta</h1>
+        <Card>
+          <p data-testid="sample-label-error-message">{error || 'Amostra não encontrada.'}</p>
+          {noBarcode ? (
+            <div data-testid="sample-label-no-barcode-guidance" style={{ marginTop: '1rem', fontSize: '0.95rem', lineHeight: 1.5 }}>
+              <p>
+                Para gerar Code128 e DataMatrix, conclua o cadastro da amostra com código industrial (intake clínico ou ficha de amostra).
+              </p>
+              <p style={{ marginTop: '0.5rem' }}>
+                Depois de gerado, escaneie o código na busca do inventário ou use a consulta rápida para abrir detalhe, armazenagem e esta página de etiqueta.
+              </p>
+            </div>
+          ) : null}
+        </Card>
       </div>
     );
   }

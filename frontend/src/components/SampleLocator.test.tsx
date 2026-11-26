@@ -234,4 +234,31 @@ describe('SampleLocator', () => {
     pending.resolve({ success: true });
     await waitFor(() => expect(screen.queryByTestId('sample-locator-result-box')).toBeNull());
   });
+
+  it('G5 hideSearch: no local search field; empty state guides back to inventory', () => {
+    render(
+      <SampleLocator
+        hideSearch
+        selectionEmptyHint="Volte à aba Inventário: pesquise ou selecione uma amostra."
+      />,
+    );
+    expect(screen.queryByTestId('sample-locator-search')).toBeNull();
+    expect(screen.queryByTestId('sample-locator-input')).toBeNull();
+    expect(screen.getByText('Localização da amostra')).toBeInTheDocument();
+    expect(screen.getByText(/sem segunda busca/i)).toBeInTheDocument();
+    expect(screen.getByTestId('sample-locator-empty')).toHaveTextContent(
+      'Volte à aba Inventário: pesquise ou selecione uma amostra.',
+    );
+  });
+
+  it('G5 hideSearch: selectionKey auto-loads location without Nova Busca', async () => {
+    mocks.getSampleLocation.mockResolvedValueOnce({ success: true, data: FOUND });
+    render(<SampleLocator hideSearch selectionKey="BC-99" />);
+    await screen.findByTestId('sample-locator-result-box');
+    expect(mocks.getSampleLocation).toHaveBeenCalledWith('BC-99');
+    expect(screen.getByTestId('sample-locator-selection-fed')).toHaveTextContent('BC-99');
+    expect(screen.queryByTestId('sample-locator-new-search-button')).toBeNull();
+    expect(screen.getByTestId('sample-locator-release-button')).toBeInTheDocument();
+  });
 });
+

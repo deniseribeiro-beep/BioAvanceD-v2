@@ -260,7 +260,7 @@ export default function FhirImportPage() {
           <div>
             <h1 className="page-title">Importação em lote</h1>
             <p className="page-subtitle">
-              Importação em lote FHIR R4: participantes e amostras entram em quarentena até TCLE assinado ou documentação autorizada. Salvar não libera a amostra para uso.
+              Importação em lote FHIR R4: participantes e amostras entram em quarentena até TCLE assinado ou documentação autorizada. Salvar não libera a amostra para uso. Rotas antigas <code>/import</code> e <code>/import/lgpd</code> redirecionam para esta página.
             </p>
           </div>
         </div>

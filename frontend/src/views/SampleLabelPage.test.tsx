@@ -100,7 +100,9 @@ describe('SampleLabelPage', () => {
   it('reports a sample with no barcode and never asks for its assets', async () => {
     serve({ specimenId: 'SP-1' });
     renderAt('/samples/S1/label');
-    expect(await screen.findByTestId('sample-label-error')).toHaveTextContent('Amostra sem código de barras gerado.');
+    expect(await screen.findByTestId('sample-label-error')).toBeInTheDocument();
+    expect(screen.getByTestId('sample-label-error-message')).toHaveTextContent('Amostra sem código de barras gerado.');
+    expect(screen.getByTestId('sample-label-no-barcode-guidance')).toHaveTextContent('Code128 e DataMatrix');
     expect(h.get).toHaveBeenCalledTimes(1);
   });
 

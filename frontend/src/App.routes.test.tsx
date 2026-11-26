@@ -30,6 +30,7 @@ vi.mock('./foundation/FoundationApp', () => ({ default: () => <p>page:foundation
 vi.mock('./views/LoginPage', () => ({ default: () => <p>page:login</p> }));
 vi.mock('./views/MFASetupPage', () => ({ default: () => <p>page:mfa-setup</p> }));
 vi.mock('./views/ResetPasswordPage', () => ({ default: () => <p>page:reset-password</p> }));
+vi.mock('./views/TenantInviteAcceptPage', () => ({ default: () => <p>page:invite-accept</p> }));
 vi.mock('./views/Dashboard', () => ({ default: () => <p>page:dashboard</p> }));
 vi.mock('./views/PatientsPage', () => ({ default: () => <p>page:patients</p> }));
 vi.mock('./views/FhirImportPage', () => ({ default: () => <p>page:fhir-import</p> }));
@@ -47,7 +48,8 @@ vi.mock('./views/ReportQueryPage', () => ({ default: () => <p>page:report-query<
 vi.mock('./views/ReportViewPage', () => ({ default: () => <p>page:report-view</p> }));
 vi.mock('./views/QualityDescriptionPage', () => ({ default: () => <p>page:quality-descriptions</p> }));
 vi.mock('./views/ImportQuarantinePage', () => ({ default: () => <p>page:import-quarantine</p> }));
-vi.mock('./components/v2/ImportForm', () => ({ default: () => <p>page:import</p> }));
+vi.mock('./views/RunbookPage', () => ({ default: () => <p>page:runbook</p> }));
+vi.mock('./views/LegalDocumentPage', () => ({ default: () => <p>page:legal</p> }));
 vi.mock('./views/AccessRequestsPage', () => ({ default: () => <p>page:access-requests</p> }));
 vi.mock('./views/ConsentHistoryPage', () => ({ default: () => <p>page:consents</p> }));
 vi.mock('./views/BiomarkerAssociationsPage', () => ({ default: () => <p>page:biomarker-associations</p> }));
@@ -94,6 +96,7 @@ describe('page routes in App.tsx', () => {
     ['/login', 'page:login'],
     ['/mfa-setup', 'page:mfa-setup'],
     ['/reset-password', 'page:reset-password'],
+    ['/invite/accept', 'page:invite-accept'],
     ['/dashboard', 'page:dashboard'],
     ['/patients', 'page:patients'],
     ['/patients/import-fhir', 'page:fhir-import'],
@@ -111,7 +114,9 @@ describe('page routes in App.tsx', () => {
     ['/reports/R-1', 'page:report-view'],
     ['/quality-descriptions', 'page:quality-descriptions'],
     ['/import/quarantine', 'page:import-quarantine'],
-    ['/import', 'page:import'],
+    ['/runbook', 'page:runbook'],
+    ['/legal/terms', 'page:legal'],
+    ['/legal/privacy', 'page:legal'],
     ['/access-requests', 'page:access-requests'],
     ['/consents', 'page:consents'],
     ['/biomarker-associations', 'page:biomarker-associations'],
@@ -119,7 +124,6 @@ describe('page routes in App.tsx', () => {
     ['/admin/tcle/edit/TPL-1', 'page:tcle-builder'],
     ['/backup', 'page:backup'],
     ['/settings/parameters', 'page:settings-parameters'],
-    ['/admin/dicionario', 'page:data-dictionary'],
     ['/user/security', 'page:user-security'],
     ['/security/mfa-setup', 'page:mfa-setup'],
   ])('%s renders %s', expectOnlyPage);
@@ -129,9 +133,13 @@ describe('redirect routes in App.tsx', () => {
   it.each([
     ['/', 'page:dashboard', '/dashboard'],
     ['/pacientes/novo-atendimento', 'page:intake', '/next/intake'],
+    ['/import', 'page:fhir-import', '/patients/import-fhir'],
     ['/import/fhir', 'page:fhir-import', '/patients/import-fhir'],
     ['/import/lgpd', 'page:fhir-import', '/patients/import-fhir'],
-    ['/admin/master-data', 'page:data-dictionary', '/admin/dicionario'],
+    ['/help', 'page:runbook', '/runbook'],
+    ['/admin/dicionario', 'page:runbook', '/runbook'],
+    ['/admin/master-data', 'page:runbook', '/runbook'],
+    ['/admin/dictionary', 'page:runbook', '/runbook'],
   ])('%s lands on %s at %s', async (url, page, landed) => {
     await expectOnlyPage(url, page);
     expect(window.location.pathname).toBe(landed);

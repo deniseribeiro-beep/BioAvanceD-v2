@@ -87,6 +87,7 @@ function renderAt(path = '/samples') {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/samples" element={<SamplesPage />} />
+        <Route path="/samples/withdrawal-return" element={<div data-testid="withdrawal-stub" />} />
         <Route path="/samples/:id" element={<SamplesPage />} />
       </Routes>
     </MemoryRouter>,
@@ -113,6 +114,12 @@ describe('SamplesPage routing and sections', () => {
     renderAt('/samples/abc');
     expect(screen.getByTestId('details-stub')).toBeInTheDocument();
     expect(screen.queryByTestId('sample-list-root')).toBeNull();
+  });
+
+  it('links withdrawal-return from the samples hub', () => {
+    renderAt();
+    fireEvent.click(screen.getByTestId('samples-withdrawal-return-link'));
+    expect(screen.getByTestId('withdrawal-stub')).toBeInTheDocument();
   });
 
   it('switches between the inventory list and the storage section', () => {

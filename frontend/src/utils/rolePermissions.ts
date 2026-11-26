@@ -105,6 +105,11 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   ['/security/mfa-setup', ALL_ROLES],
   ['/mfa-setup', ALL_ROLES],
 
+  // G13 — in-app runbook and product legal pages (all authenticated roles).
+  ['/runbook', ALL_ROLES],
+  ['/help', ALL_ROLES],
+  ['/legal', ALL_ROLES],
+
   // Administration.
   ['/security', ADMIN],
   ['/system-management', ADMIN],
@@ -116,6 +121,8 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   ['/backup', ADMIN],
   ['/settings/parameters', ADMIN],
   ['/admin/tcle', ADMIN_COORD],
+  // Legacy UI hub redirects to /runbook; APIs /dictionary/* unchanged.
+  ['/admin/dicionario', ADMIN],
   ['/admin', ADMIN],
 
   // Reporting and audit.

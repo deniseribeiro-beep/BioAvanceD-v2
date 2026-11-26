@@ -585,6 +585,7 @@ app.use("/api/backup", require("./src/interface/routes/backup.routes"));
 app.use("/api/backup-policy", require("./src/interface/routes/backupPolicy.routes"));
 app.use("/api/import-lgpd", require("./src/interface/routes/import-lgpd.routes"));
 app.use("/api/compliance", require("./src/interface/routes/compliance.routes"));
+app.use("/api/product-legal", require("./src/interface/routes/product-legal.routes"));
 app.use("/api/cids", require("./src/interface/routes/cid.routes"));
 
 app.use("/api/phone-codes", require("./src/interface/routes/phone-codes.routes"));

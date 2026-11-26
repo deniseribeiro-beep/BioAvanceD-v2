@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react';
-import { Edit3, Package, Printer, QrCode, Search } from 'lucide-react';
+import { Edit3, Package, Printer, QrCode, ScanLine, Search, Truck } from 'lucide-react';
 import Barcode from 'react-barcode';
+import Datamatrix from 'react-datamatrix-svg';
 import Button from '../UI/Button';
 import Card from '../UI/Card';
 import Input from '../UI/Input';
@@ -12,6 +13,7 @@ import type { Sample } from '../../types/models';
 import type { SampleWithId } from '../../hooks/samples/useSamplesPage';
 import { getStorageLabel, buildSprecSummary } from './sampleListFormatters';
 import InventoryBoxGrid from './InventoryBoxGrid';
+import InventoryLookupDrawer from './InventoryLookupDrawer';
 import { resolveSampleLifecycleStatus } from '../../foundation/contracts';
 import { BLOCKED_SPECIMEN_STATUSES, resolveSpecimenStatus } from '../../utils/sampleHelpers';
 
@@ -23,6 +25,8 @@ interface SamplesPageViewProps {
   loading: boolean;
   error: string | null;
   search: string;
+  searchInput: string;
+  lookupDrawerOpen: boolean;
   selectedSampleIds: string[];
   filteredSamples: SampleWithId[];
   pagedSamples: SampleWithId[];
@@ -35,6 +39,12 @@ interface SamplesPageViewProps {
   pageSize: number;
   onSearchChange: (value: string) => void;
   onSearchSubmit: () => void;
+  onOpenLookupDrawer: () => void;
+  onCloseLookupDrawer: () => void;
+  onLookupOpenDetail: (sampleId: string) => void;
+  onLookupOpenStorage: (sample: SampleWithId) => void;
+  onLookupOpenLabel: (sampleId: string) => void;
+  onOpenWithdrawalReturn: () => void;
   onToggleSelectAll: () => void;
   onToggleSelect: (sample: SampleWithId) => void;
   onBatchDelete: () => Promise<void>;
@@ -84,6 +94,8 @@ export default function SamplesPageView({
   loading,
   error,
   search,
+  searchInput,
+  lookupDrawerOpen,
   selectedSampleIds,
   filteredSamples,
   pagedSamples,
@@ -96,6 +108,12 @@ export default function SamplesPageView({
   pageSize,
   onSearchChange,
   onSearchSubmit,
+  onOpenLookupDrawer,
+  onCloseLookupDrawer,
+  onLookupOpenDetail,
+  onLookupOpenStorage,
+  onLookupOpenLabel,
+  onOpenWithdrawalReturn,
   onToggleSelectAll,
   onToggleSelect,
   onBatchDelete,
@@ -119,8 +137,14 @@ export default function SamplesPageView({
 
   return (
     <div className="page-shell samples-page" data-testid="sample-list-root">
-      <div className="page-header">
+      <div className="page-header samples-page-header">
         <h1 data-testid="samples-page-title">{t('samples.title')}</h1>
+        <div className="samples-hub-actions" data-testid="samples-hub-actions">
+          <Button variant="secondary" onClick={onOpenWithdrawalReturn} data-testid="samples-withdrawal-return-link">
+            <Truck size={16} />
+            {t('samples.withdrawalReturnHub', 'Retirada / Devolução')}
+          </Button>
+        </div>
       </div>
 
       <Card style={{ marginBottom: '1rem' }}>
@@ -129,7 +153,7 @@ export default function SamplesPageView({
             <Input
               label={t('samples.searchLabel')}
               placeholder={scanMode ? t('samples.searchScanPlaceholder', 'Escaneie barcode/QR code e pressione pesquisar') : t('samples.searchPlaceholder')}
-              value={search}
+              value={searchInput}
               onChange={(e) => onSearchChange(e.target.value)}
               data-testid="samples-search-input"
             />
@@ -151,6 +175,10 @@ export default function SamplesPageView({
               >
                 <QrCode size={15} />
                 {scanMode ? t('samples.scanModeOn', 'Leitura ativa') : t('samples.scanModeOff', 'Barcode/QR')}
+              </button>
+              <button type="button" className="samples-search-button" onClick={onOpenLookupDrawer} data-testid="samples-lookup-drawer-open">
+                <ScanLine size={15} />
+                {t('samples.lookupDrawer.open', 'Consulta rápida')}
               </button>
             </div>
           </div>
@@ -405,21 +433,48 @@ export default function SamplesPageView({
         )}
       </Card>
 
+      <InventoryLookupDrawer
+        open={lookupDrawerOpen}
+        t={t}
+        loading={loading}
+        searchInput={searchInput}
+        searchApplied={search}
+        filteredSamples={filteredSamples}
+        onClose={onCloseLookupDrawer}
+        onSearchChange={onSearchChange}
+        onSearchSubmit={onSearchSubmit}
+        onOpenDetail={onLookupOpenDetail}
+        onOpenStorage={onLookupOpenStorage}
+        onOpenLabel={onLookupOpenLabel}
+      />
+
       {printModalOpen && (
         <Modal isOpen title={t('samples.printLabels')} onClose={onClosePrintModal}>
           <div id="printable-area">
             {selectedSamples.map((sample) => {
-              const barcodeValue = sample.barcode || sample.specimenId || sample.id;
+              const barcodeValue = sample.barcode || sample.specimenId || null;
+              const matrixValue = String(sample.barcode || sample.specimenId || sample.id || '');
               const participantId = sample.participantId ?? (sample as any).patient?.participantId;
 
               return (
-                <div key={sample.id} className="qr-label">
+                <div key={sample.id} className="qr-label" data-testid={`batch-label-${sample.id}`}>
                   <div className="qr-label__title">{sample.sampleType || t('samples.sampleFallback')}</div>
-                  <div className="qr-label__code">{barcodeValue || 'N/A'}</div>
-                  {barcodeValue && (
-                    <div className="qr-label__barcode">
-                      <Barcode value={String(barcodeValue)} height={42} width={1.4} displayValue={false} margin={0} />
+                  {!barcodeValue ? (
+                    <div className="qr-label__no-barcode" data-testid={`batch-label-empty-${sample.id}`}>
+                      <p>{t('samples.labelNoBarcode', 'Sem código de barras — gere na ficha da amostra ou pelo intake antes de imprimir.')}</p>
                     </div>
+                  ) : (
+                    <>
+                      <div className="qr-label__code">{barcodeValue}</div>
+                      <div className="qr-label__symbology">
+                        <div className="qr-label__barcode" data-testid={`batch-label-code128-${sample.id}`}>
+                          <Barcode value={String(barcodeValue)} height={42} width={1.4} displayValue={false} margin={0} />
+                        </div>
+                        <div className="qr-label__datamatrix" data-testid={`batch-label-datamatrix-${sample.id}`}>
+                          <Datamatrix value={matrixValue} width={52} height={52} foreground="#000" background="#fff" />
+                        </div>
+                      </div>
+                    </>
                   )}
                   <div className="qr-label__patient">{participantId ?? 'N/A'}</div>
                 </div>

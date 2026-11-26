@@ -3,9 +3,18 @@ import { Search, MapPin, AlertCircle, Loader, QrCode } from 'lucide-react';
 import { storageApi } from '../services/storageApi';
 import type { SampleStorageLocationDTO } from '../types/models';
 
-interface SampleLocatorProps {}
+export interface SampleLocatorProps {
+  /** When set, loads this key automatically and hides the local search field (G5 selection-fed). */
+  selectionKey?: string | null;
+  hideSearch?: boolean;
+  selectionEmptyHint?: string;
+}
 
-export const SampleLocator: React.FC<SampleLocatorProps> = () => {
+export const SampleLocator: React.FC<SampleLocatorProps> = ({
+  selectionKey = null,
+  hideSearch = false,
+  selectionEmptyHint = 'Selecione uma amostra na aba Inventário ou refine a busca para uma única correspondência.',
+}) => {
   const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SampleStorageLocationDTO | null>(null);
@@ -15,14 +24,16 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (scanMode) {
+    if (scanMode && !hideSearch) {
       inputRef.current?.focus();
     }
-  }, [scanMode]);
+  }, [scanMode, hideSearch]);
 
-  const handleSearch = async () => {
-    if (!searchInput.trim()) {
+  const resolveLocation = async (rawKey: string) => {
+    const key = rawKey.trim();
+    if (!key) {
       setError('Por favor, insira um ID ou código de barras da amostra');
+      setResult(null);
       return;
     }
 
@@ -31,17 +42,17 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
     setResult(null);
 
     try {
-      const response = await storageApi.getSampleLocation(searchInput);
+      const response = await storageApi.getSampleLocation(key);
       if (response.success && response.data) {
         setResult(response.data as SampleStorageLocationDTO);
       } else {
-        setError(`Amostra "${searchInput}" não encontrada no banco de dados.`);
+        setError(`Amostra "${key}" não encontrada no banco de dados.`);
       }
     } catch (err: any) {
       if (err.message?.includes('401') || err.message?.includes('token')) {
         setError('Sessão expirada. Por favor, faça login novamente.');
       } else if (err.message?.includes('404')) {
-        setError(`Amostra "${searchInput}" não encontrada no banco de dados.`);
+        setError(`Amostra "${key}" não encontrada no banco de dados.`);
       } else {
         setError(`Erro ao buscar amostra: ${err.message || 'Erro desconhecido'}`);
       }
@@ -49,6 +60,51 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
       setLoading(false);
     }
   };
+
+  const handleSearch = async () => {
+    await resolveLocation(searchInput);
+  };
+
+  useEffect(() => {
+    if (!hideSearch) return undefined;
+    const key = selectionKey?.trim() || '';
+    if (!key) {
+      setResult(null);
+      setError(null);
+      setLoading(false);
+      return undefined;
+    }
+    let active = true;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    void storageApi
+      .getSampleLocation(key)
+      .then((response) => {
+        if (!active) return;
+        if (response.success && response.data) {
+          setResult(response.data as SampleStorageLocationDTO);
+        } else {
+          setError(`Amostra "${key}" não encontrada no banco de dados.`);
+        }
+      })
+      .catch((err: { message?: string }) => {
+        if (!active) return;
+        if (err.message?.includes('401') || err.message?.includes('token')) {
+          setError('Sessão expirada. Por favor, faça login novamente.');
+        } else if (err.message?.includes('404')) {
+          setError(`Amostra "${key}" não encontrada no banco de dados.`);
+        } else {
+          setError(`Erro ao buscar amostra: ${err.message || 'Erro desconhecido'}`);
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [hideSearch, selectionKey]);
 
   const handleToggleScanMode = () => {
     setScanMode((current) => !current);
@@ -93,59 +149,73 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
       <div className="sample-locator-header" data-testid="sample-locator-header">
         <div className="sample-locator-title" data-testid="sample-locator-title">
           <MapPin size={24} />
-          <h3>Buscar amostra</h3>
+          <h3>{hideSearch ? 'Localização da amostra' : 'Buscar amostra'}</h3>
         </div>
-        <p className="sample-locator-description">Busque por ID, barcode ou QR code.</p>
+        <p className="sample-locator-description">
+          {hideSearch
+            ? 'Alimentada pela busca única do inventário (sem segunda busca nesta aba).'
+            : 'Busque por ID, barcode ou QR code.'}
+        </p>
       </div>
 
-      <div className="sample-locator-search" data-testid="sample-locator-search">
-        <div className="search-input-group">
-          <Search size={18} />
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder={scanMode ? 'Escaneie e pressione Enter...' : 'Digite ID, barcode ou QR code...'}
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={loading}
-            className="search-input"
-            data-testid="sample-locator-input"
-          />
-        </div>
-        <div className="sample-locator-actions" data-testid="sample-locator-actions">
-          <button onClick={handleSearch} disabled={loading} className="btn-search" data-testid="sample-locator-search-button">
-            {loading ? (
-              <>
-                <Loader size={16} className="spinner" />
-                Buscando
-              </>
-            ) : (
-              <>
-                <Search size={16} />
-                Pesquisar
-              </>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={handleToggleScanMode}
-            disabled={loading}
-            className={`btn-scan ${scanMode ? 'active' : ''}`}
-            title="Ativar leitura por barcode/QR code"
-            data-testid="sample-locator-scan-button"
-          >
-            <QrCode size={16} />
-            {scanMode ? 'Leitura ativa' : 'Barcode/QR'}
-          </button>
-        </div>
-      </div>
+      {!hideSearch && (
+        <>
+          <div className="sample-locator-search" data-testid="sample-locator-search">
+            <div className="search-input-group">
+              <Search size={18} />
+              <input
+                ref={inputRef}
+                type="text"
+                placeholder={scanMode ? 'Escaneie e pressione Enter...' : 'Digite ID, barcode ou QR code...'}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={loading}
+                className="search-input"
+                data-testid="sample-locator-input"
+              />
+            </div>
+            <div className="sample-locator-actions" data-testid="sample-locator-actions">
+              <button onClick={handleSearch} disabled={loading} className="btn-search" data-testid="sample-locator-search-button">
+                {loading ? (
+                  <>
+                    <Loader size={16} className="spinner" />
+                    Buscando
+                  </>
+                ) : (
+                  <>
+                    <Search size={16} />
+                    Pesquisar
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={handleToggleScanMode}
+                disabled={loading}
+                className={`btn-scan ${scanMode ? 'active' : ''}`}
+                title="Ativar leitura por barcode/QR code"
+                data-testid="sample-locator-scan-button"
+              >
+                <QrCode size={16} />
+                {scanMode ? 'Leitura ativa' : 'Barcode/QR'}
+              </button>
+            </div>
+          </div>
 
-      <p className={`sample-locator-mode ${scanMode ? 'active' : ''}`}>
-        {scanMode
-          ? 'Leitura ativa: escaneie no campo e pressione Enter.'
-          : 'Use busca manual ou ative a leitura.'}
-      </p>
+          <p className={`sample-locator-mode ${scanMode ? 'active' : ''}`}>
+            {scanMode
+              ? 'Leitura ativa: escaneie no campo e pressione Enter.'
+              : 'Use busca manual ou ative a leitura.'}
+          </p>
+        </>
+      )}
+
+      {hideSearch && selectionKey?.trim() ? (
+        <p className="sample-locator-mode active" data-testid="sample-locator-selection-fed">
+          Exibindo localização para <code>{selectionKey}</code> (busca do inventário).
+        </p>
+      ) : null}
 
       {error && (
         <div className="error-box" data-testid="sample-locator-error-box">
@@ -196,14 +266,16 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
           </div>
 
           <div className="result-actions" data-testid="sample-locator-result-actions">
-            <button
-              onClick={handleNewSearch}
-              className="btn-secondary"
-              disabled={releasing}
-              data-testid="sample-locator-new-search-button"
-            >
-              Nova Busca
-            </button>
+            {!hideSearch ? (
+              <button
+                onClick={handleNewSearch}
+                className="btn-secondary"
+                disabled={releasing}
+                data-testid="sample-locator-new-search-button"
+              >
+                Nova Busca
+              </button>
+            ) : null}
             <button
               onClick={() => handleRelease(result.specimenId)}
               disabled={releasing}
@@ -224,9 +296,13 @@ export const SampleLocator: React.FC<SampleLocatorProps> = () => {
       )}
 
       {!result && !loading && !error && (
-        <div className="empty-state">
+        <div className="empty-state" data-testid="sample-locator-empty">
           <Search size={48} />
-          <p>Digite um ID ou código de barras para localizar uma amostra</p>
+          <p>
+            {hideSearch
+              ? selectionEmptyHint
+              : 'Digite um ID ou código de barras para localizar uma amostra'}
+          </p>
         </div>
       )}
     </div>

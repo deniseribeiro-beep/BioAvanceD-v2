@@ -252,6 +252,7 @@ const ENTITY_MAP = {
  *  intake-wizard  multi-entity workflow; its handlers audit explicitly
  *  ingestion      multi-entity ingestion; its handler audits explicitly
  *  monitoring     read-only list of run records; changes no entity
+ *  product-legal  G13 terms/privacy acceptances (own collections; not ENTITY_MAP)
  */
 const NO_ENTITY_ROUTES = [
   'health',
@@ -259,7 +260,8 @@ const NO_ENTITY_ROUTES = [
   'phone-codes',
   'intake-wizard',
   'ingestion',
-  'monitoring'
+  'monitoring',
+  'product-legal'
 ];
 
 /**

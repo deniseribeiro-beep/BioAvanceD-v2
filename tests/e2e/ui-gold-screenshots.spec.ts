@@ -89,7 +89,9 @@ const ROUTES: GoldRoute[] = [
   { name: '47-users-new-success', path: '/users/new/success', group: 'sistema', auth: true },
   { name: '48-backup', path: '/backup', group: 'sistema', auth: true },
   { name: '49-parameters', path: '/settings/parameters', group: 'sistema', auth: true },
-  { name: '50-dictionary', path: '/admin/dicionario', group: 'sistema', auth: true },
+  { name: '50-runbook', path: '/runbook', group: 'sistema', auth: true },
+  { name: '50b-legal-terms', path: '/legal/terms', group: 'sistema', auth: true },
+  { name: '50c-legal-privacy', path: '/legal/privacy', group: 'sistema', auth: true },
   { name: '51-user-security', path: '/user/security', group: 'sistema', auth: true },
   { name: '52-security-mfa', path: '/security/mfa-setup', group: 'sistema', auth: true },
 ];

@@ -627,6 +627,8 @@ export const userService = {
     api.post<ApiEnvelope<UserOrganizationScopes>>(`/users/${id}/organizations`, { organizationId }),
   removeOrganizationScope: (id: number | string, organizationId: string) =>
     api.delete<ApiEnvelope<UserOrganizationScopes>>(`/users/${id}/organizations/${encodeURIComponent(organizationId)}`),
+  createInvite: (data: Partial<User>) =>
+    api.post<ApiEnvelope<{ inviteId: string; email: string; expiresAt: string; inviteLink?: string }>>('/users/invites', data),
 };
 
 export interface UserOrganizationScopes {
@@ -906,6 +908,17 @@ export const authService = {
     api.post('/auth/password-reset/request', { email }),
   resetPassword: (token: string, newPassword: string) => 
     api.post('/auth/password-reset/reset', { token, newPassword }),
+  previewTenantInvite: (token: string) =>
+    api.get<ApiEnvelope<{
+      email: string;
+      username: string;
+      displayName: string;
+      organizationId?: string | null;
+      roleName?: string | null;
+      expiresAt?: string;
+    }>>('/auth/invites/preview', { params: { token } }),
+  acceptTenantInvite: (token: string, password: string, username?: string) =>
+    api.post('/auth/invites/accept', { token, password, username }),
 };
 
 // ========== IMPORT SERVICES ==========
@@ -1208,6 +1221,36 @@ export const securityService = {
 };
 
 // ========== USER SECURITY SERVICES ==========
+// ========== PRODUCT LEGAL (G13) ==========
+export type ProductLegalDocument = {
+  docType: 'terms' | 'privacy';
+  docVersion: string;
+  title: string;
+  body: string;
+  publishedAt?: string;
+};
+
+export type ProductLegalPendingItem = {
+  docType: 'terms' | 'privacy';
+  docVersion: string;
+  title: string;
+};
+
+export type ProductLegalStatus = {
+  tenantId: string;
+  pending: ProductLegalPendingItem[];
+  requiresAcceptance: boolean;
+};
+
+export const productLegalService = {
+  getStatus: () => api.get<{ data: ProductLegalStatus }>('/product-legal/status'),
+  getDocument: (docType: string) => api.get<{ data: ProductLegalDocument }>(`/product-legal/documents/${docType}`),
+  accept: (docType: string, docVersion: string) =>
+    api.post('/product-legal/accept', { docType, docVersion }),
+  publish: (docType: string, payload: { docVersion: string; title?: string; body?: string }) =>
+    api.put(`/product-legal/documents/${docType}/publish`, payload),
+};
+
 export const userSecurityService = {
   getStatus: () => api.get('/user/security/status'),
   getMFAStatus: () => api.get('/user/security/mfa'),

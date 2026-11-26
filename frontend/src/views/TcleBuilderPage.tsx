@@ -764,6 +764,30 @@ export default function TcleBuilderPage() {
         </p>
       </div>
 
+      <Card className="card-surface border-primary/20 bg-primary-soft/30 p-4 text-sm" data-testid="tcle-builder-instructions">
+        <h2 className="mb-2 text-base font-semibold">Como usar este construtor (G7)</h2>
+        <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
+          <li>
+            <strong className="text-foreground">Rascunho vs publicado:</strong> antes de salvar, o conteúdo é apenas local. Ao clicar em criar/salvar versão, a revisão é <strong>publicada</strong> e passa a vigorar para novos consentimentos; versões anteriores da mesma família são desativadas no histórico.
+          </li>
+          <li>
+            <strong className="text-foreground">Placeholders:</strong> use <code>{'{{titulo_projeto}}'}</code>, <code>{'{{nome_participante}}'}</code>, <code>{'{{id_amostra}}'}</code> (e demais chaves do cabeçalho) — substituídos na pré-visualização e no PDF de teste.
+          </li>
+          <li>
+            <strong className="text-foreground">DUO (GA4GH):</strong> em cada consentimento granular, informe o código de finalidade (DUO) que fundamenta o uso dos dados na decisão de acesso.
+          </li>
+          <li>
+            <strong className="text-foreground">PDF de teste:</strong> no histórico ou após salvar, use o botão PDF para validar layout, cabeçalho fixo e linhas de assinatura antes de convidar participantes.
+          </li>
+          <li>
+            <strong className="text-foreground">Não confundir:</strong> este TCLE é consentimento de <em>pesquisa</em> com participantes (e-mail, link, gov.br/ICP no fluxo e-consent). Termos de uso e Política do produto (tenant) ficam em <code>/legal/*</code> e no Runbook.
+          </li>
+        </ul>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Smoke sugerido: criar modelo → salvar/publicar → abrir PDF → conferir histórico de versões.
+        </p>
+      </Card>
+
       <div className="flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1" role="tablist" aria-label="Navegação do construtor de TCLE">
         <button
           type="button"

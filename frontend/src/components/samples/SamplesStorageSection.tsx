@@ -1,12 +1,16 @@
 import Card from '../UI/Card';
 import { SampleLocator } from '../SampleLocator';
 
-export default function SamplesStorageSection() {
+interface SamplesStorageSectionProps {
+  selectionLookupKey?: string | null;
+}
+
+export default function SamplesStorageSection({ selectionLookupKey = null }: SamplesStorageSectionProps) {
   return (
     <section className="samples-storage-section" data-testid="samples-storage-section">
       <div className="samples-storage-section__header" data-testid="samples-storage-header">
         <h2>Localização física de amostras</h2>
-        <p>Consulte a posição e mova a amostra em poucos passos.</p>
+        <p>Mapa e hierarquia alimentados pela seleção ou busca única do inventário (sem segunda busca).</p>
       </div>
 
       <div className="samples-storage-section__grid" data-testid="samples-storage-grid">
@@ -22,8 +26,8 @@ export default function SamplesStorageSection() {
               <div className="samples-storage-step">
                 <span className="samples-storage-step__number">1</span>
                 <div>
-                  <strong>Localize</strong>
-                  <p>Abra a ficha física pelo campo de busca.</p>
+                  <strong>Selecione no inventário</strong>
+                  <p>Pesquise na aba Inventário e escolha a amostra — a localização aparece aqui.</p>
                 </div>
               </div>
               <div className="samples-storage-step">
@@ -49,7 +53,11 @@ export default function SamplesStorageSection() {
         </div>
 
         <div className="samples-storage-section__panel" data-testid="samples-storage-locator-panel">
-          <SampleLocator />
+          <SampleLocator
+            hideSearch
+            selectionKey={selectionLookupKey}
+            selectionEmptyHint="Volte à aba Inventário: pesquise, selecione uma linha ou deixe uma única correspondência na busca."
+          />
         </div>
       </div>
     </section>

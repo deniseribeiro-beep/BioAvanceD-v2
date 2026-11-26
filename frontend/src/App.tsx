@@ -34,13 +34,14 @@ const ReportViewPage = lazy(() => import('./views/ReportViewPage'));
 const ReportQueryPage = lazy(() => import('./views/ReportQueryPage'));
 const ReportTemplatesPage = lazy(() => import('./views/ReportTemplatesPage'));
 const QualityDescriptionPage = lazy(() => import('./views/QualityDescriptionPage'));
-const ImportForm = lazy(() => import('./components/v2/ImportForm'));
+const RunbookPage = lazy(() => import('./views/RunbookPage'));
+const LegalDocumentPage = lazy(() => import('./views/LegalDocumentPage'));
 const BackupPage = lazy(() => import('./views/BackupPage'));
 const UserSecurityPage = lazy(() => import('./views/UserSecurityPage'));
 const MFASetupPage = lazy(() => import('./views/MFASetupPage'));
 const ResetPasswordPage = lazy(() => import('./views/ResetPasswordPage'));
+const TenantInviteAcceptPage = lazy(() => import('./views/TenantInviteAcceptPage'));
 const SettingsParametersPage = lazy(() => import('./views/SettingsParametersPage'));
-const DataDictionaryPage = lazy(() => import('./views/DataDictionaryPage'));
 const TcleBuilderPage = lazy(() => import('./views/TcleBuilderPage'));
 const AccessRequestsPage = lazy(() => import('./views/AccessRequestsPage'));
 const ConsentHistoryPage = lazy(() => import('./views/ConsentHistoryPage'));
@@ -90,6 +91,7 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/mfa-setup" element={<MFASetupPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/invite/accept" element={<TenantInviteAcceptPage />} />
           {/* Sample static paths must be registered before /samples/:id or
               withdrawal-return / custody-reports are captured as an :id. */}
           <Route
@@ -227,12 +229,12 @@ function App() {
                   />
                   <Route
                     path="/import"
-                    element={
-                      <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
-                        <ImportForm />
-                      </ProtectedRoute>
-                    }
+                    element={<Navigate to="/patients/import-fhir" replace />}
                   />
+                  <Route path="/runbook" element={<ProtectedRoute><RunbookPage /></ProtectedRoute>} />
+                  <Route path="/help" element={<Navigate to="/runbook" replace />} />
+                  <Route path="/legal/terms" element={<ProtectedRoute><LegalDocumentPage /></ProtectedRoute>} />
+                  <Route path="/legal/privacy" element={<ProtectedRoute><LegalDocumentPage /></ProtectedRoute>} />
                   {/* RF024 (#1350): the backend gates every access-request route on manageAccessRequests, which only Administrador holds. */}
                   <Route path="/access-requests" element={<ProtectedRoute requiredRole="Administrador"><AccessRequestsPage /></ProtectedRoute>} />
                   <Route path="/consents" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ConsentHistoryPage /></ProtectedRoute>} />
@@ -244,9 +246,9 @@ function App() {
                   <Route path="/admin/tcle/edit/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />
                   <Route path="/settings/parameters" element={<ProtectedRoute requiredRole="Administrador"><SettingsParametersPage /></ProtectedRoute>} />
-                  <Route path="/admin/dicionario" element={<ProtectedRoute requiredRole="Administrador"><DataDictionaryPage /></ProtectedRoute>} />
-                  <Route path="/admin/dictionary" element={<Navigate to="/admin/dicionario" replace />} />
-                  <Route path="/admin/master-data" element={<Navigate to="/admin/dicionario" replace />} />
+                  <Route path="/admin/dicionario" element={<Navigate to="/runbook" replace />} />
+                  <Route path="/admin/dictionary" element={<Navigate to="/runbook" replace />} />
+                  <Route path="/admin/master-data" element={<Navigate to="/runbook" replace />} />
                   <Route path="/user/security" element={<ProtectedRoute><UserSecurityPage /></ProtectedRoute>} />
                   <Route path="/security/mfa-setup" element={<ProtectedRoute><MFASetupPage /></ProtectedRoute>} />
                 </Routes>

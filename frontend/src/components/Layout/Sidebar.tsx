@@ -164,7 +164,7 @@ export default function Sidebar() {
       label: t('navigation.sectionSystem', 'Sistema'),
       items: [
         { path: '/system-management', icon: UserCog, label: t('navigation.systemManagement') || 'Gerenciamento do Sistema', roles: ['Administrador'] },
-        { path: '/admin/dicionario', icon: BookOpen, label: t('navigation.dataDictionary', 'Dicionário de Dados'), roles: ['Administrador'] },
+        { path: '/runbook', icon: BookOpen, label: t('navigation.runbook', 'Runbook / Processos'), roles: [...allRoles] },
         { path: '/backup', icon: HardDrive, label: t('navigation.backup'), roles: ['Administrador'] },
         { path: '/user/security', icon: KeyRound, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
       ],

@@ -31,6 +31,8 @@ function renderPaged(opts: {
       loading={false}
       error={null}
       search=""
+      searchInput=""
+      lookupDrawerOpen={false}
       selectedSampleIds={[]}
       filteredSamples={opts.filtered}
       pagedSamples={opts.paged}
@@ -43,6 +45,12 @@ function renderPaged(opts: {
       pageSize={10}
       onSearchChange={noop}
       onSearchSubmit={noop}
+      onOpenLookupDrawer={noop}
+      onCloseLookupDrawer={noop}
+      onLookupOpenDetail={noop}
+      onLookupOpenStorage={noop}
+      onLookupOpenLabel={noop}
+      onOpenWithdrawalReturn={noop}
       onToggleSelectAll={noop}
       onToggleSelect={noop}
       onBatchDelete={asyncNoop}

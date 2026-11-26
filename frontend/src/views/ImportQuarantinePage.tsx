@@ -214,7 +214,7 @@ export default function ImportQuarantinePage() {
               <FileWarning size={22} /> Quarentena de importação
             </h1>
             <p className="page-subtitle">
-              Revisar e reenviar linhas rejeitadas de planilhas históricas. A importação operacional em lote FHIR fica em Importação em lote.
+              Revisar e reenviar linhas rejeitadas de planilhas históricas. A importação operacional em lote FHIR fica em Importação em lote (<code>/patients/import-fhir</code>).
             </p>
           </div>
         </div>
@@ -228,6 +228,16 @@ export default function ImportQuarantinePage() {
           {error}
         </div>
       )}
+
+      <Card style={{ marginBottom: 16 }} data-testid="import-quarantine-steps">
+        <h2 style={{ marginTop: 0, fontSize: 16 }}>Passos (G7)</h2>
+        <ol style={{ margin: 0, paddingLeft: 20, color: '#374151', lineHeight: 1.6 }}>
+          <li>Abra um lote na tabela abaixo (ou use <code>?batchId=</code> vindo da importação).</li>
+          <li>Leia o motivo da rejeição em cada linha — mensagens vêm do validador, sem correção silenciosa.</li>
+          <li>Use <strong>Corrigir e reenviar</strong> para mandar a linha de volta pelo mesmo pipeline.</li>
+          <li>Após sucesso, a linha sai de ERROR; lotes FHIR recentes devem ser acompanhados também em Importação em lote.</li>
+        </ol>
+      </Card>
 
       <Card>
         <h2 style={{ marginTop: 0, fontSize: 18 }}>Lotes em quarentena</h2>
