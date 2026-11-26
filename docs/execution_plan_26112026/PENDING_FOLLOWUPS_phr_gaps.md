@@ -45,15 +45,15 @@ Marque `[x]` **somente** com evidência (contagem Mongo, log, MANUAL_VERIFY, com
 | **G1** | Crosswalk MarkerDB → ORPHA/MONDO + suggest real | Dump mapeado; suggest clínico ≠ só 16 fixture | §4 P0 | **DONE tip** scripts+tests (`b409ca2c`+); reimport ORPHA edges ainda residual se unmatched |
 | **G2** | SIGTAP (+ fluxos BR críticos) no prod | Typeahead + dump full (`TabelaUnificada_202611_*`) | §5 P1 | **DONE** convert+import homolog **sigtap=5068** (`W2_SIGTAP_FINAL`) |
 | **G3** | CPATH / FDA_PGX | Import real **ou** ADR “N/A nesta release” assinado | §5 P1 | **DONE** ADR N/A merged |
-| **G4** | Smokes humanos TRACE/P4 | Sessão, rascunho, Fabry E2E, ATC/SIGTAP/TCLE geo PASS | §6 P2/P4 | **PENDING** W5 |
+| **G4** | Smokes humanos TRACE/P4 | Sessão, rascunho, Fabry E2E, ATC/SIGTAP/TCLE geo PASS | §6 P2/P4 | **PENDING_HUMAN** checklist `MANUAL_VERIFY_v2.1_G4_smokes.md` |
 | **G5** | Busca única inventário (P5.3) | Uma busca; armazenagem acoplada | §7 P5.3 | **DONE** `dc8a79c6` + GCP sync |
 | **G6** | Etiqueta → scan → consulta (P5.4) | Code128 + DataMatrix → acha amostra | §7 P5.4 | **DONE** `dc8a79c6` |
-| **G7** | TCLE builder + import claros (P5.1/P5.2) | Instruções + smoke publicar/import | §7 | **DONE** tip; smoke humano W5 |
-| **G8** | TCLE remoto ouro | gov.br Login Único real + evidência humana; ICP conforme ADR | §8 P6 | **TIP DONE** mock só CI (`5e78b750`); smoke gov.br real → W5 |
+| **G7** | TCLE builder + import claros (P5.1/P5.2) | Instruções + smoke publicar/import | §7 | **DONE** tip; smoke humano residual G4 |
+| **G8** | TCLE remoto ouro | gov.br Login Único real + evidência humana; ICP conforme ADR | §8 P6 | **TIP DONE** mock só CI (`5e78b750`); smoke gov.br real residual G4 |
 | **G9** | Acesso produto tenant-only | Sem OAuth Google / IAP como auth de produto | §8 | **DONE** invite tip+GCP (`5e78b750`) |
 | **G10** | ADR padrão ouro acesso + identidade | Aprovado **antes** de G8/G9 | §8 | **DONE** ADR + `d16f093a` / GCP sync |
-| **G11** | Empacotamento comercial | Onboarding, suporte, SLA, TLS (#1465), install runbook | §9 | **PENDING** W6 |
-| **G12** | Issues GitHub escopo 2.1 = 0 open | Close com evidência ou ADR out-of-scope | §9 P3 | **PENDING** W6 |
+| **G11** | Empacotamento comercial | Onboarding, suporte, SLA, TLS (#1465), install runbook | §9 | **DONE** `6b98a5fc` (TLS ADR defer) |
+| **G12** | Issues GitHub escopo 2.1 = 0 open | Close com evidência ou ADR out-of-scope | §9 P3 | **DONE** escopo 2.1 closed (1583/1465/…) |
 | **G13** | Runbook in-app + Termos/Políticas | Substitui hub “Dicionário”; aceite versionado ≠ TCLE | §9 P8 | **DONE** `dc8a79c6` + GCP sync |
 
 **Ordem de waves**
