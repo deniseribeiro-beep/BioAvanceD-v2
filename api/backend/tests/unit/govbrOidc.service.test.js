@@ -1,5 +1,6 @@
 const {
   isGovbrOidcEnabled,
+  isGovbrOidcMockActive,
   createStateBundle,
   parseStateBundle,
   buildAuthorizationUrl,
@@ -39,7 +40,29 @@ describe('govbrOidc.service', () => {
     expect(url).toContain('response_type=code');
   });
 
-  it('returns mock identity when GOVBR_OIDC_MOCK=true', async () => {
+  it('GOVBR_OIDC_MOCK is inactive outside test/CI', () => {
+    process.env.GOVBR_OIDC_MOCK = 'true';
+    process.env.NODE_ENV = 'production';
+    delete process.env.CI;
+    expect(isGovbrOidcMockActive()).toBe(false);
+  });
+
+  it('GOVBR_OIDC_MOCK stays inactive in development even when set', () => {
+    process.env.GOVBR_OIDC_MOCK = 'true';
+    process.env.NODE_ENV = 'development';
+    delete process.env.CI;
+    expect(isGovbrOidcMockActive()).toBe(false);
+  });
+
+  it('GOVBR_OIDC_MOCK is active when CI=1 outside NODE_ENV=test', () => {
+    process.env.GOVBR_OIDC_MOCK = 'true';
+    process.env.NODE_ENV = 'production';
+    process.env.CI = '1';
+    expect(isGovbrOidcMockActive()).toBe(true);
+  });
+
+  it('returns mock identity when GOVBR_OIDC_MOCK=true in test', async () => {
+    process.env.NODE_ENV = 'test';
     process.env.CONSENT_GOVBR_OIDC_ENABLED = 'true';
     process.env.GOVBR_OIDC_CLIENT_ID = 'client';
     process.env.GOVBR_OIDC_REDIRECT_URI = 'https://app.example/callback';

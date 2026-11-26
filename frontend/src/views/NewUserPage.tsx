@@ -167,6 +167,7 @@ export default function NewUserPage() {
   };
 
   const [formData, setFormData] = useState<Partial<User>>(getInitialFormData());
+  const [inviteByLink, setInviteByLink] = useState(!editingUser);
   const [isSubmitting, setIsSubmitting] = useState(false);
   // #1246: the server's passwordRules, not a fixed copy.
   const passwordRules = usePasswordPolicy();
@@ -227,12 +228,12 @@ export default function NewUserPage() {
       errors.push(t('users.usernameRequired'));
     }
     
-    if (!editingUser && !formData.password) {
+    if (!editingUser && !inviteByLink && !formData.password) {
       errors.push(t('users.passwordRequired'));
     }
     
     // Valida complexidade da senha
-    if (formData.password) {
+    if (!inviteByLink && formData.password) {
       const passwordValidation = validatePassword(formData.password, passwordRules);
       if (!passwordValidation.isValid) {
         errors.push(...passwordValidation.errors);
@@ -243,7 +244,8 @@ export default function NewUserPage() {
       errors.push(t('users.roleRequired'));
     }
     
-    if (!formData.status) {
+    // Invitees activate as active; status is only meaningful for create/edit with password.
+    if ((!inviteByLink || editingUser) && !formData.status) {
       errors.push(t('users.statusRequired'));
     }
     
@@ -271,10 +273,22 @@ export default function NewUserPage() {
         await updateUser(userId, dataToSave);
         await loadUsers();
         navigate('/users');
+      } else if (inviteByLink) {
+        const invitePayload = { ...dataToSave };
+        delete invitePayload.password;
+        delete invitePayload.status;
+        const response = await userService.createInvite(invitePayload);
+        await loadUsers();
+        const link = response.data?.data?.inviteLink;
+        if (link) {
+          window.prompt('Convite criado — copie o link para o operador:', link);
+        } else {
+          alert('Convite criado. Encaminhe o link de ativação ao operador (por canal seguro do tenant).');
+        }
+        navigate('/users');
       } else {
         await registerUser(dataToSave);
         await loadUsers();
-        // Redireciona para lista de usuários após cadastro
         navigate('/users');
       }
     } catch (error: any) {
@@ -392,16 +406,32 @@ export default function NewUserPage() {
             }
             required
           />
-          <Input
-            data-testid="new-user-password-input"
-            label={t('users.password')}
-            type="password"
-            value={formData.password || ''}
-            onChange={(e) =>
-              setFormData({ ...formData, password: e.target.value })
-            }
-            required={!editingUser}
-          />
+          {!editingUser && (
+            <div className="form-grid-full">
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  data-testid="new-user-invite-checkbox"
+                  checked={inviteByLink}
+                  onChange={(e) => setInviteByLink(e.target.checked)}
+                />
+                Convidar usuário (ativação por link — sem senha aqui)
+              </label>
+            </div>
+          )}
+          {(!editingUser && !inviteByLink) || editingUser ? (
+            <Input
+              data-testid="new-user-password-input"
+              label={t('users.password')}
+              type="password"
+              value={formData.password || ''}
+              onChange={(e) =>
+                setFormData({ ...formData, password: e.target.value })
+              }
+              required={!editingUser && !inviteByLink}
+            />
+          ) : null}
+          {!inviteByLink && (
           <div style={{ gridColumn: '1 / -1', marginTop: '-0.5rem' }}>
             <p style={{ fontWeight: 600, marginBottom: '0.35rem' }}>{t('password.requirements.title')}</p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.25rem' }}>
@@ -416,6 +446,7 @@ export default function NewUserPage() {
               })}
             </ul>
           </div>
+          )}
           <div className="form-grid-full">
             <label htmlFor={roleSelectId} className="form-label">{t('users.roleLabel')} *</label>
             <select
@@ -474,6 +505,7 @@ export default function NewUserPage() {
             </div>
           )}
 
+          {(editingUser || !inviteByLink) && (
           <div className="form-grid-full">
             <label className="form-label">{t('users.status')} *</label>
             <select
@@ -490,6 +522,7 @@ export default function NewUserPage() {
               <option value="Bloqueado">{t('users.statusBlocked')}</option>
             </select>
           </div>
+          )}
         </div>
         
         <div className="form-actions">
@@ -506,7 +539,7 @@ export default function NewUserPage() {
             data-testid="new-user-submit-button"
             disabled={isSubmitting}
           >
-            {isSubmitting ? t('users.saving') : t('common.save')}
+            {isSubmitting ? t('users.saving') : (inviteByLink && !editingUser ? 'Convidar usuário' : t('common.save'))}
           </Button>
         </div>
       </form>

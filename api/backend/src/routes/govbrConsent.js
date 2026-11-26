@@ -14,7 +14,7 @@ router.get('/status', (_req, res) => {
   return res.json({
     enabled: cfg.enabled,
     issuer: cfg.enabled ? cfg.issuer : null,
-    mock: String(process.env.GOVBR_OIDC_MOCK || '').toLowerCase() === 'true',
+    mock: govbr.isGovbrOidcMockActive(),
   });
 });
 

@@ -8,6 +8,17 @@ function isGovbrOidcEnabled() {
   return String(process.env.CONSENT_GOVBR_OIDC_ENABLED || '').toLowerCase() === 'true';
 }
 
+/** Mock OIDC identity is allowed only in CI or NODE_ENV=test (v2.1 mock hygiene). */
+function isGovbrOidcMockActive() {
+  if (String(process.env.GOVBR_OIDC_MOCK || '').toLowerCase() !== 'true') {
+    return false;
+  }
+  const nodeEnv = String(process.env.NODE_ENV || 'development');
+  if (nodeEnv === 'test') return true;
+  if (process.env.CI === 'true' || process.env.CI === '1') return true;
+  return false;
+}
+
 function getConfig() {
   return {
     enabled: isGovbrOidcEnabled(),
@@ -70,11 +81,11 @@ function parseStateBundle(state) {
 
 /**
  * Exchange authorization code for tokens. In production this hits gov.br token endpoint.
- * When GOVBR_OIDC_MOCK=true (homolog/dev), returns a deterministic mock identity.
+ * Deterministic mock identity only when isGovbrOidcMockActive() (GOVBR_OIDC_MOCK + test/CI).
  */
 async function exchangeCodeForIdentity(code, fetchImpl = fetch) {
   const cfg = assertConfigured();
-  if (String(process.env.GOVBR_OIDC_MOCK || '').toLowerCase() === 'true') {
+  if (isGovbrOidcMockActive()) {
     return {
       sub: `mock-govbr-${String(code || 'x').slice(0, 12)}`,
       email: 'participante@mock.gov.br',
@@ -123,6 +134,7 @@ async function exchangeCodeForIdentity(code, fetchImpl = fetch) {
 
 module.exports = {
   isGovbrOidcEnabled,
+  isGovbrOidcMockActive,
   getConfig,
   buildAuthorizationUrl,
   createStateBundle,

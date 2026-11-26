@@ -157,6 +157,14 @@ npm run compose:prod:seed-admin
 
 runs the same script inside the production `backend`, whose environment is `.env.production`. `.env.production.example` deliberately carries no `BOOTSTRAP_ADMIN_*` ("The first administrator is created by a deliberate, hand-run script"), so the script refuses until the four are in that container's environment; see [Gaps](#8-gaps).
 
+### 5.1 Subsequent operators (v2.1 tenant invite)
+
+Commercial product authentication is **not** Google IAP or Google OAuth (see ADR `docs/decisions/2026-11-26-access-tenant-only-identity.md` and [runtime-mock-hygiene-v2.1.md](runtime-mock-hygiene-v2.1.md)). After the bootstrap administrator exists:
+
+1. An administrator opens **Usuários → Novo usuário**, enables **Convidar usuário**, and submits (`POST /api/users/invites`).
+2. The invited operator opens `/invite/accept?token=…`, defines a password, and signs in at `/login`.
+3. Google IAP on `bioadvanced.dev`, when used, is an **ops-internal** network edge only (`docs/runbooks/bioadvanced-iap-access.md`); customer onboarding must not depend on it.
+
 ## 6. Checking the install
 
 ```bash

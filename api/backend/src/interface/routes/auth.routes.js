@@ -535,6 +535,52 @@ router.get('/password-policy', async (req, res) => {
 router.post('/password-reset/request', authController.requestPasswordReset.bind(authController));
 router.post('/password-reset/reset', authController.resetPassword.bind(authController));
 
+// v2.1 G9: tenant invite preview + activation (no session)
+router.get('/invites/preview', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+    const token = String(req.query.token || '').trim();
+    const tenantInviteService = require('../../services/tenantInvite.service');
+    const data = await tenantInviteService.previewInvite(db, token);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      error: error.message,
+      message: error.message,
+    });
+  }
+});
+
+router.post('/invites/accept', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+    const token = String(req.body?.token || '').trim();
+    const password = req.body?.password;
+    const username = req.body?.username;
+    const tenantInviteService = require('../../services/tenantInvite.service');
+    const data = await tenantInviteService.acceptInvite(db, token, { password, username });
+    return res.status(201).json({
+      success: true,
+      message: 'Conta ativada. Faça login com seu usuário e senha.',
+      data,
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      error: error.message,
+      message: error.message,
+      details: error.details,
+    });
+  }
+});
+
 // Endpoints para primeiro login (não requerem autenticação)
 router.post('/two-factor/qr-first-login', authController.setupMFAFirstLogin.bind(authController));
 router.post('/two-factor/enable-first-login', authController.enableMFAFirstLogin.bind(authController));

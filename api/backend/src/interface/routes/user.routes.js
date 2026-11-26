@@ -333,6 +333,66 @@ router.get('/logs', authenticate, async (req, res) => {
   }
 });
 
+// v2.1 G9: tenant invite — subsequent operators activate via link (ADR 2026-11-26).
+router.post('/invites',
+  authenticate,
+  requirePermission('createUser'),
+  requirePermission('assignRole'),
+  requireOrganizationScope,
+  async (req, res) => {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: req.t('errors.databaseUnavailable'),
+        });
+      }
+      const tenantInviteService = require('../../services/tenantInvite.service');
+      const result = await tenantInviteService.createInvite(db, {
+        payload: req.body,
+        createdBy: req.user?.userID,
+        organizationScope: req.organizationScope,
+        req,
+      });
+
+      const auditLogger = require('../../utils/auditLogger');
+      auditLogger.init(db);
+      await auditLogger.log({
+        action: 'CREATE',
+        resourceType: 'TenantInvite',
+        resourceId: result.inviteId,
+        status: 'success',
+        severity: 'info',
+        message: 'Convite de operador criado',
+        payload: { email: result.email, expiresAt: result.expiresAt },
+        req,
+        module: 'Usuários',
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: 'Convite criado',
+        data: result,
+      });
+    } catch (error) {
+      logger.error('Erro ao criar convite:', error.message);
+      if (error.statusCode === 403) {
+        return res.status(403).json({ success: false, error: req.t('errors.forbidden'), message: error.message });
+      }
+      if (error.statusCode === 409) {
+        return res.status(409).json({ success: false, error: error.message, message: error.message });
+      }
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
+        success: false,
+        error: 'Erro ao criar convite',
+        message: error.message,
+        details: error.details,
+      });
+    }
+  }
+);
+
 // #1241: gated like GET / above. With authenticate alone any account could
 // read any other user's record (email, phone, organization, status, roles).
 router.get('/:id', authenticate, requirePermission('readUser'), requireOrganizationScope, async (req, res) => {

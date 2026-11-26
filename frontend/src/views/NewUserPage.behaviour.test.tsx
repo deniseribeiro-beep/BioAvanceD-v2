@@ -40,7 +40,7 @@ vi.mock('../hooks/usePasswordPolicy', () => ({
 }));
 
 vi.mock('../services/api', () => ({
-  userService: { setPassword: vi.fn() },
+  userService: { setPassword: vi.fn(), createInvite: vi.fn() },
 }));
 
 vi.mock('./UserOrganizationScopes', () => ({
@@ -67,7 +67,16 @@ const submit = async () => {
     fireEvent.submit(screen.getByTestId('new-user-form'));
   });
 };
+/** Direct register (legacy/lab): invite is the default create path in v2.1. */
+const enableDirectRegister = () => {
+  const invite = field('new-user-invite-checkbox');
+  if (invite.checked) {
+    fireEvent.click(invite);
+  }
+};
+
 const fillValidCreate = () => {
+  enableDirectRegister();
   type('new-user-name-input', 'Ana Silva');
   type('new-user-email-input', 'ana@example.com');
   type('new-user-username-input', 'ana');
@@ -88,8 +97,12 @@ beforeEach(() => {
   ];
   policy.rules = DEFAULT_PASSWORD_RULES;
   vi.mocked(userService.setPassword).mockReset().mockResolvedValue({} as any);
+  vi.mocked(userService.createInvite).mockReset().mockResolvedValue({
+    data: { data: { inviteId: 'inv-1', email: 'ana@example.com', inviteLink: 'http://localhost/invite/accept?token=abc' } },
+  } as any);
   alertSpy = vi.fn();
   vi.stubGlobal('alert', alertSpy);
+  vi.stubGlobal('prompt', vi.fn());
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -99,7 +112,7 @@ afterEach(() => {
 });
 
 describe('NewUserPage: create', () => {
-  it('renders the create form with the organizations, the default role and status, and no edit-only fields', () => {
+  it('renders the create form with invite-by-link default (v2.1 tenant-only)', () => {
     renderPage();
     expect(screen.getByText('users.newTitle')).toBeInTheDocument();
     expect(screen.getByText('users.newSubtitle')).toBeInTheDocument();
@@ -107,10 +120,23 @@ describe('NewUserPage: create', () => {
     expect(orgOptions).toEqual(['common.select', 'Hospital Um', 'Hospital Dois']);
     expect(field('new-user-role-select').value).toBe('Técnico');
     expect(screen.getByText('Operações básicas do sistema')).toBeInTheDocument();
-    expect(field('new-user-status-select').value).toBe('Ativo');
-    expect(field('new-user-password-input').required).toBe(true);
+    expect(field('new-user-invite-checkbox').checked).toBe(true);
+    expect(screen.queryByTestId('new-user-password-input')).toBeNull();
+    expect(screen.queryByTestId('new-user-status-select')).toBeNull();
     expect(screen.queryByTestId('new-user-auditor-checkbox')).toBeNull();
     expect(screen.queryByTestId('scopes-stub')).toBeNull();
+  });
+
+  it('invites the operator (no password) and surfaces the activation link', async () => {
+    renderPage();
+    type('new-user-name-input', 'Ana Silva');
+    type('new-user-email-input', 'ana@example.com');
+    type('new-user-username-input', 'ana');
+    await submit();
+    expect(userService.createInvite).toHaveBeenCalledTimes(1);
+    expect(usersHook.registerUser).not.toHaveBeenCalled();
+    expect(window.prompt).toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith('/users');
   });
 
   it('lists only the policy rules in force and ticks each one the typed password meets', () => {
@@ -122,6 +148,7 @@ describe('NewUserPage: create', () => {
       requireSpecialChars: true,
     };
     renderPage();
+    enableDirectRegister();
     const items = () => Array.from(document.querySelectorAll('li')).map((li) => li.textContent);
     expect(items()).toEqual([
       '•Mínimo de 10 caracteres',
