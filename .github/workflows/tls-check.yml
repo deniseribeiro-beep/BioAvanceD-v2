@@ -23,7 +23,8 @@ permissions:
   contents: read
 
 env:
-  TLS_HOST: bioadvanced.dev
+  # Apex A @ was missing in public DNS (2026-11-26); www resolves and is on the same Google-managed cert.
+  TLS_HOST: www.bioadvanced.dev
 
 jobs:
   deployed-host-tls:

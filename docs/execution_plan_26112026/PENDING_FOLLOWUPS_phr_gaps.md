@@ -254,6 +254,8 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 **Gate G4-09:** ADR Option B. Residual pós-tag: **G8-GOVBR-REAL**. Piloto remoto = ICP/panel.
 
+**Domínio (2026-11-26):** `https://www.bioadvanced.dev` — LB cert ACTIVE, **IAP disabled**, login produto sem túnel. Apex A `@` verificar na Name.com se `bioadvanced.dev` não resolver. Auditoria: `docs/qa/RELEASE_AUDIT_v2.1.0.md`.
+
 ---
 
 ## 11. Trilha ANVISA / QMS (paralela)
@@ -270,7 +272,7 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 1. Executar na ordem das waves (§2); não pular G10 antes de G8/G9.  
 2. Cada `[x]`: evidência inline ou link.  
-3. Residual pós-`v2.1.0`: G8-GOVBR-REAL (ADR Option B); cutover host comercial se ≠ homolog.  
+3. Residual pós-`v2.1.0`: G8-GOVBR-REAL (ADR Option B); apex DNS se necessário. Homolog=`www.bioadvanced.dev` = alvo comercial paliativo.  
 4. Zenodo DOI: archive; não misturar com go-live.
 
 ---
@@ -287,4 +289,5 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 | Runbook + Termos | Ausente | DONE |
 | Ex ante porta | Ausente | Protocolo; promote blocked |
 | ANVISA apto | Ausente | Matriz + gap rascunho |
-| Residual | — | G8-GOVBR-REAL post-2.1 (ADR Option B); cutover prod se alvo ≠ homolog |
+| Residual | — | G8-GOVBR-REAL; apex DNS `@` se faltar; domínio grafia futura |
+| Domínio HTTPS | Túnel | **DONE** www + IAP off (`bioadvanced-iap-access.md`) |

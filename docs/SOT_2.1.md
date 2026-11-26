@@ -29,7 +29,9 @@ ADRs W2+ (G3 N/A, Runbook/Termos, drawer, TLS defer, issues-out) entram no SoT *
 |----------|------|
 | TRACE Achados 1–6 | [qa/TRACE_20261125_intake_cpf_mask_human_qa.md](qa/TRACE_20261125_intake_cpf_mask_human_qa.md) |
 | MANUAL_VERIFY tip | [qa/MANUAL_VERIFY_20261106.md](qa/MANUAL_VERIFY_20261106.md) |
-| Ex ante RF016 | [evidencias/homologacao-runtime/RF016-ex-ante-sintetico-v1.0.0.md](evidencias/homologacao-runtime/RF016-ex-ante-sintetico-v1.0.0.md) |
+| Ex ante RF016 v2.1 | [evidencias/homologacao-runtime/RF016-ex-ante-v2.1.0-rc.md](evidencias/homologacao-runtime/RF016-ex-ante-v2.1.0-rc.md) |
+| Release audit `v2.1.0` | [qa/RELEASE_AUDIT_v2.1.0.md](qa/RELEASE_AUDIT_v2.1.0.md) |
+| Matriz comercial | [compliance/matriz-rastreabilidade-comercial-v2.1.md](compliance/matriz-rastreabilidade-comercial-v2.1.md) |
 
 ## Operação
 
@@ -37,7 +39,7 @@ ADRs W2+ (G3 N/A, Runbook/Termos, drawer, TLS defer, issues-out) entram no SoT *
 |----------|------|
 | Install | [operations/install-runbook.md](operations/install-runbook.md) |
 | Configuration | [operations/configuration-runbook.md](operations/configuration-runbook.md) |
-| IAP (**ops-interna apenas**, ≠ auth produto) | [runbooks/bioadvanced-iap-access.md](runbooks/bioadvanced-iap-access.md) |
+| HTTPS domínio (IAP **off**; produto tenant) | [runbooks/bioadvanced-iap-access.md](runbooks/bioadvanced-iap-access.md) → `https://www.bioadvanced.dev` |
 
 ## Wave status (auditoria)
 
@@ -45,12 +47,13 @@ ADRs W2+ (G3 N/A, Runbook/Termos, drawer, TLS defer, issues-out) entram no SoT *
 |------|--------|------------|
 | W1 | G0 + G10 | DONE |
 | W2–W6 | G1–G13 tip | DONE (G4 com ADR Option B) |
-| W7 | Ex ante → tag → prod | **DONE** RF016 PASS + tag `v2.1.0` (2026-11-26); residual G8-GOVBR-REAL |
+| W7 | Ex ante → tag → prod | **DONE** RF016 PASS + tag `v2.1.0`; domínio www HTTPS sem túnel |
 
 ## Fora do go-live 2.1
 
 - DOI Zenodo e packs acadêmicos → archive / evidências históricas; **não** bloqueiam tag.
 - G8-GOVBR-REAL (Login Único real) → residual pós-tag; ADR Option B; piloto remoto = ICP/panel.
+- Apex DNS `bioadvanced.dev` A `@` se ainda não resolver — usar `www` até Name.com corrigir.
 - Mocks de runtime (`GOVBR_OIDC_MOCK`) → só CI; **proibidos** no aceite comercial.
 - Corpus `docs/mestrado/*` → keep acadêmico; não é SoT de produto.
 - Packs Zenodo sob `_archive/pre-2.1/zenodo-stages/` podem existir só no filesystem; tip git mantém inventário + `ZENODO.md` movido (binários/ui-live não precisam entrar no git).

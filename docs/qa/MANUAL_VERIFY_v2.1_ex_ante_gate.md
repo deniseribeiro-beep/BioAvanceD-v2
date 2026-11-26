@@ -23,4 +23,4 @@
 
 ## Status (2026-11-26 W7)
 
-**W7 tip fechado:** RF016 PASS → tag `v2.1.0`. Residual pós-tag: **G8-GOVBR-REAL** (ADR Option B). Cutover a host comercial distinto do homolog segue runbooks de install/configuration quando o operador apontar o alvo.
+**W7 tip fechado:** RF016 PASS → tag `v2.1.0`. Domínio: `https://www.bioadvanced.dev` (IAP off). Residual: **G8-GOVBR-REAL** (ADR Option B). Auditoria: `RELEASE_AUDIT_v2.1.0.md`.
