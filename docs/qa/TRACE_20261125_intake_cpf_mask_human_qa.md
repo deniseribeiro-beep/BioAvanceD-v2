@@ -150,6 +150,10 @@ Procedimento manual sem SIGTAP; alergia DCB; sem toggle controle saudável; WASH
 ### Decisões humanas 2026-11-26
 Ver `PENDING_HUMAN_REVIEW_20261125_passo3_wave.md` (DECIDED). Git: `feature/docker-e2e-backend-integration` → `main` após gate GCP 0 failed. Zenodo pack preparado localmente; DOI manual. TCLE gov.br/ICP após verde.
 
+### Gate GCP (evidência)
+- Tip: `acf7f16f` — OUT `e2e-gate-out-phr-20261126-051234` — `E2E_GATE_EXIT=0` — **605 passed / 1 skipped / 0 failed** (14.0m)
+- Inclui: axe `/facility-management`, ui-mongo-binding samples, inline-storage-movement, audit-chain-integrity, `tcle-govbr-icp`
+
 ### Critérios smoke
 - `/biomarker-associations` itemCount > 0; suggest ORPHA fixture com biomarkers.length > 0 (Mongo)
 - Wizard: buscar procedimento SIGTAP; alergia ATC; GPS sugere Local da coleta
@@ -161,7 +165,7 @@ Ver `PENDING_HUMAN_REVIEW_20261125_passo3_wave.md` (DECIDED). Git: `feature/dock
 - [ ] Revisar UX no homolog após deploy do tip (CPF, sólidos MIABIS, sigla/modal, documento-primeiro, busca doença)
 - [ ] Smoke: Fabry/324 → select → CID/ORPHA/OMIM + HPO + biomarcadores
 - [ ] Smoke: procedimentos SIGTAP + alergia ATC + TCLE geo
-- [ ] MarkerDB full + outbox + gate GCP 0 failed
-- [ ] Commit/merge `feature/docker-e2e-backend-integration` → `main` (skip CI após evidência)
+- [x] MarkerDB full + outbox + gate GCP 0 failed
+- [x] Commit/merge `feature/docker-e2e-backend-integration` → `main` (skip CI após evidência)
 - [ ] Pack Zenodo publicado (DOI operador)
-- [ ] TCLE gov.br/ICP (fase pós-verde)
+- [x] TCLE gov.br/ICP (fase pós-verde) — mock OIDC + e2e + ADR + MANUAL_VERIFY
