@@ -47,6 +47,11 @@ vi.mock('../components/security/ConfigurationReleasesPanel', () => ({
   ),
 }));
 
+// The catalog panel reads its own service; the page only mounts it.
+vi.mock('../components/security/SettingCatalogPanel', () => ({
+  default: () => <div data-testid="catalog-stub">catalog</div>,
+}));
+
 function makeConfig(): SecurityConfig {
   return {
     authentication: {
@@ -402,6 +407,19 @@ describe('SecurityPage sections', () => {
     open('policies');
     expect(screen.getByText('Políticas e Diretrizes de Segurança do Sistema')).toBeInTheDocument();
     expect(screen.getByText('8. Especificações Técnicas')).toBeInTheDocument();
+  });
+
+  it('catalog: its nav button opens the setting catalog panel', () => {
+    render(<SecurityPage />);
+    expect(screen.queryByTestId('catalog-stub')).toBeNull();
+    open('catalog');
+    expect(screen.getByTestId('catalog-stub')).toBeInTheDocument();
+  });
+
+  it('a refused save shows the server message in the error banner', () => {
+    sec.error = 'Configurações inválidas: x';
+    render(<SecurityPage />);
+    expect(screen.getByTestId('security-error')).toHaveTextContent('Configurações inválidas: x');
   });
 });
 

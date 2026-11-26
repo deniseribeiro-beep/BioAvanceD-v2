@@ -15,6 +15,8 @@ function buildDb(actions = []) {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     },
     operationalStateDecisions: { insertOne: vi.fn().mockResolvedValue({ insertedId: 'osd-1' }) },
+    graph_projection_outbox: { createIndex: vi.fn().mockResolvedValue('ok'), updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }) },
+    graph_projection_outbox_aggregate_versions: { findOneAndUpdate: vi.fn().mockResolvedValue({ version: 1 }) },
   };
   return {
     collection: vi.fn((name) => {
@@ -59,6 +61,31 @@ describe('quarantine-release.service releaseQuarantine', () => {
     const db = buildDb([]);
     await expect(release(db, { evidenceIds: [' '] })).rejects.toMatchObject({ statusCode: 422, code: 'EVIDENCE_REQUIRED' });
     expect(db.samples.updateOne).not.toHaveBeenCalled();
+    expect(db.graph_projection_outbox.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('appends one QUARANTINE_RELEASED outbox event per released action, carrying its specimens, rule, actor and evidence (RF019 AC6)', async () => {
+    vi.spyOn(quarantineActionService, 'auditDecision').mockResolvedValue(undefined);
+    const db = buildDb([
+      { quarantineActionId: 'qa-nc', specimenIds: ['SPC-1'], reasonCodes: ['nonconformance'], actionStatus: 'active' },
+      { quarantineActionId: 'qa-old', specimenIds: ['SPC-1'], reasonCodes: ['manual'], actionStatus: 'released' },
+    ]);
+
+    await release(db);
+
+    const events = db.graph_projection_outbox.updateOne.mock.calls.map((call) => call[1].$setOnInsert);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      eventType: 'QUARANTINE_RELEASED',
+      aggregateType: 'QuarantineAction',
+      aggregateId: 'qa-nc',
+      sourceService: 'quarantine-release',
+      payload: {
+        quarantineActionId: 'qa-nc', specimenIds: ['SPC-1'], reasonCodes: ['nonconformance'],
+        actionStatus: 'released', authorizedBy: 'coord-1', evidenceIds: ['file-1'],
+      },
+    });
+    expect(events[0].payload.releasedAt).toBeInstanceOf(Date);
   });
 
   it('refuses a specimen that is not quarantined (409)', async () => {
@@ -75,6 +102,7 @@ describe('quarantine-release.service releaseQuarantine', () => {
     });
     expect(db.quarantineActions.updateOne).not.toHaveBeenCalled();
     expect(db.samples.updateOne).not.toHaveBeenCalled();
+    expect(db.graph_projection_outbox.updateOne).not.toHaveBeenCalled();
   });
 
   it('refuses a consent quarantine while the participant\'s consent is not active, and releases it once it is', async () => {

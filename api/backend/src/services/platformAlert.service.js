@@ -11,20 +11,32 @@
 // requeueDeadLetters in neo4jOutbox.service.js move rows into and out of
 // DEAD_LETTER; the next run sees their effect. The previous http and queue
 // readings are written only by runPlatformAlertCheck.
+//
+// RNF010 C2 (#1484): the age of the newest successful backupHistory row is
+// read fresh on each run and checked against the BackupPolicy's rpoHours.
+//
+// RNF015 C2 (#1468): the backend's memory and disk in use are read fresh on
+// each run (resourceUsage.js) and checked against ALERT_MEMORY_RATIO and
+// ALERT_DISK_RATIO.
 
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const httpMetrics = require('../infrastructure/metrics/httpMetrics');
 const queueDepth = require('../infrastructure/metrics/queueDepth');
+const resourceUsage = require('../infrastructure/metrics/resourceUsage');
 const { evaluateAlerts, windowOf } = require('../infrastructure/metrics/platformAlerts');
 const { COLLECTION_NAME: OUTBOX_COLLECTION } = require('./neo4jOutbox.service');
 const notificationDispatchService = require('./notificationDispatch.service');
+const backupPolicyService = require('./backup-policy.service');
 
 const PLATFORM_ALERTS_COLLECTION = 'platformAlerts';
 const DEAD_LETTER_MAX_TIME_MS = 2000;
 const EPISODE_MAX_TIME_MS = 2000;
+const BACKUP_READ_MAX_TIME_MS = 2000;
 
-const DEFAULT_THRESHOLDS = Object.freeze({ httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100 });
+const DEFAULT_THRESHOLDS = Object.freeze({
+  httpErrorRate: 0.05, httpP95Ms: 2500, queueBacklog: 100, memoryRatio: 0.9, diskRatio: 0.9,
+});
 
 let prevTotals = null;
 let prevSince = null;
@@ -52,6 +64,10 @@ function thresholdsFrom(env) {
       DEFAULT_THRESHOLDS.httpP95Ms, (v) => v > 0),
     queueBacklog: parseThreshold('ALERT_QUEUE_BACKLOG', env.ALERT_QUEUE_BACKLOG,
       DEFAULT_THRESHOLDS.queueBacklog, (v) => v >= 0),
+    memoryRatio: parseThreshold('ALERT_MEMORY_RATIO', env.ALERT_MEMORY_RATIO,
+      DEFAULT_THRESHOLDS.memoryRatio, (v) => v > 0 && v <= 1),
+    diskRatio: parseThreshold('ALERT_DISK_RATIO', env.ALERT_DISK_RATIO,
+      DEFAULT_THRESHOLDS.diskRatio, (v) => v > 0 && v <= 1),
   };
 }
 
@@ -63,6 +79,32 @@ async function readDeadLetter(db) {
     );
   } catch {
     logger.warn('[PLATFORM_ALERT] contagem de DEAD_LETTER indisponível');
+    return null;
+  }
+}
+
+// Null when any part of the reading fails, so the BACKUP_RPO row is unknown.
+async function readBackupRpo(db, now) {
+  try {
+    const history = db.collection('backupHistory');
+    const newest = await history.findOne(
+      { status: 'success' },
+      { sort: { completedAt: -1 }, projection: { completedAt: 1 }, maxTimeMS: BACKUP_READ_MAX_TIME_MS }
+    );
+    const anyRun = newest
+      ? true
+      : !!(await history.findOne({}, { projection: { _id: 1 }, maxTimeMS: BACKUP_READ_MAX_TIME_MS }));
+    const policy = await backupPolicyService.getPolicy(db);
+    const rpoHours = Number(policy?.rpoHours);
+    let ageHours = null;
+    if (newest) {
+      const completedAt = new Date(newest.completedAt);
+      if (Number.isNaN(completedAt.getTime())) return null;
+      ageHours = (now.getTime() - completedAt.getTime()) / 3600000;
+    }
+    return { ageHours, anyRun, rpoHours };
+  } catch {
+    logger.warn('[PLATFORM_ALERT] leitura do RPO de backup indisponível');
     return null;
   }
 }
@@ -136,21 +178,26 @@ async function runPlatformAlertCheck(db, deps = {}) {
 async function evaluateAndApply(db, deps) {
   const snapshot = deps.snapshot || httpMetrics.snapshot;
   const readQueues = deps.readQueues || (() => queueDepth.readQueueDepths(queueDepth.inputsFrom()));
+  const readResources = deps.readResources || (() => resourceUsage.readResourceUsage());
 
+  const now = new Date();
   const http = snapshot();
   const queues = await readQueues();
   const deadLetter = await readDeadLetter(db);
+  const backup = await readBackupRpo(db, now);
+  const resources = await readResources();
 
   const results = evaluateAlerts({
     httpWindow: windowOf(prevTotals, prevSince, http.totals, http.since),
     queues,
     prevQueues,
     deadLetter,
+    backup,
+    resources,
     thresholds: thresholdsFrom(deps.env || env),
   });
 
   const alerts = db.collection(PLATFORM_ALERTS_COLLECTION);
-  const now = new Date();
   for (const result of results) {
     try {
       await applyEpisode(db, alerts, result, now);

@@ -15,6 +15,8 @@ const qualityDomainPath = require.resolve('../../src/services/quality-domain.ser
 const sampleServicePath = require.resolve('../../src/services/sample.service');
 const storageServicePath = require.resolve('../../src/services/storageService');
 const rcsAssessmentServicePath = require.resolve('../../src/services/rcs-assessment.service');
+// RNF018 AC5 (#1524): re-required after the getCollection mock, which it destructures.
+const governanceEvidenceResolverPath = require.resolve('../../src/services/governance-evidence-resolver.service');
 const routePath = require.resolve('../../src/routes/intakeWizard.js');
 
 const allPaths = [
@@ -27,6 +29,7 @@ const allPaths = [
   sampleServicePath,
   storageServicePath,
   rcsAssessmentServicePath,
+  governanceEvidenceResolverPath,
   routePath,
 ];
 
@@ -56,7 +59,7 @@ function loadRoute({
   buildConsentLink,
   sendConsentEmail,
   matchOrUpsertParticipant,
-  generateSampleHash,
+  generateSampleHashFromSample,
   getCollectionImpl,
   resolveMethodologicalQuality,
 } = {}) {
@@ -77,7 +80,7 @@ function loadRoute({
   );
 
   const merkleServiceModule = require(merkleServicePath);
-  merkleServiceModule.generateSampleHash = generateSampleHash || vi.fn(() => 'hash-1');
+  merkleServiceModule.generateSampleHashFromSample = generateSampleHashFromSample || vi.fn(async () => 'hash-1');
 
   const collectionResolverModule = require(collectionResolverPath);
   collectionResolverModule.getCollection = getCollectionImpl || vi.fn();
@@ -132,6 +135,27 @@ describe('intakeWizard routes', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     clearCache();
+  });
+
+  // RNF018 AC1 (#1525): the backend twin of the wizard's quantity check.
+  it.each([0, -1])('refuses a specimen quantity of %s with 422 INVALID_QUANTITY, writing nothing', async (quantity) => {
+    const { router, patientIdentityServiceModule, auditLoggerModule } = loadRoute();
+    const sampleServiceModule = require(sampleServicePath);
+    vi.spyOn(sampleServiceModule, 'createSample');
+
+    const res = await request(buildApp(router, {})).post('/api/intake-wizard')
+      .send({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, quantity } });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({
+      success: false,
+      error: 'INVALID_QUANTITY',
+      fields: ['specimen.quantity'],
+      details: ['specimen.quantity deve ser um número maior que zero'],
+    });
+    expect(patientIdentityServiceModule.matchOrUpsertParticipant).not.toHaveBeenCalled();
+    expect(auditLoggerModule.log).not.toHaveBeenCalled();
+    expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
   });
 
   describe('POST / (handleIntakeWizard)', () => {
@@ -310,6 +334,36 @@ describe('intakeWizard routes', () => {
         expect(res.status).toBe(422);
         expect(res.body.error).toBe('NON_CANONICAL_FIELD');
         expect(res.body.fields).toContain('specimen.parentSpecimenIds');
+        expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
+      });
+
+      // RF004 AC2 (#1497), on the same createSample fixture: the collection
+      // the wizard picked passes the intake contract and reaches createSample,
+      // which runs the collection gate.
+      it('hands the picked specimen.collectionId to createSample and answers 200 (RF004 AC2, #1497)', async () => {
+        const { app, sampleServiceModule } = parentsFixture();
+
+        const res = await request(app).post('/api/intake-wizard').send({
+          ...VALID_PAYLOAD,
+          specimen: { ...VALID_PAYLOAD.specimen, collectionId: 'COL-1' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
+        expect(sampleServiceModule.createSample.mock.calls[0][1].collectionId).toBe('COL-1');
+      });
+
+      it('returns 422 NON_CANONICAL_FIELD for a non-string specimen.collectionId, and creates nothing (#1497)', async () => {
+        const { app, sampleServiceModule } = parentsFixture();
+
+        const res = await request(app).post('/api/intake-wizard').send({
+          ...VALID_PAYLOAD,
+          specimen: { ...VALID_PAYLOAD.specimen, collectionId: 42 },
+        });
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+        expect(res.body.fields).toContain('specimen.collectionId');
         expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
       });
     });
@@ -656,6 +710,70 @@ describe('intakeWizard routes', () => {
         expect(res.body.sample.sealedRcsAssessmentId).toBe('assessment-1');
       });
 
+      it('records no second RcsAssessment when createSample already pinned one (#1549)', async () => {
+        let storedSample = null;
+        const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+        const findOne = vi.fn(async () => ({ ...storedSample }));
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const samplesCollection = { insertOne, findOne, updateOne };
+        const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+
+        const rcsAssessments = createFakeDb().collection('rcsAssessments');
+        const happyDb = buildHappyPathDb().db;
+        const db = { collection: (name) => (name === 'rcsAssessments' ? rcsAssessments : happyDb.collection(name)) };
+        const generateSampleHashFromSample = vi.fn(async () => 'sealed-root');
+
+        const { router, rcsAssessmentServiceModule } = loadRoute({
+          getCollectionImpl,
+          generateSampleHashFromSample,
+          resolveMethodologicalQuality: () => ({ governance_status: 1, final_grade: 'A', rcs_score: 87.5 }),
+        });
+        let recordCount = 0;
+        rcsAssessmentServiceModule.recordAssessment = vi.fn(async (_db, specimenId) => {
+          recordCount += 1;
+          const assessment = { _id: `assessment-${recordCount}`, specimenId: String(specimenId), assessedAt: new Date(recordCount) };
+          await rcsAssessments.insertOne(assessment);
+          return assessment;
+        });
+
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async () => {
+          const assessment = await rcsAssessmentServiceModule.recordAssessment(db, 'spec-1', { final_grade: 'A' });
+          storedSample = { _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', sealedRcsAssessmentId: assessment._id };
+          return { ...storedSample };
+        });
+
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        const history = await rcsAssessmentServiceModule.getAssessmentsForSpecimen(db, 'spec-1');
+        expect(history.map((a) => a._id)).toEqual(['assessment-1']);
+        expect(updateOne).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
+        );
+        expect(generateSampleHashFromSample).toHaveBeenCalledWith(
+          db,
+          expect.objectContaining({ sealedRcsAssessmentId: 'assessment-1' })
+        );
+        expect(res.body.sample.sealedRcsAssessmentId).toBe('assessment-1');
+      });
+
       it('does not fail the intake when recording the RcsAssessment snapshot rejects', async () => {
         const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
         const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
@@ -693,6 +811,102 @@ describe('intakeWizard routes', () => {
         expect(updateOne).not.toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
+        );
+      });
+
+      it('seals the merkleRoot after the RcsAssessment pin, from the stored sample (#1546)', async () => {
+        const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+        const findOne = vi.fn().mockResolvedValue({
+          _id: 'sample-1',
+          specimenId: 'spec-1',
+          participantId: '12345678',
+          sealedSpecimenPreanalyticsId: 'profile-1',
+        });
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const samplesCollection = { insertOne, findOne, updateOne };
+        const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+
+        const { db } = buildHappyPathDb();
+        const generateSampleHashFromSample = vi.fn(async () => 'sealed-root');
+
+        const { router } = loadRoute({
+          getCollectionImpl,
+          generateSampleHashFromSample,
+          resolveMethodologicalQuality: () => ({ governance_status: 1, final_grade: 'A', rcs_score: 87.5 }),
+        });
+
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(generateSampleHashFromSample).toHaveBeenCalledWith(
+          db,
+          expect.objectContaining({ sealedRcsAssessmentId: 'assessment-1', sealedSpecimenPreanalyticsId: 'profile-1' })
+        );
+        expect(updateOne).toHaveBeenCalledWith({ _id: 'sample-1' }, { $set: { merkleRoot: 'sealed-root' } });
+        const callIndex = (key) => updateOne.mock.calls.findIndex(([, update]) => update?.$set && key in update.$set);
+        const pinIndex = callIndex('sealedRcsAssessmentId');
+        const sealIndex = callIndex('merkleRoot');
+        expect(pinIndex).toBeGreaterThanOrEqual(0);
+        expect(updateOne.mock.invocationCallOrder[sealIndex]).toBeGreaterThan(updateOne.mock.invocationCallOrder[pinIndex]);
+        expect(res.body.sample.merkleRoot).toBe('sealed-root');
+      });
+
+      it('keeps the intake a 200 when sealing the merkleRoot rejects (#1546)', async () => {
+        const insertOne = vi.fn().mockResolvedValue({ insertedId: 'sample-1' });
+        const findOne = vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const samplesCollection = { insertOne, findOne, updateOne };
+        const patientsCollection = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
+
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+
+        const { db } = buildHappyPathDb();
+
+        const { router } = loadRoute({
+          getCollectionImpl,
+          generateSampleHashFromSample: vi.fn().mockRejectedValue(new Error('snapshot read failed')),
+        });
+
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const app = buildApp(router, db);
+        const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(updateOne).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ $set: expect.objectContaining({ merkleRoot: expect.anything() }) })
         );
       });
     });
@@ -1192,6 +1406,144 @@ function defaultStorageContainersFindOne({ _id }) {
 
       expect(res.status).toBe(409);
       expect(res.body.success).toBe(false);
+    });
+
+    // RNF018 AC5 (#1524): the intake resolves the body's governanceEvidence
+    // references against the stored records before certification, as POST
+    // /api/samples does, with the real resolver and certification; a
+    // reference that does not resolve refuses it and quarantines the specimen.
+    describe('governance evidence references (RNF018 AC5, #1524)', () => {
+      const APPROVAL_ID = 'APR-1524-INTAKE';
+      const OTHER_APPROVAL_ID = 'APR-1524-INTAKE-OTHER';
+      const COLLECTION_ID = 'COL-1524-INTAKE';
+      const CHECKSUM = `sha256:${'a'.repeat(64)}`;
+      const approvalUri = `urn:bioavanced:collection-governance-approval:${APPROVAL_ID}`;
+      const SPREC = {
+        code: 'BLD-SST-A-A-A-A-C', version: '1.0', matrixType: 'fluid', sampleType: 'BLD', primaryContainer: 'SST',
+        preCentrifugation: 'A', centrifugation: 'A', secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C'
+      };
+
+      async function postIntake(extra = {}) {
+        const { db, consentsCollection } = buildHappyPathDb({
+          consentsFindOneQueue: [{ _id: 'consent-1', participantId: '12345678', signedAt: new Date() }],
+        });
+        // A custody event the outbox holds for any sample, so only the
+        // missing specimenId keeps a custody reference from resolving.
+        const { COLLECTION_NAME: OUTBOX } = require('../../src/services/neo4jOutbox.service');
+        const baseCollection = db.collection;
+        db.collection = (name) => (name === OUTBOX
+          ? { findOne: vi.fn(async () => ({ eventId: 'evt-1', payloadHash: 'a'.repeat(64) })) }
+          : baseCollection(name));
+        const { samplesCollection, patientsCollection } = setupHappyMocks();
+        const approvalsCollection = {
+          findOne: vi.fn(async (filter) => {
+            if (filter.approvalId === APPROVAL_ID) {
+              return { approvalId: APPROVAL_ID, collectionId: COLLECTION_ID, documentChecksum: CHECKSUM };
+            }
+            if (filter.approvalId === OTHER_APPROVAL_ID) {
+              return { approvalId: OTHER_APPROVAL_ID, collectionId: 'COL-1524-INTAKE-OTHER', documentChecksum: CHECKSUM };
+            }
+            return null;
+          }),
+        };
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return patientsCollection;
+          if (key === 'consents') return consentsCollection;
+          if (key === 'collectionGovernanceApprovals') return approvalsCollection;
+          throw new Error(`unexpected key ${key}`);
+        });
+        // The real certification, read at call time from the module loadRoute loads.
+        const certify = vi.fn((payload, ...rest) => require(qualityDomainPath).evaluateQuality(payload, ...rest));
+        const { router } = loadRoute({ getCollectionImpl, resolveMethodologicalQuality: certify });
+
+        const sampleServiceModule = require(sampleServicePath);
+        const createSample = vi.spyOn(sampleServiceModule, 'createSample')
+          .mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' });
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        const res = await request(buildApp(router, db)).post('/api/intake-wizard')
+          .send({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, sprec: SPREC, collectionId: COLLECTION_ID }, ...extra });
+        return { res, certify, createSample };
+      }
+
+      it('certifies with a resolved documentation reference and hands the references to createSample', async () => {
+        const governanceEvidence = { documentation: [{ uri: approvalUri, hash: CHECKSUM }] };
+        const { res, certify, createSample } = await postIntake({ governanceEvidence });
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(1);
+        expect(res.body.qualityAssessment.final_grade).toBe('A');
+        expect(certify.mock.calls[0][1].governanceEvidenceResolution.documentation[0].status).toBe('resolved');
+        const persisted = createSample.mock.calls[0][1];
+        expect(persisted.governanceEvidence).toEqual(governanceEvidence);
+        expect(persisted.specimenStatus).toBe('available');
+      });
+
+      it.each([
+        ['a missing hash', { uri: approvalUri }],
+        ['an unresolvable URI', { uri: 'urn:bioavanced:collection-governance-approval:no-such-1524', hash: CHECKSUM }],
+        ['a wrong hash', { uri: approvalUri, hash: `sha256:${'b'.repeat(64)}` }],
+      ])('refuses certification and quarantines the specimen for a documentation reference with %s', async (_label, reference) => {
+        const { res, createSample } = await postIntake({ governanceEvidence: { documentation: [reference] } });
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(0);
+        expect(res.body.qualityAssessment.final_grade).toBe('E');
+        expect(res.body.qualityAssessment.governance_rule_codes).toContain('INSUFFICIENT_DOCUMENTATION');
+        const persisted = createSample.mock.calls[0][1];
+        expect(persisted.specimenStatus).toBe('quarantined');
+        expect(persisted.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
+      });
+
+      // The owner's ruling on #1524: SOP documentation evidence is the
+      // specimen's collection's governance approval, never another's.
+      it("refuses certification and quarantines the specimen for a documentation reference to another collection's approval", async () => {
+        const { res, createSample } = await postIntake({
+          governanceEvidence: {
+            documentation: [{ uri: `urn:bioavanced:collection-governance-approval:${OTHER_APPROVAL_ID}`, hash: CHECKSUM }],
+          },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(0);
+        expect(res.body.qualityAssessment.final_grade).toBe('E');
+        expect(res.body.qualityAssessment.governance_rule_codes).toContain('INSUFFICIENT_DOCUMENTATION');
+        expect(createSample.mock.calls[0][1].specimenStatus).toBe('quarantined');
+      });
+
+      it('refuses a custody-event reference whatever specimenId the body names, since the specimen does not exist yet', async () => {
+        const { res } = await postIntake({
+          governanceEvidence: { traceability: [{ uri: 'urn:bioavanced:custody-event:evt-1', hash: CHECKSUM }] },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(0);
+        expect(res.body.qualityAssessment.governance_rule_codes).toContain('INSUFFICIENT_TRACEABILITY');
+      });
+
+      it('certifies with one argument and hands no references to createSample when none is presented', async () => {
+        const { res, certify, createSample } = await postIntake();
+
+        expect(res.status).toBe(200);
+        expect(res.body.qualityAssessment.governance_status).toBe(1);
+        expect(certify.mock.calls[0]).toHaveLength(1);
+        expect(createSample.mock.calls[0][1]).not.toHaveProperty('governanceEvidence');
+      });
+
+      it('refuses a body that sends its own governanceEvidenceResolution with 422 NON_CANONICAL_FIELD', async () => {
+        const { res, createSample } = await postIntake({
+          governanceEvidenceResolution: { documentation: [{ uri: approvalUri, hash: CHECKSUM, status: 'resolved' }] },
+        });
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+        expect(createSample).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -1763,7 +2115,11 @@ describe('intakeWizard routes: fallbacks on sparse rows (#1337)', () => {
     const { res, samplesCollection } = await postIntake({ recordAssessment: vi.fn().mockRejectedValue(new Error('')) });
 
     expect(res.status).toBe(200);
-    expect(samplesCollection.updateOne).not.toHaveBeenCalled();
+    // #1546: the merkleRoot seal still writes; the RcsAssessment pin does not.
+    expect(samplesCollection.updateOne).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
+    );
     expect(res.body.sample.sealedRcsAssessmentId).toBeUndefined();
   });
 

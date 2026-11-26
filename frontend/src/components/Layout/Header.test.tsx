@@ -45,6 +45,14 @@ describe('Header account menu', () => {
     expect(trigger.querySelector('[data-testid="account-menu-chevron"]')).not.toBeNull();
   });
 
+  it('names the account menu by its own text, with no aria-label to contradict it (RNF027, #1544)', () => {
+    user = { name: 'Ana Costa', roleName: 'Administrador', accessType: 4 };
+    renderHeader();
+    const trigger = screen.getByTestId('account-menu-trigger');
+    expect(trigger).not.toHaveAttribute('aria-label');
+    expect(trigger).toHaveAccessibleName(/^AC Ana Costa/);
+  });
+
   it('leaves the other profile as a static name', () => {
     user = { name: 'Tecnico Local', roleName: 'Técnico', accessType: 2 };
     renderHeader();

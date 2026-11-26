@@ -6,6 +6,7 @@ const {
   ensureTerminologyLookupIndexes,
 } = require('../../services/terminologySync.service');
 const logger = require('../../utils/logger');
+const { authenticate } = require('../../infrastructure/middleware/auth');
 
 const router = express.Router();
 const ORPHADATA_BASE_URL = (process.env.ORPHADATA_BASE_URL || '').replace(/\/$/, '');
@@ -449,7 +450,7 @@ function formatTerminology(terminology) {
   };
 }
 
-router.get('/', async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

@@ -232,25 +232,6 @@ export const CONSENT_SCOPES: ConsentScopeDefinition[] = [
   },
 ];
 
-export const FHIR_GENDERS: Array<ContractOption<'male' | 'female' | 'other' | 'unknown'>> = [
-  { value: 'male', label: 'Masculino' },
-  { value: 'female', label: 'Feminino' },
-  { value: 'other', label: 'Outro' },
-  { value: 'unknown', label: 'Não informado' },
-];
-
-export function getRoleByAccessType(accessType: number | undefined): RoleName | undefined {
-  return ROLE_DEFINITIONS.find((role) => role.accessType === accessType)?.value;
-}
-
-export function getRoleAccessType(roleName: RoleName): number {
-  return ROLE_DEFINITIONS.find((role) => role.value === roleName)?.accessType ?? 2;
-}
-
-export function getActiveConsentScopes(category?: ConsentScopeCategory) {
-  return category ? CONSENT_SCOPES.filter((scope) => scope.category === category) : CONSENT_SCOPES;
-}
-
 export const FOUNDATION_CONTRACT_SUMMARY = {
   roles: ROLE_DEFINITIONS.length,
   userStatuses: USER_STATUSES.length,

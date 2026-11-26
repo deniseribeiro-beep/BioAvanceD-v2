@@ -17,6 +17,50 @@ const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
 const { buildRecordRoundTripLoss, buildBundleRoundTripLoss } = require('../resources/fhir/round-trip-loss');
 const { stageMappedResources } = require('../resources/fhir/import-mappings');
+const fhirValidator = require('./fhir-validator.service');
+const { loadConformanceRegistry } = require('./identifierNamespaceRegistry.service');
+const { RELEASE_COLLECTION } = require('./interoperabilityMappingRelease.service');
+
+// RF011 AC5, RNF024 AC2 (#1479): the mapping releases an import is read with.
+// A resource's meta.profile entry that an eligible FHIRProfileRegistry row
+// matches (the validator's own rule: approved or active, `url|version` or a
+// bare url) names that row's mappingReleaseId; the release row gives its
+// mappingVersion. A profile that no eligible row matches, or whose release
+// row is not stored, names nothing: no release is guessed.
+async function createMappingReleaseResolver(db) {
+  const { profiles } = fhirValidator.buildConformanceSets(await loadConformanceRegistry(db));
+  const releases = new Map();
+  async function releaseVersion(mappingReleaseId) {
+    if (!releases.has(mappingReleaseId)) {
+      let row = null;
+      try {
+        row = await collection(db, RELEASE_COLLECTION).findOne({ interoperabilityMappingReleaseId: mappingReleaseId });
+      } catch (error) {
+        logger.warn('InteroperabilityMappingRelease indisponível; o staging FHIR não registra a release:', error.message);
+      }
+      releases.set(mappingReleaseId, typeof row?.mappingVersion === 'string' && row.mappingVersion.trim() ? row.mappingVersion : null);
+    }
+    return releases.get(mappingReleaseId);
+  }
+  return async function resolve(resources) {
+    const ids = new Set();
+    resources.forEach((resource) => {
+      const declared = resource?.meta?.profile;
+      if (!Array.isArray(declared)) return;
+      declared.forEach((entry) => {
+        profiles.forEach((row) => {
+          if (fhirValidator.profileRegistered(entry, [row])) ids.add(row.mappingReleaseId);
+        });
+      });
+    });
+    const out = [];
+    for (const mappingReleaseId of [...ids].sort()) {
+      const mappingVersion = await releaseVersion(mappingReleaseId);
+      if (mappingVersion) out.push({ mappingReleaseId, mappingVersion });
+    }
+    return out;
+  };
+}
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -636,6 +680,15 @@ async function stageBundle(db, payload, metadata = {}) {
     throw createBadRequest('Bundle FHIR não contém Specimen para staging.');
   }
 
+  // RF011 AC5, RNF024 AC2 (#1479): the releases the Bundle and each record are read with.
+  const resolveMappingReleases = await createMappingReleaseResolver(db);
+  const bundleMappingReleases = await resolveMappingReleases([payload, ...resources]);
+  const recordMappingReleases = [];
+  for (const record of records) {
+    const { patient, specimen, consents, conditions, observations } = record.fhir;
+    recordMappingReleases.push(await resolveMappingReleases([patient, specimen, ...consents, ...conditions, ...observations]));
+  }
+
   const now = new Date();
   // #1385: the organization the controller resolved from the caller's scope
   // (#1376); null for a global caller who named none.
@@ -658,6 +711,7 @@ async function stageBundle(db, payload, metadata = {}) {
     // studyStatus and ethicsApprovalId, the plaintext a Study stores, kept
     // for commitStudyCandidates.
     studyCandidates,
+    mappingReleases: bundleMappingReleases,
     createdAt: now,
     updatedAt: now,
   };
@@ -666,10 +720,11 @@ async function stageBundle(db, payload, metadata = {}) {
 
   // #1322: an Observation several records attach is walked once.
   const roundTripLossCache = new WeakMap();
-  const docs = records.map((record) => ({
+  const docs = records.map((record, index) => ({
     ...record,
     batchId,
     organizationId,
+    mappingReleases: recordMappingReleases[index],
     // RF011 AC6, RNF024 C6 (#1322): paths only, kept outside the sealed fields.
     roundTripLoss: buildRecordRoundTripLoss(record.fhir, roundTripLossCache),
     createdAt: now,
@@ -1246,7 +1301,7 @@ async function commitBatch(db, batchIdRaw, { organizationScope, canCreateStudy }
         },
       }
     );
-    await audit(db, 'FHIR_IMPORT_RECORD_COMMITTED', { batchId, recordId: record._id, participantId: normalized.participantId, specimenId: normalized.specimenId });
+    await audit(db, 'FHIR_IMPORT_RECORD_COMMITTED', { batchId, recordId: record._id, participantId: normalized.participantId, specimenId: normalized.specimenId, mappingReleases: record.mappingReleases || [] });
     committed += 1;
   }
 

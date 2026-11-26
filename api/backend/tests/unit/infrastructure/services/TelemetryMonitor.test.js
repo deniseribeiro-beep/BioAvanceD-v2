@@ -427,6 +427,20 @@ describe('TelemetryMonitor', () => {
       expect(query.indexOf('map(')).toBeLessThan(query.indexOf('r._value > -80'));
     });
 
+    // #1518 (RNF025 C8): a corrected reading's original is no breach.
+    it('keeps the current revision of each reading before the critical threshold filter (#1518, RNF025 C8)', async () => {
+      const collectRows = vi.fn().mockResolvedValue([]);
+      getInfluxQueryApiSpy.mockReturnValue({ collectRows });
+      const monitor = new TelemetryMonitor({ criticalTemp: -80 });
+
+      await monitor.findCriticalFreezers();
+
+      const query = collectRows.mock.calls[0][0];
+      const current = query.indexOf('max(column: "_revision")');
+      expect(current).toBeGreaterThan(-1);
+      expect(current).toBeLessThan(query.indexOf('r._value >'));
+    });
+
     // #688: per-sensor TemperaturePolicy.minimumDuration (minutes) as the
     // excursion threshold, falling back to the global criticalDurationHours
     // (converted to minutes) when the policy is absent/unresolved/unusable.

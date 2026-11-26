@@ -5,6 +5,13 @@ const express = require('express');
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
+// Every router app.js requires takes `authenticate` when it is required
+// (#1553); this file tests the terminology read, not the gate.
+const authModule = require('../../src/infrastructure/middleware/auth');
+authModule.authenticate = (req, res, next) => {
+  req.user = { id: 'user-1' };
+  next();
+};
 const app = require('../../app');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 

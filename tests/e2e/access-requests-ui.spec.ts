@@ -12,6 +12,13 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { deleteOrganizations } from './helpers/listOrganizations';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  assignGovernedCustody,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // RF024 (#1350): the access-request screens against the real backend. The
 // operator registers a request through the form (AC1), evaluates it (AC2/AC3:
@@ -34,9 +41,18 @@ function isoDay(offsetDays: number): string {
 test.describe('RF024 access-request screens -- real backend', () => {
   test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set -- run via npm run test:e2e:docker');
 
+  // #1497 (RF004 AC2): the specimen enters a governed collection.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`rf024-ui-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
   test.afterAll(async ({ request }) => {
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -78,11 +94,14 @@ test.describe('RF024 access-request screens -- real backend', () => {
         registeredAt: new Date().toISOString(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(sample.status());
     const specimenId = (await sample.json()).data.specimenId as string;
     expect(specimenId).toBeTruthy();
+    // RF021 AC6: a specimen in a collection is compatible only under a custody in force.
+    await assignGovernedCustody(request, apiBaseURL!, headers, governed!, specimenId, organizationId);
 
     // AC1: the request registered through the form.
     await page.goto('/access-requests');

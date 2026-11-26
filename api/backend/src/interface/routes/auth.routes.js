@@ -488,15 +488,10 @@ router.post('/refresh', async (req, res) => {
     // since #427) User document field.
     const accessToken = await authService.issueAccessToken(db, user);
 
-    const newRefreshToken = jwt.sign(
-      {
-        userID: user._id.toString(),
-        sessionID: sessionId,
-        type: 'refresh'
-      },
-      env.JWT_REFRESH_SECRET || env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // #1456 (RNF021 AC1): the shared signer adds a random jti, so two
+    // rotations inside one second still issue different tokens and the one
+    // rotated away no longer matches the stored hash.
+    const newRefreshToken = authService.issueRefreshToken(user, sessionId);
 
     await sessionService.rotateSessionTokens(db, sessionId, accessToken, newRefreshToken, session);
     setRefreshCookie(res, newRefreshToken);

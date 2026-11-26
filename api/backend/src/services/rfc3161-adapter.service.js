@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const env = require('../config/env');
+const { currentRequestId, requestIdHeaders } = require('../utils/requestContext');
 
 const TIMESTAMP_STATES = Object.freeze({
   PENDING: 'PENDING',
@@ -75,6 +76,8 @@ class Rfc3161AdapterService {
         headers: {
           'content-type': 'application/json',
           ...(env.AUDIT_RFC3161_TSA_AUTH_TOKEN ? { authorization: `Bearer ${env.AUDIT_RFC3161_TSA_AUTH_TOKEN}` } : {}),
+          // #1468 (RNF015 C3): the caller's request or job id, so the call can be tied to it.
+          ...(requestIdHeaders(currentRequestId()) || {}),
         },
         body: JSON.stringify({
           messageImprint: envelopeDigestBase64,

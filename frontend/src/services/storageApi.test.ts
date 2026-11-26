@@ -1,54 +1,189 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-vi.mock('./api', () => ({
-  default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
-}));
-
 import api from './api';
 import { storageApi } from './storageApi';
 
-const http = vi.mocked(api);
+vi.mock('./api', () => ({
+  default: {
+    get: vi.fn(),
+    post: vi.fn(),
+    delete: vi.fn(),
+  },
+}));
+
+const get = vi.mocked(api.get);
+const post = vi.mocked(api.post);
+const del = vi.mocked(api.delete);
+
+type Verb = 'get' | 'post' | 'delete';
+
+interface Row {
+  name: string;
+  verb: Verb;
+  call: () => Promise<any>;
+  url: string;
+  body?: unknown;
+  fallback: string;
+  // validatePosition, allocateSample, autoAssignSampleToBox, moveSample and
+  // releaseSample also carry a message; the other six return error only.
+  withMessage: boolean;
+  // searchSamples alone adds data: []; validatePosition alone adds available: false.
+  extra?: Record<string, unknown>;
+}
+
+const rows: Row[] = [
+  {
+    name: 'searchSamples',
+    verb: 'get',
+    call: () => storageApi.searchSamples('BC 01&x=1'),
+    url: '/storage/samples/search?q=BC%2001%26x%3D1',
+    fallback: 'SEARCH_ERROR',
+    withMessage: false,
+    extra: { data: [] },
+  },
+  {
+    name: 'listFreezers',
+    verb: 'get',
+    call: () => storageApi.listFreezers(),
+    url: '/storage/freezers',
+    fallback: 'LIST_ERROR',
+    withMessage: false,
+  },
+  {
+    name: 'validatePosition',
+    verb: 'get',
+    call: () => storageApi.validatePosition('box-7', 'B3'),
+    url: '/storage/validate/box-7/B3',
+    fallback: 'VALIDATION_ERROR',
+    withMessage: true,
+    extra: { available: false },
+  },
+  {
+    name: 'allocateSample',
+    verb: 'post',
+    call: () => storageApi.allocateSample('s-1', 'box-7', 'B3'),
+    url: '/storage/allocate',
+    body: { sampleId: 's-1', boxId: 'box-7', position: 'B3' },
+    fallback: 'ALLOCATION_ERROR',
+    withMessage: true,
+  },
+  {
+    name: 'autoAssignSampleToBox',
+    verb: 'post',
+    call: () => storageApi.autoAssignSampleToBox('s-1', 'box-7'),
+    url: '/storage/allocate/auto',
+    body: { sampleId: 's-1', boxId: 'box-7' },
+    fallback: 'AUTO_ALLOCATION_ERROR',
+    withMessage: true,
+  },
+  {
+    name: 'moveSample',
+    verb: 'post',
+    call: () => storageApi.moveSample('s-1', 'box-9', 'C4', 'reorg', 'shelf 2'),
+    url: '/storage/move',
+    body: { sampleId: 's-1', targetBoxId: 'box-9', targetPosition: 'C4', reason: 'reorg', notes: 'shelf 2' },
+    fallback: 'MOVE_SAMPLE_ERROR',
+    withMessage: true,
+  },
+  {
+    name: 'releaseSample',
+    verb: 'delete',
+    call: () => storageApi.releaseSample('s-1'),
+    url: '/storage/release/s-1',
+    fallback: 'RELEASE_ERROR',
+    withMessage: true,
+  },
+  {
+    name: 'getSampleLocation',
+    verb: 'get',
+    call: () => storageApi.getSampleLocation('s-1'),
+    url: '/storage/sample/s-1',
+    fallback: 'LOCATION_ERROR',
+    withMessage: false,
+  },
+  {
+    name: 'getAvailablePositions',
+    verb: 'get',
+    call: () => storageApi.getAvailablePositions('box-7'),
+    url: '/storage/box/box-7/available',
+    fallback: 'AVAILABLE_ERROR',
+    withMessage: false,
+  },
+  {
+    name: 'getFreezerTree',
+    verb: 'get',
+    call: () => storageApi.getFreezerTree('fz-2'),
+    url: '/storage/freezer/fz-2/tree',
+    fallback: 'TREE_ERROR',
+    withMessage: false,
+  },
+  {
+    name: 'getFreezerStats',
+    verb: 'get',
+    call: () => storageApi.getFreezerStats('fz-2'),
+    url: '/storage/freezer/fz-2/stats',
+    fallback: 'STATS_ERROR',
+    withMessage: false,
+  },
+];
+
+const verbs = { get, post, delete: del };
 
 describe('storageApi', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
-  it('returns the storage payload from each call', async () => {
-    http.get.mockResolvedValue({ data: { success: true, data: ['ok'] } } as never);
-    http.post.mockResolvedValue({ data: { success: true, sampleLocation: { position: 'A1' } } } as never);
-    http.delete.mockResolvedValue({ data: { success: true } } as never);
+  for (const row of rows) {
+  describe(row.name, () => {
+    const mock = verbs[row.verb];
 
-    await expect(storageApi.searchSamples('a b')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.listFreezers()).resolves.toMatchObject({ success: true });
-    await expect(storageApi.validatePosition('box', 'A1')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.allocateSample('s', 'box', 'A1')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.autoAssignSampleToBox('s', 'box')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.moveSample('s', 'box', 'B2', 'motivo', 'nota')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.releaseSample('s')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.getSampleLocation('s')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.getAvailablePositions('box')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.getFreezerTree('f')).resolves.toMatchObject({ success: true });
-    await expect(storageApi.getFreezerStats('f')).resolves.toMatchObject({ success: true });
-    expect(http.get).toHaveBeenCalledWith('/storage/samples/search?q=a%20b');
+    it(`${row.name}: calls the endpoint once and returns response.data as it came`, async () => {
+      const payload = { success: true, data: { marker: row.name } };
+      mock.mockResolvedValueOnce({ data: payload } as any);
+
+      const result = await row.call();
+
+      expect(result).toBe(payload);
+      expect(mock).toHaveBeenCalledTimes(1);
+      if (row.body === undefined) {
+        expect(mock).toHaveBeenCalledWith(row.url);
+      } else {
+        expect(mock).toHaveBeenCalledWith(row.url, row.body);
+      }
+      for (const other of Object.keys(verbs) as Verb[]) {
+        if (other !== row.verb) expect(verbs[other]).not.toHaveBeenCalled();
+      }
+    });
+
+    it(`${row.name}: passes the server's error (and message) through when the request fails with a response`, async () => {
+      mock.mockRejectedValueOnce(
+        Object.assign(new Error('Request failed with status code 409'), {
+          response: { data: { error: 'SERVER_CODE', message: 'server says no' } },
+        }),
+      );
+
+      const result = await row.call();
+
+      expect(result).toEqual({
+        success: false,
+        error: 'SERVER_CODE',
+        ...(row.withMessage ? { message: 'server says no' } : {}),
+        ...row.extra,
+      });
+    });
+
+    it(`${row.name}: falls back to ${row.fallback} when the request fails with no response`, async () => {
+      mock.mockRejectedValueOnce(new Error('Network Error'));
+
+      const result = await row.call();
+
+      expect(result).toEqual({
+        success: false,
+        error: row.fallback,
+        ...(row.withMessage ? { message: 'Network Error' } : {}),
+        ...row.extra,
+      });
+    });
   });
-
-  it('returns a failed result when the storage call is refused', async () => {
-    const refused = { response: { data: { error: 'CHEIO', message: 'Sem vaga' } }, message: 'no' };
-    http.get.mockRejectedValue(refused);
-    http.post.mockRejectedValue(refused);
-    http.delete.mockRejectedValue(new Error('rede'));
-
-    await expect(storageApi.searchSamples('x')).resolves.toMatchObject({ success: false, error: 'CHEIO', data: [] });
-    await expect(storageApi.listFreezers()).resolves.toMatchObject({ error: 'CHEIO' });
-    await expect(storageApi.validatePosition('b', '1')).resolves.toMatchObject({ available: false, message: 'Sem vaga' });
-    await expect(storageApi.allocateSample('s', 'b', '1')).resolves.toMatchObject({ error: 'CHEIO' });
-    await expect(storageApi.autoAssignSampleToBox('s', 'b')).resolves.toMatchObject({ error: 'CHEIO' });
-    await expect(storageApi.moveSample('s', 'b', '2')).resolves.toMatchObject({ error: 'CHEIO' });
-    await expect(storageApi.releaseSample('s')).resolves.toMatchObject({ error: 'RELEASE_ERROR', message: 'rede' });
-    await expect(storageApi.getSampleLocation('s')).resolves.toMatchObject({ error: 'CHEIO' });
-    await expect(storageApi.getAvailablePositions('b')).resolves.toMatchObject({ error: 'CHEIO' });
-    await expect(storageApi.getFreezerTree('f')).resolves.toMatchObject({ error: 'CHEIO' });
-    await expect(storageApi.getFreezerStats('f')).resolves.toMatchObject({ error: 'CHEIO' });
-  });
+  }
 });

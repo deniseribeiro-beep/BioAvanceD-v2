@@ -92,9 +92,11 @@ describe('Neo4jOutboxService', () => {
 
     const modified = await service.rescheduleStaleProcessing(db, { leaseMs: 1 });
 
-    expect(modified).toBe(2);
-    expect(updateManyCalls.length).toBe(1);
-    expect(updateManyCalls[0][0].status).toBe('PROCESSING');
+    // #1529: the dead-letter sweep and the retry sweep each report 2 here.
+    expect(modified).toBe(4);
+    expect(updateManyCalls.length).toBe(2);
+    expect(updateManyCalls[0][1].$set.status).toBe('DEAD_LETTER');
+    expect(updateManyCalls[1][0].status).toBe('PROCESSING');
   });
 
   it('hashes Date and array values as ISO strings and sorted-key objects', () => {
@@ -277,10 +279,14 @@ describe('Neo4jOutboxService', () => {
 
     expect(leased).toEqual(events);
     expect(findCalls[0]).toMatchObject({ status: { $in: ['PENDING', 'RETRYING'] } });
-    expect(updateManyCalls).toHaveLength(2);
-    expect(updateManyCalls[0][0]).toMatchObject({ status: 'PROCESSING' });
-    expect(updateManyCalls[1][0]).toEqual({ eventId: { $in: ['evt-1', 'evt-2'] } });
-    expect(updateManyCalls[1][1].$set.status).toBe('PROCESSING');
+    // #1529: dead-letter sweep, retry sweep, then the claim.
+    expect(updateManyCalls).toHaveLength(3);
+    expect(updateManyCalls[0][1].$set.status).toBe('DEAD_LETTER');
+    expect(updateManyCalls[1][0]).toMatchObject({ status: 'PROCESSING' });
+    // #1550: the claim re-checks the find's selector.
+    expect(updateManyCalls[2][0]).toEqual({ eventId: { $in: ['evt-1', 'evt-2'] }, ...findCalls[0] });
+    expect(updateManyCalls[2][1].$set.status).toBe('PROCESSING');
+    expect(typeof updateManyCalls[2][1].$set.leaseId).toBe('string');
   });
 
   it('returns an empty array from leaseNextBatch when there is nothing to lease', async () => {
@@ -295,7 +301,8 @@ describe('Neo4jOutboxService', () => {
     const leased = await service.leaseNextBatch(db);
 
     expect(leased).toEqual([]);
-    expect(updateManyCalls).toHaveLength(1);
+    // #1529: the dead-letter sweep and the retry sweep; no claim.
+    expect(updateManyCalls).toHaveLength(2);
   });
 
   it('marks an event as projected', async () => {
@@ -448,6 +455,70 @@ describe('Neo4jOutboxService', () => {
 
       expect(counterCalls).toHaveLength(0);
       expect(event).toMatchObject({ aggregateVersion: 7, eventTypeVersion: '2', canonicalModelReleaseId: 'release-x' });
+    });
+  });
+
+  // #1561: a batch of distinct aggregates in three writes, all in the
+  // caller's transaction.
+  describe('#1561 appendEvents', () => {
+    function makeBatchDb(startingVersions = {}) {
+      const versions = new Map(Object.entries(startingVersions));
+      const calls = [];
+      const collection = {
+        createIndex: async () => {},
+        bulkWrite: async (operations, options) => {
+          calls.push({ method: 'bulkWrite', operations, options });
+          for (const { updateOne: { filter, update } } of operations) {
+            if (update.$inc) versions.set(filter._id, (versions.get(filter._id) || 0) + update.$inc.version);
+          }
+          return { ok: 1 };
+        },
+        find: (filter, options) => {
+          calls.push({ method: 'find', filter, options });
+          return { toArray: async () => filter._id.$in.filter((id) => versions.has(id)).map((id) => ({ _id: id, version: versions.get(id) })) };
+        },
+        updateOne: async () => { calls.push({ method: 'updateOne' }); },
+        findOneAndUpdate: async () => { calls.push({ method: 'findOneAndUpdate' }); return { version: 1 }; },
+      };
+      return { db: { collection: () => collection }, calls };
+    }
+    const event = (aggregateId) => ({ eventType: 'T', aggregateType: 'A', aggregateId, payload: { aggregateId } });
+
+    it('takes each aggregate its next version and upserts every event by eventId, in the caller session', async () => {
+      const { db, calls } = makeBatchDb({ 'A:2': 4 });
+      const service = new Neo4jOutboxService({ collectionName: '1561_batch' });
+      const session = { id: 'tx-batch' };
+
+      const docs = await service.appendEvents(db, [event('1'), event('2'), event('3')], { session });
+
+      expect(docs.map((doc) => doc.aggregateVersion)).toEqual([1, 5, 1]);
+      expect(calls.map((call) => call.method)).toEqual(['bulkWrite', 'find', 'bulkWrite']);
+      expect(calls.every((call) => call.options?.session === session)).toBe(true);
+      expect(calls[0].operations.map((op) => op.updateOne.filter._id)).toEqual(['A:1', 'A:2', 'A:3']);
+      expect(calls[0].operations.every((op) => op.updateOne.upsert === true)).toBe(true);
+      const upserts = calls[2].operations.map((op) => op.updateOne);
+      expect(upserts.map((op) => op.filter.eventId)).toEqual(docs.map((doc) => doc.eventId));
+      expect(upserts.every((op) => op.upsert === true && op.update.$setOnInsert.status === 'PENDING')).toBe(true);
+      expect(docs[1].idempotencyKey).toBe(buildIdempotencyKey({
+        aggregateType: 'A', aggregateId: '2', aggregateVersion: 5, eventType: 'T', eventTypeVersion: '1', payloadHash: hashPayload({ aggregateId: '2' }),
+      }));
+    });
+
+    it('refuses an aggregate named twice, or a caller-supplied aggregateVersion, writing nothing', async () => {
+      const { db, calls } = makeBatchDb();
+      const service = new Neo4jOutboxService({ collectionName: '1561_batch_refused' });
+
+      await expect(service.appendEvents(db, [event('1'), event('1')])).rejects.toThrow('agregados distintos');
+      await expect(service.appendEvents(db, [{ ...event('1'), aggregateVersion: 3 }])).rejects.toThrow('aggregateVersion');
+      expect(calls).toEqual([]);
+    });
+
+    it('writes nothing for an empty batch', async () => {
+      const { db, calls } = makeBatchDb();
+      const service = new Neo4jOutboxService({ collectionName: '1561_batch_empty' });
+
+      expect(await service.appendEvents(db, [])).toEqual([]);
+      expect(calls).toEqual([]);
     });
   });
 
@@ -648,6 +719,232 @@ describe('Neo4jOutboxService', () => {
     it('requeues nothing when given no event ids', async () => {
       const db = makeDb({ counters: [], checkpoints: [], events: [] });
       expect(await new Neo4jOutboxService().requeueDeadLetters(db, [])).toBe(0);
+    });
+  });
+
+  // #1527 (RNF019 C5): the lease counts a try once; a lease timeout does not
+  // count it again.
+  describe('#1527 lease timeout', () => {
+    const valueOf = (doc, key) => doc[key];
+
+    const matches = (doc, query) => Object.entries(query).every(([key, cond]) => {
+      if (key === '$or') return cond.some((sub) => matches(doc, sub));
+      const value = valueOf(doc, key);
+      if (cond === null) return value == null;
+      if (cond instanceof Date) return value instanceof Date && value.getTime() === cond.getTime();
+      if (cond && typeof cond === 'object') {
+        if ('$in' in cond) return cond.$in.includes(value);
+        if ('$lt' in cond) return value != null && value < cond.$lt;
+        if ('$gte' in cond) return value != null && value >= cond.$gte;
+        if ('$lte' in cond) return value != null && value <= cond.$lte;
+      }
+      return value === cond;
+    });
+
+    const makeFakeDb = (doc) => {
+      const docs = [doc];
+      const collection = {
+        updateMany: async (q, u) => {
+          let modifiedCount = 0;
+          for (const d of docs) {
+            if (!matches(d, q)) continue;
+            if (u.$set) Object.assign(d, u.$set);
+            if (u.$inc) {
+              for (const [field, by] of Object.entries(u.$inc)) d[field] = (d[field] || 0) + by;
+            }
+            modifiedCount += 1;
+          }
+          return { modifiedCount };
+        },
+        find: (q) => {
+          const found = () => docs.filter((d) => matches(d, q)).map((d) => ({ ...d }));
+          const chain = {
+            sort: () => chain,
+            limit: () => chain,
+            toArray: async () => found(),
+          };
+          return chain;
+        },
+      };
+      return { collection: () => collection };
+    };
+
+    const leaseThenExpire = async (doc, db, service) => {
+      const leased = await service.leaseNextBatch(db, { batchSize: 5, leaseMs: 1000, maxAttempts: 8 });
+      expect(leased).toHaveLength(1);
+      expect(doc.attempts).toBe(1);
+      expect(doc.status).toBe('PROCESSING');
+      doc.updatedAt = new Date(Date.now() - 10 * 1000);
+      doc.nextAttemptAt = new Date(Date.now() + 60 * 1000);
+    };
+
+    it('a lease timeout found by rescheduleStaleProcessing leaves the one try the lease counted', async () => {
+      const doc = { eventId: 'evt-t', status: 'PENDING', attempts: 0, nextAttemptAt: null, updatedAt: new Date() };
+      const db = makeFakeDb(doc);
+      const service = new Neo4jOutboxService();
+      await leaseThenExpire(doc, db, service);
+
+      await service.rescheduleStaleProcessing(db, { leaseMs: 1000 });
+
+      expect(doc.status).toBe('RETRYING');
+      expect(doc.attempts).toBe(1);
+    });
+
+    it('a lease timeout swept by leaseNextBatch leaves the one try the lease counted', async () => {
+      const doc = { eventId: 'evt-t', status: 'PENDING', attempts: 0, nextAttemptAt: null, updatedAt: new Date() };
+      const db = makeFakeDb(doc);
+      const service = new Neo4jOutboxService();
+      await leaseThenExpire(doc, db, service);
+
+      const leased = await service.leaseNextBatch(db, { batchSize: 5, leaseMs: 1000, maxAttempts: 8 });
+
+      expect(leased).toEqual([]);
+      expect(doc.status).toBe('RETRYING');
+      expect(doc.attempts).toBe(1);
+    });
+
+    // #1529 (RNF019 C5): no lease claims an event whose tries are spent, so a
+    // timeout on the last allowed try dead-letters it.
+    const leaseLastTryThenExpire = async (doc, db, service) => {
+      const leased = await service.leaseNextBatch(db, { batchSize: 5, leaseMs: 1000, maxAttempts: 2 });
+      expect(leased).toHaveLength(1);
+      expect(doc.attempts).toBe(2);
+      doc.updatedAt = new Date(Date.now() - 10 * 1000);
+    };
+
+    it('#1529 a lease timeout on the last allowed try found by rescheduleStaleProcessing dead-letters the event', async () => {
+      const doc = { eventId: 'evt-l', status: 'RETRYING', attempts: 1, nextAttemptAt: null, updatedAt: new Date() };
+      const db = makeFakeDb(doc);
+      const service = new Neo4jOutboxService();
+      await leaseLastTryThenExpire(doc, db, service);
+
+      const moved = await service.rescheduleStaleProcessing(db, { leaseMs: 1000, maxAttempts: 2 });
+
+      expect(moved).toBe(1);
+      expect(doc.status).toBe('DEAD_LETTER');
+      expect(doc.attempts).toBe(2);
+      expect(doc.lastError).toBe('processing_lease_expired');
+      expect(doc.leaseUntil).toBeNull();
+    });
+
+    it('#1529 a lease timeout on the last allowed try swept by leaseNextBatch dead-letters the event', async () => {
+      const doc = { eventId: 'evt-l', status: 'RETRYING', attempts: 1, nextAttemptAt: null, updatedAt: new Date() };
+      const db = makeFakeDb(doc);
+      const service = new Neo4jOutboxService();
+      await leaseLastTryThenExpire(doc, db, service);
+
+      const leased = await service.leaseNextBatch(db, { batchSize: 5, leaseMs: 1000, maxAttempts: 2 });
+
+      expect(leased).toEqual([]);
+      expect(doc.status).toBe('DEAD_LETTER');
+      expect(doc.attempts).toBe(2);
+      expect(doc.lastError).toBe('leased_processing_timeout');
+    });
+
+    it('#1529 a sweep dead-letters a RETRYING event already left with its tries spent', async () => {
+      const doc = { eventId: 'evt-s', status: 'RETRYING', attempts: 2, nextAttemptAt: null, updatedAt: new Date(), lastError: 'processing_lease_expired' };
+      const db = makeFakeDb(doc);
+
+      await new Neo4jOutboxService().rescheduleStaleProcessing(db, { leaseMs: 1000, maxAttempts: 2 });
+
+      expect(doc.status).toBe('DEAD_LETTER');
+    });
+
+    it('#1529 a sweep leaves a fresh lease on its last try alone', async () => {
+      const doc = { eventId: 'evt-f', status: 'RETRYING', attempts: 1, nextAttemptAt: null, updatedAt: new Date() };
+      const db = makeFakeDb(doc);
+      const service = new Neo4jOutboxService();
+      await service.leaseNextBatch(db, { batchSize: 5, leaseMs: 60 * 1000, maxAttempts: 2 });
+
+      await service.rescheduleStaleProcessing(db, { leaseMs: 60 * 1000, maxAttempts: 2 });
+
+      expect(doc.status).toBe('PROCESSING');
+      expect(doc.attempts).toBe(2);
+    });
+  });
+
+  // #1550: the claim re-checks what the find selected, so two leases that
+  // read the same batch never both claim an event, nor claim one another
+  // lease has since put into backoff.
+  describe('#1550 atomic lease', () => {
+    const matches = (doc, query) => Object.entries(query).every(([key, cond]) => {
+      if (key === '$or') return cond.some((sub) => matches(doc, sub));
+      const value = doc[key];
+      if (cond === null) return value == null;
+      if (cond instanceof Date) return value instanceof Date && value.getTime() === cond.getTime();
+      if (cond && typeof cond === 'object') {
+        if ('$in' in cond) return cond.$in.includes(value);
+        if ('$lt' in cond) return value != null && value < cond.$lt;
+        if ('$gte' in cond) return value != null && value >= cond.$gte;
+        if ('$lte' in cond) return value != null && value <= cond.$lte;
+      }
+      return value === cond;
+    });
+
+    const makeFakeDb = (docs, { beforeUpdate } = {}) => {
+      const collection = {
+        updateMany: async (q, u) => {
+          if (beforeUpdate) beforeUpdate(q, u);
+          let modifiedCount = 0;
+          for (const d of docs) {
+            if (!matches(d, q)) continue;
+            if (u.$set) Object.assign(d, u.$set);
+            if (u.$inc) {
+              for (const [field, by] of Object.entries(u.$inc)) d[field] = (d[field] || 0) + by;
+            }
+            modifiedCount += 1;
+          }
+          return { modifiedCount };
+        },
+        find: (q) => {
+          const found = () => docs.filter((d) => matches(d, q)).map((d) => ({ ...d }));
+          const chain = {
+            sort: () => chain,
+            limit: () => chain,
+            toArray: async () => found(),
+          };
+          return chain;
+        },
+      };
+      return { collection: () => collection };
+    };
+
+    const pending = (eventId) => ({ eventId, status: 'PENDING', attempts: 0, nextAttemptAt: null, updatedAt: new Date() });
+
+    it('two leases that read the same batch claim each event once and count its try once', async () => {
+      const docs = [pending('evt-1'), pending('evt-2')];
+      const db = makeFakeDb(docs);
+      const service = new Neo4jOutboxService();
+
+      const [a, b] = await Promise.all([
+        service.leaseNextBatch(db, { batchSize: 5, leaseMs: 60000 }),
+        service.leaseNextBatch(db, { batchSize: 5, leaseMs: 60000 }),
+      ]);
+
+      const idsA = a.map((event) => event.eventId);
+      const idsB = b.map((event) => event.eventId);
+      expect(idsA.filter((id) => idsB.includes(id))).toEqual([]);
+      expect([...idsA, ...idsB].sort()).toEqual(['evt-1', 'evt-2']);
+      expect(docs.map((d) => d.attempts)).toEqual([1, 1]);
+    });
+
+    it('a claim skips an event another lease put into backoff after the find', async () => {
+      const doc = pending('evt-1');
+      let raced = false;
+      const db = makeFakeDb([doc], {
+        beforeUpdate: (q, u) => {
+          if (raced || !u.$set || u.$set.status !== 'PROCESSING' || !('eventId' in q)) return;
+          raced = true;
+          Object.assign(doc, { status: 'RETRYING', attempts: 1, nextAttemptAt: new Date(Date.now() + 60 * 1000) });
+        },
+      });
+
+      const leased = await new Neo4jOutboxService().leaseNextBatch(db, { batchSize: 5, leaseMs: 60000 });
+
+      expect(raced).toBe(true);
+      expect(leased).toEqual([]);
+      expect(doc.attempts).toBe(1);
+      expect(doc.status).toBe('RETRYING');
     });
   });
 });

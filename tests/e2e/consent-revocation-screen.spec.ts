@@ -87,7 +87,7 @@ test.describe('RF010 AC5-AC6 consent revocation screen (/consents) -- real backe
 
     // Opened the way the patients list links to it.
     await page.goto(`/consents?participantId=${participantId}`);
-    await expect(page.getByTestId('consent-state')).toHaveText('active', { timeout: 15_000 });
+    await expect(page.getByTestId('consent-state')).toHaveText('Ativo', { timeout: 15_000 });
     await expect(page.getByTestId('consent-decision-events')).toContainText('accepted');
     await expect(page.getByTestId('consent-decision-events')).toContainText('staff_portal');
 
@@ -97,7 +97,7 @@ test.describe('RF010 AC5-AC6 consent revocation screen (/consents) -- real backe
     await page.getByLabel('Motivo').fill('Não deseja contato futuro');
     await page.getByTestId('revoke-selected-button').click();
     await expect(page.getByTestId('consent-notice')).toHaveText('Revogação registrada.');
-    await expect(page.getByTestId('consent-state')).toHaveText('partially_revoked');
+    await expect(page.getByTestId('consent-state')).toHaveText('Parcialmente revogado');
     await expect(page.getByTestId('consent-revocations')).toContainText('Contato futuro');
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, scopedWatch);
 
@@ -115,7 +115,7 @@ test.describe('RF010 AC5-AC6 consent revocation screen (/consents) -- real backe
     await expect(page.getByTestId('revoke-scope-storage')).toBeVisible();
     await expect(page.getByTestId('revoke-scope-contact')).toHaveCount(0);
     await page.getByTestId('revoke-all-button').click();
-    await expect(page.getByTestId('consent-state')).toHaveText('revoked');
+    await expect(page.getByTestId('consent-state')).toHaveText('Revogado');
     await expect(page.getByTestId('revoke-all-button')).toHaveCount(0);
     await expect(page.getByTestId('consent-revocations')).toContainText('Todos os usos');
 

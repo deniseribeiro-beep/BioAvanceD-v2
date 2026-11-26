@@ -83,6 +83,10 @@ export function useLogs() {
   // sequence -- whichever call is issued last must be able to invalidate
   // the other's in-flight response.
   const requestSeq = useRequestSequence();
+  // #1446: `loading` is set by loadLogs alone, so only a newer loadLogs may
+  // take over its reset; a queryLogs that supersedes a load's data must not
+  // leave `loading` stuck true.
+  const loadingSeq = useRequestSequence();
 
   useEffect(() => {
     loadLogs();
@@ -98,6 +102,7 @@ export function useLogs() {
 
   const loadLogs = async (filters?: Record<string, unknown>) => {
     const seq = requestSeq.next();
+    const loadingTurn = loadingSeq.next();
     try {
       setLoading(true);
       setError(null);
@@ -115,7 +120,7 @@ export function useLogs() {
       setError(errorMessage);
       setLogs([]); // Define array vazio em caso de erro
     } finally {
-      if (requestSeq.isCurrent(seq)) setLoading(false);
+      if (loadingSeq.isCurrent(loadingTurn)) setLoading(false);
     }
   };
 

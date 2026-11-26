@@ -300,6 +300,21 @@ describe('#979 src/workers/worker.js — Redis connectivity loss is retried, con
     expect(exitSpy).not.toHaveBeenCalled();
   });
 
+  // RF022 AC4/AC9, RNF014 C7: initWorker refuses on a missing, blocked or
+  // other-release ReadinessReport; worker.js must then exit 1 rather than
+  // keep the process up with no queue consumer behind its heartbeat.
+  describe('#1551 src/workers/worker.js — Foundation readiness refusal', () => {
+    it('exits(1) when initWorker refuses on the Foundation readiness gate', async () => {
+      const { FoundationNotReadyError } = require('../../src/foundation/readiness');
+      fakeInitWorker.mockRejectedValue(new FoundationNotReadyError('Nenhum ReadinessReport para o ambiente test'));
+
+      await loadWorker();
+
+      expect(fakeInitWorker).toHaveBeenCalledTimes(1);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+  });
+
   // #1085: the encryption gate sits at the top of startWorker(), ahead of the
   // Redis connectivity test, so its refusal must terminate this process the
   // same way every other startup failure here does. Pinned because the call

@@ -105,22 +105,19 @@ export default function BackupPage() {
     }
   };
 
-  const handlePolicyFieldChange = (field: keyof BackupPolicy, value: string | number | boolean) => {
-    if (!policyDraft) return;
-    setPolicyDraft({ ...policyDraft, [field]: value });
+  const handlePolicyFieldChange = (draft: BackupPolicy, field: keyof BackupPolicy, value: string | number | boolean) => {
+    setPolicyDraft({ ...draft, [field]: value });
   };
 
-  const handleSavePolicy = async () => {
-    if (!policyDraft) return;
-
-    const validationErrors = validateBackupPolicyDraft(policyDraft);
+  const handleSavePolicy = async (draft: BackupPolicy) => {
+    const validationErrors = validateBackupPolicyDraft(draft);
     setPolicyValidationErrors(validationErrors);
     if (validationErrors.length > 0) {
       return;
     }
 
     try {
-      await updatePolicy(policyDraft);
+      await updatePolicy(draft);
       setPolicySaveStatus('success');
       setTimeout(() => setPolicySaveStatus('idle'), 3000);
     } catch (err) {
@@ -142,16 +139,14 @@ export default function BackupPage() {
     }
   };
 
-  const handleRestore = async () => {
-    if (!selectedBackup) return;
-
-    const confirmMessage = t('backup.restoreConfirm').replace('{fileName}', selectedBackup.fileName);
+  const handleRestore = async (backup: Backup) => {
+    const confirmMessage = t('backup.restoreConfirm').replace('{fileName}', backup.fileName);
     if (!confirm(confirmMessage)) {
       return;
     }
 
     try {
-      await restoreBackup(selectedBackup.fileName);
+      await restoreBackup(backup.fileName);
       alert(t('backup.restoreSuccess'));
       setIsRestoreModalOpen(false);
       setSelectedBackup(null);
@@ -345,7 +340,7 @@ export default function BackupPage() {
                 id="backup-policy-cron"
                 type="text"
                 value={policyDraft.cronExpression}
-                onChange={(e) => handlePolicyFieldChange('cronExpression', e.target.value)}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'cronExpression', e.target.value)}
               />
               <span className="policy-help">{t('backup.policy.cronExpressionHelp')}</span>
             </div>
@@ -357,7 +352,7 @@ export default function BackupPage() {
                 type="number"
                 min="30"
                 value={policyDraft.retentionDays}
-                onChange={(e) => handlePolicyFieldChange('retentionDays', parseInt(e.target.value, 10))}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'retentionDays', parseInt(e.target.value, 10))}
               />
               <span className="policy-help">{t('backup.policy.retentionDaysHelp')}</span>
             </div>
@@ -366,7 +361,7 @@ export default function BackupPage() {
               <input
                 type="checkbox"
                 checked={policyDraft.encryptionEnabled}
-                onChange={(e) => handlePolicyFieldChange('encryptionEnabled', e.target.checked)}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'encryptionEnabled', e.target.checked)}
               />
               <span>{t('backup.policy.encryptionEnabled')}</span>
             </label>
@@ -379,7 +374,7 @@ export default function BackupPage() {
                 min="1"
                 max="24"
                 value={policyDraft.rpoHours}
-                onChange={(e) => handlePolicyFieldChange('rpoHours', parseInt(e.target.value, 10))}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'rpoHours', parseInt(e.target.value, 10))}
               />
               <span className="policy-help">{t('backup.policy.rpoHoursHelp')}</span>
             </div>
@@ -392,7 +387,7 @@ export default function BackupPage() {
                 min="1"
                 max="12"
                 value={policyDraft.rtoHours}
-                onChange={(e) => handlePolicyFieldChange('rtoHours', parseInt(e.target.value, 10))}
+                onChange={(e) => handlePolicyFieldChange(policyDraft, 'rtoHours', parseInt(e.target.value, 10))}
               />
               <span className="policy-help">{t('backup.policy.rtoHoursHelp')}</span>
             </div>
@@ -403,7 +398,7 @@ export default function BackupPage() {
             </p>
 
             <div className="policy-actions">
-              <Button onClick={handleSavePolicy} disabled={policySaving}>
+              <Button onClick={() => handleSavePolicy(policyDraft)} disabled={policySaving}>
                 <Save size={16} /> {t('backup.policy.save')}
               </Button>
             </div>
@@ -446,7 +441,7 @@ export default function BackupPage() {
                 {t('common.cancel')}
               </Button>
               <Button
-                onClick={handleRestore}
+                onClick={() => handleRestore(selectedBackup)}
                 disabled={loading}
                 className="restore-button"
               >

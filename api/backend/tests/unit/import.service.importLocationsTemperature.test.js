@@ -7,6 +7,8 @@ import fs from 'fs';
 const require2 = createRequire(import.meta.url);
 const importService = require2('../../src/services/import.service');
 const influxTelemetryWriteRepository = require2('../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const auditLogger = require2('../../src/utils/auditLogger');
+const logger = require2('../../src/utils/logger');
 
 const PERSISTED_AT = new Date('2026-10-17T12:00:00.000Z');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -195,5 +197,113 @@ describe('ImportService.importTemperature', () => {
     expect(written.clockStatus).toBe('unknown');
     expect(written.observedAt.toISOString()).toBe('2020-01-01T00:00:00.000Z');
     expect(result.success).toBe(1);
+  });
+});
+
+// RULE-025 (#1582): a row's cells outside the import's contract are stripped
+// before hash, screen and store; a trustworthy row is imported and flagged,
+// an untrustworthy one is still refused whole, and each row with such a cell
+// writes one security audit naming the column, never its value. A blank cell
+// carries no value and flags nothing.
+describe('RULE-025 on the temperature import (#1582)', () => {
+  const PII_NAME = 'Maria da Silva 123.456.789-09';
+  let write;
+  let logSpy;
+
+  beforeEach(() => {
+    write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(PERSISTED_AT);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const strippedAudits = () => logSpy.mock.calls
+    .map(([entry]) => entry)
+    .filter((entry) => entry && entry.action === 'TELEMETRY_PII_STRIPPED');
+
+  it('(a) imports a valid row with an extra column and audits it', async () => {
+    const filePath = writeTmpFile('temps-pii.csv', `sensorId,temperatureValue,patientName\nS1,-20,${PII_NAME}\n`);
+    const { db, inserted } = importDb();
+
+    const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-pii.csv' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(write.mock.calls[0][0])).not.toContain('Maria');
+    expect(strippedAudits()).toEqual([expect.objectContaining({
+      resourceType: 'TelemetryReading',
+      resourceId: 'S1',
+      source: 'worker',
+      payload: { ingestionService: 'temperature-import', fieldNames: ['patientName'], unlistedFieldCount: 0 },
+    })]);
+    expect((inserted.telemetryValidationIssues || []).filter((issue) => issue.issueCode === 'personal_data_stripped'))
+      .toEqual([expect.objectContaining({ fieldPath: 'patientName', disposition: 'quarantined' })]);
+  });
+
+  it('(b) refuses an implausible row whole and still audits its extra column', async () => {
+    const filePath = writeTmpFile('temps-pii-implausible.csv', `sensorId,temperatureValue,patientName\nS1,900,${PII_NAME}\n`);
+    const { db } = importDb();
+
+    const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-pii-implausible.csv' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(write).not.toHaveBeenCalled();
+    expect(strippedAudits()).toHaveLength(1);
+  });
+
+  it('(c) a blank extra column flags nothing', async () => {
+    const filePath = writeTmpFile('temps-blank-extra.csv', 'sensorId,temperatureValue,notes,remark\nS1,-20,,   \n');
+    const { db, inserted } = importDb();
+
+    const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-blank-extra.csv' });
+
+    expect(result.success).toBe(1);
+    expect(strippedAudits()).toHaveLength(0);
+    expect((inserted.telemetryValidationIssues || []).filter((issue) => issue.issueCode === 'personal_data_stripped')).toHaveLength(0);
+  });
+
+  it('(d) no extra cell value reaches a row error or a log', async () => {
+    const logCalls = Object.keys(logger)
+      .filter((name) => typeof logger[name] === 'function')
+      .map((name) => vi.spyOn(logger, name).mockImplementation(() => {}));
+    const filePath = writeTmpFile('temps-pii-mixed.csv', `sensorId,temperatureValue,patientName,cpf\nS1,-20,${PII_NAME},12345678909\nS1,900,${PII_NAME},12345678909\n`);
+    const { db } = importDb();
+
+    const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-pii-mixed.csv' });
+
+    expect(result).toMatchObject({ success: 1, total: 2 });
+    expect(result.errors).toHaveLength(1);
+    const seen = JSON.stringify([result.errors, ...logCalls.flatMap((spy) => spy.mock.calls), logSpy.mock.calls]);
+    expect(seen).not.toContain('Maria');
+    expect(seen).not.toContain('12345678909');
+  });
+
+  // Only an extra column's blank cell goes uncounted: a whitespace-only
+  // contract cell reaches the parser as received and is refused as before,
+  // never replaced by the parser's default.
+  it('(e) a whitespace-only timestamp cell is still a row error', async () => {
+    const filePath = writeTmpFile('temps-blank-timestamp.csv', 'sensorId,temperatureValue,timestamp\nS1,-20,   \n');
+    const { db } = importDb();
+
+    const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-blank-timestamp.csv' });
+
+    expect(result).toMatchObject({ success: 0, total: 1 });
+    expect(result.errors).toEqual([expect.objectContaining({ row: 1, error: expect.stringMatching(/timestamp deve ser uma data ISO 8601/) })]);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('(f) a whitespace-only temperatureUnit cell is still a row error', async () => {
+    const filePath = writeTmpFile('temps-blank-unit.csv', 'sensorId,temperatureValue,temperatureUnit\nS1,-20,  \n');
+    const { db } = importDb();
+
+    const result = await importService.importTemperature(db, { path: filePath, originalname: 'temps-blank-unit.csv' });
+
+    expect(result).toMatchObject({ success: 0, total: 1 });
+    expect(result.errors).toEqual([expect.objectContaining({ row: 1, errors: expect.arrayContaining([expect.stringMatching(/temperatureUnit/)]) })]);
+    expect(write).not.toHaveBeenCalled();
   });
 });

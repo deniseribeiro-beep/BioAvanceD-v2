@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const env = require('../../src/config/env');
 const rfc3161AdapterService = require('../../src/services/rfc3161-adapter.service');
+const { runWithRequestId } = require('../../src/utils/requestContext');
 
 describe('rfc3161-adapter.service', () => {
   beforeEach(() => {
@@ -147,6 +148,29 @@ describe('rfc3161-adapter.service', () => {
         headers: expect.objectContaining({ authorization: 'Bearer secret-token' }),
       }),
     );
+  });
+
+  // #1468 (RNF015 C3): the TSA can tie the call to the request or job that made it.
+  it('modo remote envia X-Request-Id ao TSA dentro de um request e nenhum fora dele', async () => {
+    env.AUDIT_RFC3161_MODE = 'remote';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: 'tsa-token-value', messageImprint: 'imprint-value' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const input = {
+      envelopeDigestSha256: 'i'.repeat(64),
+      envelopeDigestBase64: Buffer.from('digest').toString('base64'),
+    };
+
+    await runWithRequestId('req-1468-0001', () => rfc3161AdapterService.anchorEnvelopeDigest(input));
+    await rfc3161AdapterService.anchorEnvelopeDigest(input);
+
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({
+      'content-type': 'application/json',
+      'X-Request-Id': 'req-1468-0001',
+    });
+    expect(fetchMock.mock.calls[1][1].headers).not.toHaveProperty('X-Request-Id');
   });
 
   it('verifyTimestamp em modo disabled sempre verifica', () => {

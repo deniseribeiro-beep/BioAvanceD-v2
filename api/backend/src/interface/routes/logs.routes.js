@@ -40,6 +40,30 @@ function sendInvalidSource(res, error) {
   return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message, details: error.details || [error.message] });
 }
 
+// #1466: getLogs returns its rows through logSerializer, which turns each Date
+// into { _type: 'Date', _value: <ISO 8601>, _formatted }, so String() of the
+// stored timestamp printed "[object Object]" and both exports lost every
+// event's time (RF012). The timestamp column is written as ISO 8601, read from
+// timestamp, then dateTime, then timestampISO; empty when none is a date.
+function toIsoTimestamp(value) {
+  if (value === null || value === undefined || value === '') return null;
+  let raw = value;
+  if (typeof raw === 'object' && !(raw instanceof Date)) {
+    if (raw._type !== 'Date' || typeof raw._value !== 'string') return null;
+    raw = raw._value;
+  }
+  const date = raw instanceof Date ? raw : new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function csvTimestamp(log) {
+  for (const value of [log?.timestamp, log?.dateTime, log?.timestampISO]) {
+    const iso = toIsoTimestamp(value);
+    if (iso) return iso;
+  }
+  return '';
+}
+
 function buildCsv(logs = []) {
   const headers = ['timestamp', 'userName', 'action', 'entity', 'result', 'severity', 'module', 'ipSource', 'message'];
   const escape = (value) => {
@@ -47,7 +71,7 @@ function buildCsv(logs = []) {
     return `"${str.replace(/"/g, '""')}"`;
   };
 
-  const rows = logs.map((log) => headers.map((header) => escape(log?.[header])).join(','));
+  const rows = logs.map((log) => headers.map((header) => escape(header === 'timestamp' ? csvTimestamp(log) : log?.[header])).join(','));
   return [headers.join(','), ...rows].join('\n');
 }
 

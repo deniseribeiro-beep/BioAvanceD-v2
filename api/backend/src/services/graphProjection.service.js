@@ -9,6 +9,45 @@ function stableHash(payload) {
   return crypto.createHash('sha256').update(ordered).digest('hex');
 }
 
+function terminologyConceptEvent(payload) {
+  return {
+    eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
+    aggregateType: 'TerminologyConcept',
+    aggregateId: String(payload.terminologyConceptId || payload.aggregateId || ''),
+    payload: {
+      terminologyConceptId: payload.terminologyConceptId || null,
+      systemUri: payload.systemUri || null,
+      code: payload.code || null,
+      version: payload.version || null,
+      display: payload.display || null,
+      conceptStatus: payload.conceptStatus || 'active',
+      referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+    },
+    sourceService: payload.sourceService || 'graph-projection-service',
+    traceId: payload.traceId || null,
+    schemaVersion: 1,
+  };
+}
+
+function terminologyRelationEvent(payload) {
+  return {
+    eventType: 'TERMINOLOGY_RELATION_PROMOTED',
+    aggregateType: 'TerminologyRelation',
+    aggregateId: String(payload.terminologyRelationId || payload.aggregateId || ''),
+    payload: {
+      terminologyRelationId: payload.terminologyRelationId || null,
+      sourceConceptId: payload.sourceConceptId || null,
+      targetConceptId: payload.targetConceptId || null,
+      relationType: payload.relationType || null,
+      relationVersion: payload.relationVersion || null,
+      referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+    },
+    sourceService: payload.sourceService || 'graph-projection-service',
+    traceId: payload.traceId || null,
+    schemaVersion: 1,
+  };
+}
+
 // #1313 (RF023 AC3): each append takes `options.session`, the aggregate
 // write's transaction, and the outbox appends the event inside it.
 class GraphProjectionService {
@@ -184,23 +223,21 @@ class GraphProjectionService {
     }, options);
   }
 
-  // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
-  // exclusivamente pelo outbox" — appended by referenceRelease.service.js's
-  // promoteRelease on the same write that inserts a TerminologyConcept, same
-  // outbox pattern RF023 uses for consent/lineage/quality/telemetry.
-  async appendTerminologyConceptEvent(db, payload, options = {}) {
+  // #1505 (RF019 AC6): a quarantine applied appends this event in the
+  // action's insert, as an explicit release appends QUARANTINE_RELEASED. The
+  // payload carries ids, rule codes and the actor, no civil field.
+  async appendQuarantineApplyEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
-      eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
-      aggregateType: 'TerminologyConcept',
-      aggregateId: String(payload.terminologyConceptId || payload.aggregateId || ''),
+      eventType: 'QUARANTINE_APPLIED',
+      aggregateType: 'QuarantineAction',
+      aggregateId: String(payload.quarantineActionId || ''),
       payload: {
-        terminologyConceptId: payload.terminologyConceptId || null,
-        systemUri: payload.systemUri || null,
-        code: payload.code || null,
-        version: payload.version || null,
-        display: payload.display || null,
-        conceptStatus: payload.conceptStatus || 'active',
-        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+        quarantineActionId: payload.quarantineActionId ? String(payload.quarantineActionId) : null,
+        specimenIds: (payload.specimenIds || []).map(String),
+        reasonCodes: payload.reasonCodes || [],
+        actionStatus: payload.actionStatus || 'active',
+        startedAt: payload.startedAt || null,
+        authorizedBy: payload.authorizedBy ? String(payload.authorizedBy) : null,
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
@@ -208,23 +245,52 @@ class GraphProjectionService {
     }, options);
   }
 
-  async appendTerminologyRelationEvent(db, payload, options = {}) {
+  // #1510 (RF019 AC6): "Auditar a decisão e emitir outbox quando houver
+  // projeção permitida". QuarantineAction has a derived Neo4j projection via
+  // the transactional outbox (dict-ENTIDADES.md); an explicit release appends
+  // this event in the action's write. The payload carries ids, rule codes and
+  // the actor, no civil field.
+  async appendQuarantineReleaseEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
-      eventType: 'TERMINOLOGY_RELATION_PROMOTED',
-      aggregateType: 'TerminologyRelation',
-      aggregateId: String(payload.terminologyRelationId || payload.aggregateId || ''),
+      eventType: 'QUARANTINE_RELEASED',
+      aggregateType: 'QuarantineAction',
+      aggregateId: String(payload.quarantineActionId || ''),
       payload: {
-        terminologyRelationId: payload.terminologyRelationId || null,
-        sourceConceptId: payload.sourceConceptId || null,
-        targetConceptId: payload.targetConceptId || null,
-        relationType: payload.relationType || null,
-        relationVersion: payload.relationVersion || null,
-        referenceDatasetReleaseId: payload.referenceDatasetReleaseId || null,
+        quarantineActionId: payload.quarantineActionId ? String(payload.quarantineActionId) : null,
+        specimenIds: (payload.specimenIds || []).map(String),
+        reasonCodes: payload.reasonCodes || [],
+        actionStatus: payload.actionStatus || 'released',
+        releasedAt: payload.releasedAt || null,
+        authorizedBy: payload.authorizedBy ? String(payload.authorizedBy) : null,
+        evidenceIds: payload.evidenceIds || [],
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
     }, options);
+  }
+
+  // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
+  // exclusivamente pelo outbox" — appended by referenceRelease.service.js's
+  // promoteRelease on the same write that inserts a TerminologyConcept, same
+  // outbox pattern RF023 uses for consent/lineage/quality/telemetry.
+  async appendTerminologyConceptEvent(db, payload, options = {}) {
+    return this.outbox.appendEvent(db, terminologyConceptEvent(payload), options);
+  }
+
+  async appendTerminologyRelationEvent(db, payload, options = {}) {
+    return this.outbox.appendEvent(db, terminologyRelationEvent(payload), options);
+  }
+
+  // #1561: one batch of promoted records, each its own aggregate, appended
+  // in the batch's transaction (`options.session`), as the single appends
+  // above are in their record's.
+  async appendTerminologyConceptEvents(db, payloads, options = {}) {
+    return this.outbox.appendEvents(db, payloads.map(terminologyConceptEvent), options);
+  }
+
+  async appendTerminologyRelationEvents(db, payloads, options = {}) {
+    return this.outbox.appendEvents(db, payloads.map(terminologyRelationEvent), options);
   }
 
   // PHR-003 / ADR 2026-11-26: one event per disease↔analyte pair.

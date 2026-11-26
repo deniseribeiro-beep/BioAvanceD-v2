@@ -2,9 +2,12 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const AccessRequestModel = require('../models/AccessRequest');
 const { evaluatePolicies } = require('../models/AccessPolicy');
+const { associationInForce } = require('../models/researchResourceAssociation');
 const ConsentAuthorizationDecisionModel = require('../models/ConsentAuthorizationDecision');
 const { SampleModel } = require('../models/Sample');
 const { getCollection } = require('../utils/collectionResolver');
+const collectionGovernanceService = require('./collectionGovernance.service');
+const custodianship = require('./custodianship.service');
 
 // sources/duo.js's own fixed systemUri for every DUO-imported TerminologyConcept.
 const { DUO_SYSTEM_URI } = require('../models/ConsentPermission');
@@ -74,6 +77,57 @@ function evaluateAccessState(accessRequest, now = new Date()) {
   return { allowed: true, reason: status };
 }
 
+/**
+ * #1495 (RF024 AC2): a specimen registered into a collection is released only
+ * while that collection holds its regime, its context and an approval in force
+ * (the registration rule, RF004 AC3/AC7) and the specimen's custody holds with
+ * its approval in force (RF021 AC6). The reasons that refuse, [] when all hold,
+ * or null for a specimen in no collection, which no collection governs.
+ */
+async function governanceRefusals(db, sample, now) {
+  if (!sample?.collectionId) return null;
+  // `collections` has no resolver key; collectionGovernance reads it the same way.
+  const collection = await db.collection('collections').findOne({ collectionId: String(sample.collectionId) });
+  if (!collection) return [`Coleção ${sample.collectionId} do espécime ${sample.specimenId} não encontrada`];
+  const reasons = [];
+  const regimeRefusal = await collectionGovernanceService.registrationRefusal(db, collection, now);
+  if (regimeRefusal) reasons.push(regimeRefusal);
+  const custodyRefusal = await custodianship.operabilityRefusal(db, sample.specimenId, now);
+  if (custodyRefusal) reasons.push(custodyRefusal);
+  return reasons;
+}
+
+// RF019 AC3 (#1510): a quarantined specimen is not released for use. Its
+// reason joins the governance reasons, so the item is incompatible and the
+// policy decision denies, naming it. Read from the specimen the item resolves to.
+function withQuarantineRefusal(sample, governance) {
+  if (!sample || SampleModel.resolveSpecimenStatus(sample) !== 'quarantined') return governance;
+  return [...(governance || []), `Espécime ${sample.specimenId} em quarentena (RF019)`];
+}
+
+/**
+ * RNF008 AC3 (#1496): the biobanks a collection belongs to, sorted, through
+ * Collection <- ResearchResourceCollection -> ResearchResource <-
+ * ResearchResourceBiobank -> Biobank, each link counted only while in force
+ * (associationInForce). [] for no collection or no link in force.
+ */
+async function collectionBiobankIds(db, collectionId, now) {
+  if (!collectionId) return [];
+  // Neither link collection has a CANONICAL_COLLECTIONS entry; each is read
+  // by name with a static filter key, as institutionalReferenceValidator does.
+  const resourceLinks = await db.collection('researchResourceCollections').find({ collectionId: String(collectionId) }).toArray();
+  const biobankIds = new Set();
+  for (const resourceLink of resourceLinks) {
+    if (!associationInForce(resourceLink, now) || !resourceLink.researchResourceId) continue;
+    const biobankLinks = await db.collection('researchResourceBiobanks')
+      .find({ researchResourceId: String(resourceLink.researchResourceId) }).toArray();
+    for (const biobankLink of biobankLinks) {
+      if (associationInForce(biobankLink, now) && biobankLink.biobankId) biobankIds.add(String(biobankLink.biobankId));
+    }
+  }
+  return [...biobankIds].sort();
+}
+
 function unprocessable(message) {
   const error = new Error(message);
   error.statusCode = 422;
@@ -83,11 +137,13 @@ function unprocessable(message) {
 /**
  * RF024 AC4: the version of evaluateCompatibility's own rules: active consent
  * per participant-linked item, an active DUO concept when a duoCode is
- * given, and an active Study. Bump it whenever those rules change, so a
+ * given, an active Study and, for a specimen in a collection, the collection's
+ * regime, its approval in force and the specimen's custody (#1495), and
+ * no quarantined specimen (RF019 AC3, #1510). Bump it whenever those rules change, so a
  * stored decision names the rules it stood on. The AccessPolicy versions a
  * decision applied are recorded beside it, in appliedPolicies.
  */
-const ACCESS_COMPATIBILITY_POLICY_VERSION = 'rf024-compatibility/1.0.0';
+const ACCESS_COMPATIBILITY_POLICY_VERSION = 'rf024-compatibility/1.2.0';
 
 /**
  * RF024 AC4, CFG-004 ("Toda execução ou decisão registra
@@ -155,9 +211,16 @@ class AccessRequestService {
    * AC#2: avalia consentimento (por item vinculado a um participante real),
    * DUO (o duoCode da própria solicitação, se informado), o Study de destino
    * (precisa estar `active`, mesmo gate que RF021 já usa para
-   * Sample/Consent/Patient) e as AccessPolicy vigentes. AC#3: o resultado
+   * Sample/Consent/Patient), o regime, a aprovação vigente e a custódia de
+   * cada espécime registrado numa coleção (#1495, governanceRefusals) e as
+   * AccessPolicy vigentes. AC#3: o resultado
    * das políticas é `policyDecision` (permit, deny ou review_required, com
    * as políticas aplicadas e as razões; ver models/AccessPolicy.js).
+   * RNF008 AC3 (#1496): cada entrada registra o estudo, o protocolo e a
+   * coleção da amostra do seu item (studyId, protocolId, collectionId; null
+   * para dataset ou item não resolvido), lidos pelas condições de mesmo nome
+   * da AccessPolicy, e os biobancos da coleção (biobankIds, pelos vínculos
+   * ResearchResource vigentes; biobankId só quando há exatamente um).
    *
    * #661: 'file' items (SampleFile) always carry the specimenId they were
    * uploaded against, so they resolve to a real participant the same way a
@@ -244,40 +307,64 @@ class AccessRequestService {
       return { consentValid: decision.result !== 'deny', decision };
     };
 
+    const governanceNow = new Date();
     const consentCompatibility = [];
     for (const item of accessRequest.requestedItems) {
       let participantId = null;
+      let studyId = null;
+      let protocolId = null;
+      let collectionId = null;
+      let biobankIds = [];
       let consentValid = null;
       let decision = null;
+      let governance = null;
 
       if (item.itemType === 'specimen') {
         const sample = await samples.findOne({ specimenId: item.itemId });
         participantId = sample?.participantId || null;
+        studyId = sample?.studyId || null;
+        protocolId = sample?.protocolId || null;
+        collectionId = sample?.collectionId || null;
+        biobankIds = await collectionBiobankIds(db, collectionId, governanceNow);
         ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
+        governance = withQuarantineRefusal(sample, await governanceRefusals(db, sample, governanceNow));
       } else if (item.itemType === 'file') {
         const file = ObjectId.isValid(item.itemId)
           ? await sampleFiles.findOne({ _id: new ObjectId(item.itemId) })
           : null;
         const sample = file?.specimenId ? await samples.findOne({ specimenId: file.specimenId }) : null;
         participantId = sample?.participantId || null;
+        studyId = sample?.studyId || null;
+        protocolId = sample?.protocolId || null;
+        collectionId = sample?.collectionId || null;
+        biobankIds = await collectionBiobankIds(db, collectionId, governanceNow);
         ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
+        governance = withQuarantineRefusal(sample, await governanceRefusals(db, sample, governanceNow));
       }
       // 'dataset' items: intentionally left untouched — participantId/
       // consentValid stay null (non-blocking), per #661's de-identified-
       // by-design conclusion documented on evaluateCompatibility above.
 
-      const compatible = consentValid !== false && duoCompatible !== false && studyActive;
+      const governanceValid = governance === null ? null : governance.length === 0;
+      const compatible = consentValid !== false && duoCompatible !== false && studyActive && governanceValid !== false;
 
       consentCompatibility.push({
         itemId: item.itemId,
         itemType: item.itemType,
         participantId,
+        studyId,
+        protocolId,
+        collectionId,
+        biobankId: biobankIds.length === 1 ? biobankIds[0] : null,
+        biobankIds,
         consentValid,
         consentAuthorizationDecisionId: decision?.consentAuthorizationDecisionId || null,
         consentAuthorizationResult: decision?.result || null,
         consentAuthorizationReasons: decision?.reasons || [],
         duoCompatible,
         studyActive,
+        governanceValid,
+        governanceReasons: governance || [],
         compatible,
       });
     }

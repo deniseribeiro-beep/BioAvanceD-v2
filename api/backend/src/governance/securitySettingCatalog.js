@@ -1,7 +1,7 @@
 /**
  * RF014 AC1, CFG-002: the setting catalog of the security configuration.
  * "Cada opção possui tipo, escopo, valor permitido, default, dependências,
- * versão e responsável", one entry per key of the eight policy groups.
+ * versão e responsável", one entry per key of the nine policy groups.
  *
  * Each entry carries:
  *  - type: the JSON type a value must have (security.service's structural gate).
@@ -29,7 +29,7 @@
  */
 const { invariantForPath } = require('./invariants');
 
-const CATALOG_VERSION = '1.0.0';
+const CATALOG_VERSION = '1.1.0';
 
 const ADMIN = 'role:administrator';
 const RELEASE_VALIDITY = 'ConfigurationRelease.effectivePeriod';
@@ -110,6 +110,14 @@ const ENTRIES = {
   'lgpd.anonymizeOnExport': fixed('boolean', true, 'export-pseudonymised'),
   'lgpd.requireConsent': fixed('boolean', true, 'consent-required'),
   'lgpd.consentExpirationDays': fixed('number', null, 'consent-no-expiry'),
+
+  // RNF025 AC6 (#1520): the clock-drift limit telemetry screening and the
+  // ingestion timeliness metric read. `[inference]` The docs name no key:
+  // the name follows the minute-keyed keys (lockoutDurationMinutes,
+  // timeoutMinutes) and V2E-0602's "configured limit"; the floor is the
+  // smallest whole minute; the ceiling of one day is in no doc: past a day
+  // the check would no longer flag a device clock set to the wrong date.
+  'telemetry.clockDriftLimitMinutes': range(5, 1, 1440, true),
 };
 
 function ownerOf(allowedValues) {

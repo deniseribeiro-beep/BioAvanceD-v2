@@ -86,6 +86,71 @@ export async function waitForEthicalConsentStatus(
   );
 }
 
+/** #1481 RF029 AC6: an EthicalConsent node's own properties and the ids of the Donor nodes CONSENTED_UNDER it. */
+export async function readConsentProjection(consentId: string): Promise<{ consent: Record<string, unknown> | null; donorIds: string[] }> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (c:EthicalConsent {id: $consentId}) OPTIONAL MATCH (d:Donor)-[:CONSENTED_UNDER]->(c) RETURN properties(c) AS consent, collect(d.id) AS donorIds',
+      { consentId }
+    );
+    if (result.records.length === 0) return { consent: null, donorIds: [] };
+    return { consent: result.records[0].get('consent'), donorIds: result.records[0].get('donorIds') };
+  } finally {
+    await session.close();
+  }
+}
+
+/** #1500 (RF023 AC5): one STORED_AT placement edge into a box, its times as ISO strings. */
+export interface StoredAtEdge {
+  sampleId: string | null;
+  position: string | null;
+  validFrom: string | null;
+  validTo: string | null;
+  transactionTime: string | null;
+  /** #1519 (RNF016 C1): the outbox event that last wrote the edge. */
+  eventId: string | null;
+}
+
+/** #1500 (RF023 AC5): every Sample-[:STORED_AT]->StoragePosition edge into `boxId`. */
+export async function readStoredAtEdges(boxId: string): Promise<StoredAtEdge[]> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (s:Sample)-[r:STORED_AT]->(p:StoragePosition {boxId: $boxId}) ' +
+        'RETURN s.id AS sampleId, p.position AS position, toString(r.validFrom) AS validFrom, ' +
+        'toString(r.validTo) AS validTo, toString(r.transactionTime) AS transactionTime, r.eventId AS eventId',
+      { boxId }
+    );
+    return result.records.map((record) => ({
+      sampleId: record.get('sampleId') ?? null,
+      position: record.get('position') ?? null,
+      validFrom: record.get('validFrom') ?? null,
+      validTo: record.get('validTo') ?? null,
+      transactionTime: record.get('transactionTime') ?? null,
+      eventId: record.get('eventId') ?? null,
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
+/** #1500: polls until a STORED_AT edge into `boxId` exists and returns the edges, or throws on timeout. */
+export async function waitForStoredAtEdge(
+  boxId: string,
+  { timeoutMs = 15_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<StoredAtEdge[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const edges = await readStoredAtEdges(boxId);
+    if (edges.length > 0) {
+      return edges;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`waitForStoredAtEdge: timed out after ${timeoutMs}ms waiting for a STORED_AT edge into box ${boxId}`);
+}
+
 /**
  * RF009 (#304) fixture: seeds a bare `:Sample {id}` node plus an optional
  * `DERIVED_FROM` edge to a parent's node, so propagateCompromise's
@@ -386,6 +451,52 @@ export async function countSampleNodes(sampleId: string): Promise<number> {
   }
 }
 
+/** #1503 (RF023 AC8): counts `:EthicalConsent` nodes with the given id. */
+export async function countEthicalConsentNodes(consentId: string): Promise<number> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run('MATCH (c:EthicalConsent {id: $consentId}) RETURN count(c) AS n', { consentId });
+    return Number(result.records[0].get('n'));
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * #1503 (RNF007 AC3, RNF028 C2): an EthicalConsent node's own properties and
+ * the properties of every node within two hops of it, either direction.
+ */
+export async function readConsentNeighbourhood(
+  consentId: string
+): Promise<{ consent: Record<string, unknown> | null; neighbours: Record<string, unknown>[] }> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (c:EthicalConsent {id: $consentId}) OPTIONAL MATCH (c)-[*1..2]-(n) ' +
+        'RETURN properties(c) AS consent, collect(DISTINCT properties(n)) AS neighbours',
+      { consentId }
+    );
+    if (result.records.length === 0) return { consent: null, neighbours: [] };
+    return { consent: result.records[0].get('consent'), neighbours: result.records[0].get('neighbours') };
+  } finally {
+    await session.close();
+  }
+}
+
+/** #1503 (RNF019 C8): nodes that are a TelemetryReading, or carry the reading's id or its sensor's id. */
+export async function countTelemetryReadingNodes(readingId: string, sensorId: string): Promise<number> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (n) WHERE n:TelemetryReading OR n.id = $readingId OR n.sensorId = $sensorId RETURN count(n) AS n',
+      { readingId, sensorId }
+    );
+    return Number(result.records[0].get('n'));
+  } finally {
+    await session.close();
+  }
+}
+
 /** #1325: every node and relationship in the database, the scope of the backup's Neo4j export. */
 export async function countGraph(): Promise<{ nodes: number; relationships: number }> {
   const session = getDriver().session({ database });
@@ -393,6 +504,26 @@ export async function countGraph(): Promise<{ nodes: number; relationships: numb
     const nodes = await session.run('MATCH (n) RETURN count(n) AS n');
     const relationships = await session.run('MATCH ()-[r]->() RETURN count(r) AS n');
     return { nodes: Number(nodes.records[0].get('n')), relationships: Number(relationships.records[0].get('n')) };
+  } finally {
+    await session.close();
+  }
+}
+
+export interface SchemaEntry { name: string; labelsOrTypes: string[]; properties: string[] }
+
+/** #1557 (RNF016 C7): the database's constraints and indexes. */
+export async function readSchemaCatalog(): Promise<{ constraints: SchemaEntry[]; indexes: SchemaEntry[] }> {
+  const session = getDriver().session({ database });
+  try {
+    // No `type` column: its values changed across Neo4j 5 minors.
+    const toEntry = (r: { get: (k: string) => unknown }): SchemaEntry => ({
+      name: r.get('name') as string,
+      labelsOrTypes: (r.get('labelsOrTypes') as string[] | null) ?? [],
+      properties: (r.get('properties') as string[] | null) ?? [],
+    });
+    const constraints = await session.run('SHOW CONSTRAINTS YIELD name, labelsOrTypes, properties');
+    const indexes = await session.run('SHOW INDEXES YIELD name, labelsOrTypes, properties');
+    return { constraints: constraints.records.map(toEntry), indexes: indexes.records.map(toEntry) };
   } finally {
     await session.close();
   }

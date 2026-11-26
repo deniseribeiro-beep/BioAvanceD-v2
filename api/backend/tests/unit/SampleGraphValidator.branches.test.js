@@ -172,6 +172,15 @@ describe('SampleGraphValidator branches (#1337)', () => {
       expect(report.graphPath.ethics).toEqual({ valid: false, reason: 'Consentimento Inválido ou Revogado' });
       expect(report.isReleasable).toBe(false);
     });
+
+    it("scopes the consent lookup to the sample's participant, newest first (#1546)", async () => {
+      await evaluate(buildSample());
+
+      const [query, options] = consents.findOne.mock.calls[0];
+      expect(query.participantId).toBe('12345678');
+      expect(query.$or).toHaveLength(2);
+      expect(options).toEqual({ sort: { signedAt: -1, updatedAt: -1, createdAt: -1 } });
+    });
   });
 
   describe('disease requirements', () => {
@@ -421,4 +430,12 @@ describe('SampleGraphValidator branches (#1337)', () => {
       expect(decision.triggerEventId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     });
   });
+});
+
+// #1505 (RF019 AC6): recordAction appends a QUARANTINE_APPLIED outbox event;
+// this file's fake db has no outbox, and the event's contract is pinned in
+// quarantine-action.service.test.js.
+beforeEach(() => {
+  const { GraphProjectionService } = require('../../src/services/graphProjection.service');
+  vi.spyOn(GraphProjectionService.prototype, 'appendQuarantineApplyEvent').mockResolvedValue(null);
 });

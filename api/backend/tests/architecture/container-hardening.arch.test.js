@@ -1,0 +1,1021 @@
+// node:test-only by contract (README.md Test Strategy -- vitest is out of
+// contract here). Do not port to vitest's import/expect.
+//
+// RNF014 C1-C3 and C7 (#1470): compose.prod.yml and the Dockerfiles it
+// builds are the production stack's declarative artifacts, and this file
+// pins what they promise:
+//   C1  every image is pinned by an exact version or a digest;
+//   C2  no secret is baked into an image: a build context that copies the
+//       whole tree excludes .env files, and no build arg, ENV or COPY names
+//       a secret;
+//   C3  every service has CPU and memory limits, every service but the
+//       four official-image data stores runs read_only, with cap_drop ALL
+//       and a non-root user, and every service but a one-shot job declares
+//       a health check that runs a command;
+//   C7  the backend refuses to start without a ready ReadinessReport, and
+//       the API and both workers start only after the Foundation job
+//       completes. The refusal itself is proven in
+//       tests/unit/server.startServer.1098.test.js ("RF022 Foundation
+//       readiness gate").
+//
+// compose.prod.yml is read by a small parser that models only the shapes
+// this file uses and refuses every other line: an unknown key (cap_add,
+// privileged, extends, a merge key), a quoted or oddly indented key, a tab,
+// an anchor or a flow mapping where a block is read. A refusal names the
+// line; widen the parser on purpose, never by loosening a check. The
+// "refuses" cases below plant one bypass each and must stay red-on-revert.
+//
+// Does NOT run on CI, and skips there by design (#1190): CI runs
+// test:architecture inside backend-unit-runner, whose image holds only
+// api/backend. It runs natively, wherever the repo tree is present.
+
+const { test: nodeTest } = require('node:test');
+const assert = require('node:assert/strict');
+
+const fs = require('fs');
+const path = require('path');
+
+const REPO_ROOT = path.resolve(__dirname, '../../../..');
+const COMPOSE_PROD = path.resolve(REPO_ROOT, 'compose.prod.yml');
+
+const IN_REPO_TREE = fs.existsSync(path.join(REPO_ROOT, 'api', 'backend', 'package.json'));
+const test = IN_REPO_TREE
+  ? nodeTest
+  : (name, fn) => nodeTest(name, { skip: '#1190: repo tree not reachable (expected inside backend-unit-runner)' }, fn);
+
+// The third-party data stores run their official images, whose entrypoints
+// start as root to prepare their data directory. RNF014 C3's limits apply to
+// them; read_only, cap_drop and the non-root user apply to every other
+// service. An exempt service must run an image, never a build (asserted).
+const OFFICIAL_IMAGE_SERVICES = ['mongodb', 'neo4j', 'influxdb', 'redis'];
+
+// The keys the parser models. Any other key is refused, so nothing these
+// checks do not read (cap_add, privileged, security_opt, extends, a merge
+// key, a build target) can undo what they assert.
+const TOP_LEVEL_KEYS = ['name', 'services', 'volumes'];
+const SERVICE_KEYS = ['image', 'build', 'restart', 'init', 'user', 'deploy', 'environment', 'volumes', 'healthcheck', 'command', 'env_file', 'depends_on', 'read_only', 'cap_drop', 'tmpfs', 'ports'];
+const BUILD_KEYS = ['context', 'dockerfile', 'args'];
+
+// The keys a healthcheck block may hold. disable, or any other key, refuses.
+const HEALTHCHECK_KEYS = ['test', 'interval', 'timeout', 'retries', 'start_period'];
+// A health check test in exec form that runs a command: ["CMD", "<cmd>", ...]
+// or ["CMD-SHELL", "<cmd>"]. ["NONE"], a bare string or an empty list refuses.
+const HEALTHCHECK_TEST = /^\["(CMD|CMD-SHELL)",[ ]*"[^"].*\]$/;
+
+// An exact x.y.z version (with an optional suffix such as -alpine), or a
+// sha256 digest, or both.
+const PINNED_IMAGE = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*(?::\d+\.\d+\.\d+(?:[-.][A-Za-z0-9._-]+)?)?(?:@sha256:[0-9a-f]{64})?$/;
+const SECRET_NAME = /PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL|PRIVATE|API_KEY/i;
+// A key line: a bare key (no quote, no merge key), then nothing or a value.
+const KEY_LINE = /^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:[ ]+(.*?))?[ ]*$/;
+// A numeric uid, with an optional numeric gid, neither of them 0.
+const NUMERIC_NON_ROOT = /^0*[1-9]\d*(?::0*[1-9]\d*)?$/;
+
+function read(file) {
+  return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+}
+
+function indentOf(line) {
+  return /^ */.exec(line)[0].length;
+}
+
+// A trailing comment is dropped only from a line holding no quote, so a #
+// inside a quoted value is never cut; a quoted value with a comment after it
+// then reads as unpinned or unreadable, which refuses.
+function stripComment(line) {
+  return /["']/.test(line) ? line : line.replace(/(^|\s)#.*$/, '');
+}
+
+// The block mapping at exactly `indent` spaces: each line at that indent is
+// `key:` or `key: value`, each key once, and deeper lines are the children of
+// the key above them. Any other line refuses.
+function mapping(lines, indent, where) {
+  const out = new Map();
+  let current = null;
+  for (const line of lines) {
+    const n = indentOf(line);
+    if (n > indent && current) {
+      assert.equal(current.value, '', `${where}: lines indented under a key that already has a value are not modelled: ${JSON.stringify(line)}`);
+      current.children.push(line);
+      continue;
+    }
+    assert.equal(n, indent, `${where}: unreadable line, expected a key at ${indent} spaces: ${JSON.stringify(line)}`);
+    const m = KEY_LINE.exec(line.slice(indent));
+    assert.ok(m, `${where}: unreadable key line: ${JSON.stringify(line)}`);
+    assert.ok(!out.has(m[1]), `${where}: key ${m[1]} is declared twice`);
+    current = { value: m[2] === undefined ? '' : m[2], children: [] };
+    out.set(m[1], current);
+  }
+  return out;
+}
+
+// A key that holds a block: no inline value (an anchor, an alias, a flow
+// mapping) and at least one child line.
+function block(entry, where) {
+  assert.ok(entry, `${where} is missing`);
+  assert.equal(entry.value, '', `${where} must be a block, not ${JSON.stringify(entry.value)}`);
+  assert.ok(entry.children.length > 0, `${where} is empty`);
+  return entry.children;
+}
+
+function unquote(value) {
+  const m = /^"(.*)"$/.exec(value) || /^'(.*)'$/.exec(value);
+  return m ? m[1] : value;
+}
+
+// compose text -> Map service name -> Map key -> { value, children }.
+function parseCompose(text) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n')
+    .filter((l) => l.trim() !== '' && !/^\s*#/.test(l))
+    .map(stripComment)
+    .filter((l) => l.trim() !== '');
+  for (const l of lines) assert.ok(!/^[ ]*\t/.test(l), `compose: a tab in the indentation: ${JSON.stringify(l)}`);
+  const top = mapping(lines, 0, 'compose');
+  for (const k of top.keys()) assert.ok(TOP_LEVEL_KEYS.includes(k), `compose: top-level key ${k} is not modelled by this test`);
+  const services = new Map();
+  for (const [name, entry] of mapping(block(top.get('services'), 'services:'), 2, 'services')) {
+    const keys = mapping(block(entry, `service ${name}`), 4, `service ${name}`);
+    for (const k of keys.keys()) assert.ok(SERVICE_KEYS.includes(k), `${name}: key ${k} is not modelled by this test`);
+    services.set(name, keys);
+  }
+  return services;
+}
+
+// The build a service names: the short form `build: <dir>` or a block with a
+// context. null for an image-only service.
+function buildOf(name, keys) {
+  const entry = keys.get('build');
+  if (!entry) return null;
+  let context;
+  let dockerfile = 'Dockerfile';
+  let args = [];
+  if (entry.value !== '') {
+    context = unquote(entry.value);
+  } else {
+    const build = mapping(block(entry, `${name}: build`), 6, `${name}: build`);
+    for (const k of build.keys()) assert.ok(BUILD_KEYS.includes(k), `${name}: build key ${k} is not modelled by this test`);
+    assert.ok(build.has('context'), `${name}: build must name a context`);
+    context = unquote(build.get('context').value);
+    if (build.has('dockerfile')) dockerfile = unquote(build.get('dockerfile').value);
+    args = entry.children;
+  }
+  assert.match(context, /^\.\/[A-Za-z0-9_./-]+$/, `${name}: build context ${context} must be a ./ path in this repo`);
+  assert.match(dockerfile, /^[A-Za-z0-9_.-]+$/, `${name}: dockerfile ${dockerfile} must be a file name in the context`);
+  const dir = path.posix.normalize(context);
+  assert.ok(!dir.startsWith('..'), `${name}: build context ${context} leaves the repo`);
+  return { dir, dockerfile: path.posix.join(dir, dockerfile), args };
+}
+
+// Dockerfile instructions, comments dropped and continuation lines joined.
+function instructions(text) {
+  const joined = text.replace(/\r\n/g, '\n').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
+  return joined.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const m = /^(\S+)\s*(.*)$/.exec(l);
+    return { op: m[1].toUpperCase(), rest: m[2] };
+  });
+}
+
+// The repo tree as the checks read it; a fixture passes its own.
+const repoTree = {
+  read: (rel) => read(path.resolve(REPO_ROOT, rel)),
+  exists: (rel) => fs.existsSync(path.resolve(REPO_ROOT, rel)),
+};
+
+function services(text) {
+  return [...parseCompose(text)].map(([name, keys]) => ({ name, keys, build: buildOf(name, keys) }));
+}
+
+function checkImages(text) {
+  const all = services(text);
+  for (const { name, keys, build } of all) {
+    assert.ok(keys.has('image') || build, `${name}: names neither an image nor a build`);
+    if (!keys.has('image')) continue;
+    const image = unquote(keys.get('image').value);
+    assert.match(image, PINNED_IMAGE, `${name}: image ${image} must carry an exact x.y.z version or a sha256 digest`);
+    assert.ok(/:\d|@sha256:/.test(image), `${name}: image ${image} names no version or digest`);
+  }
+}
+
+function checkFroms(text, tree) {
+  const files = new Set(services(text).filter((s) => s.build).map((s) => s.build.dockerfile));
+  for (const file of files) {
+    const stages = [];
+    for (const { op, rest } of instructions(tree.read(file))) {
+      if (op !== 'FROM') continue;
+      const m = /^(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?$/i.exec(rest);
+      assert.ok(m, `${file}: unreadable FROM ${rest}`);
+      if (!stages.includes(m[1])) {
+        assert.match(m[1], PINNED_IMAGE, `${file}: FROM ${m[1]} must carry an exact x.y.z version or a sha256 digest`);
+        assert.ok(/:\d|@sha256:/.test(m[1]), `${file}: FROM ${m[1]} names no version or digest`);
+      }
+      if (m[2]) stages.push(m[2]);
+    }
+  }
+  return files;
+}
+
+function checkSecrets(text, tree) {
+  for (const { name, build } of services(text)) {
+    if (!build) continue;
+    for (const line of build.args) {
+      assert.doesNotMatch(line, SECRET_NAME, `${name}: a build arg must not carry a secret: ${line.trim()}`);
+    }
+    for (const { op, rest } of instructions(tree.read(build.dockerfile))) {
+      if (op === 'ARG' || op === 'ENV') {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)/.exec(rest);
+        assert.ok(m, `${build.dockerfile}: unreadable ${op} ${rest}`);
+        assert.doesNotMatch(m[1], SECRET_NAME, `${build.dockerfile}: ${op} ${m[1]} must not carry a secret`);
+      }
+      if (op === 'COPY' || op === 'ADD') {
+        const sources = rest.split(/\s+/).filter((w) => !w.startsWith('--')).slice(0, -1);
+        for (const source of sources) {
+          assert.doesNotMatch(source, /(^|\/)(secrets|certs)(\/|$)|\.pem$|\.key$|(^|\/)\.env/, `${build.dockerfile}: ${op} ${source} copies secret material`);
+          if (source === '.' || source === './') {
+            const ignore = path.posix.join(build.dir, '.dockerignore');
+            assert.ok(tree.exists(ignore), `${build.dockerfile} copies its whole context, so ${ignore} must exist`);
+            const patterns = tree.read(ignore).split('\n').map((l) => l.trim());
+            for (const p of ['.env', '.env.*']) {
+              assert.ok(patterns.includes(p), `${ignore} must exclude ${p}: ${build.dockerfile} copies its whole context`);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// Limits are read only from deploy.resources.limits, never from
+// reservations or anywhere else under deploy.
+function checkLimits(text) {
+  for (const { name, keys } of services(text)) {
+    const deploy = mapping(block(keys.get('deploy'), `${name}: deploy`), 6, `${name}: deploy`);
+    const resources = mapping(block(deploy.get('resources'), `${name}: deploy.resources`), 8, `${name}: deploy.resources`);
+    const limits = mapping(block(resources.get('limits'), `${name}: deploy.resources.limits`), 10, `${name}: deploy.resources.limits`);
+    assert.ok(limits.has('cpus'), `${name}: limits.cpus is missing`);
+    assert.match(unquote(limits.get('cpus').value), /^\d+(\.\d+)?$/, `${name}: limits.cpus is not a number`);
+    assert.ok(limits.has('memory'), `${name}: limits.memory is missing`);
+    assert.match(unquote(limits.get('memory').value), /^\d+[kmg]$/, `${name}: limits.memory is not a size`);
+  }
+}
+
+// The services another service waits for with condition:
+// service_completed_successfully, which compose starts only after they
+// exit 0.
+function awaitedToComplete(all) {
+  const awaited = new Set();
+  for (const { name, keys } of all) {
+    if (!keys.has('depends_on')) continue;
+    const deps = mapping(block(keys.get('depends_on'), `${name}: depends_on`), 6, `${name}: depends_on`);
+    for (const [dep, entry] of deps) {
+      const condition = mapping(block(entry, `${name}: depends_on.${dep}`), 8, `${name}: depends_on.${dep}`).get('condition');
+      if (dep !== name && condition?.value === 'service_completed_successfully') awaited.add(dep);
+    }
+  }
+  return awaited;
+}
+
+// A one-shot job is exempt by its shape, never its name: it says restart:
+// "no" and another service waits for it to complete successfully. Every
+// other service declares a healthcheck block whose test runs a command.
+// Returns the services it checked.
+function checkHealth(text) {
+  const all = services(text);
+  const awaited = awaitedToComplete(all);
+  const checked = [];
+  for (const { name, keys } of all) {
+    if (unquote(keys.get('restart')?.value ?? '') === 'no' && awaited.has(name)) continue;
+    const health = mapping(block(keys.get('healthcheck'), `${name}: healthcheck`), 6, `${name}: healthcheck`);
+    for (const k of health.keys()) assert.ok(HEALTHCHECK_KEYS.includes(k), `${name}: healthcheck key ${k} is not modelled by this test`);
+    assert.ok(health.has('test'), `${name}: healthcheck.test is missing`);
+    assert.match(health.get('test').value, HEALTHCHECK_TEST, `${name}: healthcheck.test must run a command as ["CMD", ...] or ["CMD-SHELL", ...]`);
+    checked.push(name);
+  }
+  return checked;
+}
+
+// True when the arguments of an adduser/useradd name a uid that is not a
+// plain non-zero number, or allow a non-unique uid (-o), in any spelling:
+// separate words, a combined short-flag cluster (-Du0, -ou 0), quotes or
+// --uid=0. Any uid option it cannot read as a non-zero number counts as unsafe.
+function createsUnsafeUid(words) {
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    let value = null;
+    if (/^--(non-unique)$/.test(w)) return true;
+    if (/^--uid(=|$)/.test(w)) {
+      value = w.includes('=') ? w.slice(w.indexOf('=') + 1) : words[i + 1];
+    } else if (/^-[A-Za-z]/.test(w) && !w.startsWith('--')) {
+      const flags = w.slice(1);
+      const u = flags.indexOf('u');
+      const o = flags.indexOf('o');
+      if (o >= 0 && (u < 0 || o < u)) return true;
+      if (u >= 0) value = flags.slice(u + 1) !== '' ? flags.slice(u + 1) : words[i + 1];
+    }
+    if (value !== null && !/^0*[1-9]\d*$/.test(value ?? '')) return true;
+  }
+  return false;
+}
+
+// The words of each shell command in a RUN: quotes and backslashes dropped,
+// then split at && || ; | ( ) and backticks, so a command inside sh -c "..."
+// or $(...) reads as a command of its own, and an exec-form list as words.
+function shellCommands(run) {
+  return run.replace(/["'\\]/g, '').split(/&&|\|\||[;|()`\n]/)
+    .map((c) => c.split(/[\s,[\]]+/).filter(Boolean));
+}
+
+// True when a word or path names the user database: a component passwd,
+// shadow, group or gshadow (or its - backup), the etc directory itself (cd
+// /etc, COPY x /etc/), or a glob directly under etc.
+const USER_DATABASE = /^(passwd|shadow|group|gshadow)-?$/;
+function namesUserDatabase(word) {
+  const parts = word.split('/');
+  return parts.some((p, i) => USER_DATABASE.test(p)
+    || (p === 'etc' && (parts.slice(i + 1).every((q) => q === '') || /[*?{\]]/.test(parts[i + 1]))));
+}
+
+// True when a stage instruction may rewrite the user database: a RUN that
+// names it, or a COPY/ADD whose source names it or whose destination,
+// resolved against the stage's WORKDIR, is /, /etc or a database file. A
+// destination it cannot resolve (a variable, an exec-form list, a relative
+// path before any WORKDIR) counts as a rewrite.
+function rewritesUserDatabase(op, workdir) {
+  if (op.op === 'RUN') return shellCommands(op.rest).some((words) => words.some(namesUserDatabase));
+  if (op.op !== 'COPY' && op.op !== 'ADD') return false;
+  if (/^\s*\[/.test(op.rest)) return true;
+  const words = op.rest.split(/\s+/).filter((w) => w && !w.startsWith('--'));
+  if (words.length < 2 || words.some((w) => w.includes('$'))) return true;
+  if (words.slice(0, -1).some(namesUserDatabase)) return true;
+  const dest = words[words.length - 1];
+  if (!dest.startsWith('/') && workdir === null) return true;
+  const resolved = path.posix.normalize(dest.startsWith('/') ? dest : `${workdir}/${dest}`);
+  return resolved === '/' || namesUserDatabase(resolved);
+}
+
+// A Dockerfile USER passes when it is a numeric non-root uid, or a name
+// other than root that the final stage creates with adduser or useradd,
+// where every adduser/useradd naming it leaves out uid 0 and -o, and the
+// stage builds on no earlier stage, runs no deluser, userdel or usermod,
+// and rewrites no user database file.
+function dockerUserIsNonRoot(user, stageOps, earlierStages) {
+  if (NUMERIC_NON_ROOT.test(user)) return true;
+  const m = /^([a-z_][a-z0-9_-]*)(?::([a-z_][a-z0-9_-]*|0*[1-9]\d*))?$/.exec(user);
+  if (!m || m[1] === 'root' || m[2] === 'root') return false;
+  const from = /^(?:--platform=\S+\s+)?(\S+)/.exec(stageOps[0].rest);
+  if (!from || earlierStages.includes(from[1].toLowerCase())) return false;
+  let workdir = null;
+  let created = false;
+  for (const o of stageOps) {
+    if (o.op === 'WORKDIR') {
+      const dir = o.rest.trim();
+      workdir = dir.includes('$') || (!dir.startsWith('/') && workdir === null) ? null
+        : path.posix.normalize(dir.startsWith('/') ? dir : `${workdir}/${dir}`);
+    }
+    if (rewritesUserDatabase(o, workdir)) return false;
+    if (o.op !== 'RUN') continue;
+    for (const words of shellCommands(o.rest)) {
+      for (let i = 0; i < words.length; i++) {
+        if (/deluser|userdel|usermod/.test(words[i])) return false;
+        if (!/adduser|useradd/.test(words[i])) continue;
+        if (!/^(\S*\/)?(adduser|useradd)$/.test(words[i])) return false;
+        const args = words.slice(i + 1);
+        if (!args.includes(m[1])) continue;
+        if (createsUnsafeUid(args)) return false;
+        created = true;
+      }
+    }
+  }
+  return created;
+}
+
+function checkPrivilege(text, tree) {
+  for (const { name, keys, build } of services(text)) {
+    if (OFFICIAL_IMAGE_SERVICES.includes(name)) {
+      assert.equal(build, null, `${name} is built from this repo, so it cannot be exempt`);
+      continue;
+    }
+    assert.equal(keys.get('read_only')?.value, 'true', `${name}: read_only: true is missing`);
+    assert.equal(keys.get('cap_drop')?.value, '["ALL"]', `${name}: cap_drop: ["ALL"] is missing`);
+    if (keys.has('user')) {
+      const user = unquote(keys.get('user').value);
+      assert.match(user, NUMERIC_NON_ROOT, `${name}: user ${JSON.stringify(user)} is not a numeric non-root uid`);
+      continue;
+    }
+    assert.ok(build, `${name}: runs an image this repo does not build and sets no user:, so it runs as the image's default user`);
+    // The final stage is what compose.prod.yml runs (build: takes no target:).
+    const ops = instructions(tree.read(build.dockerfile));
+    const start = ops.map((o) => o.op).lastIndexOf('FROM');
+    const stage = ops.slice(start);
+    const earlierStages = ops.slice(0, start).filter((o) => o.op === 'FROM')
+      .map((o) => /\s+AS\s+(\S+)\s*$/i.exec(o.rest)?.[1].toLowerCase()).filter(Boolean);
+    const users = stage.filter((o) => o.op === 'USER');
+    assert.ok(users.length > 0, `${name}: neither compose.prod.yml user: nor the final stage of ${build.dockerfile} sets a user, so it runs as root`);
+    const user = users[users.length - 1].rest;
+    assert.ok(dockerUserIsNonRoot(user, stage, earlierStages),`${name}: the final stage of ${build.dockerfile} runs as ${user}, which is not shown to be non-root`);
+  }
+}
+
+function checkAll(text, tree) {
+  checkImages(text);
+  checkFroms(text, tree);
+  checkSecrets(text, tree);
+  checkLimits(text);
+  checkPrivilege(text, tree);
+  checkHealth(text);
+}
+
+test('RNF014 C1: every compose.prod.yml image is pinned by version or digest', () => {
+  checkImages(read(COMPOSE_PROD));
+});
+
+test('RNF014 C1: every FROM in a production Dockerfile is pinned, or names an earlier stage', () => {
+  assert.ok(checkFroms(read(COMPOSE_PROD), repoTree).size > 0, 'compose.prod.yml must build at least one image');
+});
+
+test('RNF014 C2: no secret is baked into a production image', () => {
+  checkSecrets(read(COMPOSE_PROD), repoTree);
+});
+
+test('RNF014 C3: every compose.prod.yml service declares CPU and memory limits', () => {
+  checkLimits(read(COMPOSE_PROD));
+});
+
+test('RNF014 C3: every service but the official-image data stores runs read_only, with cap_drop ALL and a non-root user', () => {
+  const parsed = parseCompose(read(COMPOSE_PROD));
+  for (const name of OFFICIAL_IMAGE_SERVICES) {
+    assert.ok(parsed.has(name), `${name} is listed as an official-image service but compose.prod.yml has none`);
+  }
+  checkPrivilege(read(COMPOSE_PROD), repoTree);
+});
+
+test('RNF014 C3: every compose.prod.yml service but a one-shot job declares a health check that runs a command', () => {
+  assert.ok(checkHealth(read(COMPOSE_PROD)).length > 0, 'compose.prod.yml must run at least one long-running service');
+});
+
+test('RNF014 C7: the backend and both workers require a ready ReadinessReport and wait for the Foundation job', () => {
+  const parsed = parseCompose(read(COMPOSE_PROD));
+  for (const name of ['backend', 'worker', 'neo4j-projection-worker']) {
+    const service = parsed.get(name);
+    assert.ok(service, `compose.prod.yml must define ${name}`);
+    const env = mapping(block(service.get('environment'), `${name}: environment`), 6, `${name}: environment`);
+    assert.match(unquote(env.get('FOUNDATION_READINESS_REQUIRED')?.value ?? ''), /^(true|1)$/, `${name} must set FOUNDATION_READINESS_REQUIRED: "true"`);
+    const deps = mapping(block(service.get('depends_on'), `${name}: depends_on`), 6, `${name}: depends_on`);
+    assert.ok(deps.has('foundation'), `${name} must depend on foundation`);
+    const foundation = mapping(block(deps.get('foundation'), `${name}: depends_on.foundation`), 8, `${name}: depends_on.foundation`);
+    assert.equal(foundation.get('condition')?.value, 'service_completed_successfully', `${name} must wait for foundation to complete successfully`);
+  }
+});
+
+// RF023 AC3, RNF019 C1: an aggregate write and its outbox event commit in one
+// transaction only on a replica set; a standalone mongod takes none.
+test('RF023 AC3 (#1550): mongodb runs a replica set, initiated by mongo-rs-init, and every MongoDB writer waits for it', () => {
+  const parsed = parseCompose(read(COMPOSE_PROD));
+
+  const mongodb = parsed.get('mongodb');
+  assert.ok(mongodb, 'compose.prod.yml must define mongodb');
+  const mongodCommand = mongodb.get('command')?.value ?? '';
+  assert.ok(mongodCommand.includes('--replSet rs0'), 'mongodb must start mongod with --replSet rs0');
+  assert.ok(mongodCommand.includes('--keyFile'), 'mongodb must start mongod with --keyFile, which a replica set with root credentials demands');
+  const mongoEnv = mapping(block(mongodb.get('environment'), 'mongodb: environment'), 6, 'mongodb: environment');
+  assert.match(mongoEnv.get('MONGO_REPLICA_SET_KEY')?.value ?? '', /^\$\{MONGO_REPLICA_SET_KEY:\?/, 'mongodb must take MONGO_REPLICA_SET_KEY with a :? guard');
+
+  const init = parsed.get('mongo-rs-init');
+  assert.ok(init, 'compose.prod.yml must define mongo-rs-init');
+  const initCommand = init.get('command')?.value ?? '';
+  assert.ok(initCommand.includes('rs.initiate'), 'mongo-rs-init must run rs.initiate');
+  assert.ok(initCommand.includes('mongodb:27017'), 'mongo-rs-init must name mongodb:27017 as the member');
+  const initDeps = mapping(block(init.get('depends_on'), 'mongo-rs-init: depends_on'), 6, 'mongo-rs-init: depends_on');
+  const initOnMongo = mapping(block(initDeps.get('mongodb'), 'mongo-rs-init: depends_on.mongodb'), 8, 'mongo-rs-init: depends_on.mongodb');
+  assert.equal(initOnMongo.get('condition')?.value, 'service_healthy', 'mongo-rs-init must wait for mongodb to be healthy');
+
+  for (const name of ['foundation', 'backend', 'worker', 'neo4j-projection-worker']) {
+    const service = parsed.get(name);
+    assert.ok(service, `compose.prod.yml must define ${name}`);
+    const deps = mapping(block(service.get('depends_on'), `${name}: depends_on`), 6, `${name}: depends_on`);
+    assert.ok(deps.has('mongo-rs-init'), `${name} must depend on mongo-rs-init`);
+    const rsInit = mapping(block(deps.get('mongo-rs-init'), `${name}: depends_on.mongo-rs-init`), 8, `${name}: depends_on.mongo-rs-init`);
+    assert.equal(rsInit.get('condition')?.value, 'service_completed_successfully', `${name} must wait for mongo-rs-init to complete successfully`);
+  }
+});
+
+// Fixtures: a minimal stack that passes, and one planted bypass per case.
+const FIXTURE_DOCKERFILE = 'FROM node:22.23.4-alpine\nRUN addgroup -S app && adduser -S app -G app\nUSER app\n';
+function fixtureTree(files = {}) {
+  const all = { 'app/Dockerfile': FIXTURE_DOCKERFILE, ...files };
+  return { read: (rel) => all[rel], exists: (rel) => rel in all };
+}
+const LIMITS = '    deploy:\n      resources:\n        limits:\n          cpus: "1"\n          memory: 1g\n';
+const HARDENED = '    read_only: true\n    cap_drop: ["ALL"]\n';
+const HEALTH = '    healthcheck:\n      test: ["CMD", "true"]\n';
+const REDIS = `  redis:\n    image: redis:7.4.11-alpine\n${LIMITS}${HEALTH}`;
+const APP = `  app:\n    build:\n      context: ./app\n      dockerfile: Dockerfile\n${HARDENED}${LIMITS}${HEALTH}`;
+const fixture = (...services) => `name: fixture\n\nservices:\n${services.join('\n')}\nvolumes:\n  data:\n`;
+
+test('RNF014 fixtures: the minimal hardened stack passes every check', () => {
+  checkAll(fixture(REDIS, APP), fixtureTree());
+  checkAll(fixture(REDIS, `  app:\n    image: example/app:1.2.3\n    user: "10001:10001"\n${HARDENED}${LIMITS}${HEALTH}`), fixtureTree());
+});
+
+test('RNF014 refuses bypass 1: a service name with an underscore, dot, capital, quote or trailing comment', () => {
+  for (const header of ['  bad_name:', '  bad.name:', '  BadName:', '  bad-name: # a comment']) {
+    assert.throws(() => checkAll(fixture(REDIS, APP, `${header}\n    image: busybox:latest\n`), fixtureTree()), /busybox:latest must carry/, header);
+  }
+  assert.throws(() => checkAll(fixture(REDIS, APP, '  "quoted":\n    image: busybox:latest\n'), fixtureTree()), /unreadable key line/);
+});
+
+test('RNF014 refuses bypass 2: user 0:0 in single quotes, or an empty user', () => {
+  for (const user of ["'0:0'", '""', "''", '"0"', 'root']) {
+    assert.throws(() => checkAll(fixture(REDIS, `${APP}    user: ${user}\n`), fixtureTree()), /is not a numeric non-root uid/, user);
+  }
+});
+
+test('RNF014 refuses bypass 3: a user from a variable, cap_add, privileged, a Dockerfile USER not shown non-root', () => {
+  assert.throws(() => checkAll(fixture(REDIS, `${APP}    user: "\${APP_UID:-0}"\n`), fixtureTree()), /is not a numeric non-root uid/);
+  assert.throws(() => checkAll(fixture(REDIS, `${APP}    cap_add: ["SYS_ADMIN"]\n`), fixtureTree()), /key cap_add is not modelled/);
+  assert.throws(() => checkAll(fixture(REDIS, `${APP}    privileged: true\n`), fixtureTree()), /key privileged is not modelled/);
+  assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree({ 'app/Dockerfile': 'FROM node:22.23.4-alpine\nARG U=0\nUSER ${U}\n' })), /is not shown to be non-root/);
+  assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree({ 'app/Dockerfile': 'FROM node:22.23.4-alpine\nRUN adduser -u0 app\nUSER app\n' })), /is not shown to be non-root/);
+  assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree({ 'app/Dockerfile': 'FROM node:22.23.4-alpine\nRUN adduser -S app && usermod -o -u 0 app\nUSER app\n' })), /is not shown to be non-root/);
+});
+
+test('RNF014 refuses bypass 3 in every uid-0 spelling and a rewritten passwd', () => {
+  const dockerfile = (run) => ({ 'app/Dockerfile': `FROM node:22.23.4-alpine\nRUN ${run}\nUSER app\n` });
+  for (const run of ['adduser -Du0 app', 'adduser -u "0" app', 'useradd -ou 0 app', 'adduser -D -u 0 app', 'useradd -o -u 1000 app', 'adduser --uid=0 app', 'adduser -u ${U} app', 'adduser -S app && sed -i s/app:x:100/app:x:0/ /etc/passwd']) {
+    assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree(dockerfile(run))), /is not shown to be non-root/, run);
+  }
+  checkAll(fixture(REDIS, APP), fixtureTree(dockerfile('adduser -D -u 1000 app')));
+  checkAll(fixture(REDIS, APP), fixtureTree(dockerfile('adduser -S -G root app')));
+});
+
+test('RNF014 refuses bypass 3 when any adduser of the user is unsafe, or the user is deleted', () => {
+  const stage = (body) => ({ 'app/Dockerfile': `FROM node:22.23.4-alpine\n${body}USER app\n` });
+  for (const body of [
+    'RUN adduser -S app\nRUN adduser -D -u 0 app\n',
+    'RUN adduser -S app && deluser app && adduser -u 0 -o app\n',
+    'RUN adduser -S app\nRUN deluser app && adduser -D -u 0 app\n',
+    'RUN adduser -S app && sh -c "deluser app; adduser -u 0 app"\n',
+    'RUN adduser -S app && sh -c "adduser -u 0 app"\n',
+    'RUN adduser -S app && userdel app\n',
+    'RUN adduser -S app\nRUN ["adduser", "-u", "0", "app"]\n',
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree(stage(body))), /is not shown to be non-root/, body);
+  }
+  checkAll(fixture(REDIS, APP), fixtureTree(stage('RUN addgroup -S app && adduser -D -g "u 0" -G app app\n')));
+});
+
+test('RNF014 refuses bypass 3 through a user database rewritten by COPY, ADD, a doubled slash, a cd into /etc or a glob', () => {
+  const stage = (body) => ({ 'app/Dockerfile': `FROM node:22.23.4-alpine\nRUN adduser -S app\n${body}USER app\n` });
+  for (const body of [
+    'COPY passwd /etc/passwd\n',
+    'COPY --from=builder /etc/passwd /etc/\n',
+    'ADD rootfs/ /\n',
+    'WORKDIR /app\nCOPY users ../etc/\n',
+    'WORKDIR /etc\nCOPY users .\n',
+    'COPY users ./\n',
+    'RUN sed -i s/x:100:/x:0:/ /etc//passwd\n',
+    'RUN cd /etc && sed -i s/x:100:/x:0:/ passwd\n',
+    'RUN cd /etc && sed -i s/x:100:/x:0:/ pass""wd\n',
+    'RUN sed -i s/x:100:/x:0:/ /etc/pass*\n',
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree(stage(body))), /is not shown to be non-root/, body);
+  }
+  checkAll(fixture(REDIS, APP), fixtureTree(stage('WORKDIR /app\nCOPY src/ .\nCOPY nginx.conf /etc/nginx/conf.d/default.conf\nRUN mkdir -p /etc/tsa/certs\n')));
+});
+
+test('RNF014 refuses bypass 3 from a final stage built on an earlier stage', () => {
+  const dockerfile = 'FROM node:22.23.4-alpine AS base\nRUN adduser -S app && sed -i s/x:100:/x:0:/ /etc/passwd\nFROM base\nRUN adduser -S app || true\nUSER app\n';
+  assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree({ 'app/Dockerfile': dockerfile })), /is not shown to be non-root/);
+});
+
+test('RNF014 refuses a line indented under a key that already has a value', () => {
+  assert.throws(() => checkAll(fixture(REDIS, `${APP}    user: "10001"\n      extra: 1\n`), fixtureTree()), /already has a value/);
+});
+
+test('RNF014 refuses bypass 4: cpus and memory under reservations only', () => {
+  const reserved = '    deploy:\n      resources:\n        reservations:\n          cpus: "1"\n          memory: 1g\n';
+  assert.throws(() => checkAll(fixture(REDIS, `  app:\n    build:\n      context: ./app\n${HARDENED}${reserved}`), fixtureTree()), /deploy\.resources\.limits is missing/);
+});
+
+test('RNF014 refuses bypass 5: an image-only service outside the exempt data stores', () => {
+  assert.throws(() => checkAll(fixture(REDIS, `  extra:\n    image: example/extra:1.2.3\n${LIMITS}`), fixtureTree()), /extra: read_only: true is missing/);
+  assert.throws(() => checkAll(fixture(REDIS, `  extra:\n    image: example/extra:1.2.3\n${HARDENED}${LIMITS}`), fixtureTree()), /sets no user:/);
+});
+
+test('RNF014 refuses bypass 6: the short form build: ./dir', () => {
+  const short = `  app:\n    build: ./app\n${HARDENED}${LIMITS}${HEALTH}`;
+  checkAll(fixture(REDIS, short), fixtureTree());
+  assert.throws(() => checkAll(fixture(REDIS, short), fixtureTree({ 'app/Dockerfile': 'FROM node:latest\nRUN adduser -S app\nUSER app\n' })), /FROM node:latest must carry/);
+  assert.throws(() => checkAll(fixture(REDIS, short), fixtureTree({ 'app/Dockerfile': 'FROM node:22.23.4-alpine\n' })), /sets a user, so it runs as root/);
+});
+
+test('RNF014 refuses bypass 7: a long-running service with no health check, or one that runs nothing or is turned off', () => {
+  const app = (health) => `  app:\n    build: ./app\n${HARDENED}${LIMITS}${health}`;
+  for (const [health, error] of [
+    ['', /app: healthcheck is missing/],
+    ['    healthcheck: {}\n', /app: healthcheck must be a block/],
+    ['    healthcheck:\n      interval: 10s\n', /app: healthcheck\.test is missing/],
+    ['    healthcheck:\n      test: ["NONE"]\n', /app: healthcheck\.test must run a command/],
+    ['    healthcheck:\n      test: ["CMD"]\n', /app: healthcheck\.test must run a command/],
+    ['    healthcheck:\n      test: curl -f http://localhost/\n', /app: healthcheck\.test must run a command/],
+    ['    healthcheck:\n      test: ["CMD", "true"] # a comment\n', /app: healthcheck\.test must run a command/],
+    ['    healthcheck:\n      test: ["CMD", "true"]\n      disable: true\n', /app: healthcheck key disable is not modelled/],
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, app(health)), fixtureTree()), error, health);
+  }
+});
+
+test('RNF014 refuses bypass 8: a one-shot exemption without restart: "no" and a service waiting for it to complete', () => {
+  const job = (restart) => `  job:\n    build: ./app\n${restart}${HARDENED}${LIMITS}`;
+  const waitsFor = (condition) => `  app:\n    build: ./app\n${HARDENED}${LIMITS}${HEALTH}    depends_on:\n      job:\n        condition: ${condition}\n`;
+  checkAll(fixture(REDIS, waitsFor('service_completed_successfully'), job('    restart: "no"\n')), fixtureTree());
+  for (const [restart, condition] of [
+    ['    restart: "no"\n', 'service_started'],
+    ['    restart: "no"\n', 'service_healthy'],
+    ['    restart: unless-stopped\n', 'service_completed_successfully'],
+    ['', 'service_completed_successfully'],
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, waitsFor(condition), job(restart)), fixtureTree()), /job: healthcheck is missing/, `${restart} ${condition}`);
+  }
+  assert.throws(() => checkAll(fixture(REDIS, APP, job('    restart: "no"\n')), fixtureTree()), /job: healthcheck is missing/);
+});
+
+test('RNF014 refuses bypass 9: a secret build arg, ARG or ENV, a COPY of secret material, or a whole-context COPY without the .env exclusion', () => {
+  const withArgs = (args) => `  app:\n    build:\n      context: ./app\n      args:\n${args}${HARDENED}${LIMITS}${HEALTH}`;
+  checkAll(fixture(REDIS, withArgs('        NODE_ENV: production\n')), fixtureTree());
+  for (const args of ['        API_TOKEN: abc\n', '        - DB_PASSWORD=abc\n']) {
+    assert.throws(() => checkAll(fixture(REDIS, withArgs(args)), fixtureTree()), /app: a build arg must not carry a secret/, args);
+  }
+  const stage = (body) => ({ 'app/Dockerfile': `FROM node:22.23.4-alpine\nRUN addgroup -S app && adduser -S app -G app\nWORKDIR /app\n${body}USER app\n` });
+  for (const [body, error] of [
+    ['ARG NPM_TOKEN\n', /app\/Dockerfile: ARG NPM_TOKEN must not carry a secret/],
+    ['ENV JWT_SECRET=abc\n', /app\/Dockerfile: ENV JWT_SECRET must not carry a secret/],
+    ['COPY .env ./\n', /app\/Dockerfile: COPY \.env copies secret material/],
+    ['COPY --chown=app certs/server.pem ./\n', /app\/Dockerfile: COPY certs\/server\.pem copies secret material/],
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree(stage(body))), error, body);
+  }
+  const whole = (ignore) => ({ ...stage('COPY . .\n'), ...(ignore === null ? {} : { 'app/.dockerignore': ignore }) });
+  checkAll(fixture(REDIS, APP), fixtureTree(whole('node_modules\n.env\n.env.*\n')));
+  for (const [ignore, error] of [
+    [null, /app\/Dockerfile copies its whole context, so app\/\.dockerignore must exist/],
+    ['node_modules\n.env.*\n', /app\/\.dockerignore must exclude \.env: /],
+    ['node_modules\n.env\n', /app\/\.dockerignore must exclude \.env\.\*: /],
+  ]) {
+    assert.throws(() => checkAll(fixture(REDIS, APP), fixtureTree(whole(ignore))), error, String(ignore));
+  }
+});
+
+// RNF014 C4 and C5 (#1569). Both checks are regression guards over the forms
+// listed here, not a proof that no other form exists.
+//
+// C4, one family of artifacts for every environment. Read in every root
+// compose file, a name compose*.yml, compose*.yaml, docker-compose*.yml or
+// docker-compose*.yaml (COMPOSE_FILE): each service's image: line and its build context, dockerfile
+// and target (the block form, or the short form build: <dir>); in each
+// Dockerfile those builds name, its FROM lines; and in
+// .github/workflows/publish-images.yml, each matrix entry's image, context,
+// file and target. It holds that
+//   - a deployable component (a build context compose.prod.yml builds) is
+//     built in every environment from a Dockerfile in that same context whose
+//     base images are among the ones compose.prod.yml's Dockerfile for that
+//     context uses, and no other context is built, but for the listed test
+//     tooling in compose.test.yml;
+//   - every third-party image repository, compose image: and Dockerfile FROM
+//     alike, carries one and the same version in every file;
+//   - each published-image overlay (<base>.images.yml or <base>.images.yaml)
+//     points a service only at an image that publish-images.yml builds from
+//     that service's own build context, dockerfile and target in <base>.yml
+//     or <base>.yaml.
+//
+// C5, Kubernetes stays optional. Read in the root compose files and
+// Dockerfile*, the Dockerfiles under api/backend and frontend, the three
+// package.json files, and every file under scripts/, infra/ and
+// .github/workflows/: the words kubectl, kubernetes, k8s, helm, kustomize,
+// kustomization and minikube (whole words, any case), a line that opens with
+// apiVersion:, and a file named Chart.yaml or kustomization.yaml. Any hit
+// fails: nothing the stack is built, tested or deployed with may need
+// Kubernetes. The compose stack itself runs without it, as the checks above
+// read.
+
+const COMPOSE_FILE = /^(docker-)?compose[A-Za-z0-9_.-]*\.ya?ml$/;
+// A UTF-8 byte order mark some editors write at a file's start.
+const stripBom = (text) => text.replace(/^﻿/, '');
+const PUBLISH_IMAGES = '.github/workflows/publish-images.yml';
+const PUBLISHED_IMAGE = /^ghcr\.io\/deniseribeiro-beep\/(bioavanced-[a-z-]+):\$\{IMAGE_TAG:\?[^}]*\}$/;
+// The only builds outside a deployable context: test tooling, by file, by
+// service, by context and dockerfile.
+const TEST_TOOLING = [{ file: 'compose.test.yml', service: 'playwright-runner', dir: '.', dockerfile: 'Dockerfile.playwright' }];
+
+const KUBERNETES_WORD = /\b(kubectl|kubernetes|k8s|helm|kustomize|kustomization|minikube)\b/i;
+const KUBERNETES_MANIFEST_LINE = /^apiVersion:/m;
+const KUBERNETES_FILE = /^(Chart\.yaml|kustomization\.ya?ml)$/i;
+
+// The root tree for C4 and C5, as the checks read it; a fixture passes its own.
+const deployTree = {
+  read: repoTree.read,
+  exists: repoTree.exists,
+  // The files directly in a directory, '.' for the repo root.
+  files: (dir) => fs.readdirSync(path.resolve(REPO_ROOT, dir), { withFileTypes: true }).filter((e) => e.isFile())
+    .map((e) => (dir === '.' ? e.name : path.posix.join(dir, e.name))),
+  walk: (rel) => {
+    const out = [];
+    const visit = (dir) => {
+      const abs = path.resolve(REPO_ROOT, dir);
+      if (!fs.existsSync(abs)) return;
+      for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+        const child = path.posix.join(dir, e.name);
+        if (e.isDirectory()) visit(child);
+        else if (e.isFile()) out.push(child);
+      }
+    };
+    visit(rel);
+    return out;
+  },
+};
+
+// A lenient line scan of any compose file, base or overlay: services at two
+// spaces under services:, each one's image: and build: at four, and a build
+// block's context, dockerfile and target at six. A service line it cannot
+// read refuses.
+function composeServices(text, where) {
+  const out = [];
+  let inServices = false;
+  let svc = null;
+  let inBuild = false;
+  for (const raw of stripBom(text).replace(/\r\n/g, '\n').split('\n')) {
+    if (/^\s*(#.*)?$/.test(raw)) continue;
+    const line = stripComment(raw);
+    if (line.trim() === '') continue;
+    const n = indentOf(line);
+    if (n === 0) {
+      inServices = /^services:[ ]*$/.test(line);
+      svc = null;
+      continue;
+    }
+    if (!inServices) continue;
+    if (n === 2) {
+      const m = /^ {2}([a-z0-9][a-z0-9-]*):[ ]*$/.exec(line);
+      assert.ok(m, `${where}: unreadable service line ${JSON.stringify(line)}`);
+      svc = { name: m[1], image: null, build: null };
+      out.push(svc);
+      inBuild = false;
+      continue;
+    }
+    assert.ok(svc, `${where}: a line outside any service: ${JSON.stringify(line)}`);
+    const m = KEY_LINE.exec(line.slice(n));
+    if (n === 4) {
+      inBuild = false;
+      if (!m) continue;
+      if (m[1] === 'image') svc.image = unquote(m[2] ?? '');
+      if (m[1] === 'build') {
+        svc.build = { context: m[2] ? unquote(m[2]) : null, dockerfile: 'Dockerfile', target: null };
+        inBuild = !m[2];
+      }
+      continue;
+    }
+    if (n === 6 && inBuild && m) {
+      if (m[1] === 'context') svc.build.context = unquote(m[2] ?? '');
+      if (m[1] === 'dockerfile') svc.build.dockerfile = unquote(m[2] ?? '');
+      if (m[1] === 'target') svc.build.target = unquote(m[2] ?? '');
+    }
+  }
+  return out;
+}
+
+// The non-stage FROM images of a Dockerfile.
+function baseImages(text, file) {
+  const stages = [];
+  const bases = new Set();
+  for (const { op, rest } of instructions(text)) {
+    if (op !== 'FROM') continue;
+    const m = /^(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?$/i.exec(rest);
+    assert.ok(m, `${file}: unreadable FROM ${rest}`);
+    if (!stages.includes(m[1].toLowerCase())) bases.add(m[1]);
+    if (m[2]) stages.push(m[2].toLowerCase());
+  }
+  return bases;
+}
+
+function rootComposeFiles(tree) {
+  return tree.files('.').filter((f) => COMPOSE_FILE.test(f)).sort();
+}
+
+function builtDockerfile(file, svc) {
+  assert.ok(svc.build.context, `${file}: ${svc.name}: build names no context`);
+  assert.match(svc.build.context, /^\.(\/[A-Za-z0-9_.-]+)*\/?$/, `${file}: ${svc.name}: build context ${svc.build.context} must be a ./ path in this repo`);
+  assert.match(svc.build.dockerfile, /^[A-Za-z0-9_.-]+$/, `${file}: ${svc.name}: dockerfile ${svc.build.dockerfile} must be a file name in the context`);
+  const dir = path.posix.normalize(svc.build.context).replace(/\/$/, '') || '.';
+  assert.ok(!dir.startsWith('..'), `${file}: ${svc.name}: build context leaves the repo`);
+  return { dir, dockerfile: path.posix.join(dir, svc.build.dockerfile), target: svc.build.target };
+}
+
+// Returns the number of builds it read.
+function checkBuildFamily(tree) {
+  const prodBases = new Map();
+  for (const svc of composeServices(tree.read('compose.prod.yml'), 'compose.prod.yml')) {
+    if (!svc.build) continue;
+    const b = builtDockerfile('compose.prod.yml', svc);
+    const bases = prodBases.get(b.dir) ?? new Set();
+    for (const base of baseImages(tree.read(b.dockerfile), b.dockerfile)) bases.add(base);
+    prodBases.set(b.dir, bases);
+  }
+  assert.ok(prodBases.size > 0, 'compose.prod.yml must build at least one component');
+  let builds = 0;
+  for (const file of rootComposeFiles(tree)) {
+    for (const svc of composeServices(tree.read(file), file)) {
+      if (!svc.build) continue;
+      const b = builtDockerfile(file, svc);
+      builds += 1;
+      if (!prodBases.has(b.dir)) {
+        assert.ok(TEST_TOOLING.some((t) => t.file === file && t.service === svc.name && t.dir === b.dir && path.posix.join(t.dir, t.dockerfile) === b.dockerfile),
+          `${file}: ${svc.name} builds ${b.dockerfile}, outside every context compose.prod.yml builds and not listed test tooling`);
+        continue;
+      }
+      assert.ok(tree.exists(b.dockerfile), `${file}: ${svc.name}: ${b.dockerfile} does not exist`);
+      for (const base of baseImages(tree.read(b.dockerfile), b.dockerfile)) {
+        assert.ok(prodBases.get(b.dir).has(base),
+          `${file}: ${svc.name}: ${b.dockerfile} starts from ${base}, which no production Dockerfile in ${b.dir} uses`);
+      }
+    }
+  }
+  return builds;
+}
+
+// Returns the repositories it read, each with its one reference.
+function checkOneVersionPerImage(tree) {
+  const refs = new Map();
+  const note = (ref, where) => {
+    if (PUBLISHED_IMAGE.test(ref)) return;
+    const m = /^([^:@]+(?::\d+(?=\/))?[^:@]*)([:@].+)?$/.exec(ref);
+    assert.ok(m && m[2], `${where}: image ${ref} names no version or digest`);
+    const seen = refs.get(m[1]);
+    assert.ok(!seen || seen.ref === ref, `${where}: ${ref}, but ${seen?.where} uses ${seen?.ref}: one repository, one version in every environment`);
+    refs.set(m[1], seen ?? { ref, where });
+  };
+  for (const file of rootComposeFiles(tree)) {
+    for (const svc of composeServices(tree.read(file), file)) {
+      if (svc.image !== null) note(svc.image, `${file}: ${svc.name}`);
+      if (svc.build && svc.build.context) {
+        const b = builtDockerfile(file, svc);
+        if (tree.exists(b.dockerfile)) for (const base of baseImages(tree.read(b.dockerfile), b.dockerfile)) note(base, b.dockerfile);
+      }
+    }
+  }
+  return refs;
+}
+
+// publish-images.yml's matrix: image -> { dir, dockerfile, target }.
+function publishedBuilds(tree) {
+  const text = tree.read(PUBLISH_IMAGES).replace(/\r\n/g, '\n');
+  const out = new Map();
+  const entry = /^ +- image: (\S+)\n +context: (\S+)\n +file: (\S+)\n +target: "?([^"\n]*)"?$/gm;
+  for (const m of text.matchAll(entry)) {
+    assert.ok(!out.has(m[1]), `${PUBLISH_IMAGES}: ${m[1]} is published twice`);
+    out.set(m[1], { dir: path.posix.normalize(m[2]), dockerfile: m[3], target: m[4] || null });
+  }
+  assert.ok(out.size > 0, `${PUBLISH_IMAGES}: no matrix entry read`);
+  return out;
+}
+
+// Returns the overlay services it read.
+function checkPublishedOverlays(tree) {
+  const published = publishedBuilds(tree);
+  let read = 0;
+  for (const overlay of rootComposeFiles(tree).filter((f) => /\.images\.ya?ml$/.test(f))) {
+    const base = overlay.replace(/\.images(\.ya?ml)$/, '$1');
+    assert.ok(tree.exists(base), `${overlay}: its base file ${base} does not exist`);
+    const baseServices = new Map(composeServices(tree.read(base), base).map((s) => [s.name, s]));
+    for (const svc of composeServices(tree.read(overlay), overlay)) {
+      const m = PUBLISHED_IMAGE.exec(svc.image ?? '');
+      assert.ok(m, `${overlay}: ${svc.name}: image ${svc.image} is not a published bioavanced image tagged by IMAGE_TAG`);
+      const own = baseServices.get(svc.name);
+      assert.ok(own && own.build, `${overlay}: ${svc.name} is not a service ${base} builds`);
+      const b = builtDockerfile(base, own);
+      const p = published.get(m[1]);
+      assert.ok(p, `${overlay}: ${svc.name}: ${m[1]} is not built by ${PUBLISH_IMAGES}`);
+      assert.deepEqual(p, b, `${overlay}: ${svc.name}: ${m[1]} is published from ${JSON.stringify(p)}, but ${base} builds it from ${JSON.stringify(b)}`);
+      read += 1;
+    }
+  }
+  return read;
+}
+
+// The deployment surface C5 reads.
+function deploymentFiles(tree) {
+  const root = tree.files('.').filter((f) => COMPOSE_FILE.test(f) || /^Dockerfile/.test(f) || f === 'package.json');
+  const nested = ['api/backend', 'frontend'].flatMap((d) => tree.files(d).filter((f) => /^(Dockerfile.*|package\.json)$/.test(path.posix.basename(f))));
+  return [...root, ...nested, ...tree.walk('scripts'), ...tree.walk('infra'), ...tree.walk('.github/workflows')];
+}
+
+// Returns the files it read.
+function checkNoKubernetes(tree) {
+  const files = deploymentFiles(tree);
+  for (const file of files) {
+    assert.doesNotMatch(path.posix.basename(file), KUBERNETES_FILE, `${file} is a Kubernetes file: RNF014 C5 keeps Kubernetes optional`);
+    const text = stripBom(tree.read(file));
+    const word = KUBERNETES_WORD.exec(text);
+    assert.ok(!word, `${file} names ${word?.[0]}: RNF014 C5 keeps Kubernetes optional`);
+    assert.doesNotMatch(text, KUBERNETES_MANIFEST_LINE, `${file} holds a Kubernetes manifest (apiVersion:): RNF014 C5 keeps Kubernetes optional`);
+  }
+  return files;
+}
+
+test('RNF014 C4: every environment builds each deployable component from its production context and base images', () => {
+  assert.ok(checkBuildFamily(deployTree) > 0, 'no build read in the root compose files');
+});
+
+test('RNF014 C4: every third-party image carries one version in every compose file and Dockerfile', () => {
+  assert.ok(checkOneVersionPerImage(deployTree).size > 0, 'no image read in the root compose files');
+});
+
+test('RNF014 C4: each published-image overlay runs the image built from its own service\'s build', () => {
+  assert.ok(checkPublishedOverlays(deployTree) > 0, 'no published-image overlay service read');
+});
+
+test('RNF014 C5: no compose file, Dockerfile, package.json, script, infra file or workflow needs Kubernetes', () => {
+  const files = checkNoKubernetes(deployTree);
+  for (const f of ['compose.prod.yml', 'api/backend/Dockerfile.prod', 'frontend/Dockerfile.prod', '.github/workflows/ci-pipeline.yml']) {
+    assert.ok(files.includes(f), `the scan must read ${f}`);
+  }
+});
+
+// A fixture tree for C4 and C5: root files and walked directories from a map.
+function deployFixture(files) {
+  return {
+    read: (rel) => { assert.ok(rel in files, `fixture has no ${rel}`); return files[rel]; },
+    exists: (rel) => rel in files,
+    files: (dir) => Object.keys(files).filter((f) => path.posix.dirname(f) === dir),
+    walk: (dir) => Object.keys(files).filter((f) => f.startsWith(`${dir}/`)),
+  };
+}
+const FIX_PROD = 'services:\n  app:\n    build:\n      context: ./app\n      dockerfile: Dockerfile.prod\n  db:\n    image: mongo:7.0.45\n';
+const FIX_TEST = 'services:\n  app-test:\n    build:\n      context: ./app\n      dockerfile: Dockerfile.dev\n  db-test:\n    image: mongo:7.0.45\n';
+const FIX_PUBLISH = 'jobs:\n  publish:\n    strategy:\n      matrix:\n        include:\n          - image: bioavanced-app\n            context: app\n            file: app/Dockerfile.prod\n            target: ""\n';
+const FIX_IMAGES = 'services:\n  app:\n    image: ghcr.io/deniseribeiro-beep/bioavanced-app:${IMAGE_TAG:?set IMAGE_TAG}\n';
+const deployFiles = (over = {}) => ({
+  'compose.prod.yml': FIX_PROD,
+  'compose.test.yml': FIX_TEST,
+  'compose.prod.images.yml': FIX_IMAGES,
+  'app/Dockerfile.prod': 'FROM node:22.23.4-alpine AS deps\nFROM node:22.23.4-alpine\n',
+  'app/Dockerfile.dev': 'FROM node:22.23.4-alpine\n',
+  [PUBLISH_IMAGES]: FIX_PUBLISH,
+  'scripts/deploy.sh': 'docker compose -f compose.prod.yml up -d\n',
+  'package.json': '{"dependencies":{"helmet":"7.2.0"}}\n',
+  ...over,
+});
+
+test('RNF014 C4 and C5 fixtures: the minimal one-family, compose-only tree passes every check', () => {
+  const tree = deployFixture(deployFiles());
+  assert.equal(checkBuildFamily(tree), 2);
+  assert.equal(checkOneVersionPerImage(tree).size, 2);
+  assert.equal(checkPublishedOverlays(tree), 1);
+  assert.equal(checkNoKubernetes(tree).length, 6);
+});
+
+test('RNF014 C4 refuses: a test build from another base image, or from a context production does not build', () => {
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'app/Dockerfile.dev': 'FROM node:20.0.0-alpine\n' }))), /starts from node:20\.0\.0-alpine/);
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.test.yml': FIX_TEST.replace('./app', './app-copy') }))), /outside every context compose\.prod\.yml builds/);
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.test.yml': `${FIX_TEST}  playwright-runner:\n    build:\n      context: ./other\n      dockerfile: Dockerfile.playwright\n` }))), /not listed test tooling/);
+});
+
+test('RNF014 C4 refuses: one image repository at two versions, across compose files or a Dockerfile FROM', () => {
+  assert.throws(() => checkOneVersionPerImage(deployFixture(deployFiles({ 'compose.test.yml': FIX_TEST.replace('mongo:7.0.45', 'mongo:7.0.44') }))), /one repository, one version/);
+  assert.throws(() => checkOneVersionPerImage(deployFixture(deployFiles({ 'app/Dockerfile.dev': 'FROM node:22.23.3-alpine\n' }))), /one repository, one version/);
+});
+
+test('RNF014 C4 refuses: a published image built from another dockerfile or target than its service', () => {
+  assert.throws(() => checkPublishedOverlays(deployFixture(deployFiles({ [PUBLISH_IMAGES]: FIX_PUBLISH.replace('app/Dockerfile.prod', 'app/Dockerfile.dev') }))), /is published from/);
+  assert.throws(() => checkPublishedOverlays(deployFixture(deployFiles({ [PUBLISH_IMAGES]: FIX_PUBLISH.replace('target: ""', 'target: preview') }))), /is published from/);
+  assert.throws(() => checkPublishedOverlays(deployFixture(deployFiles({ 'compose.prod.images.yml': FIX_IMAGES.replace('bioavanced-app:', 'bioavanced-other:') }))), /is not built by/);
+});
+
+test('RNF014 C5 refuses: a script that runs kubectl or helm, a manifest, or a Chart.yaml', () => {
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'scripts/deploy.sh': 'kubectl apply -f deploy/\n' }))), /names kubectl/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'scripts/deploy.sh': 'Helm upgrade --install app ./chart\n' }))), /names Helm/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'infra/app.yml': 'apiVersion: apps/v1\nkind: Deployment\n' }))), /Kubernetes manifest/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'infra/chart/Chart.yaml': 'name: app\n' }))), /is a Kubernetes file/);
+});
+
+const FIX_FOREIGN = 'services:\n  app-e2e:\n    build:\n      context: ./app-copy\n      dockerfile: Dockerfile.dev\n';
+
+test('RNF014 C4 and C5 refuses: a root compose file whose name holds a digit or a hyphen is read like any other', () => {
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.e2e.yml': FIX_FOREIGN }))), /compose\.e2e\.yml: app-e2e builds app-copy\/Dockerfile\.dev, outside every context/);
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.ci-test.yml': FIX_FOREIGN }))), /compose\.ci-test\.yml: app-e2e builds/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'compose.e2e.yml': '# deploy with kubectl apply\nservices: {}\n' }))), /compose\.e2e\.yml names kubectl/);
+});
+
+test('RNF014 C4 and C5 refuses: a root compose file named compose-<name>, compose.yaml or docker-compose.yml is read like any other', () => {
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose-e2e.yml': FIX_FOREIGN }))), /compose-e2e\.yml: app-e2e builds app-copy\/Dockerfile\.dev, outside every context/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'compose-e2e.yml': '# deploy with kubectl apply\nservices: {}\n' }))), /compose-e2e\.yml names kubectl/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'compose.yaml': '# deploy with kubectl apply\nservices: {}\n' }))), /compose\.yaml names kubectl/);
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'docker-compose.yml': FIX_FOREIGN }))), /docker-compose\.yml: app-e2e builds/);
+});
+
+test('RNF014 C4 and C5 refuses: a compose file or manifest that opens with a byte order mark', () => {
+  assert.throws(() => checkBuildFamily(deployFixture(deployFiles({ 'compose.test.yml': `\uFEFF${FIX_TEST.replace('./app', './app-copy')}` }))), /outside every context compose\.prod\.yml builds/);
+  assert.throws(() => checkNoKubernetes(deployFixture(deployFiles({ 'infra/app.yml': '\uFEFFapiVersion: apps/v1\nkind: Deployment\n' }))), /Kubernetes manifest/);
+});
+
+test('RNF014 C4 fixtures: a build context written with a trailing slash is the same context', () => {
+  assert.equal(checkBuildFamily(deployFixture(deployFiles({ 'compose.test.yml': FIX_TEST.replace('./app', './app/') }))), 2);
+});

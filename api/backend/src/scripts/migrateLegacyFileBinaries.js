@@ -8,6 +8,15 @@
  * and left untouched; the disk file is never removed or changed
  * (docs/decisions/2026-10-30-data-file-legacy-disk-rows-migration.md).
  *
+ * One-way: no rollback. --apply overwrites a moved row's storagePath,
+ * storageUri and storageObjectVersion, and its version rows' objectUri, with
+ * the object store's, and keeps the earlier values nowhere, so nothing
+ * points the row back at its disk file. Once npm run encryption:rewrite
+ * re-keys the object, the row's envelope no longer opens the disk bytes
+ * either. The disk files are never changed: undo the move by restoring
+ * sample_files, assayFiles, datasetFiles and dataFileVersions from a backup
+ * taken before --apply.
+ *
  * Usage, from api/backend:
  *   npm run files:migrate-legacy              dry run: counts, writes nothing
  *   npm run files:migrate-legacy -- --apply   moves the binaries

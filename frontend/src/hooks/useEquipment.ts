@@ -48,13 +48,7 @@ export function useEquipment() {
     try {
       const response = await equipmentService.create(data);
       const newEquipment = extractResponseEntity<Equipment>(response, data as any);
-      if (newEquipment) {
-        setEquipment((prev) => [...prev, newEquipment]);
-        notifyDashboardDataChanged();
-        return newEquipment;
-      }
-      // Se não houver dados na resposta, recarrega a lista
-      await loadEquipment();
+      setEquipment((prev) => [...prev, newEquipment]);
       notifyDashboardDataChanged();
       return newEquipment;
     } catch (err: any) {
@@ -69,15 +63,10 @@ export function useEquipment() {
       const response = await equipmentService.update(id, data);
       // Atualiza na lista usando _id ou equipmentID
       const updatedEquipment = extractResponseEntity<Equipment>(response, data as any);
-      if (updatedEquipment) {
-        setEquipment((prev) => prev.map((e) => {
-          const eqId = (e as any)._id || e.equipmentID;
-          return String(eqId) === String(id) ? updatedEquipment : e;
-        }));
-        notifyDashboardDataChanged();
-        return updatedEquipment;
-      }
-      await loadEquipment(); // Recarrega se não houver dados na resposta
+      setEquipment((prev) => prev.map((e) => {
+        const eqId = (e as any)._id || e.equipmentID;
+        return String(eqId) === String(id) ? updatedEquipment : e;
+      }));
       notifyDashboardDataChanged();
       return updatedEquipment;
     } catch (err: any) {

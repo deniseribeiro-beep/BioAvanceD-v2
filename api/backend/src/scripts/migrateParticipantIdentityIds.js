@@ -19,6 +19,11 @@
  * Idempotent: a migrated record carries both fields, so the second run finds
  * nothing. `remaining` counts the records still missing one.
  *
+ * One-way: no rollback. The participantIdentityId it assigns is a fresh random
+ * uuid and the identityStatus is 'active'; records inserted since carry the
+ * same two fields from ParticipantIdentityModel.create, so this run's writes
+ * cannot be told apart. Undo is restoring participantIdentities from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:participant-identity-ids               applies
  *   npm run migrate:participant-identity-ids -- --dry-run  counts, writes nothing

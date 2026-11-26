@@ -2,10 +2,32 @@ import { type Page } from '@playwright/test';
 import { test, expect } from './showcaseFixtures';
 import { MongoClient, Db, ObjectId } from 'mongodb';
 import { randomBytes, createHash } from 'crypto';
+import { readFile } from 'fs/promises';
+import { deleteOrganizations } from '../e2e/helpers/listOrganizations';
 import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
 import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, seedStudy, seedProtocol, seedCollectionEntity, seedActiveConsent, seedDuoConcept, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
-import { seedSensorWithPolicy, findTemperatureIncident, removeSeededSensor, closeSeedSensorDb, type SeededSensor } from '../e2e/helpers/seedSensor';
+import { seedSensorWithPolicy, findTemperatureIncident, removeSeededSensor, closeSeedSensorDb, type SeededSensor, seedSensorOnFreezer, removeSensorOnFreezer, type SeededFreezerSensor } from '../e2e/helpers/seedSensor';
 import { queryTemperaturePoints } from '../e2e/helpers/queryInflux';
+import { completeFirstLoginMfa } from '../e2e/helpers/completeFirstLoginMfa';
+import { computeTotp } from '../e2e/helpers/totp';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  assignGovernedCustody,
+  type GovernedCollection,
+} from '../e2e/helpers/seedGovernedCollection';
+// W7 derivative lineage reel's intake fixtures (#1506).
+import { SIGNATURE_PNG_DATA_URL } from '../e2e/helpers/consentSignature';
+import {
+  seedActiveConsentTemplate,
+  seedActiveTerminologyConcept,
+  cleanupActiveTerminologyConcepts,
+  seedLegacyDiagnosisTerminology,
+} from '../e2e/helpers/seedParticipant';
+import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver, waitForDerivedFrom, readSampleStatus } from '../e2e/helpers/queryNeo4j';
+import { generateValidCpf } from '../e2e/helpers/cpf';
+import { waitForIntakeWizardReady } from '../e2e/helpers/waitForIntakeWizardReady';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -19,12 +41,12 @@ import { queryTemperaturePoints } from '../e2e/helpers/queryInflux';
 //
 // Wave 2 reel (#331): demonstrates what's provably working end-to-end
 // through the real UI against the real backend for RF003 (login/session),
-// RF020 (Organizations/Collections CRUD, #606-608). RF007 (scientific
-// files, including this session's Assay/Dataset linkage, #641/#643) and
-// RF011 (FHIR interop) are proven real-backend but API-only today -- no UI
-// exists for either yet, so per this skill's own "reuse proven flows, don't
-// improvise a new one" guidance, this reel doesn't fabricate a UI path for
-// them rather than risk demoing an unproven flow live.
+// RF020 (Organizations/Collections CRUD, #606-608). RF011 (FHIR interop)
+// was proven real-backend but API-only when this reel was recorded, so it
+// doesn't fabricate a UI path for it rather than risk demoing an unproven
+// flow live. RF007's scientific files were API-only then too; the sample
+// page's Arquivos section has since carried their upload, download and
+// delete (#647), and the W10 reel below records the upload and a replace.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker against the real stack');
 
@@ -142,7 +164,9 @@ test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
 
 // Wave 3 reel (#646): demonstrates what's provably working end-to-end
 // through the real UI against the real backend for RF014 (security policy
-// management, including the login MFA-toggle round trip), RF017 (equipment
+// management: the setting catalog (AC1), an out-of-range change refused
+// with its message on the page (AC3), the MFA-toggle save and an on-camera
+// rollback to the release it replaced (AC4), #1490), RF017 (equipment
 // management), and RF016 (real symbology label generation + print-job
 // download, #655). RF015/RF024/RF025/RF026/RF029 are proven real-backend
 // but API-only today -- no frontend caller exists for any of them (see
@@ -156,7 +180,16 @@ test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
 // seedStorageBoxLocation() fixture gap (#598) -- the equipment sub-domain
 // alone is what's demoed for RF017.
 test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w3-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
   test.afterAll(async () => {
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -199,7 +232,28 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
       await page.goto('/system-management?tab=security');
       await expect(page.getByTestId('security-page')).toBeVisible();
       await beat(page, MEDIUM);
+      // RF014 AC1 (#1490): the setting catalog, each key with its type,
+      // scope, allowed values, default, dependencies, owner and validity.
+      // maxLoginAttempts is range(5, 1, 10) in securitySettingCatalog.js.
+      await page.getByTestId('security-nav-catalog').click();
+      await expect(page.getByTestId('security-catalog-version')).toHaveText(/^\d+\.\d+\.\d+$/);
+      await expect(
+        page.locator('[data-testid="security-catalog-row"][data-path="authentication.maxLoginAttempts"]').getByTestId('security-catalog-allowed'),
+      ).toHaveText('1..10');
+      await beat(page, LARGE);
+      await page.getByTestId('security-catalog-row').last().scrollIntoViewIfNeeded();
+      await beat(page, MEDIUM);
+      // RF014 AC3 (#1490): a value outside the catalog's range is refused,
+      // and the server's message is on the page. The refusal leaves a draft
+      // release behind, but no active one.
       await page.getByTestId('security-nav-authentication').click();
+      await page.getByTestId('security-max-login-attempts-input').fill('15');
+      await beat(page, SMALL);
+      await page.getByTestId('security-save-config-button').click();
+      await expect(page.getByTestId('security-error')).toContainText('maxLoginAttempts deve estar entre 1 e 10');
+      await beat(page, MEDIUM);
+      // Back to the stored value, so the valid save below is not refused by it.
+      await page.getByTestId('security-max-login-attempts-input').fill(String(originalSecurityConfig!.authentication.maxLoginAttempts));
       await beat(page, SMALL);
       await page.getByTestId('security-require-mfa-toggle').click();
       await beat(page, SMALL);
@@ -209,12 +263,32 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
       // beat for less than that window so the confirmation is still on
       // screen while the viewer registers it.
       await expect(page.locator('.security-success')).toBeVisible();
+      // A save clears the refusal's message when it starts (useSecurity.ts).
+      await expect(page.getByTestId('security-error')).toHaveCount(0);
       await beat(page, MEDIUM);
       // RF014 AC4 (#1339): the save is a new release, active at the top of
       // the history, with the one it replaced offering a rollback.
       await page.getByTestId('security-nav-releases').click();
-      await expect(page.getByTestId('security-release-row').first()).toHaveAttribute('data-status', 'active');
+      const rows = page.getByTestId('security-release-row');
+      await expect(rows.first()).toHaveAttribute('data-status', 'active');
       await expect(page.getByTestId('security-release-rollback').first()).toBeVisible();
+      // RF014 AC4 (#1490): roll back on camera to the release the MFA save
+      // replaced. The refused draft sits between the two in the history, so
+      // the target is read through the API, never picked by position.
+      const history = (await (await request.get(`${apiBaseURL}/api/security/config/releases`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data;
+      const active = history.find((release: { status: string }) => release.status === 'active');
+      const superseded = history.find((release: { configurationReleaseId: string }) => release.configurationReleaseId === active.supersedesId);
+      await beat(page, MEDIUM);
+      await rows
+        .filter({ has: page.getByTestId('security-release-version').getByText(superseded.semanticVersion, { exact: true }) })
+        .getByTestId('security-release-rollback')
+        .click();
+      // The rollback is a new active release naming the one it restored. It
+      // flips only authentication.requireMFA back, which ends no session.
+      await expect(rows.first()).toHaveAttribute('data-status', 'active');
+      await expect(rows.first().getByTestId('security-release-restores')).toHaveText(superseded.semanticVersion);
       await beat(page, LARGE);
 
       // 3. Equipment management through the real UI. (RF017, #646 Wave 3)
@@ -232,10 +306,11 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
       // Not a row-text assertion: this shared test DB accumulates equipment
       // fixtures across every session (500+ rows as of this writing), so a
       // freshly-created row can land many pages deep in the unsorted,
-      // 10-per-page table. The form panel closing on success (it stays open
-      // on error, see EquipmentForm's onSave catch block) is the reliable
-      // signal instead.
-      await expect(page.getByTestId('equipment-form-panel')).not.toBeVisible();
+      // 10-per-page table. The form page returning to the equipment list on
+      // success (it stays open on error, see EquipmentFormPage's onSave catch
+      // block) is the reliable signal instead.
+      await page.waitForURL(/\/facility-management\?tab=equipment$/);
+      await expect(page.getByTestId('equipment-form-page')).toHaveCount(0);
       await beat(page, LARGE);
 
       // 4. Real sample labeling through the real UI. (RF016, #655/#646)
@@ -256,6 +331,7 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
           registeredAt: new Date().toISOString(),
           boxId,
           positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       expect([201, 202]).toContain(sampleCreate.status());
@@ -320,7 +396,16 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
 });
 
 test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w4-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
   test.afterAll(async () => {
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -376,6 +461,7 @@ test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
           registeredAt: new Date().toISOString(),
           boxId: seededStorageBox.boxId,
           positionCode: seededStorageBox.positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       expect([201, 202]).toContain(createSample.status());
@@ -472,18 +558,17 @@ test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
 //    Until it was built, the URL every bulk invitation emails pointed at the
 //    JWT page behind ProtectedRoute -- a participant with no account hit a
 //    login wall. Proven real-backend by consent-token-page.spec.ts, whose
-//    selectors and seeding shape this segment reuses verbatim.
-//  - RNF011 AC#4 / RF029 AC#6's LGPD import surface (`/import/lgpd`, #808)
-//    and its quarantine review screen (`/import/quarantine`, #794 item 2).
-//    The requirement is "invalid imports are staged or quarantined, without
-//    silent correction"; this is the first reel where a human can watch a
-//    rejected row survive its own import.
-//
-// The import API half is proven by lgpd-sample-import.spec.ts (#759/#787),
-// which is where the MIABIS ids and the mixed-file CSV shape below come from
-// -- the page is a thin surface over that already-green path. The page itself
-// had only mocked component coverage (ImportLGPDPage.test.tsx), so this
-// segment is the first time it is driven against a real backend at all.
+//    selectors and seeding shape this segment reuses verbatim. Since #1542
+//    the accepted link stays the participant's panel, and the segment ends
+//    on that panel.
+//  - RNF011 AC#4 / RF029 AC#6's batch import. Since #1542 `/import/lgpd`
+//    lands on the FHIR batch import (`/patients/import-fhir`), the one
+//    batch path in the navigation. The requirement is "invalid imports are
+//    staged or quarantined, without silent correction"; here a human sees
+//    the RCS-GOV gate's refusal of one row of a bundle only as the Erros 1
+//    count, while the rows that pass are saved in quarantine, none released
+//    by the import. The refused row's matrix reason, and the save's own
+//    writes, are checked off camera.
 //
 // Not demoed here, deliberately: ResultsPage's import-job filter (#889) is
 // new since Wave 4 too, but its UI half is a known full-suite red on this
@@ -601,7 +686,20 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       const stored = await db.collection('patients').findOne({ participantId });
       expect(stored?.status).toBe('ACTIVE');
       expect(stored?.consentAcceptedAt).toBeTruthy();
-      expect(stored?.consentTokenHash).toBeNull();
+      // #1542: the accepted link stays the participant's panel, so its hash
+      // is kept rather than cleared.
+      expect(stored?.consentTokenHash).toBe(createHash('sha256').update(consentToken).digest('hex'));
+
+      // 5. The same emailed link, opened again, is now the participant's
+      //    panel: the accepted purpose can be revoked from here, the declined
+      //    one is not listed, and there is nothing left to accept.
+      await page.goto(`/patients/${participantId}/consent?token=${consentToken}`);
+      await expect(page.getByTestId('consent-token-manage')).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId('consent-token-revoke-showcase-w5-research')).toBeVisible();
+      await expect(page.getByTestId('consent-token-revoke-showcase-w5-recontact')).toHaveCount(0);
+      await expect(page.getByTestId('consent-token-accept')).toHaveCount(0);
+      await page.getByTestId('consent-token-manage').scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
     } finally {
       await db.collection('patients').deleteMany({ participantId }).catch(() => {});
       await db.collection('patientConsents').deleteMany({ participantId }).catch(() => {});
@@ -609,11 +707,10 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
     }
   });
 
-  test('RNF011 AC#4 an operator imports a spreadsheet and the rejected row is quarantined, not dropped', async ({ page, request }) => {
+  test('RNF011 AC#4 an operator imports a FHIR batch and the row the gate refuses is held back, not corrected', async ({ page }) => {
     const testUser = process.env.TEST_USER || 'admin';
     const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
-    const createdParticipantIds: string[] = [];
     let batchId: string | null = null;
 
     await page.addInitScript(() => {
@@ -635,117 +732,133 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       await expect(page.getByTestId('system-management-page')).toBeVisible();
       await beat(page, LARGE);
 
-      // Off camera: three real participants for the spreadsheet to reference,
-      // so the uploaded file is a plausible one rather than a file every row
-      // of which would fail for the same reason.
-      const admin = await realLogin(request);
-      for (let i = 0; i < 3; i += 1) {
-        const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
-        createdParticipantIds.push(participant.participantId);
-      }
-      const [firstId, secondId, badId] = createdParticipantIds;
-
-      // The MIABIS ids are the real seeded ones (foundation-bootstrap-test);
-      // the third row's sampleType is not, which is what gets it rejected.
-      // Same mixed-file shape as lgpd-sample-import.spec.ts's #787 block.
-      const csv = [
-        'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject',
-        `${firstId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase)`,
-        `${secondId},PLASMA,VENOUS_BLOOD,TUBE_EDTA,3,GOOD,Coorte Wave 5 (showcase)`,
-        `${badId},TIPO_QUE_NAO_EXISTE,VENOUS_BLOOD,TUBE_EDTA,5,GOOD,Coorte Wave 5 (showcase)`,
-      ].join('\n');
-
-      // 2. The LGPD import surface (#808) -- the only importer that
-      //    quarantines its rejected rows.
-      await page.goto('/import/lgpd');
-      await expect(page.getByRole('heading', { name: 'Importação LGPD' })).toBeVisible();
-      await beat(page, LARGE);
-
-      await page.getByTestId('import-lgpd-type').selectOption('samples');
-      await beat(page, SMALL);
-      await page.getByTestId('import-lgpd-file').setInputFiles({
-        name: 'amostras-coorte-wave5.csv',
-        mimeType: 'text/csv',
-        buffer: Buffer.from(csv, 'utf8'),
+      // A FHIR R4 Bundle of three participants, each with one specimen. The
+      // third specimen asks for the RCS-GOV governance check and carries no
+      // matrix, which that check requires: the gate refuses that row, and
+      // nothing fills the matrix in for the operator.
+      const run = String(Date.now()).slice(-6);
+      const participant = (n: number) => ({
+        resourceType: 'Patient',
+        id: `7${n}${run}`,
+        identifier: [{ system: 'urn:showcase:cpf', value: `000${n}${run}00` }],
+        name: [{ text: `Participante Wave 5 ${n} (showcase)` }],
+        telecom: [{ system: 'email', value: `showcase-w5-${n}-${run}@example.test` }],
       });
+      const specimen = (n: number, extension: Array<Record<string, unknown>> = []) => ({
+        resourceType: 'Specimen',
+        id: `SPC-W5-${n}-${run}`,
+        subject: { reference: `Patient/7${n}${run}` },
+        type: { text: 'PLASMA' },
+        collection: { collectedDateTime: '2026-11-01T09:00:00Z' },
+        extension,
+      });
+      const bundle = {
+        resourceType: 'Bundle',
+        type: 'collection',
+        entry: [
+          { resource: participant(1) },
+          { resource: participant(2) },
+          { resource: participant(3) },
+          { resource: specimen(1) },
+          { resource: specimen(2) },
+          { resource: specimen(3, [{ url: 'urn:showcase:rcs-gov-required', valueBoolean: true }]) },
+        ],
+      };
+
+      // 2. `/import/lgpd` now lands on the FHIR batch import (#1542): the
+      //    batch path every operator is sent to.
+      await page.goto('/import/lgpd');
+      await page.waitForURL('**/patients/import-fhir');
+      await expect(page.getByTestId('fhir-import-page')).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Importação em lote' })).toBeVisible();
+      await beat(page, LARGE);
+
+      await page.getByTestId('fhir-import-json-input').setInputFiles({
+        name: 'coorte-wave5-bundle.json',
+        mimeType: 'application/fhir+json',
+        buffer: Buffer.from(JSON.stringify(bundle), 'utf8'),
+      });
+      await expect(page.getByTestId('fhir-import-patient-count')).toContainText('3');
+      await expect(page.getByTestId('fhir-import-specimen-count')).toContainText('3');
       await beat(page, MEDIUM);
 
-      await page.getByTestId('import-lgpd-submit').click();
-
-      // 3. The partial outcome, stated as counts rather than a verdict: two
-      //    rows landed, one did not, and nothing was corrected for you.
-      await expect(page.getByTestId('import-lgpd-counts')).toHaveText(
-        '2 de 3 importadas · 1 rejeitadas',
-        { timeout: 30_000 }
+      // 3. Validation stages the batch and runs the gate over every row. On
+      //    screen the refusal shows only as counts: three rows, two valid,
+      //    Erros 1. Its matrix reason is checked off camera after the save.
+      const staged = page.waitForResponse(
+        (response) => response.url().includes('/import/fhir/stage') && response.request().method() === 'POST'
       );
-      await beat(page, MEDIUM);
+      await page.getByTestId('fhir-import-validate-button').click();
+      const stagedBody = await (await staged).json();
+      batchId = String(stagedBody?.data?.batch?._id ?? stagedBody?.batch?._id ?? '') || null;
+      expect(batchId).toBeTruthy();
 
-      await expect(page.getByTestId('import-lgpd-rejected-rows')).toContainText(badId);
+      const summary = page.getByTestId('fhir-import-validation-summary');
+      await expect(summary).toContainText(/Total\s*3/, { timeout: 30_000 });
+      await expect(summary).toContainText(/Válidos\s*2/);
+      await expect(summary).toContainText(/Erros\s*1/);
+      await summary.scrollIntoViewIfNeeded();
       await beat(page, LARGE);
 
-      // 4. The link that closes RNF011 AC#4's loop: the rejected row is
-      //    somewhere, and the operator can go there.
-      await expect(page.getByTestId('import-lgpd-quarantine-link')).toBeVisible();
-      await beat(page, MEDIUM);
-      await page.getByTestId('import-lgpd-quarantine-link').click();
-
-      await expect(page).toHaveURL(/\/import\/quarantine\?batchId=/);
-      batchId = new URL(page.url()).searchParams.get('batchId');
-      await expect(page.getByRole('heading', { name: 'Quarentena de importação' })).toBeVisible();
-      await beat(page, LARGE);
-
-      // 5. The batch, with the uploaded file retained beside it (#792/#806)
-      //    -- "retido" is the difference between a reviewable rejection and
-      //    a silently dropped row.
-      await expect(
-        page.getByRole('cell', { name: 'amostras-coorte-wave5.csv' })
-      ).toBeVisible({ timeout: 15_000 });
-      // Scoped to this run's own row: the quarantine listing is cumulative,
-      // and the mongodb-test-data volume carries earlier sessions' batches.
-      await expect(
-        page.getByRole('row', { name: /amostras-coorte-wave5/ })
-      ).toContainText('retido');
+      // Only the two rows that passed are offered for review and saving.
+      await expect(page.getByTestId('fhir-import-staging-table').locator('tbody tr')).toHaveCount(2);
       await beat(page, MEDIUM);
 
-      // The batchId query param auto-opens the row detail -- no extra click.
-      // It renders below the fold at this viewport, though, and toBeVisible()
-      // does not scroll: without this the reel asserts a payoff the viewer
-      // never sees.
-      const rejectedRows = page.getByRole('heading', { name: /Linhas rejeitadas/ });
-      await expect(rejectedRows).toBeVisible();
-      await rejectedRows.scrollIntoViewIfNeeded();
-      await beat(page, MEDIUM);
-      await expect(page.getByText(/Linha 4/)).toBeVisible({ timeout: 15_000 });
+      // 4. Saving keeps every row in quarantine: a row is released only by a
+      //    signed TCLE or authorized documentation, never by the import. The
+      //    status table reads QUARANTINED/BLOCKED from validation onward, so
+      //    the save is proven by its own commit response and by what it wrote.
+      const committed = page.waitForResponse(
+        (response) => response.url().includes(`/import/fhir/batches/${batchId}/commit`) && response.request().method() === 'POST'
+      );
+      await page.getByTestId('fhir-import-save-quarantine-button').click();
+      expect((await committed).status()).toBe(200);
+
+      // Off camera: the save ran. Each row that passed was sent its TCLE,
+      // which moves it to PENDING_CONSENT, or CONSENT_SEND_FAILED when the
+      // stack's mail send fails; validation alone leaves a row VALID. The
+      // consentTracking the send records is sealed at rest, so this raw read
+      // cannot see it, and the status is the proof.
+      const rows = await db
+        .collection('import_staging_records')
+        .find({ batchId: new ObjectId(batchId!) })
+        .sort({ rowNumber: 1 })
+        .toArray();
+      expect(rows).toHaveLength(3);
+      const passed = rows.filter((row) => row.status !== 'ERROR');
+      expect(passed).toHaveLength(2);
+      for (const row of passed) {
+        expect(['PENDING_CONSENT', 'CONSENT_SEND_FAILED']).toContain(row.status);
+      }
+
+      // Off camera: the refused row survived its own import, held as an
+      // error naming the missing matrix rather than dropped or corrected.
+      const refused = rows.filter((row) => row.status === 'ERROR');
+      expect(refused).toHaveLength(1);
+      expect(refused[0].errors.map((error: { field?: string }) => error.field)).toContain('matrix');
+      expect(rows.some((row) => row.availabilityStatus === 'AVAILABLE')).toBe(false);
+
+      const statusTable = page.getByTestId('fhir-import-status-table');
+      await expect(statusTable.locator('tbody tr')).toHaveCount(3, { timeout: 30_000 });
+      await expect(statusTable).toContainText('QUARANTINED');
+      await expect(statusTable).toContainText('BLOCKED');
+      await expect(statusTable).not.toContainText('AVAILABLE');
+      await statusTable.scrollIntoViewIfNeeded();
       await beat(page, LARGE);
     } finally {
       // Same restore-what-the-reel-changed discipline as Waves 3 and 4: the
       // mongodb-test-data volume is persistent, so demo rows would otherwise
-      // accumulate in the quarantine listing across every future session.
-      if (client) {
-        if (createdParticipantIds.length) {
-          await db
-            .collection('samples')
-            .deleteMany({ participantId: { $in: createdParticipantIds } })
-            .catch(() => {});
-          await db
-            .collection('patients')
-            .deleteMany({ participantId: { $in: createdParticipantIds } })
-            .catch(() => {});
-          await db
-            .collection('participantIdentities')
-            .deleteMany({ participantId: { $in: createdParticipantIds } })
-            .catch(() => {});
-        }
-        if (batchId) {
-          await db
-            .collection('import_staging_records')
-            .deleteMany({ batchId: new ObjectId(batchId) })
-            .catch(() => {});
-          await db
-            .collection('import_batches')
-            .deleteOne({ _id: new ObjectId(batchId) })
-            .catch(() => {});
-        }
+      // accumulate in the import listings across every future session. No
+      // row is signed, so the save commits no patient or sample.
+      if (client && batchId) {
+        await db
+          .collection('import_staging_records')
+          .deleteMany({ batchId: new ObjectId(batchId) })
+          .catch(() => {});
+        await db
+          .collection('import_batches')
+          .deleteOne({ _id: new ObjectId(batchId) })
+          .catch(() => {});
       }
     }
   });
@@ -899,9 +1012,17 @@ test.describe('Human-paced e2e showcase reel — W6 collection governance', () =
 // release. The study, protocol, DUO concept and consent are seeded.
 test.describe('Human-paced e2e showcase reel — RF024 access requests', () => {
   const boxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-rf024-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -941,10 +1062,13 @@ test.describe('Human-paced e2e showcase reel — RF024 access requests', () => {
         registeredAt: new Date().toISOString(),
         boxId: box.boxId,
         positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(sample.status());
     const specimenId = (await sample.json()).data.specimenId as string;
+    // Off camera (RF021 AC6): the specimen in custody under the collection's approval, so it can be released.
+    await assignGovernedCustody(request, apiBaseURL!, headers, governed!, specimenId, organizationId);
 
     try {
       // 1. The researcher's request, registered by the operator.
@@ -1000,9 +1124,17 @@ test.describe('Human-paced e2e showcase reel — RF024 access requests', () => {
 // AccessPolicy (#663) has no UI either and is not shown.
 test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
   const boxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w6-revoke-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -1072,10 +1204,13 @@ test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
           registeredAt: new Date().toISOString(),
           boxId: box.boxId,
           positionCode: box.positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       expect([201, 202], await sample.text()).toContain(sample.status());
       const specimenId = (await sample.json()).data.specimenId as string;
+      // Off camera (RF021 AC6): the specimen in custody, so the revoked purpose is the only refusal.
+      await assignGovernedCustody(request, apiBaseURL!, headers, governed!, specimenId, organizationId);
 
       // 1. A request for the health purpose, registered by the operator.
       await page.goto('/access-requests');
@@ -1142,11 +1277,11 @@ test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
 // W9 reel (#1396): RF009 telemetry and RF015 alerts. A freezer's readings
 // go through the real ingest endpoint, are persisted in InfluxDB, and the
 // out-of-range ones open a temperature incident the operator inspects in
-// Facility Management's Incidents tab. The "Controle de Temperatura" and
-// "Histórico de Leituras" tabs now read the persisted readings, and
-// tests/e2e/facility-temperature-readings.spec.ts covers them. Deliberately
-// not demoed: the notification attempt the alert dispatches, which is
-// recorded by the backend but has no UI that shows it.
+// Facility Management's Incidents tab. The same persisted readings then show
+// in its "Controle de Temperatura" and "Histórico de Leituras" tabs
+// (RNF016 C3) and in the Dashboard's temperature chart (RF009 C1, #1522).
+// Deliberately not demoed: the notification attempt the alert dispatches,
+// which is recorded by the backend but has no UI that shows it (RF015 C2).
 test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () => {
   // POST /api/iot/telemetry is gated by the machine ingest secret (#1091).
   const ingestHeaders = () => ({ 'x-telemetry-ingest-secret': process.env.TELEMETRY_INGEST_SECRET ?? '' });
@@ -1173,21 +1308,25 @@ test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () =>
       // reading, so the readable name is set before any reading arrives.
       await db.collection('sensorMetadata').updateOne({ sensorId: sensor.sensorId }, { $set: { sensorName } });
 
-      const postReading = async (temperature: number) => {
+      // Returns the reading's id, which keys its row in the readings history.
+      const postReading = async (temperature: number): Promise<string> => {
         const res = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
           headers: ingestHeaders(),
           data: { sensorId: sensor.sensorId, temperature, timestamp: new Date().toISOString() },
         });
         expect(res.status(), await res.text()).toBe(200);
+        const { telemetryReadingId } = await res.json();
+        expect(telemetryReadingId).toBeTruthy();
+        return String(telemetryReadingId);
       };
 
       // Off camera: two readings above the -60 °C limit. The second is sent
       // only once the first has opened the incident, so it updates that one.
-      await postReading(-52);
+      const firstReadingId = await postReading(-52);
       await expect
         .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.samplesOutOfRange ?? null, { timeout: 15_000 })
         .toBe(1);
-      await postReading(-45);
+      const secondReadingId = await postReading(-45);
       await expect
         .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.samplesOutOfRange ?? null, { timeout: 15_000 })
         .toBe(2);
@@ -1220,6 +1359,35 @@ test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () =>
       await expect(panel).toContainText('Detalhes do Incidente');
       await expect(panel).toContainText('-45.0°C / -52.0°C');
       await panel.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 4. "Controle de Temperatura": the freezer's card shows its newest persisted reading. (RNF016 C3)
+      await page.getByTestId('facility-tab-temperature').click();
+      const card = page.getByTestId(`temperature-sensor-card-${sensor.sensorId}`);
+      await expect(card).toBeVisible();
+      await expect(card).toContainText('-45.0°C');
+      await card.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 5. "Histórico de Leituras": both persisted readings, each above the alert threshold. (RNF016 C3)
+      await page.getByTestId('facility-tab-history').click();
+      const newestRow = page.getByTestId(`history-row-${secondReadingId}`);
+      const firstRow = page.getByTestId(`history-row-${firstReadingId}`);
+      await expect(newestRow).toContainText(sensor.sensorId);
+      await expect(newestRow).toContainText('-45.0°C');
+      await expect(newestRow).toContainText('Alerta');
+      await expect(firstRow).toContainText('-52.0°C');
+      await expect(firstRow).toContainText('Alerta');
+      await newestRow.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 6. The Dashboard's temperature chart draws the same readings, its legend naming the newest. (RF009 C1)
+      await page.goto('/dashboard');
+      await beat(page, MEDIUM);
+      const legend = page.getByTestId(`dashboard-temperature-sensor-${sensor.sensorId}`);
+      await expect(legend).toContainText('-45.0°C');
+      await expect(page.getByTestId(`dashboard-temperature-line-${sensor.sensorId}`)).toBeAttached();
+      await page.locator('.temperature-card').scrollIntoViewIfNeeded();
       await beat(page, LARGE);
     } finally {
       await removeSeededSensor(sensor);
@@ -1285,9 +1453,17 @@ function sampleMerkleRoot(sample: Record<string, any>): string {
 
 test.describe('Human-paced e2e showcase reel — W8 storage and specimen state', () => {
   const boxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w8-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -1338,6 +1514,7 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
         registeredAt: new Date().toISOString(),
         boxId: boxA.boxId,
         positionCode: boxA.positionCode,
+        collectionId: governed!.collectionId,
       },
     });
     expect([201, 202]).toContain(sample.status());
@@ -1450,6 +1627,273 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
   });
 });
 
+// W7 reel (#1506): a derivative registered through the intake wizard names
+// its parent specimen (RF023, dict-02 ELM-0120 parentSpecimenIds). The parent
+// is registered through the same wizard first, briskly, for the participant
+// whose consent was signed off camera (the #1371 path), so it is available and
+// may be derived from (RF019 AC3). The derivative's stored parent and its
+// LINEAGE_REGISTERED outbox event are asserted off camera. The derivative's
+// page then shows its parent link (RF023), and a breach in the parent's
+// freezer marks the derivative compromised through its lineage, with the
+// breach's freezer and since-time, and the parent too (RF019 AC1/AC4, #1559).
+// The parent is first moved off camera into a freezer of its own, so that
+// only DERIVED_FROM carries the breach to the derivative. Deliberately not
+// demoed: a control sample beside the derivative that stays clear, which
+// tests/e2e/specimen-lineage.spec.ts covers.
+test.describe('Human-paced e2e showcase reel — W7 derivative lineage', () => {
+  const patientName = 'Ana Beatriz Lima';
+  // The intake wizard scene's disease and codes, seeded the same guarded way.
+  const diseaseLabel = 'Doença de Pompe';
+  const diseaseSearch = 'Pompe';
+  const orphaCode = 'ORPHA:365';
+  const orphaNumeric = '365';
+  const cidCode = 'E74.0';
+  const omimCode = '232300';
+  const hpoCode = 'HP:0003198';
+  const phenotypeLabel = 'Miopatia';
+  let mongo: MongoClient | null = null;
+  let box: SeededStorageBox | null = null;
+  let governed: GovernedCollection | null = null;
+  let consentTemplateId = '';
+  let parentFreezer: SeededStorageBox | null = null;
+  let breachSensor: SeededFreezerSensor | null = null;
+
+  test.beforeAll(async () => {
+    mongo = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await mongo.connect();
+    const db = mongo.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+    // RF004 AC2 (#1497): every specimen names a governed collection.
+    governed = await seedGovernedCollection(`showcase-w7-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    consentTemplateId = await seedActiveConsentTemplate(db);
+    // The wizard allocates a free position automatically, so a freezer with room must exist.
+    box = await seedStorageBoxLocation();
+    const legacy = await db.collection('terminologies').findOne({ codigo: orphaCode, descricao: diseaseLabel });
+    if (!legacy) {
+      await seedLegacyDiagnosisTerminology({ orphaCode, cidCode, omimCode: `OMIM:${omimCode}`, description: diseaseLabel });
+    }
+    await seedOrphaPhenotypeGraph(orphaNumeric, diseaseLabel, [{ hpoCode, label: phenotypeLabel }]);
+    await seedActiveTerminologyConcept('http://www.orpha.net', orphaCode, diseaseLabel, { datasetCode: 'ORPHA' });
+    await seedActiveTerminologyConcept('http://hl7.org/fhir/sid/icd-10', cidCode, diseaseLabel, { datasetCode: 'ICD10' });
+    await seedActiveTerminologyConcept('https://www.omim.org', omimCode, diseaseLabel, { datasetCode: 'OMIM' });
+    await seedActiveTerminologyConcept('http://purl.obolibrary.org/obo/hp.owl', hpoCode, phenotypeLabel, { datasetCode: 'HPO' });
+  });
+
+  test.afterAll(async () => {
+    await removeOrphaPhenotypeGraph(orphaNumeric).catch(() => {});
+    await closeNeo4jDriver();
+    if (breachSensor) await removeSensorOnFreezer(breachSensor).catch(() => {});
+    if (parentFreezer) await cleanupStorageBoxLocation(parentFreezer).catch(() => {});
+    await closeSeedSensorDb();
+    await cleanupActiveTerminologyConcepts();
+    if (box) await cleanupStorageBoxLocation(box).catch(() => {});
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
+    await closeSeedDb();
+    await mongo?.close();
+  });
+
+  test('RF023 an operator registers a derivative through the intake wizard, naming its parent specimen', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    const db = mongo!.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+
+    // Rewrites the lower-third caption showcaseFixtures mounts, one per stage.
+    const caption = async (heading: string, sub: string) => {
+      await page.evaluate(([h, s]) => {
+        const el = document.getElementById('__sc_caption');
+        if (!el) return;
+        el.textContent = h;
+        const small = document.createElement('small');
+        small.textContent = s;
+        el.appendChild(small);
+      }, [heading, sub]);
+    };
+
+    // The birth date carries the run's uniqueness: the intake matches a participant by name and birth date.
+    const stamp = Date.now();
+    const birthIso = new Date(Date.UTC(1950, 0, 1) + (stamp % 18_000) * 86_400_000).toISOString().slice(0, 10);
+    const birthBr = `${birthIso.slice(8, 10)}/${birthIso.slice(5, 7)}/${birthIso.slice(0, 4)}`;
+    const email = `ana.lima.${String(stamp).slice(-4)}@exemplo.com.br`;
+    const cpf = generateValidCpf();
+
+    // Off camera: the participant and her signed consent (the #1371 path).
+    const created = await request.post(`${apiBaseURL}/api/patients`, {
+      headers,
+      data: { participantId: 'placeholder', patientName, birthDate: birthIso, sex: 'F', consentTemplateId },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const participantId = String((await created.json())?.data?.participantId || '');
+    expect(participantId).toBeTruthy();
+    const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers,
+      data: { participantId, consentTemplateId, responses: {}, signatureName: patientName, signatureImageBase64: SIGNATURE_PNG_DATA_URL },
+    });
+    expect(signed.ok(), await signed.text()).toBe(true);
+
+    // One intake through the wizard; `paced` holds the beats the derivative's take shows.
+    const registerThroughWizard = async (project: string, parentSpecimenId: string | null, paced: boolean, stage: [string, string]) => {
+      const pause = (ms: number) => (paced ? beat(page, ms) : Promise.resolve());
+      await page.goto('/next/intake');
+      await waitForIntakeWizardReady(page);
+      await caption(...stage);
+      await page.getByTestId('wizard-full-name').fill(patientName);
+      await page.getByTestId('wizard-birth-date').fill(birthBr);
+      await expect(page.getByTestId('wizard-patient-match-alert')).toBeVisible({ timeout: 10_000 });
+      await pause(MEDIUM);
+      await page.getByTestId('wizard-gender').selectOption('F');
+      await page.getByTestId('wizard-email').fill(email);
+      await page.getByTestId('wizard-document').fill(cpf);
+      await page.getByTestId('wizard-next-button').click();
+
+      // Known processing on every SPREC axis (index 1 each), never "processing
+      // unknown", which forces axes 3-6 to X and fails quality governance.
+      await expect(page.getByTestId('wizard-sprec-axis-1')).toBeVisible();
+      await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+      for (const field of ['wizard-sample-type', 'wizard-sample-origin', 'wizard-extraction-protocol']) {
+        await page.getByTestId(field).selectOption({ index: 1 });
+      }
+      for (const axis of [1, 2, 3, 4, 5, 6, 7]) {
+        await page.getByTestId(`wizard-sprec-axis-${axis}`).selectOption({ index: 1 });
+      }
+      await page.getByTestId('wizard-quantity').fill('5');
+      await page.getByTestId('wizard-collection').selectOption(governed!.collectionId);
+      await page.getByTestId('wizard-linked-project').fill(project);
+      if (parentSpecimenId) {
+        const parentField = page.getByTestId('wizard-parent-specimen-ids');
+        await parentField.scrollIntoViewIfNeeded();
+        await caption('Derivado da amostra de origem', `A nova amostra nomeia sua origem: ${parentSpecimenId}`);
+        await pause(MEDIUM);
+        await parentField.pressSequentially(parentSpecimenId, { delay: 80 });
+        await pause(LARGE);
+      }
+      await page.getByTestId('wizard-institution-name').fill('Hospital Universitário');
+      await page.getByTestId('wizard-next-button').click();
+
+      await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
+      await page.getByTestId('wizard-diagnosis-search').fill(diseaseSearch);
+      const diagnosis = page.getByTestId('wizard-diagnosis-results').getByRole('button', { name: diseaseLabel }).first();
+      await expect(diagnosis).toBeVisible({ timeout: 10_000 });
+      await diagnosis.click();
+      await expect(page.locator('.phenotype-card', { hasText: phenotypeLabel })).toBeVisible({ timeout: 10_000 });
+      await page.getByTestId('wizard-treatment-status').selectOption('NAIVE');
+      await pause(SMALL);
+
+      const submission = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
+      await page.getByTestId('wizard-submit-button').click();
+      const response = await submission;
+      const raw = await response.text();
+      expect(response.ok(), `POST /intake-wizard (${project}) -> ${response.status()}: ${raw.slice(0, 500)}`).toBe(true);
+      const body = JSON.parse(raw);
+      expect(String(body?.patientMatch?.patientID || '')).toBe(participantId);
+      expect(body?.consent?.active, `${project}: the intake reads the signed consent`).toBe(true);
+      expect(body?.qualityAssessment?.governance_status, `${project}: quality governance`).toBe(1);
+      const sample = { mongoId: String(body?.sample?._id || ''), specimenId: String(body?.sample?.specimenId || '') };
+      expect(sample.mongoId, `${project} sample _id`).toBeTruthy();
+      expect(sample.specimenId, `${project} sample specimenId`).toBeTruthy();
+      return sample;
+    };
+
+    // 1. The parent specimen, registered briskly: it is available, so it may be derived from (RF019 AC3).
+    const parent = await registerThroughWizard('Projeto Doenças Raras', null, false, ['Amostra de origem', 'Registrada pelo cadastro integrado, com o TCLE já assinado']);
+    expect((await db.collection('samples').findOne({ _id: new ObjectId(parent.mongoId) }))?.specimenStatus).toBe('available');
+
+    // 2. The derivative names the parent's specimenId on step 2.
+    const derivative = await registerThroughWizard('Projeto Doenças Raras · alíquota', parent.specimenId, true, ['Amostra derivada', 'O mesmo cadastro integrado, para a mesma participante']);
+    await expect(page.getByTestId('sample-label')).toBeVisible();
+    await expect(page.getByTestId('sample-label-sample-id')).toContainText(derivative.specimenId);
+    await page.getByTestId('sample-label').scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // Off camera: the lineage is stored on the derivative and emitted to the graph's outbox.
+    const stored = await db.collection('samples').findOne({ _id: new ObjectId(derivative.mongoId) });
+    expect(stored?.parentSpecimenIds).toEqual([parent.specimenId]);
+    const lineageEvents = await db.collection('graph_projection_outbox').find({
+      eventType: 'LINEAGE_REGISTERED',
+      aggregateType: 'Sample',
+      aggregateId: derivative.mongoId,
+    }).toArray();
+    expect(lineageEvents).toHaveLength(1);
+    expect(lineageEvents[0].payload).toEqual({ specimenId: derivative.mongoId, parentSpecimenId: parent.mongoId });
+
+    // 3. The derivative's own page.
+    await page.goto(`/samples/${encodeURIComponent(derivative.specimenId)}`);
+    await expect(page.getByTestId('sample-detail-root')).toBeVisible({ timeout: 20_000 });
+    await caption('A amostra derivada', 'Registrada com sua origem, na mesma participante e coleção');
+    await beat(page, LARGE);
+    const idRow = page.getByText('ID da Amostra:', { exact: true }).locator('xpath=..');
+    await expect(idRow).toContainText(derivative.specimenId);
+    await idRow.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // 4. The lineage card links the parent specimen (RF023).
+    await expect(page.getByTestId(`sample-lineage-parent-link-${parent.specimenId}`)).toBeVisible();
+    await page.getByTestId('sample-lineage-card').scrollIntoViewIfNeeded();
+    await caption('Linhagem', `Derivada de ${parent.specimenId}`);
+    await beat(page, LARGE);
+
+    // Off camera: the parent moves into a freezer of its own, so it is the only
+    // sample there and the breach reaches the derivative only through DERIVED_FROM.
+    await waitForDerivedFrom(derivative.mongoId, parent.mongoId);
+    parentFreezer = await seedStorageBoxLocation();
+    const move = await request.post(`${apiBaseURL}/api/storage/move`, {
+      headers,
+      data: {
+        sampleId: parent.specimenId,
+        targetBoxId: parentFreezer.boxId,
+        targetPosition: parentFreezer.positionCode,
+        reason: 'Amostra de origem em freezer próprio',
+      },
+    });
+    expect(move.status(), await move.text()).toBe(200);
+    breachSensor = await seedSensorOnFreezer(parentFreezer.freezerId, 2, 8);
+    const now = Date.now();
+    for (const minutesAgo of [3, 2, 1, 0]) {
+      const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: { 'x-telemetry-ingest-secret': process.env.TELEMETRY_INGEST_SECRET ?? '' },
+        data: { sensorId: breachSensor.sensorId, temperature: -50, timestamp: new Date(now - minutesAgo * 60_000).toISOString() },
+      });
+      expect(reading.status()).toBe(200);
+    }
+    const sensorId = breachSensor.sensorId;
+    await expect
+      .poll(async () => (await queryTemperaturePoints(sensorId, 10)).length, { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(4);
+    const cycle = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/run-cycle-full`, {
+      headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+      data: { criticalDurationHours: 2 / 60, expectedReadingIntervalMinutes: 5 },
+    });
+    expect(cycle.status()).toBe(200);
+    await expect.poll(() => readSampleStatus(parent.mongoId), { timeout: 15_000 }).toBe('COMPROMISED');
+    await expect.poll(() => readSampleStatus(derivative.mongoId), { timeout: 15_000 }).toBe('COMPROMISED');
+
+    // 5. The derivative's page again: compromised through its lineage, with the breach's freezer and since-time (RF019 AC1/AC4).
+    await page.goto(`/samples/${encodeURIComponent(derivative.specimenId)}`);
+    await expect(page.getByTestId('sample-detail-root')).toBeVisible({ timeout: 20_000 });
+    const graphStatus = page.getByTestId('sample-graph-status');
+    await expect(graphStatus).toHaveAttribute('data-state', 'compromised', { timeout: 10_000 });
+    await expect(page.getByTestId('sample-compromise-freezer')).toHaveText(sensorId);
+    const breachedSince = page.getByTestId('sample-compromise-breached-since');
+    await expect(breachedSince).toHaveText(/\S/);
+    await expect(breachedSince).not.toHaveText('N/A');
+    await graphStatus.scrollIntoViewIfNeeded();
+    await caption('Cadeia de frio comprometida', 'A falha no freezer da amostra de origem alcança a derivada pela linhagem');
+    await beat(page, LARGE);
+
+    // 6. The parent's page, through the lineage link.
+    await page.getByTestId(`sample-lineage-parent-link-${parent.specimenId}`).click();
+    await expect(page).toHaveURL(new RegExp(`/samples/${encodeURIComponent(parent.specimenId)}$`));
+    await expect(page.getByTestId('sample-detail-page-title')).toContainText(parent.specimenId);
+    await expect(graphStatus).toHaveAttribute('data-state', 'compromised', { timeout: 10_000 });
+    await graphStatus.scrollIntoViewIfNeeded();
+    await caption('A amostra de origem', 'Comprometida pela mesma falha, em seu próprio freezer');
+    await beat(page, LARGE);
+  });
+});
+
 // Login and sample inventory reel: the real login (a rejected password, then
 // the right one) and the Inventário de Amostras listing specimens registered
 // through the real API, a search narrowing it to one, and that specimen's
@@ -1458,9 +1902,17 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
 // which other cases cover.
 test.describe('Human-paced e2e showcase reel — login and sample inventory', () => {
   const boxes: SeededStorageBox[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-inventory-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
 
   test.afterAll(async () => {
     await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
     await closeSeedDb();
   });
 
@@ -1504,6 +1956,7 @@ test.describe('Human-paced e2e showcase reel — login and sample inventory', ()
           registeredAt: new Date().toISOString(),
           boxId: box.boxId,
           positionCode: box.positionCode,
+          collectionId: governed!.collectionId,
         },
       });
       if ([201, 202].includes(res.status())) specimenIds.push((await res.json()).data.specimenId as string);
@@ -1565,21 +2018,25 @@ test.describe('Human-paced e2e showcase reel — login and sample inventory', ()
     await page.getByText('Inventário de Amostras', { exact: true }).first().click();
     await page.waitForURL('**/samples');
     await expect(page.getByTestId('samples-page-title')).toBeVisible();
-    // The table names each specimen by its barcode, not the API's specimenId.
+    // Earlier scenes register specimens too, so the inventory holds more than this
+    // scene's rows. The list is newest-first (10 per page), so this scene's own
+    // specimens are on page 1; each is listed once.
     const rows = page.locator('[data-testid^="sample-row-"]');
-    await expect(rows).toHaveCount(specimenIds.length);
+    for (const specimenId of specimenIds) {
+      await expect(rows.filter({ has: page.getByText(specimenId, { exact: true }) })).toHaveCount(1);
+    }
     await beat(page, LARGE);
     await page.getByTestId('samples-table').scrollIntoViewIfNeeded();
     await beat(page, MEDIUM);
 
-    // 3. A search by barcode narrows the list to one specimen.
-    const target = (await page.getByRole('cell', { name: /^BR-\d{4}-\d{3}$/ }).last().textContent())!.trim();
+    // 3. A search by its specimen id narrows the list to one specimen.
+    const target = specimenIds[0];
     await page.getByTestId('samples-search-input').scrollIntoViewIfNeeded();
     await page.getByTestId('samples-search-input').fill(target);
     await beat(page, SMALL);
     await page.getByTestId('samples-search-button').click();
     await expect(rows).toHaveCount(1);
-    await expect(page.getByRole('cell', { name: target, exact: true })).toBeVisible();
+    await expect(rows.filter({ has: page.getByText(target, { exact: true }) })).toBeVisible();
     await beat(page, MEDIUM);
 
     // 4. That specimen's own page.
@@ -1589,5 +2046,893 @@ test.describe('Human-paced e2e showcase reel — login and sample inventory', ()
     await beat(page, LARGE);
     await page.getByText('Armazenagem e Projeto').first().scrollIntoViewIfNeeded();
     await beat(page, LARGE);
+  });
+});
+
+// W5 reel (security, LGPD and RBAC): user management through the real UI
+// (RF003: a user created, its role changed and the account inactivated), the
+// live session a role change ends (RNF008 AC7, RNF021 AC2), a user listing and
+// ending their own sessions on Segurança da Conta (RNF021 AC6), the Logs
+// screen with its session view (RF012, RNF009) and the read-only Permissões
+// tab (RNF008 AC2). Each ended session is checked off camera through the API,
+// as auth-access-security.spec.ts does. Deliberately not demoed: the MFA
+// reset, the administrator password set and the auditor grant, which
+// auth-access-security.spec.ts covers, and the audit chain's hash check, which
+// needs a known event hash (audit-chain-integrity.spec.ts). The fixture users
+// stay in place: deletion is logical (RF003 AC4).
+test.describe('Human-paced e2e showcase reel — W5 security, LGPD and RBAC', () => {
+  const password = 'Fixture@123456-forte';
+  // A short suffix keeps the username and email unique on a reused volume
+  // (RF003 AC1) while they still read as a name on camera.
+  const suffix = () => Date.now().toString(36).slice(-4);
+
+  test('RF003/RNF008 an administrator creates a user, changes its role, which ends its session, and inactivates it', async ({ page, request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
+    const username = `marina.souza.${suffix()}`;
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    // 1. The administrator signs in.
+    await page.goto('/login');
+    await expect(page.getByTestId('login-page')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('login-username-input').fill(testUser);
+    await beat(page, SMALL);
+    await page.getByTestId('login-password-input').fill(testPass);
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await page.waitForURL('**/system-management');
+    await beat(page, LARGE);
+
+    // 2. A new user through the real form. (RF003 AC1)
+    await page.goto('/system-management?tab=users');
+    await expect(page.getByTestId('users-table')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('new-user-button').click();
+    await expect(page.getByTestId('new-user-form')).toBeVisible();
+    await beat(page, LARGE);
+    await page.getByTestId('new-user-name-input').fill('Marina Souza');
+    await beat(page, SMALL);
+    await page.getByTestId('new-user-email-input').fill(`${username}@example.com`);
+    await beat(page, SMALL);
+    await page.getByTestId('new-user-username-input').fill(username);
+    await beat(page, SMALL);
+    await page.getByTestId('new-user-password-input').fill(password);
+    await beat(page, SMALL);
+    // The form opens on Técnico but its untouched default sends access type
+    // 1, which registers an external user; choosing the role sends 2.
+    await page.getByTestId('new-user-role-select').selectOption('Coordenador');
+    await beat(page, SMALL);
+    await page.getByTestId('new-user-role-select').selectOption('Técnico');
+    await expect(page.getByTestId('new-user-role-select')).toHaveValue('Técnico');
+    await beat(page, SMALL);
+    const created = page.waitForResponse(
+      (response) => response.url().includes('/api/users/register') && response.request().method() === 'POST'
+    );
+    await page.getByTestId('new-user-submit-button').click();
+    const createdResponse = await created;
+    expect(createdResponse.ok(), await createdResponse.text()).toBeTruthy();
+    expect(createdResponse.request().postDataJSON(), 'the form registers a technician').toMatchObject({
+      roleName: 'Técnico',
+      accessType: 2,
+    });
+    const createdBody = await createdResponse.json();
+    const userID: string = createdBody.data?._id || createdBody.data?.id;
+    expect(userID, 'the register response names the new user').toBeTruthy();
+    await expect(page).toHaveURL(/system-management/);
+    const row = page.locator('tr', { has: page.getByTestId(`edit-user-button-${userID}`) });
+    await expect(row).toContainText('Marina Souza');
+    await expect(row.locator('.role-badge').first()).toContainText('Técnico');
+    await expect(row.locator('.status-badge').first()).toHaveText('Ativo');
+    await row.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // Off camera: the new user enrols the second factor and opens a session,
+    // as on a first login.
+    const target = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+    const targetStatus = () =>
+      request.get(`${apiBaseURL}/api/user/security/status`, { headers: { Authorization: `Bearer ${target.token}` } });
+    expect((await targetStatus()).status(), 'the session works before the role change').toBe(200);
+
+    // 3. A role change through the edit form ends that live session.
+    // (RF003 AC3, RNF008 AC7, RNF021 AC2)
+    await page.getByTestId(`edit-user-button-${userID}`).click();
+    await expect(page.getByTestId('new-user-form')).toBeVisible();
+    await beat(page, LARGE);
+    await page.getByTestId('new-user-role-select').selectOption('Coordenador');
+    await beat(page, MEDIUM);
+    const roleSaved = page.waitForResponse(
+      (response) => response.url().includes(`/api/users/${userID}`) && response.request().method() === 'PUT'
+    );
+    await page.getByTestId('new-user-submit-button').click();
+    const roleResponse = await roleSaved;
+    expect(roleResponse.status(), await roleResponse.text()).toBe(200);
+    await expect(page).toHaveURL(/system-management/);
+    await expect(row.locator('.role-badge').first()).toContainText('Coordenador');
+    await row.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+    expect((await targetStatus()).status(), 'the role change ended the session').toBe(401);
+
+    // 4. Inactivation keeps the account's record. (RF003 AC4, RNF022 AC5)
+    await page.getByTestId(`edit-user-button-${userID}`).click();
+    await expect(page.getByTestId('new-user-form')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('new-user-status-select').scrollIntoViewIfNeeded();
+    await page.getByTestId('new-user-status-select').selectOption('Inativo');
+    await beat(page, SMALL);
+    const statusSaved = page.waitForResponse(
+      (response) => response.url().includes(`/api/users/${userID}`) && response.request().method() === 'PUT'
+    );
+    await page.getByTestId('new-user-submit-button').click();
+    const statusResponse = await statusSaved;
+    expect(statusResponse.status(), await statusResponse.text()).toBe(200);
+    await expect(page).toHaveURL(/system-management/);
+    await expect(row.locator('.status-badge').first()).toHaveText('Inativo');
+    await row.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+  });
+
+  test('RNF021 AC6/RF012/RNF008 AC2 a user ends their own sessions, then the administrator reads the Logs and the permissions tab', async ({ page, request }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
+    const username = `rafael.lima.${suffix()}`;
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    // Off camera: a Técnico with an enrolled second factor and a session on
+    // another device. The first-login enrolment is inline, not through
+    // completeFirstLoginMfa, so the TOTP secret is kept for the UI login below.
+    const admin = await realLogin(request);
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { name: 'Rafael Lima', email: `${username}@example.com`, username, password, accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const qr = await request.post(`${apiBaseURL}/api/auth/two-factor/qr-first-login`, { data: { username, password } });
+    expect(qr.ok(), await qr.text()).toBeTruthy();
+    const secret: string = (await qr.json()).data?.secret;
+    expect(secret).toBeTruthy();
+    const enable = await request.post(`${apiBaseURL}/api/auth/two-factor/enable-first-login`, {
+      data: { username, password, code: computeTotp(secret) },
+    });
+    expect(enable.ok(), await enable.text()).toBeTruthy();
+    const otherToken: string = (await enable.json()).data.token;
+    const otherStatus = () =>
+      request.get(`${apiBaseURL}/api/user/security/status`, { headers: { Authorization: `Bearer ${otherToken}` } });
+    expect((await otherStatus()).status(), 'the other session works before').toBe(200);
+
+    // 1. The user signs in with password and second factor. The beats before
+    // the code keep this login in a later second than the enrolment above, so
+    // the two sessions' tokens differ.
+    await page.goto('/login');
+    await expect(page.getByTestId('login-page')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('login-username-input').fill(username);
+    await beat(page, SMALL);
+    await page.getByTestId('login-password-input').fill(password);
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await expect(page.getByTestId('two-factor-section')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('login-mfa-code-input').fill(computeTotp(secret));
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await page.waitForURL('**/dashboard');
+    await beat(page, LARGE);
+
+    // 2. Segurança da Conta lists both sessions, this one marked current, and
+    // the user ends the other one. (RNF021 AC6)
+    await page.goto('/user/security');
+    await expect(page.getByTestId('security-page-title')).toBeVisible();
+    const sessions = page.getByTestId('session-item');
+    await expect(sessions).toHaveCount(2);
+    await expect(page.locator('[data-testid="session-item"][data-session-current="true"]')).toHaveCount(1);
+    await page.getByTestId('sessions-list').scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+    await page
+      .locator('[data-testid="session-item"][data-session-current="false"] [data-testid^="revoke-session-button-"]')
+      .click();
+    await expect(page.getByTestId('security-confirm-proceed-button')).toBeVisible();
+    await beat(page, MEDIUM);
+    const ended = page.waitForResponse(
+      (response) => response.url().includes('/api/auth/sessions/') && response.request().method() === 'DELETE'
+    );
+    await page.getByTestId('security-confirm-proceed-button').click();
+    expect((await ended).status()).toBe(200);
+    await expect(sessions).toHaveCount(1);
+    await beat(page, MEDIUM);
+    expect((await otherStatus()).status(), 'the ended session is refused').toBe(401);
+
+    // 3. Sair ends the current session too. (RNF021 AC2, RF001 AC4)
+    await page.getByRole('button', { name: 'Sair' }).click();
+    await page.waitForURL('**/login');
+    await expect(page.getByTestId('login-page')).toBeVisible();
+    await beat(page, LARGE);
+
+    // 4. The administrator signs in and opens Logs. (RF012, RNF009)
+    await page.getByTestId('login-username-input').fill(testUser);
+    await beat(page, SMALL);
+    await page.getByTestId('login-password-input').fill(testPass);
+    await beat(page, SMALL);
+    await page.getByTestId('login-submit-button').click();
+    await page.waitForURL('**/system-management');
+    await beat(page, MEDIUM);
+    await page.locator('a[href="/logs"]').first().click();
+    await page.waitForURL('**/logs');
+    await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible();
+    await expect(page.locator('.logs-table-container')).toBeVisible();
+    await beat(page, LARGE);
+    await page.locator('.logs-table-container').scrollIntoViewIfNeeded();
+    await beat(page, MEDIUM);
+
+    // The session view, narrowed to sessions their own users ended: the one
+    // ended above is among them, its owner shown as a pseudonym.
+    const reasonsLoaded = page.waitForResponse(
+      (response) => response.url().includes('/api/logs/sessions') && response.url().includes('revocationReason=user_request')
+    );
+    await page.getByLabel('Motivo da revogação').selectOption('user_request');
+    expect((await reasonsLoaded).status()).toBe(200);
+    await expect(page.getByTestId('session-audit-reason').first()).toHaveText('Solicitação do usuário');
+    await page.getByTestId('session-audit-table').scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // 5. The Permissões tab: the seeded roles and the permissions enforcement
+    // reads, shown read-only. (RNF008 AC2)
+    await page.goto('/system-management?tab=security');
+    await expect(page.getByTestId('security-page')).toBeVisible();
+    await beat(page, MEDIUM);
+    await page.getByTestId('security-nav-permissions').click();
+    await expect(page.getByTestId('security-permissions-readonly-note')).toBeVisible();
+    const manageSystem = page.getByTestId('security-permission-toggle-administrator-manageSystem');
+    await expect(manageSystem).toBeChecked();
+    await expect(manageSystem).toBeDisabled();
+    await beat(page, LARGE);
+    await page.getByTestId('security-permission-role-auditor').scrollIntoViewIfNeeded();
+    await expect(page.getByTestId('security-permission-toggle-auditor-viewAuditLogs')).toBeChecked();
+    await beat(page, LARGE);
+  });
+});
+
+// W10 reel (#1483): a sample's scientific files, an ingestion result and the
+// MIABIS export. RF007's upload is the sample page's own Arquivos section,
+// driven by the selectors sample-files-section-ui.spec.ts proves. The
+// replace has no UI: the new version goes through PUT .../replace off
+// camera, as a client system sends it, and the page, reloaded, lists the
+// file under its new name in the same row, whose download carries the
+// replacement. RF029's ingestion is a machine endpoint, as the W9 readings
+// are: a Specimen record goes through POST /api/ingestion/records off
+// camera and the operator finds the accepted specimen in the inventory.
+// RF020 AC5's MIABIS export has no page either: the browser opens the
+// export endpoint itself, on the record of a collection registered off
+// camera.
+test.describe('Human-paced e2e showcase reel — W10 files, ingestion and MIABIS export', () => {
+  const boxes: SeededStorageBox[] = [];
+  const organizationIds: string[] = [];
+  // #1497 (RF004 AC2): the collection this reel's specimens enter.
+  let governed: GovernedCollection | null = null;
+
+  test.beforeAll(async () => {
+    governed = await seedGovernedCollection(`showcase-w10-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  });
+
+  test.afterAll(async ({ request }) => {
+    await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await cleanupGovernedCollection(governed);
+    await closeGovernedCollectionDb();
+    await closeSeedDb();
+  });
+
+  test('RF007 an operator uploads a scientific file on the sample page, and its replacement is listed and downloaded in its place', async ({ page, request }) => {
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+
+    // Off camera: a stored specimen, registered as sample-files-section-ui.spec.ts does.
+    const participant = await createRealParticipant(request, apiBaseURL!, session.token);
+    const box = await seedStorageBoxLocation();
+    boxes.push(box);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers,
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'Coorte Doenças Raras',
+        registeredAt: new Date().toISOString(),
+        boxId: box.boxId,
+        positionCode: box.positionCode,
+        collectionId: governed!.collectionId,
+      },
+    });
+    expect([201, 202], await create.text()).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId as string;
+    const original = Buffer.from('specimen_id,analyte,value\nS-1,glucose,92\n');
+    // The names reach the screen, so they read as a lab's; the specimen is new each run, so its file list holds only these.
+    const fileName = 'perfil-metabolico.csv';
+
+    // 1. The sample's page and its Arquivos section.
+    await page.goto(`/samples/${specimenId}`);
+    await expect(page.getByTestId('sample-detail-page-title')).toBeVisible();
+    await beat(page, LARGE);
+    await page.getByTestId('sample-files-open-upload-button').scrollIntoViewIfNeeded();
+    await beat(page, MEDIUM);
+
+    // 2. The upload, through the section's own form. (RF007)
+    await page.getByTestId('sample-files-open-upload-button').click();
+    await beat(page, SMALL);
+    await page.getByTestId('file-upload-input').setInputFiles({ name: fileName, mimeType: 'text/csv', buffer: original });
+    await beat(page, SMALL);
+    await page.getByTestId('sample-files-upload-submit').click();
+    await expect(page.getByTestId('sample-files-upload-submit')).not.toBeVisible();
+    await expect(page.getByText(fileName, { exact: true })).toBeVisible();
+    await beat(page, LARGE);
+
+    // Off camera: the stored row, then its replacement, sent as a client system sends it. (RF007 AC4)
+    const list = await request.get(`${apiBaseURL}/api/samples/${specimenId}/files`, { headers });
+    expect(list.ok(), await list.text()).toBeTruthy();
+    const uploaded = (await list.json()).data.find((file: { fileName: string }) => file.fileName === fileName);
+    expect(uploaded, `${fileName} listed`).toBeTruthy();
+    const fileID = String(uploaded._id);
+    const replacement = Buffer.from('specimen_id,analyte,value\nS-1,glucose,94\nS-1,lactate,1.1\n');
+    const replacementName = 'perfil-metabolico-v2.csv';
+    const replace = await request.put(`${apiBaseURL}/api/samples/${specimenId}/files/${fileID}/replace`, {
+      headers,
+      multipart: {
+        changeReason: 'Correção do valor de glicose',
+        file: { name: replacementName, mimeType: 'text/csv', buffer: replacement },
+      },
+    });
+    expect(replace.status(), await replace.text()).toBe(200);
+    expect((await replace.json()).data.versionNumber).toBe(2);
+
+    // 3. Reloaded, the page lists the file under its new name, in the same row. (RF007 AC4)
+    await page.reload();
+    const row = page.getByTestId(`sample-file-row-${fileID}`);
+    await row.scrollIntoViewIfNeeded();
+    await expect(row.getByText(replacementName, { exact: true })).toBeVisible();
+    await expect(page.getByText(fileName, { exact: true })).toHaveCount(0);
+    await beat(page, LARGE);
+
+    // 4. The download, clicked on camera, carries the replacement's bytes.
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId(`sample-file-download-button-${fileID}`).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(replacementName);
+    const downloaded = await readFile((await download.path())!);
+    expect(downloaded.equals(replacement)).toBe(true);
+    await beat(page, MEDIUM);
+  });
+
+  test('RF029 a specimen record a client system sends is accepted by ingestion and the operator finds it in the inventory', async ({ page, request }) => {
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    // Off camera: the record's references, as ingestion-records.spec.ts seeds
+    // them -- a participant with an active consent and a collection site.
+    // The ingested specimen references the site, so its delete is refused
+    // and the site stays; the name is never drawn, and the stamp keeps the
+    // next run's create a 201 rather than a reuse.
+    const participant = await createRealParticipant(request, apiBaseURL!, session.token);
+    await seedActiveConsent(participant.participantId);
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: `Hospital Parceiro ${stamp}`, acronym: 'HPAR', organizationType: 'biobank', countryCode: 'BR' },
+    });
+    expect(org.status(), await org.text()).toBe(201);
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+
+    // Off camera: the record arrives through the ingestion endpoint. (RF029)
+    const ingest = await request.post(`${apiBaseURL}/api/ingestion/records`, {
+      headers,
+      data: {
+        entityType: 'Specimen',
+        payload: {
+          specimenId: 'client-claimed',
+          participantId: participant.participantId,
+          sampleType: 'PLASMA',
+          sampleOrigin: 'VENOUS_BLOOD',
+          extractionProtocol: 'TUBE_EDTA',
+          quantity: 5,
+          registeredAt: new Date().toISOString(),
+          collectionSite: organizationId,
+          collectionId: governed!.collectionId,
+        },
+        provenance: {
+          sourceSystem: 'urn:system:showcase-w10',
+          retrievedAt: new Date().toISOString(),
+          purpose: 'e2e_proof',
+          sourceRecordId: `showcase-w10-${stamp}`,
+        },
+      },
+    });
+    expect(ingest.status(), await ingest.text()).toBe(201);
+    const outcome = await ingest.json();
+    expect(outcome).toMatchObject({ success: true, status: 'accepted', entityType: 'Specimen' });
+    const specimenId = outcome.entityId as string;
+
+    // 1. The inventory, searched by the server's specimen id.
+    await page.goto('/samples');
+    await expect(page.getByTestId('samples-page-title')).toBeVisible();
+    await beat(page, LARGE);
+    const rows = page.locator('[data-testid^="sample-row-"]');
+    await page.getByTestId('samples-search-input').scrollIntoViewIfNeeded();
+    await page.getByTestId('samples-search-input').fill(specimenId);
+    await beat(page, SMALL);
+    await page.getByTestId('samples-search-button').click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.filter({ has: page.getByText(specimenId, { exact: true }) })).toBeVisible();
+    await beat(page, MEDIUM);
+
+    // 2. The ingested specimen's own page.
+    await page.locator('[data-testid^="sample-edit-button-"]').first().click();
+    await page.waitForURL(/\/samples\/[^/]+$/);
+    await expect(page.getByText('Status Atual:', { exact: true })).toBeVisible();
+    await beat(page, LARGE);
+  });
+
+  test('RF020 AC5 the MIABIS export carries a collection registered in the biobank', async ({ page, request }) => {
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    // The collection id is the text the shot highlights, so it reads as a
+    // lab's; a run cut off before its finally left these rows behind, and
+    // the deletes clear them (the deletes are hard) before they are entered.
+    const biobankId = 'bb-doencas-raras';
+    const collectionId = 'col-doencas-raras';
+    await request.delete(`${apiBaseURL}/api/collections/${collectionId}`, { headers }).catch(() => {});
+    await request.delete(`${apiBaseURL}/api/biobanks/${biobankId}`, { headers }).catch(() => {});
+
+    // Off camera: a biobank and a collection, entered as miabis-export.spec.ts enters them.
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: 'Biobanco de Doenças Raras', countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    try {
+      const biobank = await request.post(`${apiBaseURL}/api/biobanks`, {
+        headers,
+        data: {
+          biobankId,
+          biobankName: 'Biobanco de Doenças Raras',
+          biobankDescription: 'Biobanco da demonstração da exportação MIABIS',
+          legalEntityId: organizationId,
+          biobankStatus: 'active',
+          countryCode: 'BR',
+          contactInformation: { email: 'contato@example.org' },
+        },
+      });
+      expect(biobank.ok(), await biobank.text()).toBeTruthy();
+      const collection = await request.post(`${apiBaseURL}/api/collections`, {
+        headers,
+        data: { collectionId, collectionName: 'Coleção Doenças Raras', governanceRegime: 'biorepository' },
+      });
+      expect(collection.ok(), await collection.text()).toBeTruthy();
+
+      // Off camera: the export's record for that collection. (RF020 AC5)
+      const res = await request.get(`${apiBaseURL}/api/biobanks/miabis/export`, { headers });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const data = (await res.json()).data;
+      const record = data.collections.find((entry: { miabis: { id: string } }) => entry.miabis.id === collectionId);
+      expect(record, `collection ${collectionId} in the export`).toBeTruthy();
+      expect(record.nationalExtensions.governanceRegime).toBe('biorepository');
+      expect(data.conformanceClaimed).toBe(false);
+
+      // 1. The export itself, opened in the browser, on that collection's record.
+      await page.setExtraHTTPHeaders(headers);
+      await page.goto(`${apiBaseURL}/api/biobanks/miabis/export`);
+      await expect(page.getByText(collectionId).first()).toBeVisible();
+      await beat(page, LARGE);
+      await page.evaluate((id) => (window as unknown as { find: (text: string) => boolean }).find(id), collectionId);
+      await beat(page, LARGE);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/collections/${collectionId}`, { headers }).catch(() => {});
+      await request.delete(`${apiBaseURL}/api/biobanks/${biobankId}`, { headers }).catch(() => {});
+    }
+  });
+});
+
+// W11 reel (#1474): the two W11 flows an operator sees in the UI.
+//
+//  - RNF027 C1/C2: an administrator signs in and reaches the Backup page by
+//    keyboard alone, every stop showing its focus, as rnf027-interface.spec.ts
+//    proves in three browsers.
+//  - RNF010 C1/C5: a backup run from the Backup page exports MongoDB, Neo4j
+//    and InfluxDB, and its restore test verifies every store. The page then
+//    shows the RPO and RTO the policy holds (RNF010 C2/C3).
+//
+// Deliberately not demoed: the request metrics, the platform alerts, the
+// monitoring runs, the availability record and the deep health route. They
+// are the Administrador's API (/api/monitoring/*, /api/availability,
+// /api/health) and no screen shows them, so the reel does not fabricate one.
+// The restore test has no UI either: it runs off camera through
+// POST /api/backup/restore-test on the backup the reel created, and its result
+// is asserted. The page's Restaurar button replaces the live database, so it
+// is never clicked.
+test.describe('Human-paced e2e showcase reel — W11 keyboard navigation and backup restore test', () => {
+  test('RNF027 an administrator signs in and reaches the Backup page by keyboard alone', async ({ page }) => {
+    const testUser = process.env.TEST_USER || 'admin';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+
+    // 1. The login form by keyboard: the username field takes focus on load,
+    // Tab moves to the password, Enter submits.
+    await page.goto('/login');
+    await expect(page.getByTestId('login-username-input')).toBeFocused();
+    await beat(page, MEDIUM);
+    await page.keyboard.type(testUser, { delay: 80 });
+    await beat(page, SMALL);
+    await page.keyboard.press('Tab');
+    await expect(page.getByTestId('login-password-input')).toBeFocused();
+    await page.keyboard.type(testPass, { delay: 60 });
+    await beat(page, SMALL);
+    await page.keyboard.press('Enter');
+    await page.waitForURL('**/system-management');
+    await expect(page.getByTestId('system-management-page')).toBeVisible();
+    await beat(page, LARGE);
+
+    // 2. The sidebar by keyboard, from its first link down to Backup, as
+    // rnf027-interface.spec.ts walks it. Each stop is centred so the caption
+    // never hides the focused link.
+    const backupLink = page.locator('aside#app-sidebar nav.sidebar-nav a[href="/backup"]');
+    await expect(backupLink).toBeVisible();
+    const firstNav = page.locator('aside#app-sidebar nav.sidebar-nav a').first();
+    await firstNav.focus();
+    await expect(firstNav).toBeFocused();
+    await beat(page, MEDIUM);
+    let reached = false;
+    for (let i = 0; i < 40; i += 1) {
+      await page.keyboard.press('Tab');
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.scrollIntoView({ block: 'center' }));
+      await beat(page, SMALL / 2);
+      if (await backupLink.evaluate((el) => el === document.activeElement)) {
+        reached = true;
+        break;
+      }
+    }
+    expect(reached).toBe(true);
+    await beat(page, MEDIUM);
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/\/backup$/);
+    await expect(page.getByRole('heading', { name: 'Gerenciamento de Backup' })).toBeVisible();
+    await beat(page, LARGE);
+  });
+
+  test('RNF010 an administrator runs a backup of every store and its restore test verifies it', async ({ page, request }) => {
+    const session = await realLogin(request);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+
+    // 1. The backup run from the page.
+    await page.goto('/backup');
+    await expect(page.getByRole('heading', { name: 'Gerenciamento de Backup' })).toBeVisible();
+    await beat(page, LARGE);
+    const performed = page.waitForResponse((res) => res.url().includes('/api/backup/perform') && res.request().method() === 'POST');
+    await page.locator('.create-backup-button').click();
+    const run = (await (await performed).json()).data;
+    // The run names its folder by path; the table lists it by that folder's name.
+    const fileName = String(run.path).split(/[\\/]/).pop()!;
+    await expect(page.locator('.status-message.success')).toBeVisible({ timeout: 15_000 });
+    await beat(page, MEDIUM);
+
+    // 2. The run is listed with its state and checksum.
+    const row = page.locator('.backups-table tbody tr', { hasText: fileName });
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await expect(row.locator('.backup-status-badge')).toHaveAttribute('data-status', 'success');
+    await row.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // Off camera: the run exported every store, and its restore test verifies
+    // the checksum and each store's counts. No screen shows the restore test.
+    expect(run.stores.neo4j.status).toBe('exported');
+    expect(run.stores.influxdb.status).toBe('exported');
+    const restoreTest = await request.post(`${apiBaseURL}/api/backup/restore-test/${fileName}`, { headers });
+    expect(restoreTest.status(), await restoreTest.text()).toBe(200);
+    const result = (await restoreTest.json()).data;
+    expect(result.success, result.error).toBe(true);
+    expect(result.checksumVerified).toBe(true);
+    expect(result.stores.neo4j.status, result.stores.neo4j.error).toBe('verified');
+    expect(result.stores.influxdb.status, result.stores.influxdb.error).toBe('verified');
+
+    // 3. The policy's recovery targets, RPO and RTO, on the same page.
+    const rpo = page.locator('#backup-policy-rpo');
+    await rpo.scrollIntoViewIfNeeded();
+    await expect(rpo).toBeVisible();
+    await expect(page.locator('#backup-policy-rto')).toBeVisible();
+    await beat(page, LARGE);
+  });
+});
+
+// W6 reel: a consent term's revision and a collection's regime conversion.
+//  - RF010 AC1/AC5/AC8: an operator publishes a new version of a term from
+//    the builder at /admin/tcle/edit/:id, which supersedes the earlier one.
+//    The builder reports the invitation sweep to the participant still pending
+//    on the old version, and /consents shows the policy change notice sent to
+//    the holder of a consent in force under it, as
+//    tcle-publication-sweep.spec.ts and consent-policy-change-notice.spec.ts
+//    prove.
+//  - RF020 AC4: an operator converts a biorepository collection to a biobank
+//    from its governance panel, with the biobank's context, an approval in
+//    force and a justification, and the decision history records the
+//    regime_change event, as specimen-quality-inventory.spec.ts proves
+//    through the API.
+//
+// Deliberately not demoed: the emails themselves, which the test stack's SMTP
+// catcher accepts and no screen shows; the invitation's token is asserted off
+// camera. The term's first version, its pending participant and its holder are
+// seeded, as both e2e specs do. The collection's approval and its first
+// biorepository context are recorded off camera through the API, since the W6
+// collection governance case above already shows both on screen, and the
+// access policy the biobank names is created through the API because
+// AccessPolicy has no UI.
+test.describe('Human-paced e2e showcase reel — W6 term revision and regime conversion', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('RF010 AC1/AC5/AC8 an operator publishes a revised term, inviting the pending participant and notifying the holder in force', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const title = `0 Showcase TCLE revisão ${stamp}`;
+    const versionGroupId = `showcase-tcle-revision-${stamp}`;
+    const permissionKey = 'showcase-research';
+    // Eight-digit participant ids, the form the patient lookup reads directly.
+    const pending = String(86_000_000 + Math.floor(Math.random() * 1_000_000));
+    const holder = String(87_000_000 + Math.floor(Math.random() * 1_000_000));
+    const participantIds = [pending, holder];
+    const holderConsentId = `showcase-tcle-holder-${stamp}`;
+
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+
+    try {
+      const inserted = await db.collection('consent_templates').insertOne({
+        title,
+        content: '<p>Versão 1 do termo de consentimento para pesquisa com amostras.</p>',
+        htmlContent: '<p>Versão 1 do termo de consentimento para pesquisa com amostras.</p>',
+        version: 'v1',
+        versionGroupId,
+        caae: '',
+        active: true,
+        permissions: [{ key: permissionKey, label: 'Uso das amostras em pesquisa', required: true }],
+        validFrom: new Date('2026-01-01T00:00:00.000Z'),
+        validTo: new Date('2027-12-31T23:59:59.000Z'),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const v1Id = inserted.insertedId;
+      // One participant still pending on v1, one holding a consent in force under it.
+      await db.collection('patients').insertMany([
+        { participantId: pending, status: 'PENDING_CONSENT', consentTemplateId: v1Id.toString(), createdAt: new Date(), updatedAt: new Date() },
+        { participantId: holder, status: 'ACTIVE', consentTemplateId: v1Id.toString(), createdAt: new Date(), updatedAt: new Date() },
+      ]);
+      await db.collection('participantIdentities').insertMany(participantIds.map((participantId) => ({
+        participantId,
+        email: `showcase-tcle-${participantId}@example.test`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })));
+      await db.collection('patientConsents').insertOne({
+        consentId: holderConsentId,
+        participantId: holder,
+        consentTemplateId: v1Id.toString(),
+        consentVersion: 'v1',
+        responses: { [permissionKey]: true },
+        status: 'ACTIVE',
+        signedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      // 1. The builder opens the term in force and the operator revises its text.
+      await page.goto(`/admin/tcle/edit/${v1Id.toString()}`);
+      const editor = page.getByRole('textbox', { name: 'Editor do corpo do TCLE' });
+      await expect(editor).toContainText('Versão 1 do termo', { timeout: 15_000 });
+      await beat(page, LARGE);
+      await editor.fill('Versão 2 do termo de consentimento para pesquisa com amostras, revisada pelo operador.');
+      await beat(page, SMALL);
+      // RF010 AC1: the revision records the modality chosen in the builder.
+      await page.getByLabel('Modalidade de Consentimento').selectOption('dynamic');
+      await beat(page, MEDIUM);
+
+      // 2. Saved as a new version: the builder reports the invitation sweep.
+      await page.getByRole('button', { name: 'Salvar nova versão do TCLE' }).click();
+      const published = page.getByRole('alert').filter({ hasText: 'Nova versão criada' });
+      await expect(published).toContainText('1 de 1 participantes pendentes', { timeout: 15_000 });
+      await published.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // Off camera: v2 supersedes v1, the pending participant holds a fresh
+      // invitation token, and the holder's notice is recorded as delivered.
+      const v2 = await db.collection('consent_templates').findOne({ versionGroupId, _id: { $ne: v1Id } });
+      expect(v2?.version).toBe('v2');
+      expect(v2?.previousPolicyId).toBe(v1Id.toString());
+      expect(v2?.consentModel).toBe('dynamic');
+      const invited = await db.collection('patients').findOne({ participantId: pending });
+      expect(invited?.consentTokenHash).toMatch(/^[0-9a-f]{64}$/);
+      const notice = await db.collection('consentCommunicationEvents').findOne({ consentId: holderConsentId });
+      expect(notice).toMatchObject({
+        communicationType: 'policy_change_notice',
+        contentTemplateId: 'consent.policy_change_notice.v1',
+        sourceEventType: 'ConsentTemplate',
+        sourceEventId: String(v2?._id),
+        deliveryStatus: 'delivered',
+      });
+
+      // 3. The holder's consent history lists the policy change notice.
+      await page.goto(`/consents?participantId=${holder}`);
+      const noticeRow = page.getByTestId('consent-communication-consent.policy_change_notice.v1');
+      await expect(noticeRow).toContainText('Atualização do termo', { timeout: 15_000 });
+      await expect(noticeRow).toContainText('delivered');
+      await noticeRow.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+    } finally {
+      await db.collection('consentCommunicationEvents').deleteMany({ consentId: holderConsentId });
+      await db.collection('patientConsents').deleteMany({ participantId: { $in: participantIds } });
+      await db.collection('participantIdentities').deleteMany({ participantId: { $in: participantIds } });
+      await db.collection('patients').deleteMany({ participantId: { $in: participantIds } });
+      await db.collection('consent_templates').deleteMany({ versionGroupId });
+      await client.close();
+    }
+  });
+
+  test('RF020 AC4 an operator converts a biorepository collection to a biobank with its justification', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+    const headers = { Authorization: `Bearer ${session.token}` };
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `showcase-regime-${stamp}`, studyId: `showcase-regime-study-${stamp}`, protocolId: `showcase-regime-protocol-${stamp}` };
+    const justification = 'Ampliação para uso futuro em pesquisas compatíveis com o consentimento';
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    // The organization pickers read the first page sorted by name.
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: `0 Showcase Regime ${stamp}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+    let accessPolicyId = '';
+
+    try {
+      // Off camera: an approval in force and the biorepository's first context.
+      const approval = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/approvals`, {
+        headers,
+        data: {
+          authority: 'CEP Hospital Universitário',
+          caae: '00000000.0.0000.0000',
+          documentUri: 'https://docs.example.org/parecer-cep.pdf',
+          documentChecksum: `sha256:${'e'.repeat(64)}`,
+          effectivePeriod: { start: '2026-01-01', end: '2030-12-31' },
+          status: 'active',
+          responsibleOrganizationId: organizationId,
+        },
+      });
+      expect(approval.status(), await approval.text()).toBe(201);
+      const approvalId = (await approval.json()).data.approvalId as string;
+      const created = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
+        headers,
+        data: {
+          justification: 'Contexto inicial do biorrepositório aprovado pelo CEP',
+          governanceContext: {
+            studyId: ids.studyId,
+            protocolId: ids.protocolId,
+            protocolVersion: '1.0',
+            caae: '00000000.0.0000.0000',
+            responsibleOrganizationId: organizationId,
+            responsibleInvestigatorId: 'Dra. Pesquisadora Responsável',
+            ethicsApprovalId: approvalId,
+            validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+            plannedEndDate: '2030-12-31',
+          },
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      // Off camera: the biobank's access policy, which has no UI.
+      const policy = await request.post(`${apiBaseURL}/api/access-policies`, {
+        headers,
+        data: {
+          policyName: `Showcase biobanco ${stamp}`,
+          policyVersion: '1.0.0',
+          applicableEntityTypes: ['AccessRequest'],
+          decisionEffect: 'review_required',
+          ruleExpression: 'all-conditions',
+          effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+          roleCodes: ['researcher'],
+          organizationScopeIds: [organizationId],
+          resourceScopes: ['Specimen'],
+          conditions: [{ consent: 'compatible' }],
+          decisionReasonsRequired: true,
+        },
+      });
+      expect(policy.status(), await policy.text()).toBe(201);
+      accessPolicyId = (await policy.json()).data.accessPolicyId as string;
+
+      // 1. The collection's governance: a biorepository with its first decision.
+      await page.goto('/system-management?tab=collections');
+      await beat(page, LARGE);
+      await page.getByTestId(`governance-collection-button-${ids.collectionId}`).click();
+      await expect(page.getByTestId('collection-governance-panel')).toBeVisible();
+      await expect(page.getByTestId('collection-governance-regime')).toContainText('Biorrepositório');
+      await beat(page, MEDIUM);
+
+      // 2. The conversion: the biobank's context, the approval it rests on, and why.
+      const regime = page.getByTestId('governance-event-regime-select');
+      await regime.scrollIntoViewIfNeeded();
+      await regime.selectOption('biobank');
+      await beat(page, SMALL);
+      await page.getByTestId('governance-context-broad-purpose-input').fill('Pesquisa em saúde com amostras do biobanco');
+      await page.getByTestId('governance-context-policy-input').fill(accessPolicyId);
+      await page.getByTestId('governance-context-committee-input').fill('Comitê de Acesso do Biobanco');
+      await page.getByTestId('governance-context-custodian-select').selectOption(organizationId);
+      await page.getByTestId('governance-context-future-use-input').fill('Uso compatível com o consentimento');
+      await page.getByTestId('governance-context-consent-model-broad').check();
+      await page.getByTestId('governance-context-ethics-rule-select').selectOption('when_required_by_policy');
+      await page.getByTestId(`governance-event-approval-${approvalId}`).check();
+      await beat(page, SMALL);
+      await page.getByTestId('governance-event-justification-input').fill(justification);
+      await beat(page, SMALL);
+      await page.getByTestId('governance-event-submit').click();
+
+      // 3. The history records the conversion with its justification.
+      const events = page.getByTestId('collection-governance-events');
+      await expect(events).toContainText('Conversão de regime');
+      await expect(events).toContainText(justification);
+      await expect(page.getByTestId('collection-governance-regime')).toContainText('Biobanco');
+      await events.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // Off camera: the regime_change event follows the created one.
+      const governance = await request.get(`${apiBaseURL}/api/collections/${ids.collectionId}/governance`, { headers });
+      expect(governance.status(), await governance.text()).toBe(200);
+      const recorded = (await governance.json()).data;
+      expect(recorded.governanceRegime).toBe('biobank');
+      expect(recorded.events.map((e: { decisionType: string; previousRegime: string | null; newRegime: string }) => [e.decisionType, e.previousRegime, e.newRegime])).toEqual([
+        ['created', null, 'biorepository'],
+        ['regime_change', 'biorepository', 'biobank'],
+      ]);
+      expect(recorded.events[1]).toMatchObject({ justification, approvalIds: [approvalId] });
+    } finally {
+      await request.delete(`${apiBaseURL}/api/collections/${ids.collectionId}`, { headers }).catch(() => {});
+      await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, { headers }).catch(() => {});
+      if (accessPolicyId) await db.collection('accessPolicies').deleteMany({ accessPolicyId });
+      await client.close();
+    }
   });
 });

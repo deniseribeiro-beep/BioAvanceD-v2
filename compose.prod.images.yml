@@ -1,0 +1,24 @@
+# Pulls the backend, worker and frontend images of compose.prod.yml from
+# GHCR instead of building them (#1563). The images are published by
+# .github/workflows/publish-images.yml, tagged with the full commit SHA:
+#
+#   IMAGE_TAG=<40-char sha> docker compose -f compose.prod.yml
+#     -f compose.prod.images.yml pull
+#
+# Every service built from api/backend/Dockerfile.prod runs the one
+# bioavanced-backend image, the worker included; frontend runs
+# bioavanced-frontend. tsa and witness are not published and still build
+# locally.
+services:
+  foundation:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  essential-references:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  backend:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  worker:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  neo4j-projection-worker:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-backend:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}
+  frontend:
+    image: ghcr.io/deniseribeiro-beep/bioavanced-frontend:${IMAGE_TAG:?set IMAGE_TAG to the commit SHA whose images to use}

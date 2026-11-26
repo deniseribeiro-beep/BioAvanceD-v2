@@ -157,6 +157,22 @@ class Neo4jOutboxService {
     };
   }
 
+  // #941: once per collection name per process, logged rather than thrown
+  // (appendEvent's comment says why).
+  async ensureIndexesOnce(db) {
+    if (!ensuredOutboxIndexCollections.has(this.collectionName)) {
+      ensuredOutboxIndexCollections.add(this.collectionName);
+      try {
+        await this.ensureIndexes(db);
+      } catch (error) {
+        logger.warn(
+          `[NEO4J_OUTBOX] Falha ao criar indices de ${this.collectionName}: ${error.message}. ` +
+          ('A entrega continua, mas sem a garantia de idempotencia do indice unico em eventId (#941).')
+        );
+      }
+    }
+  }
+
   async appendEvent(db, event, options = {}) {
     const collection = this.getCollection(db);
 
@@ -176,17 +192,7 @@ class Neo4jOutboxService {
     //
     // Latched BEFORE the await so a persistent failure cannot retry per
     // append; that matches utils/collectionResolver.js:46-48.
-    if (!ensuredOutboxIndexCollections.has(this.collectionName)) {
-      ensuredOutboxIndexCollections.add(this.collectionName);
-      try {
-        await this.ensureIndexes(db);
-      } catch (error) {
-        logger.warn(
-          `[NEO4J_OUTBOX] Falha ao criar indices de ${this.collectionName}: ${error.message}. ` +
-          ('A entrega continua, mas sem a garantia de idempotencia do indice unico em eventId (#941).')
-        );
-      }
-    }
+    await this.ensureIndexesOnce(db);
 
     const aggregateVersion = event.aggregateVersion || await this.nextAggregateVersion(
       db,
@@ -219,6 +225,63 @@ class Neo4jOutboxService {
     return doc;
   }
 
+  // #1561: appendEvent for a batch of distinct aggregates, in three writes
+  // whatever the batch size: one bulk $inc of the version counters, one read
+  // of them back, one bulk upsert of the events by eventId. `options.session`
+  // is the aggregates' own transaction, as in appendEvent (#1313), and the
+  // read-back runs in it. An aggregate named twice in one call, or an event
+  // carrying its own aggregateVersion, is refused: appendEvent takes those.
+  async appendEvents(db, events, options = {}) {
+    const collection = this.getCollection(db);
+    if (!Array.isArray(events) || events.length === 0) return [];
+
+    const keys = events.map((event) => {
+      if (event.aggregateVersion) {
+        throw new Error('appendEvents não aceita aggregateVersion do chamador; use appendEvent');
+      }
+      return `${normalizeText(event.aggregateType)}:${normalizeText(event.aggregateId)}`;
+    });
+    if (new Set(keys).size !== keys.length) {
+      throw new Error('appendEvents exige agregados distintos no mesmo lote; use appendEvent');
+    }
+
+    await this.ensureIndexesOnce(db);
+
+    const sessionOption = options.session ? { session: options.session } : {};
+    const now = new Date();
+    const versions = db.collection(this.versionCollectionName);
+    await versions.bulkWrite(events.map((event, index) => ({
+      updateOne: {
+        filter: { _id: keys[index] },
+        update: {
+          $inc: { version: 1 },
+          $set: { aggregateType: normalizeText(event.aggregateType), aggregateId: normalizeText(event.aggregateId), updatedAt: now },
+        },
+        upsert: true,
+      },
+    })), { ordered: true, ...sessionOption });
+    const counters = await versions.find({ _id: { $in: keys } }, sessionOption).toArray();
+    const versionByKey = new Map(counters.map((counter) => [counter._id, Number(counter.version || 1)]));
+
+    const docs = events.map((event, index) => this.buildEvent({
+      ...event,
+      aggregateVersion: versionByKey.get(keys[index]) || 1,
+      projectionState: event.projectionState || options.projectionState || {},
+    }));
+    await collection.bulkWrite(docs.map((doc) => {
+      const { updatedAt, ...docWithoutUpdatedAt } = doc;
+      return {
+        updateOne: {
+          filter: { eventId: doc.eventId },
+          update: { $setOnInsert: docWithoutUpdatedAt, $set: { updatedAt: new Date() } },
+          upsert: true,
+        },
+      };
+    }), { ordered: true, ...sessionOption });
+
+    return docs;
+  }
+
   async leaseNextBatch(db, options = {}) {
     const collection = this.getCollection(db);
     const batchSize = Math.max(1, Number(options.batchSize || env.GRAPH_OUTBOX_BATCH_SIZE || 100));
@@ -226,6 +289,15 @@ class Neo4jOutboxService {
     const now = new Date();
     const staleProcessingBefore = new Date(now.getTime() - Number(options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000));
 
+    // #1529 (RNF019 C5): a lease that timed out on its last allowed try is a dead letter.
+    await this.deadLetterExhausted(collection, {
+      maxAttempts,
+      staleBefore: staleProcessingBefore,
+      now,
+      lastError: 'leased_processing_timeout',
+    });
+
+    // #1527 (RNF019 C5): the lease already counted this try; a timeout does not count it again.
     await collection.updateMany(
       {
         status: 'PROCESSING',
@@ -235,20 +307,23 @@ class Neo4jOutboxService {
         $set: {
           status: 'RETRYING',
           leaseUntil: null,
+          lastError: 'leased_processing_timeout',
           updatedAt: new Date()
-        },
-        $inc: { attempts: 1 },
-        $setOnInsert: { lastError: 'leased_processing_timeout' }
+        }
       }
     );
 
+    // #1550: the claim re-checks what the find selected, under this lease's
+    // own id, so two leases that read the same batch never both claim an
+    // event, nor claim one another lease has since put into backoff.
+    const claimable = {
+      status: { $in: ['PENDING', 'RETRYING'] },
+      attempts: { $lt: maxAttempts },
+      // #1313 (RNF019 C5): a retry waits out its backoff.
+      $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: now } }]
+    };
     const events = await collection
-      .find({
-        status: { $in: ['PENDING', 'RETRYING'] },
-        attempts: { $lt: maxAttempts },
-        // #1313 (RNF019 C5): a retry waits out its backoff.
-        $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: now } }]
-      })
+      .find(claimable)
       .sort({ aggregateType: 1, aggregateId: 1, aggregateVersion: 1, occurredAt: 1, _id: 1 })
       .limit(batchSize)
       .toArray();
@@ -258,11 +333,13 @@ class Neo4jOutboxService {
     }
 
     const eventIds = events.map((event) => event.eventId);
+    const leaseId = crypto.randomUUID();
     await collection.updateMany(
-      { eventId: { $in: eventIds } },
+      { eventId: { $in: eventIds }, ...claimable },
       {
         $set: {
           status: 'PROCESSING',
+          leaseId,
           leaseUntil: new Date(now.getTime() + Number(options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000)),
           updatedAt: now
         },
@@ -270,7 +347,7 @@ class Neo4jOutboxService {
       }
     );
 
-    return collection.find({ eventId: { $in: eventIds } }).toArray();
+    return collection.find({ eventId: { $in: eventIds }, leaseId }).toArray();
   }
 
   async rescheduleStaleProcessing(db, options = {}) {
@@ -278,6 +355,15 @@ class Neo4jOutboxService {
     const now = new Date();
     const leaseMs = Number(options.leaseMs || env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000);
     const staleBefore = new Date(now.getTime() - leaseMs);
+    const maxAttempts = Math.max(1, Number(options.maxAttempts || env.GRAPH_OUTBOX_MAX_ATTEMPTS || 8));
+    // #1529 (RNF019 C5): a lease that timed out on its last allowed try is a dead letter.
+    const deadLettered = await this.deadLetterExhausted(collection, {
+      maxAttempts,
+      staleBefore,
+      now,
+      lastError: 'processing_lease_expired',
+    });
+    // #1527 (RNF019 C5): the lease already counted this try; a timeout does not count it again.
     const result = await collection.updateMany(
       {
         status: 'PROCESSING',
@@ -289,11 +375,40 @@ class Neo4jOutboxService {
           leaseUntil: null,
           updatedAt: now,
           lastError: 'processing_lease_expired'
-        },
-        $inc: { attempts: 1 }
+        }
       }
     );
-    return result.modifiedCount || 0;
+    return deadLettered + (result.modifiedCount || 0);
+  }
+
+  // #1529 (RNF019 C5): no lease claims an event whose tries are spent, so one
+  // whose last lease timed out, stale in PROCESSING or already put back in
+  // RETRYING by an earlier sweep, would sit there for good. It goes to
+  // DEAD_LETTER, where requeueDeadLetters can requeue it.
+  async deadLetterExhausted(collection, { maxAttempts, staleBefore, now, lastError }) {
+    const result = await collection.updateMany(
+      {
+        attempts: { $gte: maxAttempts },
+        $or: [
+          { status: 'RETRYING' },
+          { status: 'PROCESSING', updatedAt: { $lte: staleBefore } },
+        ],
+      },
+      {
+        $set: {
+          status: 'DEAD_LETTER',
+          lastError,
+          processedAt: now,
+          updatedAt: now,
+          leaseUntil: null,
+        },
+      }
+    );
+    const count = result?.modifiedCount || 0;
+    if (count) {
+      logger.error('[GRAPH_OUTBOX] DEAD_LETTER: lease expirado na última tentativa', { count, maxAttempts, lastError });
+    }
+    return count;
   }
 
   async markProjected(db, eventId) {

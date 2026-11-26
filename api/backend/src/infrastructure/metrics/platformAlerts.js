@@ -1,6 +1,9 @@
 // RNF015 C2 (#1323): the platform alert rules over the request metrics, the
-// BullMQ queue depths and the graph-outbox DEAD_LETTER count. Pure: the
-// readings come in, one row per alert key goes out.
+// BullMQ queue depths and the graph-outbox DEAD_LETTER count, and RNF010 C2
+// (#1484): the age of the newest successful backup against the policy's
+// rpoHours, and RNF015 C2 (#1468): the backend's memory and disk in use
+// against their ratio thresholds. Pure: the readings come in, one row per
+// alert key goes out.
 
 const { LATENCY_BUCKETS_MS } = require('./httpMetrics');
 
@@ -11,6 +14,9 @@ const ALERT_CODES = Object.freeze({
   QUEUE_BACKLOG: 'QUEUE_BACKLOG',
   QUEUE_FAILED: 'QUEUE_FAILED',
   OUTBOX_DEAD_LETTER: 'OUTBOX_DEAD_LETTER',
+  BACKUP_RPO: 'BACKUP_RPO',
+  RESOURCE_MEMORY: 'RESOURCE_MEMORY',
+  RESOURCE_DISK: 'RESOURCE_DISK',
 });
 
 // Below this many requests in a window, a rate or a percentile says nothing.
@@ -119,12 +125,48 @@ function deadLetterRow(deadLetter) {
     deadLetter > 0 ? 'firing' : 'ok', deadLetter, 0);
 }
 
-function evaluateAlerts({ httpWindow, queues = [], prevQueues = [], deadLetter, thresholds }) {
+// RNF010 C2 (#1484): `backup` is { ageHours, anyRun, rpoHours }, ageHours
+// null when no backupHistory row has status success. No row at all is a
+// fresh install before its first run, unknown; runs with none succeeded fire.
+function backupRpoRow(backup) {
+  if (!backup || !Number.isFinite(backup.rpoHours) || backup.rpoHours <= 0) {
+    return row(ALERT_CODES.BACKUP_RPO, 'backup', 'critical', 'unknown', null, null);
+  }
+  const { ageHours, rpoHours } = backup;
+  if (ageHours === null) {
+    return row(ALERT_CODES.BACKUP_RPO, 'backup', 'critical',
+      backup.anyRun ? 'firing' : 'unknown', null, rpoHours);
+  }
+  return row(ALERT_CODES.BACKUP_RPO, 'backup', 'critical',
+    ageHours > rpoHours ? 'firing' : 'ok', ageHours, rpoHours);
+}
+
+// RNF015 C2 (#1468): `resources` is { memory, disk }, each a ratio in [0, 1]
+// or null when unreadable (resourceUsage.js). A missing reading is unknown.
+function resourceRow(code, severity, value, threshold) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return row(code, 'backend', severity, 'unknown', null, threshold);
+  }
+  const rounded = Math.round(value * 10000) / 10000;
+  return row(code, 'backend', severity, value > threshold ? 'firing' : 'ok', rounded, threshold);
+}
+
+function resourceRows(resources, thresholds) {
+  const { memory = null, disk = null } = resources || {};
+  return [
+    resourceRow(ALERT_CODES.RESOURCE_MEMORY, 'warning', memory, thresholds.memoryRatio),
+    resourceRow(ALERT_CODES.RESOURCE_DISK, 'critical', disk, thresholds.diskRatio),
+  ];
+}
+
+function evaluateAlerts({ httpWindow, queues = [], prevQueues = [], deadLetter, backup, resources, thresholds }) {
   const prevByName = new Map((prevQueues || []).map((q) => [q.name, q]));
   return [
     ...httpRows(httpWindow, thresholds),
     ...queues.flatMap((queue) => queueRows(queue, prevByName.get(queue.name), thresholds)),
     deadLetterRow(deadLetter),
+    backupRpoRow(backup),
+    ...resourceRows(resources, thresholds),
   ];
 }
 

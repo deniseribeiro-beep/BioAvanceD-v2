@@ -53,7 +53,8 @@ function main() {
         + `duplicates [${v2.duplicateIds.join(', ')}], `
         + `missing entity/field/cardinality/preparationPhase/changeStatus [${v2.missingRequiredFieldIds.join(', ')}], `
         + `unknown changeStatus [${v2.unknownChangeStatusIds.join(', ')}], `
-        + `historical ids absent [${v2.missingHistoricalIds.join(', ')}].`
+        + `historical ids absent [${v2.missingHistoricalIds.join(', ')}], `
+        + `historical ids given a new meaning [${v2.reassignedHistoricalIds.join(', ')}].`
     );
   }
   const freshV2 = parseDictionaryV2(fs.readFileSync(SOURCE_MD_V2, 'utf8'));

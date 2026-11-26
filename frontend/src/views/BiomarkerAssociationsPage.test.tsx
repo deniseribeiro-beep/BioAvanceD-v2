@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import BiomarkerAssociationsPage, { matchesBiomarkerAssociationSearch } from './BiomarkerAssociationsPage';
@@ -124,5 +124,44 @@ describe('BiomarkerAssociationsPage (#1402, ELM-0275..0285)', () => {
     await user.click(screen.getByTestId('biomarker-associations-pagination-next'));
     expect(await screen.findByText('bm-11')).toBeInTheDocument();
     expect(screen.queryByText('bm-1')).not.toBeInTheDocument();
+  });
+
+  it('lists each load error reading, object details by their message', async () => {
+    mocked.getAll.mockRejectedValue({
+      response: { status: 500, data: { message: 'Falha no banco', details: [{ message: 'detalhe 1' }, null, 'detalhe 2'] } },
+    });
+    renderPage();
+    expect(await screen.findByText('Erro: Falha no banco')).toBeInTheDocument();
+    expect(screen.getByText('Erro: detalhe 1')).toBeInTheDocument();
+    expect(screen.getByText('Erro: detalhe 2')).toBeInTheDocument();
+    expect(screen.getAllByText(/^Erro: /)).toHaveLength(3);
+    expect(screen.queryByText('Carregando...')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Editar')).not.toBeInTheDocument();
+  });
+
+  it('shows a bare Error message when the load fails without a response', async () => {
+    mocked.getAll.mockRejectedValue(new Error('Network Error'));
+    renderPage();
+    expect(await screen.findByText('Erro: Network Error')).toBeInTheDocument();
+    expect(screen.getAllByText(/^Erro: /)).toHaveLength(1);
+  });
+
+  it('lists a stored row that lacks its fields and opens it with its own state', async () => {
+    const codeOnly = { biomarkerId: 'bm-2', analyte: { systemUri: 'http://loinc.org', code: '2345-7' } };
+    const bare = { biomarkerId: 'bm-3' };
+    mocked.getAll.mockResolvedValue({ data: { success: true, data: [codeOnly, bare] } } as any);
+    const user = userEvent.setup({ delay: null });
+    renderPage();
+
+    const codeRow = (await screen.findByText('bm-2')).closest('tr') as HTMLTableRowElement;
+    expect(within(codeRow).getByText('2345-7')).toBeInTheDocument();
+    const bareRow = screen.getByText('bm-3').closest('tr') as HTMLTableRowElement;
+    const cells = within(bareRow).getAllByRole('cell').map((cell) => cell.textContent);
+    expect(cells.slice(0, 6)).toEqual(['bm-3', '-', '', '', '', '']);
+
+    await user.click(within(bareRow).getByTitle('Editar'));
+    expect(navigate).toHaveBeenCalledWith('/biomarker-associations/bm-3/edit', {
+      state: { association: bare },
+    });
   });
 });

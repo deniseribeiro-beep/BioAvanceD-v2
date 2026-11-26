@@ -1,6 +1,6 @@
-const { SampleModel, BLOCKED_SPECIMEN_STATUSES } = require('../models/Sample');
+const { SampleModel, BLOCKED_SPECIMEN_STATUSES, findRcsDerivedFields, rcsDerivedWriteDetails } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
-const collectionGovernanceService = require('./collectionGovernance.service');
+const sampleCollectionGate = require('./sample-collection-gate.service');
 const logger = require('../utils/logger');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
@@ -13,16 +13,19 @@ const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const crypto = require('crypto');
+const { isDeepStrictEqual } = require('util');
 const { withMongoTransaction, withTransactionWhereSupported, isTransientTransactionError } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
-const qualityDomain = require('./quality-domain.service');
+const sampleCertification = require('./sample-certification.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
+const merkleService = require('./MerkleService');
 const quarantineActionService = require('./quarantine-action.service');
 const legalHoldService = require('./legalHold.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
 const { applySampleOrganizationScope } = require('./sampleTenancy.service');
 const participantIdentityService = require('./participantIdentity.service');
 const { issueSpecimenLabel } = require('./specimenLabel.service');
+const LabelIdentifierModel = require('../models/LabelIdentifier');
 const { withoutLegacyBarcode, assertLegacyBarcodeWritable } = require('../utils/sampleBarcodeWindow');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
@@ -42,10 +45,21 @@ const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadas
 // the sample-file controller and the storage routes resolve it the same way.
 const { findSampleByAnyId } = require('../utils/sampleLookup');
 
+// #1548: the fields an edit may write that MerkleService.generateSampleHash hashes.
+const SEALED_UPDATE_FIELDS = Object.freeze(['clinicalData', 'pharmacologyData']);
+
 function createSampleValidationError(message, statusCode = 422) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+// RF006 AC4 (V2E-0438): a quantity write lands only on the ledger version
+// it read; a write that matched nothing lost a race and is refused.
+function assertQuantityLedgerWrite(result) {
+  if (!result || result.matchedCount === 0) {
+    throw createSampleValidationError('Amostra alterada concorrentemente; leia-a de novo', 409);
+  }
 }
 
 // RF006 AC3 / RF026 AC7: a status write the generic update refuses (a
@@ -56,6 +70,157 @@ function createStatusWriteRefusal(message) {
   const error = createSampleValidationError(message, 422);
   error.code = STATUS_WRITE_REFUSED;
   return error;
+}
+
+// #1548: a reseal lands only on the root it verified; a write that matched
+// nothing lost a race with another edit, so it stores nothing and is refused.
+function createSealWriteConflict() {
+  const message = 'Amostra alterada concorrentemente; a merkleRoot lida não é mais a armazenada, leia-a de novo';
+  const error = createSampleValidationError(message, 409);
+  error.code = 'SAMPLE_SEAL_WRITE_CONFLICT';
+  error.details = [message];
+  return error;
+}
+
+// RNF018 AC4: a write to the RCS result is refused; only certification sets it.
+function createRcsDerivedWriteRefusal(fields) {
+  const details = rcsDerivedWriteDetails(fields);
+  const error = createSampleValidationError(details.join(', '), 422);
+  error.code = 'RCS_DERIVED_WRITE_REFUSED';
+  error.fields = fields;
+  error.details = details;
+  return error;
+}
+
+// RF018 AC10 (#1537): the SPREC is the certified input; an edit refuses a change to it.
+function createSprecWriteRefusal() {
+  const message = 'sprec é a entrada certificada da avaliação RCS e não é alterado por uma edição';
+  const error = createSampleValidationError(message, 422);
+  error.code = 'SPREC_WRITE_REFUSED';
+  error.fields = ['sprec'];
+  error.details = [message];
+  return error;
+}
+
+// RNF018 AC1 (#1525): the backend twin of SampleDetailsPage's quantity check.
+// A quantity field the edit names is a finite number at or above zero, or
+// null; anything else is refused before anything is written.
+const QUANTITY_UPDATE_FIELDS = ['quantity', 'currentQuantity', 'initialQuantity'];
+function findInvalidQuantityFields(updateData) {
+  return QUANTITY_UPDATE_FIELDS.filter((field) => {
+    if (!Object.prototype.hasOwnProperty.call(updateData, field)) return false;
+    const value = updateData[field];
+    if (value === null) return false;
+    return !(typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  });
+}
+// RF006 AC4 (#1531): currentQuantity, totalWithdrawn and totalReturned move
+// only through a ledgered withdrawal or return. initialQuantity (ELM-0138)
+// and quantity are registration values, editable until the first movement.
+const LEDGER_QUANTITY_FIELDS = ['currentQuantity', 'totalWithdrawn', 'totalReturned'];
+const REGISTRATION_QUANTITY_FIELDS = ['initialQuantity', 'quantity'];
+function storedLedgerQuantity(existing, field) {
+  if (field === 'currentQuantity') return existing.currentQuantity ?? existing.quantity ?? null;
+  return existing[field] ?? 0;
+}
+function hasLedgerMovement(existing) {
+  return !((existing.quantityLedgerVersion ?? 0) === 0
+    && (existing.totalWithdrawn ?? 0) === 0
+    && (existing.totalReturned ?? 0) === 0);
+}
+function findLedgerQuantityWrites(updateData, existing) {
+  const named = (field) => Object.prototype.hasOwnProperty.call(updateData, field);
+  const ledger = LEDGER_QUANTITY_FIELDS.filter((field) => named(field)
+    && updateData[field] !== storedLedgerQuantity(existing, field));
+  const registration = hasLedgerMovement(existing)
+    ? REGISTRATION_QUANTITY_FIELDS.filter((field) => named(field) && updateData[field] !== (existing[field] ?? null))
+    : [];
+  return [...ledger, ...registration];
+}
+// RF006 AC4 (#1531): before the first movement, a registration correction
+// re-derives the balance as Sample.create does (currentQuantity from
+// initialQuantity, else quantity), so an unmoved specimen stays full.
+// Returns undefined when nothing re-derives it, and when the stored balance
+// already differs from its base (a pre-ledger specimen consumed with no
+// recorded movement keeps its balance).
+function rederivedCurrentQuantity(updateData, existing) {
+  if (hasLedgerMovement(existing)) return undefined;
+  const base = existing.initialQuantity ?? existing.quantity ?? null;
+  if ((existing.currentQuantity ?? existing.quantity ?? null) !== base) return undefined;
+  const changed = (field) => Object.prototype.hasOwnProperty.call(updateData, field)
+    && updateData[field] !== (existing[field] ?? null);
+  if (changed('initialQuantity')) {
+    if (typeof updateData.initialQuantity === 'number') return updateData.initialQuantity;
+    // A cleared initialQuantity leaves quantity as the base, as Sample.create does.
+    const quantityBase = Object.prototype.hasOwnProperty.call(updateData, 'quantity')
+      ? updateData.quantity
+      : existing.quantity;
+    return quantityBase ?? undefined;
+  }
+  // quantity is the base only when no initialQuantity is stored or sent.
+  if ((existing.initialQuantity ?? null) === null && (updateData.initialQuantity ?? null) === null
+    && changed('quantity')) return updateData.quantity;
+  return undefined;
+}
+function createLedgerQuantityWriteRefusal(fields) {
+  const details = fields.map((field) => (LEDGER_QUANTITY_FIELDS.includes(field)
+    ? `${field} é derivado do ledger de movimentações e só muda por retirada ou devolução`
+    : `${field} não pode mudar depois da primeira movimentação do ledger`));
+  const error = createSampleValidationError(details.join(', '), 422);
+  error.code = 'QUANTITY_LEDGER_WRITE_REFUSED';
+  error.fields = fields;
+  error.details = details;
+  return error;
+}
+function createInvalidQuantityRefusal(fields) {
+  const details = fields.map((field) => `${field} deve ser um número maior ou igual a zero`);
+  const error = createSampleValidationError(details.join(', '), 422);
+  error.code = 'INVALID_QUANTITY';
+  error.fields = fields;
+  error.details = details;
+  return error;
+}
+
+// RNF007 AC4 (#1463): a caller-supplied code carries no personal data. The
+// refusal names the kind, never the value, as the ingestion path does.
+const BARCODE_PERSONAL_DATA = 'BARCODE_PERSONAL_DATA';
+function createBarcodePersonalDataRefusal(what) {
+  const error = createSampleValidationError(`O código de barras não pode conter ${what} (RNF007 AC4)`, 422);
+  error.code = BARCODE_PERSONAL_DATA;
+  error.details = [error.message];
+  return error;
+}
+
+const NAME_PARTICLES = new Set(['das', 'dos']);
+function foldLetters(value) {
+  return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+// A name part (3+ letters, not a particle) that is a whole letter run of
+// the code, or the whole name or two adjacent parts run together.
+function containsPersonName(code, name) {
+  const foldedName = foldLetters(name);
+  const parts = foldedName.split(/[^a-z]+/).filter((part) => part.length >= 3 && !NAME_PARTICLES.has(part));
+  if (parts.length === 0) return false;
+  const foldedCode = foldLetters(code);
+  const runs = new Set(foldedCode.split(/[^a-z]+/).filter(Boolean));
+  if (parts.some((part) => runs.has(part))) return true;
+  const letters = foldedCode.replace(/[^a-z]/g, '');
+  const joined = [foldedName.replace(/[^a-z]/g, '')];
+  for (let i = 0; i + 1 < parts.length; i += 1) joined.push(parts[i] + parts[i + 1]);
+  return joined.some((candidate) => candidate.length >= 6 && letters.includes(candidate));
+}
+
+// Reads the name through ParticipantIdentity (decryptIdentity falls back to
+// the ciphertext sibling) and never logs or returns it.
+async function assertCodeHasNoPersonalData(db, code, participantId) {
+  const what = LabelIdentifierModel.personalDataIn(code);
+  if (what) throw createBarcodePersonalDataRefusal(what);
+  if (!participantId) return;
+  const identityRecord = await (await getCollection(db, 'participantIdentities')).findOne({ participantId: String(participantId) });
+  const identity = identityRecord ? participantIdentityService.decryptIdentity(identityRecord) : null;
+  if (identity?.patientName && containsPersonName(code, identity.patientName)) {
+    throw createBarcodePersonalDataRefusal('o nome do participante');
+  }
 }
 
 /**
@@ -221,30 +386,8 @@ class SampleService {
         }
       }
 
-      if (sampleData.collectionId !== undefined && sampleData.collectionId !== null && sampleData.collectionId !== '') {
-        const collectionDoc = await db.collection('collections').findOne({ collectionId: String(sampleData.collectionId) });
-        if (!collectionDoc) {
-          throw createSampleValidationError(`collectionId ${sampleData.collectionId} não encontrado`, 404);
-        }
-        // RF004 AC2/AC3/AC7, RF021 AC6: human research material enters only
-        // a collection governed as a biobank or a biorepository, with the
-        // one context its regime names and an approval in force.
-        const refusal = await collectionGovernanceService.registrationRefusal(db, collectionDoc);
-        if (refusal) {
-          throw createSampleValidationError(refusal, 422);
-        }
-        // RF004 AC4: a biorepository specimen belongs to the context's study
-        // and protocol; one naming another is refused.
-        const ctx = collectionDoc.governanceContext;
-        if (collectionDoc.governanceRegime === 'biorepository') {
-          for (const field of ['studyId', 'protocolId']) {
-            const given = sampleData[field];
-            if (given !== undefined && given !== null && given !== '' && String(given) !== ctx[field]) {
-              throw createSampleValidationError(`${field} ${given} difere do ${field} do biorrepositório da coleção (${ctx[field]})`, 422);
-            }
-          }
-        }
-      }
+      // RF004 AC2 (#1538): the one collection gate every sample writer runs.
+      await sampleCollectionGate.assertSampleCollectionAdmits(db, sampleData);
 
       // ELM-0128 - collectionSite (Reference(Organization)): quando informado,
       // deve resolver a uma Organization real já cadastrada.
@@ -257,7 +400,8 @@ class SampleService {
 
       // dict-02 ELM-0120 (#1368): a derivative names its parents by
       // specimenId. Each must exist, belong to the same participant (consent
-      // governance flows through the donor) and not be closed. The sample
+      // governance flows through the donor), not be closed and not be
+      // quarantined, since deriving is processing (RF019 AC3). The sample
       // stores the specimenIds; the lineage event carries each parent's
       // _id, the key the graph holds a Sample under.
       const parentSpecimenIds = [...new Set((Array.isArray(sampleData.parentSpecimenIds) ? sampleData.parentSpecimenIds : [])
@@ -280,6 +424,9 @@ class SampleService {
           }
           if (SampleModel.isTerminalSpecimen(parent)) {
             throw createSampleValidationError(`parentSpecimenIds ${parentId} está encerrada (status: ${parent.specimenStatus})`, 422);
+          }
+          if (SampleModel.resolveSpecimenStatus(parent) === 'quarantined') {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} está em quarentena e não pode ser processada (RF019)`, 422);
           }
         }
         parentMongoIds = parentSpecimenIds.map((parentId) => String(byId.get(parentId)._id));
@@ -342,7 +489,9 @@ class SampleService {
       } else {
         // Converte para string se necessário
         sampleData.barcode = String(sampleData.barcode).trim();
-        
+        // RNF007 AC4 (#1463): refused before any write.
+        await assertCodeHasNoPersonalData(db, sampleData.barcode, sampleData.participantId);
+
         // #944: era "RF004", que nao menciona barcode em nenhum criterio.
         // O requisito e dict-02 ELM-0116 (Specimen.barcodeValue, Unico).
         // Verifica duplicidade por barcode (se fornecido)
@@ -360,27 +509,15 @@ class SampleService {
       // #492: live registration didn't compute RCS server-side at all —
       // mirrors import.service.js's CSV/XLSX branch (#383), which is the
       // only other place `sprec` -> RCS-GOV field mapping already exists.
-      if (sampleData.sprec && typeof sampleData.sprec === 'object' && Object.keys(sampleData.sprec).length > 0) {
-        const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({
-          sprec: sampleData.sprec,
-          // RF018 AC2 (#1320): the use context reaches the assessment only when sent.
-          ...(sampleData.qualificationContext !== undefined ? { qualificationContext: sampleData.qualificationContext } : {}),
-        });
-        sampleData.modelVersion = canonicalQualityAssessment.model_version;
-        sampleData.matrixType = canonicalQualityAssessment.matrix_type;
-        sampleData.governanceStatus = canonicalQualityAssessment.governance_status;
-        sampleData.governanceFailureReasons = canonicalQualityAssessment.governance_failure_reasons || [];
-        sampleData.governanceRuleCodes = canonicalQualityAssessment.governance_rule_codes || [];
-        sampleData.rcsScore = canonicalQualityAssessment.rcs_score;
-        sampleData.scoreBasedGrade = canonicalQualityAssessment.score_based_grade;
-        sampleData.finalGrade = canonicalQualityAssessment.final_grade || '';
-        sampleData.gradeRoute = canonicalQualityAssessment.grade_route;
-        sampleData.axisPenalties = canonicalQualityAssessment.axis_penalties || [];
-        sampleData.calculationTrace = canonicalQualityAssessment.calculation_trace || {};
-        sampleData.rcsEvaluation = canonicalQualityAssessment;
-      }
+      // RNF018 AC4 (#1537): the certification is shared with the JSON import.
+      await sampleCertification.certifySampleSprec(db, sampleData);
 
       const sample = SampleModel.create(sampleData);
+      // #1548: the seal and its SPREC pin are server-owned, so a body's
+      // merkleRoot or sealedSpecimenPreanalyticsId is never stored; both stay
+      // null until the pin and the seal below write them.
+      sample.merkleRoot = null;
+      sample.sealedSpecimenPreanalyticsId = null;
       // #1192: the tenancy key comes only from the caller's server-built
       // options, never from sampleData, which a request body or import row fills.
       sample.organizationId = options.organizationId ? String(options.organizationId) : null;
@@ -591,6 +728,17 @@ class SampleService {
         }
       }
 
+      // #1548: sealed last, once both snapshots above are pinned, from the
+      // stored sample, so the seal covers what the integrity check recomputes.
+      try {
+        const storedSample = await samplesCollection.findOne({ _id: result.insertedId }) || sample;
+        const merkleRoot = await merkleService.generateSampleHashFromSample(db, storedSample);
+        await samplesCollection.updateOne({ _id: result.insertedId }, { $set: { merkleRoot } });
+        sample.merkleRoot = merkleRoot;
+      } catch (sealError) {
+        logger.error('Falha ao selar a merkleRoot da amostra:', sealError.message || sealError);
+      }
+
       // Log sanitizado (apenas ID, sem dados sensíveis)
       logger.info('Amostra criada:', {
         specimenId: sample.specimenId,
@@ -686,6 +834,8 @@ class SampleService {
       // RF006 AC2/AC3: a withdrawal moves quantityStatus only; specimenStatus
       // is an operational state no quantity change moves.
       const quantityStatus = SampleModel.computeQuantityStatus(sample.initialQuantity || sample.quantity, newAvailableQty);
+      const readLedgerVersion = sample.quantityLedgerVersion ?? null;
+      const nextLedgerVersion = (readLedgerVersion ?? 0) + 1;
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -707,12 +857,14 @@ class SampleService {
         ipAddress: auditInfo.ipAddress || null,
         userAgent: auditInfo.userAgent || null,
         previousQuantity: availableQty,
-        newQuantity: newAvailableQty
+        newQuantity: newAvailableQty,
+        quantityLedgerVersion: nextLedgerVersion
       });
 
       // RF006 AC#6: ledger append + balance update must land atomically —
       // a crash between the two would desync the movement ledger from
       // currentQuantity, silently.
+      // RF006 AC4: the balance write is guarded by the ledger version it read.
       await withMongoTransaction(db, async (session) => {
         await appendMovementWithHashChain(movementsCollection, movement, { session });
 
@@ -726,14 +878,16 @@ class SampleService {
           linkedProject: withdrawalData.linkedProject || sample.linkedProject,
           lastWithdrawalID: movementID,
           quantityStatus,
+          quantityLedgerVersion: nextLedgerVersion,
           updatedAt: new Date()
         };
 
-        await samplesCollection.updateOne(
-          { specimenId: sample.specimenId },
+        const result = await samplesCollection.updateOne(
+          { specimenId: sample.specimenId, quantityLedgerVersion: readLedgerVersion },
           { $set: update },
           { session }
         );
+        assertQuantityLedgerWrite(result);
       });
 
       logger.info(`Retirada registrada: Sample ${sample.barcode || sample._id}, Qtd: ${withdrawQty}, Novo saldo: ${newAvailableQty}`);
@@ -744,7 +898,8 @@ class SampleService {
         withdrawnQuantity: withdrawQty,
         remainingQuantity: newAvailableQty,
         newStatus: currentSpecimenStatus,
-        quantityStatus
+        quantityStatus,
+        quantityLedgerVersion: nextLedgerVersion
       };
     } catch (error) {
       logger.error('Erro ao retirar amostra:', error.message);
@@ -851,9 +1006,12 @@ class SampleService {
         return null;
       }
 
-      const nextAvailable = updateData.currentQuantity !== undefined
-        ? updateData.currentQuantity
-        : existing.currentQuantity ?? existing.quantity;
+      const rederivedCurrent = rederivedCurrentQuantity(updateData, existing);
+      const nextAvailable = rederivedCurrent !== undefined
+        ? rederivedCurrent
+        : updateData.currentQuantity !== undefined
+          ? updateData.currentQuantity
+          : existing.currentQuantity ?? existing.quantity;
       const nextOriginal = updateData.initialQuantity !== undefined
         ? updateData.initialQuantity
         : existing.initialQuantity ?? existing.quantity;
@@ -866,8 +1024,32 @@ class SampleService {
       if (Object.prototype.hasOwnProperty.call(updateData, 'quantityStatus')) {
         throw createStatusWriteRefusal('quantityStatus é derivado de initialQuantity e currentQuantity e não pode ser editado');
       }
+      // RNF018 AC4: the RCS result is set only by certification.
+      const rcsDerivedFields = findRcsDerivedFields(updateData);
+      if (rcsDerivedFields.length > 0) {
+        throw createRcsDerivedWriteRefusal(rcsDerivedFields);
+      }
+      // RF018 AC10 (#1537): the SPREC is a certified input; an edit does not change it.
+      if (Object.prototype.hasOwnProperty.call(updateData, 'sprec')
+        && !isDeepStrictEqual(updateData.sprec ?? null, existing.sprec ?? null)) {
+        throw createSprecWriteRefusal();
+      }
+      // RNF018 AC1 (#1525): a negative or non-numeric quantity is refused.
+      const invalidQuantityFields = findInvalidQuantityFields(updateData);
+      if (invalidQuantityFields.length > 0) {
+        throw createInvalidQuantityRefusal(invalidQuantityFields);
+      }
+      // RF006 AC4 (#1531): an edit does not move a ledgered quantity.
+      const ledgerQuantityWrites = findLedgerQuantityWrites(updateData, existing);
+      if (ledgerQuantityWrites.length > 0) {
+        throw createLedgerQuantityWriteRefusal(ledgerQuantityWrites);
+      }
       // #1378 (ELM-0116): after the migration window, barcode is not written.
       assertLegacyBarcodeWritable(updateData);
+      // RNF007 AC4 (#1463): a written barcode carries no personal data.
+      if (Object.prototype.hasOwnProperty.call(updateData, 'barcode') && String(updateData.barcode ?? '').trim()) {
+        await assertCodeHasNoPersonalData(db, String(updateData.barcode).trim(), existing.participantId);
+      }
       if (requestedStatus) {
         // RF026 AC7: closed only by POST /api/samples/:id/close (validated
         // total consumption) or an executed disposition, never by an edit.
@@ -909,20 +1091,23 @@ class SampleService {
       // flag, not this change's call.
       // parentSpecimenIds (ELM-0120, #1368) is set at creation, where its
       // LINEAGE_REGISTERED is appended, and is deliberately not updatable.
+      // quantityLedgerVersion (RF006 AC4) is excluded on purpose: server-owned like the status fields.
+      // currentQuantity, totalWithdrawn and totalReturned are excluded too: only
+      // a withdrawal or return writes them (RF006 AC4, #1531).
+      // merkleRoot and sealedSpecimenPreanalyticsId are excluded on purpose: the
+      // seal and the pin it hashes are server-owned (#1548).
       const ALLOWED_UPDATE_FIELDS = [
         'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
         'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
         'withdrawnAt', 'receivedAt', 'quantity', 'unit', 'quality',
-        'modelVersion', 'matrixType', 'governanceStatus',
-        'governanceFailureReasons', 'governanceRuleCodes',
-        'biologicalPenalty', 'rcsScore', 'scoreBasedGrade', 'finalGrade',
-        'gradeRoute', 'axisPenalties', 'calculationTrace', 'rcsEvaluation',
+        // RCS_DERIVED_FIELDS are refused above (RNF018 AC4).
         'externalQualityAssessment', 'locationID', 'linkedProject',
-        'collectionSite', 'sprec', 'merkleRoot', 'sealedRcsAssessmentId',
-        'sealedSpecimenPreanalyticsId', 'consentTemplateId', 'clinicalData',
+        // sprec is refused above when it changes (RF018 AC10, #1537).
+        'collectionSite',
+        'consentTemplateId', 'clinicalData',
         'pharmacologyData', 'consentStatus', 'quarantineReason',
-        'importBatchId', 'importedAt', 'importedBy', 'currentQuantity',
-        'initialQuantity', 'totalWithdrawn', 'totalReturned',
+        'importBatchId', 'importedAt', 'importedBy',
+        'initialQuantity',
         'accessionNumber', 'orderNumber', 'processingStatus',
         'protocolApplied', 'specimenCollection', 'studyId', 'protocolId',
         'collectionId', 'linkedFiles', 'qrCode', 'storageLocation',
@@ -940,18 +1125,42 @@ class SampleService {
       // it and records its provenance.
       const payload = {
         ...restUpdateData,
+        ...(rederivedCurrent !== undefined ? { currentQuantity: rederivedCurrent } : {}),
         ...(requestedStatus ? { specimenStatus } : {}),
         quantityStatus,
         updatedAt: new Date()
       };
 
+      // #1548: an edit that changes a sealed input reseals in the same write,
+      // but only a sample whose stored seal verifies before the edit: a missing
+      // or mismatched root keeps reading as tampered, and no edit launders it.
+      const changesSealedInput = SEALED_UPDATE_FIELDS.some((key) =>
+        Object.prototype.hasOwnProperty.call(restUpdateData, key)
+        && !isDeepStrictEqual(restUpdateData[key] ?? null, existing[key] ?? null));
+      if (changesSealedInput && existing.merkleRoot) {
+        const priorRoot = await merkleService.generateSampleHashFromSample(db, existing);
+        if (priorRoot === existing.merkleRoot) {
+          payload.merkleRoot = await merkleService.generateSampleHashFromSample(db, { ...existing, ...restUpdateData });
+        }
+      }
+
+      // #1548: a reseal is compare-and-set on the root it verified, so two
+      // concurrent edits cannot each store a root covering only their own edit.
+      const reseals = Object.prototype.hasOwnProperty.call(payload, 'merkleRoot');
+      const updateFilter = reseals
+        ? { specimenId: existing.specimenId, merkleRoot: existing.merkleRoot }
+        : { specimenId: existing.specimenId };
+
       const statusChanges = String(previousStatus || '').toLowerCase() !== String(specimenStatus || '').toLowerCase();
       const writeUpdate = async (session) => {
         const result = await samplesCollection.updateOne(
-          { specimenId: existing.specimenId },
+          updateFilter,
           { $set: payload },
           session ? { session } : undefined
         );
+        if (reseals && result.matchedCount === 0) {
+          throw createSealWriteConflict();
+        }
         // RF006 AC7: an edit that changes specimenStatus records the change,
         // append-only, with the write. The edit has no event of its own, so
         // the decision's trigger is an id minted for this update.
@@ -1208,6 +1417,8 @@ class SampleService {
       // RF006 AC2/AC3: a return moves quantityStatus only (a depleted
       // specimen becomes partial or full again); specimenStatus stays.
       const quantityStatus = SampleModel.computeQuantityStatus(sample.initialQuantity || sample.quantity, newAvailableQty);
+      const readLedgerVersion = sample.quantityLedgerVersion ?? null;
+      const nextLedgerVersion = (readLedgerVersion ?? 0) + 1;
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -1229,7 +1440,8 @@ class SampleService {
         ipAddress: auditInfo.ipAddress || null,
         userAgent: auditInfo.userAgent || null,
         previousQuantity: sample.currentQuantity || 0,
-        newQuantity: newAvailableQty
+        newQuantity: newAvailableQty,
+        quantityLedgerVersion: nextLedgerVersion
       });
 
       // RF006 AC#6: ledger append + balance update must land atomically —
@@ -1241,6 +1453,7 @@ class SampleService {
           currentQuantity: newAvailableQty,
           totalReturned: newTotalReturned,
           quantityStatus,
+          quantityLedgerVersion: nextLedgerVersion,
           updatedAt: new Date()
         };
 
@@ -1252,11 +1465,12 @@ class SampleService {
           update.sampleDestination = null;
         }
 
-        await samplesCollection.updateOne(
-          { specimenId: sample.specimenId },
+        const result = await samplesCollection.updateOne(
+          { specimenId: sample.specimenId, quantityLedgerVersion: readLedgerVersion },
           { $set: update },
           { session }
         );
+        assertQuantityLedgerWrite(result);
       });
 
       logger.info(`Devolução registrada: Sample ${sample.barcode || sample._id}, Qtd: ${returnQty}, Condição: ${returnData.condition}, Novo saldo: ${newAvailableQty}`);
@@ -1268,7 +1482,8 @@ class SampleService {
         condition: returnData.condition,
         newAvailableQuantity: newAvailableQty,
         newStatus: currentSpecimenStatus,
-        quantityStatus
+        quantityStatus,
+        quantityLedgerVersion: nextLedgerVersion
       };
     } catch (error) {
       logger.error('Erro ao retornar amostra:', error.message);
@@ -1310,6 +1525,31 @@ class SampleService {
       logger.error('Erro ao buscar movimentações:', error.message);
       throw error;
     }
+  }
+
+  // RF006 AC4: compares a specimen's currentQuantity and quantityLedgerVersion
+  // with the ledger head, the movement stamped with the highest version.
+  async reconcileQuantityLedger(db, specimenId) {
+    const samplesCollection = await getCollection(db, 'samples');
+    const movementsCollection = await getCollection(db, 'sampleMovements');
+    const sample = await findSampleByAnyId(samplesCollection, specimenId);
+    if (!sample) return null;
+    const version = sample.quantityLedgerVersion ?? 0;
+    const currentQuantity = sample.currentQuantity ?? sample.quantity ?? null;
+    const [head] = await movementsCollection
+      .find({ specimenId: sample.specimenId, quantityLedgerVersion: { $type: 'number' } })
+      .sort({ quantityLedgerVersion: -1 })
+      .limit(1)
+      .toArray();
+    const reconciled = version === 0 ? !head : Boolean(head) && head.quantityLedgerVersion === version && head.newQuantity === currentQuantity;
+    return {
+      specimenId: sample.specimenId,
+      currentQuantity,
+      quantityLedgerVersion: version,
+      ledgerHeadVersion: head ? head.quantityLedgerVersion : null,
+      ledgerHeadQuantity: head ? head.newQuantity : null,
+      reconciled
+    };
   }
 
   /**

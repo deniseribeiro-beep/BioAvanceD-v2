@@ -164,4 +164,97 @@ describe('BiomarkerAssociationFormPage', () => {
     expect(payload).not.toHaveProperty('biomarkerId');
     expect(mocked.create).not.toHaveBeenCalled();
   });
+
+  it('falls back to the default save message when the error carries none', async () => {
+    mocked.create.mockRejectedValue({});
+    const user = userEvent.setup({ delay: null });
+    renderForm('/biomarker-associations/new');
+    const form = screen.getByLabelText('Contexto de uso').closest('form') as HTMLFormElement;
+    await fillRequired(user);
+    await user.click(within(form).getByRole('button', { name: 'Salvar' }));
+
+    const alert = await within(form).findByRole('alert');
+    expect(alert).toHaveTextContent(/^Erro ao salvar a associação$/);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('opens a stored row that lacks its fields with every field empty or at its default', () => {
+    renderForm('/biomarker-associations/bm-3/edit', { association: { biomarkerId: 'bm-3' } });
+    expect(screen.getByLabelText('biomarkerId')).toHaveValue('bm-3');
+    expect(screen.getByLabelText('Sistema do analito')).toHaveValue('');
+    expect(screen.getByLabelText('Código do analito')).toHaveValue('');
+    expect(screen.getByLabelText('Nome do analito')).toHaveValue('');
+    expect(screen.getByLabelText('Sistema da condição 1')).toHaveValue(ORPHA);
+    expect(screen.getByLabelText('Código da condição 1')).toHaveValue('');
+    expect(screen.queryByLabelText('Código da condição 2')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Papel do biomarcador')).toHaveValue('');
+    expect(screen.getByLabelText('Contexto de uso')).toHaveValue('');
+    expect(screen.getByLabelText('Sistema da evidência 1')).toHaveValue('DOI');
+    expect(screen.getByLabelText('Valor da evidência 1')).toHaveValue('');
+    expect(screen.queryByLabelText('Valor da evidência 2')).not.toBeInTheDocument();
+  });
+
+  it('keeps a stored system outside the lists as its own option', () => {
+    const legacy = {
+      ...stored,
+      biomarkerId: 'bm-5',
+      associatedCondition: [{ systemUri: 'http://snomed.info/sct', code: '399068003' }],
+      evidenceReferences: [{}, { system: 'ISBN', value: '9780000000002' }],
+    };
+    renderForm('/biomarker-associations/bm-5/edit', { association: legacy });
+
+    const optionsOf = (select: HTMLElement) => within(select).getAllByRole('option').map((option) => option.textContent);
+    const conditionSystem = screen.getByLabelText('Sistema da condição 1');
+    expect(conditionSystem).toHaveValue('http://snomed.info/sct');
+    expect(optionsOf(conditionSystem)).toEqual(['ORPHA', 'ICD-11', 'MONDO', 'http://snomed.info/sct']);
+    const firstEvidence = screen.getByLabelText('Sistema da evidência 1');
+    expect(firstEvidence).toHaveValue('DOI');
+    expect(optionsOf(firstEvidence)).toEqual(['DOI', 'PMID']);
+    expect(screen.getByLabelText('Valor da evidência 1')).toHaveValue('');
+    const secondEvidence = screen.getByLabelText('Sistema da evidência 2');
+    expect(secondEvidence).toHaveValue('ISBN');
+    expect(optionsOf(secondEvidence)).toEqual(['DOI', 'PMID', 'ISBN']);
+  });
+
+  it('sends a stored version back with the typed analyte name', async () => {
+    const versioned = { ...stored, analyte: { ...stored.analyte, version: ' 2.74 ' } };
+    const user = userEvent.setup({ delay: null });
+    renderForm('/biomarker-associations/bm-1/edit', { association: versioned });
+
+    const name = screen.getByLabelText('Nome do analito');
+    await user.clear(name);
+    await fill(user, name, 'PSA total');
+    const form = name.closest('form') as HTMLFormElement;
+    await user.click(within(form).getByRole('button', { name: 'Salvar' }));
+
+    await waitFor(() => expect(mocked.update).toHaveBeenCalledTimes(1));
+    expect(mocked.update.mock.calls[0][1].analyte).toEqual({
+      systemUri: 'http://loinc.org', code: '2857-1', version: '2.74', display: 'PSA total',
+    });
+  });
+
+  it('adds and removes condition and evidence rows, each edit touching only its own row', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm('/biomarker-associations/new');
+
+    await fill(user, screen.getByLabelText('Código da condição 1'), 'ORPHA:558');
+    await user.click(screen.getByRole('button', { name: 'Adicionar condição' }));
+    await fill(user, screen.getByLabelText('Código da condição 2'), 'ORPHA:909');
+    expect(screen.getByLabelText('Código da condição 1')).toHaveValue('ORPHA:558');
+    await user.click(screen.getByRole('button', { name: 'Remover condição 1' }));
+    expect(screen.getByLabelText('Código da condição 1')).toHaveValue('ORPHA:909');
+    expect(screen.queryByLabelText('Código da condição 2')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remover condição 1' })).toBeDisabled();
+
+    expect(screen.getByRole('button', { name: 'Remover evidência 1' })).toBeDisabled();
+    await fill(user, screen.getByLabelText('Valor da evidência 1'), '111');
+    await user.click(screen.getByRole('button', { name: 'Adicionar evidência' }));
+    expect(screen.getByLabelText('Sistema da evidência 2')).toHaveValue('DOI');
+    await fill(user, screen.getByLabelText('Valor da evidência 2'), '999');
+    expect(screen.getByLabelText('Valor da evidência 1')).toHaveValue('111');
+    await user.click(screen.getByRole('button', { name: 'Remover evidência 1' }));
+    expect(screen.getByLabelText('Valor da evidência 1')).toHaveValue('999');
+    expect(screen.queryByLabelText('Valor da evidência 2')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remover evidência 1' })).toBeDisabled();
+  });
 });

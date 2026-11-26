@@ -45,7 +45,7 @@ export default function IncidentManagement() {
 
   const pageSize = 10;
 
-  const fetchIncidents = async () => {
+  const fetchIncidents = async (): Promise<TemperatureIncident[] | null> => {
     setLoading(true);
     setError(null);
     try {
@@ -60,10 +60,13 @@ export default function IncidentManagement() {
         suppressErrorToast: true,
       } as Parameters<typeof apiClient.get>[1]);
 
-      setIncidents(data.incidents || []);
+      const fresh: TemperatureIncident[] = data.incidents || [];
+      setIncidents(fresh);
+      return fresh;
     } catch (err: any) {
       setError(err.response?.data?.message || err.response?.data?.error || err.message || t('incidents.errors.load', 'Erro ao carregar incidentes'));
       console.error('Erro ao buscar incidentes:', err);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -133,8 +136,6 @@ export default function IncidentManagement() {
   };
 
   const handleAddNote = async (incidentId: string) => {
-    if (!noteText.trim()) return;
-
     try {
       await apiClient.post(`/incidents/${incidentId}/notes`, {
         userId: user?._id,
@@ -143,12 +144,10 @@ export default function IncidentManagement() {
         suppressErrorToast: true,
       } as Parameters<typeof apiClient.post>[2]);
       
-      await fetchIncidents();
+      const fresh = await fetchIncidents();
       setNoteText('');
-      if (selectedIncident) {
-        const updated = incidents.find(i => i._id === selectedIncident._id);
-        if (updated) setSelectedIncident(updated);
-      }
+      const updated = fresh?.find(i => i._id === incidentId);
+      if (updated) setSelectedIncident(updated);
     } catch (err: any) {
       alert(err.response?.data?.message || err.response?.data?.error || err.message || t('incidents.errors.addNote', 'Erro ao adicionar nota'));
     }

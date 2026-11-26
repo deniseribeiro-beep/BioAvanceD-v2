@@ -1323,8 +1323,9 @@ describe('sample-file.controller', () => {
     });
   });
 
-  // RF007 AC#7 (#334): "substituição" is the audited verb that was
-  // missing alongside upload/access/logical-removal.
+  // RF007 AC4/AC6 (#334): a substitution writes a DataFileVersion that keeps
+  // the previous checksum, and the version it creates is audited alongside
+  // upload, access and logical removal.
   describe('replaceFile', () => {
     it('returns 503 when db is missing', async () => {
       const req = { app: { locals: {} }, params: { specimenId: '1', fileID: '2' }, file: { path: '/tmp/new.csv' } };

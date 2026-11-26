@@ -2,17 +2,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
-import router from '../../../src/routes/orphanet.js';
 
 const require2 = createRequire(import.meta.url);
 const logger = require2('../../../src/utils/logger');
+
+// orphanet.js takes `authenticate` when it is required (#1553), so it is
+// required here, after the stub, not imported.
+const authModule = require2('../../../src/infrastructure/middleware/auth');
+const realAuthenticate = authModule.authenticate;
+const signedIn = (req, res, next) => {
+  req.user = { id: 'user-1' };
+  next();
+};
+authModule.authenticate = signedIn;
+const routerPath = require2.resolve('../../../src/routes/orphanet.js');
+const router = require2(routerPath);
 
 // src/routes/orphanet.js reads its db connection from req.app.locals.db
 // (a shared connection set up once at server startup, not a per-request
 // MongoClient) -- see git history of the file, commit e9fc064c switched
 // it from `new MongoClient(MONGO_URI)` per request to `req.app.locals.db`.
-// So tests here set app.locals.db directly, mirroring
-// tests/unit/routes/orphanet-count.test.js's pattern for the sibling route.
+// So tests here set app.locals.db directly.
 
 function emptyFind() {
   return vi.fn(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }));
@@ -37,6 +47,23 @@ function buildApp(db) {
   app.use('/api/orphanet', router);
   return app;
 }
+
+describe('orphanet route GET /search authentication (#1553)', () => {
+  it('answers 401 with no token', async () => {
+    authModule.authenticate = realAuthenticate;
+    delete require2.cache[routerPath];
+    try {
+      const gated = require2(routerPath);
+      const app = express();
+      app.use('/api/orphanet', gated);
+      const res = await request(app).get('/api/orphanet/search').query({ q: 'disease' });
+      expect(res.status).toBe(401);
+    } finally {
+      authModule.authenticate = signedIn;
+      delete require2.cache[routerPath];
+    }
+  });
+});
 
 describe('orphanet route GET /search', () => {
   beforeEach(() => {

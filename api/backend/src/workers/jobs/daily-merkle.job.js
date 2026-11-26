@@ -4,6 +4,8 @@ const auditRootService = require('../../services/auditRoot.service');
 const auditV2Service = require('../../services/audit-v2.service');
 const logger = require('../../utils/logger');
 const env = require('../../config/env');
+const requestContext = require('../../utils/requestContext');
+const jobMetrics = require('../../infrastructure/metrics/jobMetrics');
 
 /**
  * Daily Merkle Job
@@ -82,42 +84,56 @@ function msUntilNextRun() {
 }
 
 async function runOnce() {
-  const date = new Date();
-  const targetDate = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - 1)).toISOString().slice(0, 10);
+  return requestContext.runAsJob(null, async () => {
+    const date = new Date();
+    const targetDate = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - 1)).toISOString().slice(0, 10);
 
-  // No closeConnection() here: connectDB() hands back the process-wide shared
-  // client, which the worker's queue handlers hold for the life of the process.
-  // Closing it at the end of this nightly run left every later job failing with
-  // "Client must be connected before running operations" while the heartbeat
-  // healthcheck stayed green. The process that opened the connection owns it.
-  try {
-    const db = await connectDB();
-    logger.info(`[daily-merkle] Gerando Merkle Root para ${targetDate}`);
-    const result = await integrityService.buildMerkleForDate(targetDate, db, { persistMissing: true });
-    if (!isValidMerkleResult(result)) {
-      logger.warn(`[daily-merkle] Resultado Merkle inválido para ${targetDate}; job encerrado sem persistência`);
-      return;
-    }
+    // No closeConnection() here: connectDB() hands back the process-wide shared
+    // client, which the worker's queue handlers hold for the life of the process.
+    // Closing it at the end of this nightly run left every later job failing with
+    // "Client must be connected before running operations" while the heartbeat
+    // healthcheck stayed green. The process that opened the connection owns it.
+    // #1468 (RNF015 C1/C3): the run is recorded once, completed or failed,
+    // under its own correlation id; with no database there is nothing to
+    // record into, and runOnce still never rejects.
+    let db = null;
+    let outcome = 'completed';
+    const t0 = process.hrtime.bigint();
+    try {
+      db = await connectDB();
+      logger.info(`[daily-merkle] Gerando Merkle Root para ${targetDate}`);
+      const result = await integrityService.buildMerkleForDate(targetDate, db, { persistMissing: true });
+      if (!isValidMerkleResult(result)) {
+        logger.warn(`[daily-merkle] Resultado Merkle inválido para ${targetDate}; job encerrado sem persistência`);
+        return;
+      }
 
-    await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, treeSize: result.leaves.length, db });
-    await anchorV2ForDate(db, targetDate, result);
-    await sealEventChain(db);
-    await recoverMissingDates(db, targetDate);
-    await auditRootService.processTimestampBacklog({ externalDb: db });
-    logger.info(`[daily-merkle] Root salva para ${targetDate} -> ${result.root}`);
-  } catch (error) {
-    if (isSigningConfigError(error)) {
-      logger.error(
-        '[daily-merkle] ERRO DE CONFIGURACAO: a chave de assinatura de auditoria nao pode ser carregada. '
-        + 'Nenhuma raiz diaria (audit_roots) nem tree head (audit_tree_heads) sera selada enquanto isso durar. '
-        + 'Verifique AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE, AUDIT_MERKLE_SIGN_KEY_ID e '
-        + 'AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON:',
-        error.message || error
-      );
-    } else {
-      logger.error('[daily-merkle] Erro ao executar job diário de Merkle:', error.message || error);
+      await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, treeSize: result.leaves.length, db });
+      await anchorV2ForDate(db, targetDate, result);
+      await sealEventChain(db);
+      await recoverMissingDates(db, targetDate);
+      await auditRootService.processTimestampBacklog({ externalDb: db });
+      logger.info(`[daily-merkle] Root salva para ${targetDate} -> ${result.root}`);
+    } catch (error) {
+      outcome = 'failed';
+      if (isSigningConfigError(error)) {
+        logger.error(
+          '[daily-merkle] ERRO DE CONFIGURACAO: a chave de assinatura de auditoria nao pode ser carregada. '
+          + 'Nenhuma raiz diaria (audit_roots) nem tree head (audit_tree_heads) sera selada enquanto isso durar. '
+          + 'Verifique AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE, AUDIT_MERKLE_SIGN_KEY_ID e '
+          + 'AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON:',
+          error.message || error
+        );
+      } else {
+        logger.error('[daily-merkle] Erro ao executar job diário de Merkle:', error.message || error);
+      }
+    } finally {
+      if (db) {
+        const durationMs = Number(process.hrtime.bigint() - t0) / 1e6;
+        await jobMetrics.recordJob(db, { worker: 'daily-merkle', job: 'run', outcome, durationMs });
+      }
     }
-  }
+  });
 }
 
 async function anchorV2ForDate(db, date, result) {

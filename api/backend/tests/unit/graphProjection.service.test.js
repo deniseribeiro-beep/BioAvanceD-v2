@@ -205,6 +205,45 @@ describe('graphProjection.service', () => {
     });
   });
 
+  describe('appendQuarantineReleaseEvent (#1510)', () => {
+    it('emits QUARANTINE_RELEASED keyed by the action, with its specimens, rule, actor and evidence, inside the caller session', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'session-q' };
+      const releasedAt = new Date('2026-11-12T10:00:00Z');
+
+      await service.appendQuarantineReleaseEvent({}, {
+        quarantineActionId: 'qa-1',
+        specimenIds: ['SPC-1', 2],
+        reasonCodes: ['nonconformance'],
+        actionStatus: 'released',
+        releasedAt,
+        authorizedBy: 'coord-1',
+        evidenceIds: ['file-1'],
+        sourceService: 'quarantine-release',
+      }, { session });
+
+      const [, event, options] = outbox.appendEvent.mock.calls[0];
+      expect(event).toMatchObject({
+        eventType: 'QUARANTINE_RELEASED',
+        aggregateType: 'QuarantineAction',
+        aggregateId: 'qa-1',
+        sourceService: 'quarantine-release',
+        schemaVersion: 1,
+      });
+      expect(event.payload).toEqual({
+        quarantineActionId: 'qa-1',
+        specimenIds: ['SPC-1', '2'],
+        reasonCodes: ['nonconformance'],
+        actionStatus: 'released',
+        releasedAt,
+        authorizedBy: 'coord-1',
+        evidenceIds: ['file-1'],
+      });
+      expect(options).toEqual({ session });
+    });
+  });
+
   describe('appendLineageEvent', () => {
     it('uses specimenId for aggregateId and payload when present', async () => {
       const outbox = createFakeOutbox();
@@ -578,6 +617,29 @@ describe('graphProjection.service', () => {
       expect(call.aggregateId).toBe('agg-tr');
       expect(call.payload.sourceConceptId).toBeNull();
       expect(call.payload.targetConceptId).toBeNull();
+    });
+  });
+  // #1561: a batch of promoted records goes to the outbox as one call,
+  // each event the shape its single append gives, in the caller's session.
+  describe('appendTerminologyConceptEvents / appendTerminologyRelationEvents', () => {
+    it('hands the outbox one batch of the single-append event shapes, with the caller session', async () => {
+      const outbox = { ...createFakeOutbox(), appendEvents: vi.fn().mockResolvedValue([]) };
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'tx-1561' };
+      const concept = { terminologyConceptId: 'tc-1', systemUri: 'http://purl.obolibrary.org/obo/hp.owl', code: 'HP:0000001', version: 'v', display: 'All', referenceDatasetReleaseId: 'rel-1' };
+      const relation = { terminologyRelationId: 'tr-1', sourceConceptId: 'tc-1', targetConceptId: 'tc-2', relationType: 'is_a', relationVersion: 'v', referenceDatasetReleaseId: 'rel-1' };
+
+      await service.appendTerminologyConceptEvent({}, concept);
+      await service.appendTerminologyRelationEvent({}, relation);
+      await service.appendTerminologyConceptEvents({}, [concept, { aggregateId: 'agg-tc' }], { session });
+      await service.appendTerminologyRelationEvents({}, [relation], { session });
+
+      const [conceptBatch, relationBatch] = outbox.appendEvents.mock.calls;
+      expect(conceptBatch[1][0]).toEqual(outbox.appendEvent.mock.calls[0][1]);
+      expect(conceptBatch[1][1]).toMatchObject({ aggregateId: 'agg-tc', payload: { conceptStatus: 'active', code: null } });
+      expect(conceptBatch[2]).toEqual({ session });
+      expect(relationBatch[1]).toEqual([outbox.appendEvent.mock.calls[1][1]]);
+      expect(relationBatch[2]).toEqual({ session });
     });
   });
 });

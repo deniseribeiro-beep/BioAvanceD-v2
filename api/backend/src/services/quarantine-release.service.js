@@ -5,6 +5,10 @@ const quarantineActionService = require('./quarantine-action.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
 const consentService = require('./consent.service');
 const { isConsentOwned } = require('./consentQuarantine.service');
+const { GraphProjectionService } = require('./graphProjection.service');
+const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
+
+const graphProjection = new GraphProjectionService();
 
 // #1315 (RF019 AC5/AC6): a quarantined specimen is released only by an
 // authorized actor (the route's gate), with evidence, and only once the rule
@@ -73,10 +77,24 @@ async function releaseQuarantine(db, sample, { actorId, evidenceIds, reason = nu
   const released = [];
   for (const action of open) {
     const closed = { ...QuarantineActionModel.release(action, now), authorizedBy: actorId };
-    await actions.updateOne(
-      { quarantineActionId: action.quarantineActionId },
-      { $set: { actionStatus: closed.actionStatus, releasedAt: closed.releasedAt, authorizedBy: closed.authorizedBy } }
-    );
+    // #1510 (RF019 AC6): the close and its outbox event share one write.
+    await withTransactionWhereSupported(db, async (session) => {
+      await actions.updateOne(
+        { quarantineActionId: action.quarantineActionId },
+        { $set: { actionStatus: closed.actionStatus, releasedAt: closed.releasedAt, authorizedBy: closed.authorizedBy } },
+        session ? { session } : undefined
+      );
+      await graphProjection.appendQuarantineReleaseEvent(db, {
+        quarantineActionId: closed.quarantineActionId,
+        specimenIds: closed.specimenIds,
+        reasonCodes: closed.reasonCodes,
+        actionStatus: closed.actionStatus,
+        releasedAt: closed.releasedAt,
+        authorizedBy: closed.authorizedBy,
+        evidenceIds: evidence,
+        sourceService: 'quarantine-release',
+      }, session ? { session } : {});
+    });
     await quarantineActionService.auditDecision(db, { decision: 'released', action: closed, req, details: { evidenceIds: evidence, reason } });
     released.push(closed);
   }

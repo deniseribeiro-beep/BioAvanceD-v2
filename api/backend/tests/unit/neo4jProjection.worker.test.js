@@ -12,13 +12,125 @@ vi.spyOn(neo4jConnection, 'connectNeo4j').mockResolvedValue({
   session: () => ({ close: async () => undefined }),
 });
 
+// #1468: the worker records each event through jobMetrics.recordJob, called
+// on the module (not destructured) so this spy intercepts it; the cases pass
+// `db: {}`, which a real record would warn about. Its own behaviour is proven
+// in tests/unit/infrastructure/metrics/jobMetrics.test.js.
+const jobMetrics = require('../../src/infrastructure/metrics/jobMetrics');
+const requestContext = require('../../src/utils/requestContext');
+
+vi.spyOn(jobMetrics, 'recordJob').mockResolvedValue(undefined);
+
+// #1557: runProjectionWorker applies the Neo4j schema before its first lease;
+// the cases' fake sessions have no `run`, so the apply is spied here, before
+// the worker destructures it. Its own behaviour is proven in
+// tests/unit/neo4j-apply-schema.test.js.
+const neo4jSchema = require('../../src/infrastructure/database/neo4j/schema/applySchema');
+
+vi.spyOn(neo4jSchema, 'applyNeo4jSchema').mockResolvedValue({ applied: 18 });
+
+beforeEach(() => {
+  jobMetrics.recordJob.mockReset().mockResolvedValue(undefined);
+});
+
 const { runProjectionOnce, runProjectionWorker, PROJECTOR_NAME } = require('../../src/workers/neo4jProjection.worker');
+
+// #1468 (RNF015 C1/C3): each event runs under its own correlation id and is
+// recorded as one job run.
+describe('#1468 neo4jProjection.worker job context and metrics', () => {
+  const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+  const outboxFor = (events) => ({
+    rescheduleStaleProcessing: async () => 0,
+    leaseNextBatch: async () => events,
+    markProjected: async () => undefined,
+    markRetrying: async () => undefined,
+    markDeadLetter: async () => undefined,
+  });
+
+  function captureRecords() {
+    const records = [];
+    jobMetrics.recordJob.mockImplementation(async (db, entry) => {
+      records.push({ db, ...entry, requestId: requestContext.currentRequestId() });
+    });
+    return records;
+  }
+
+  it('records a projected event as completed under its traceId', async () => {
+    const records = captureRecords();
+    const db = {};
+    let seen;
+    const projector = { applyEvent: async () => { seen = requestContext.currentRequestId(); } };
+
+    const result = await runProjectionOnce({
+      db,
+      neo4jDriver,
+      outboxService: outboxFor([{ eventId: 'evt-t1', attempts: 1, traceId: 'req-trace-0001' }]),
+      projector,
+      maxAttempts: 8,
+    });
+
+    expect(result).toMatchObject({ processed: 1, projected: 1, failed: 0 });
+    expect(seen).toBe('req-trace-0001');
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      db,
+      worker: 'neo4j-projection',
+      job: 'project-event',
+      outcome: 'completed',
+      requestId: 'req-trace-0001',
+    });
+    expect(records[0].durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('runs an event without a traceId under a fresh well-formed id of its own', async () => {
+    const records = captureRecords();
+    const projector = { applyEvent: async () => undefined };
+
+    await requestContext.runAsJob('req-outer-0003', () => runProjectionOnce({
+      db: {},
+      neo4jDriver,
+      outboxService: outboxFor([{ eventId: 'evt-t2', attempts: 1 }, { eventId: 'evt-t3', attempts: 1 }]),
+      projector,
+      maxAttempts: 8,
+    }));
+
+    expect(records).toHaveLength(2);
+    for (const record of records) {
+      expect(requestContext.WELL_FORMED.test(record.requestId)).toBe(true);
+      expect(record.requestId).not.toBe('req-outer-0003');
+    }
+    expect(records[0].requestId).not.toBe(records[1].requestId);
+  });
+
+  it('records an event whose applyEvent throws as failed, and still counts it failed', async () => {
+    const records = captureRecords();
+    const projector = { applyEvent: async () => { throw new Error('neo4j offline'); } };
+    const logger = require('../../src/utils/logger');
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const result = await runProjectionOnce({
+        db: {},
+        neo4jDriver,
+        outboxService: outboxFor([{ eventId: 'evt-t4', attempts: 1, traceId: 'req-trace-0002' }]),
+        projector,
+        maxAttempts: 8,
+      });
+
+      expect(result).toMatchObject({ processed: 1, projected: 0, failed: 1 });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ outcome: 'failed', requestId: 'req-trace-0002' });
+    } finally {
+      logger.warn.mockRestore();
+    }
+  });
+});
 
 describe('neo4jProjection.worker', () => {
   it('replays outbox events idempotently and marks dead letters after repeated failures', async () => {
     const events = [
       { eventId: 'evt-1', eventType: 'CONSENT_UPSERTED', aggregateType: 'EthicalConsent', aggregateId: 'consent-1', attempts: 0, schemaVersion: 1, payload: { donorKey: 'patient-1' } },
-      { eventId: 'evt-2', eventType: 'QUALITY_ASSESSED', aggregateType: 'Sample', aggregateId: 'sample-1', attempts: 7, schemaVersion: 1, payload: { sampleId: 'sample-1' } },
+      { eventId: 'evt-2', eventType: 'QUALITY_ASSESSED', aggregateType: 'Sample', aggregateId: 'sample-1', attempts: 8, schemaVersion: 1, payload: { sampleId: 'sample-1' } },
     ];
 
     const state = {
@@ -104,7 +216,7 @@ describe('neo4jProjection.worker', () => {
     const retries = [];
     const outboxService = {
       rescheduleStaleProcessing: async () => 0,
-      leaseNextBatch: async () => [{ eventId: 'evt-b', aggregateType: 'Sample', aggregateId: 's-b', attempts: 2 }],
+      leaseNextBatch: async () => [{ eventId: 'evt-b', aggregateType: 'Sample', aggregateId: 's-b', attempts: 3 }],
       markProjected: async () => undefined,
       markRetrying: async (_db, eventId, _error, options) => retries.push({ eventId, options }),
       markDeadLetter: async () => undefined,
@@ -117,13 +229,36 @@ describe('neo4jProjection.worker', () => {
     expect(retries).toEqual([{ eventId: 'evt-b', options: { attempts: 3 } }]);
   });
 
+  // #1501 (RNF019 C5): leaseNextBatch counts the try before the projector runs,
+  // so an event leased on its seventh try of eight is retried, and only the
+  // eighth try's failure dead-letters it.
+  it('retries an event leased on its next-to-last try and dead-letters it on the last', async () => {
+    const run = async (attempts) => {
+      const state = { retrying: [], dead: [] };
+      const outboxService = {
+        rescheduleStaleProcessing: async () => 0,
+        leaseNextBatch: async () => [{ eventId: `evt-${attempts}`, aggregateType: 'Sample', aggregateId: 's-l', attempts }],
+        markProjected: async () => undefined,
+        markRetrying: async (_db, eventId, _error, options) => state.retrying.push({ eventId, options }),
+        markDeadLetter: async (_db, eventId) => state.dead.push(eventId),
+      };
+      const projector = { applyEvent: async () => { throw new Error('neo4j offline'); } };
+      const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+      await runProjectionOnce({ db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8 });
+      return state;
+    };
+
+    expect(await run(7)).toEqual({ retrying: [{ eventId: 'evt-7', options: { attempts: 7 } }], dead: [] });
+    expect(await run(8)).toEqual({ retrying: [], dead: ['evt-8'] });
+  });
+
   // #1313 (RNF019 C5/C7): a dead letter is logged as an error, naming it.
   it('logs a dead letter as an error with its aggregate and version', async () => {
     const logger = require('../../src/utils/logger');
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
     const outboxService = {
       rescheduleStaleProcessing: async () => 0,
-      leaseNextBatch: async () => [{ eventId: 'evt-x', eventType: 'T', aggregateType: 'Sample', aggregateId: 's-x', attempts: 7 }],
+      leaseNextBatch: async () => [{ eventId: 'evt-x', eventType: 'T', aggregateType: 'Sample', aggregateId: 's-x', attempts: 8 }],
       markProjected: async () => undefined,
       markRetrying: async () => undefined,
       markDeadLetter: async () => undefined,
@@ -350,5 +485,124 @@ describe('neo4jProjection.worker - runProjectionWorker', () => {
     expect(result).toEqual({ processed: 0, projected: 0, failed: 0, skipped: 0, deferred: 0 });
 
     setTimeoutSpy.mockRestore();
+  });
+});
+
+// RF022 AC4/AC9, RNF014 C7: with FOUNDATION_READINESS_REQUIRED, the worker
+// leases no outbox event unless the newest ReadinessReport is ready for this
+// build's release. The real readiness module reads an in-memory db.
+describe('#1551 runProjectionWorker Foundation readiness gate', () => {
+  const env = require('../../src/config/env');
+  const { createFakeDb } = require('./foundation/helpers/fake-db');
+  const ReadinessReportModel = require('../../src/models/ReadinessReport');
+  const { CANONICAL_MODEL_RELEASE_ID } = require('../../src/foundation/readiness');
+  const projector = { applyEvent: async () => ({ projected: true }) };
+  const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+  let requiredBefore;
+  let outboxService;
+
+  beforeEach(() => {
+    requiredBefore = env.FOUNDATION_READINESS_REQUIRED;
+    env.FOUNDATION_READINESS_REQUIRED = true;
+    outboxService = {
+      rescheduleStaleProcessing: vi.fn().mockResolvedValue(0),
+      leaseNextBatch: vi.fn().mockResolvedValue([]),
+      markProjected: async () => undefined,
+      markRetrying: async () => undefined,
+      markDeadLetter: async () => undefined,
+    };
+  });
+  afterEach(() => {
+    env.FOUNDATION_READINESS_REQUIRED = requiredBefore;
+  });
+
+  async function dbWithReport(gateResults, canonicalModelReleaseId = CANONICAL_MODEL_RELEASE_ID) {
+    const db = createFakeDb();
+    if (gateResults) {
+      await db.collection('readinessReports').insertOne(ReadinessReportModel.create({
+        foundationDataRunId: 'run-1',
+        canonicalModelReleaseId,
+        environment: env.NODE_ENV,
+        gateResults,
+      }));
+    }
+    return db;
+  }
+
+  function run(db) {
+    return runProjectionWorker({ db, neo4jDriver, outboxService, projector, maxAttempts: 8, once: true });
+  }
+
+  async function expectRefusal(db) {
+    await expect(run(db)).rejects.toMatchObject({ name: 'FoundationNotReadyError' });
+    expect(outboxService.rescheduleStaleProcessing).not.toHaveBeenCalled();
+    expect(outboxService.leaseNextBatch).not.toHaveBeenCalled();
+  }
+
+  it('refuses with no ReadinessReport before leasing', async () => {
+    await expectRefusal(await dbWithReport(null));
+  });
+
+  it('refuses a blocked ReadinessReport before leasing', async () => {
+    await expectRefusal(await dbWithReport([{ gate: 'version', result: 'fail', p0: true }]));
+  });
+
+  it('refuses a ready ReadinessReport of another release before leasing', async () => {
+    await expectRefusal(await dbWithReport([{ gate: 'version', result: 'pass', p0: true }], 'release-1.3.0'));
+  });
+
+  it('runs a pass on a ready ReadinessReport for this release', async () => {
+    const db = await dbWithReport([{ gate: 'version', result: 'pass', p0: true }]);
+
+    await expect(run(db)).resolves.toMatchObject({ processed: 0 });
+    expect(outboxService.leaseNextBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads no ReadinessReport with the flag off', async () => {
+    env.FOUNDATION_READINESS_REQUIRED = false;
+
+    await expect(run(await dbWithReport(null))).resolves.toMatchObject({ processed: 0 });
+    expect(outboxService.leaseNextBatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// RNF016 C7: the worker applies the declared constraints and indexes before
+// it leases any outbox event, and a failed apply leases nothing.
+describe('#1557 runProjectionWorker applies the Neo4j schema first', () => {
+  const env = require('../../src/config/env');
+  const projector = { applyEvent: async () => ({ projected: true }) };
+  const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+  let outboxService;
+
+  beforeEach(() => {
+    neo4jSchema.applyNeo4jSchema.mockClear();
+    outboxService = {
+      rescheduleStaleProcessing: vi.fn().mockResolvedValue(0),
+      leaseNextBatch: vi.fn().mockResolvedValue([]),
+      markProjected: async () => undefined,
+      markRetrying: async () => undefined,
+      markDeadLetter: async () => undefined,
+    };
+  });
+
+  function run() {
+    return runProjectionWorker({ db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8, once: true });
+  }
+
+  it('applies the schema with the passed driver before the first lease', async () => {
+    await expect(run()).resolves.toMatchObject({ processed: 0 });
+
+    expect(neo4jSchema.applyNeo4jSchema).toHaveBeenCalledTimes(1);
+    expect(neo4jSchema.applyNeo4jSchema).toHaveBeenCalledWith(neo4jDriver, { database: env.NEO4J_DATABASE || 'neo4j' });
+    expect(outboxService.leaseNextBatch).toHaveBeenCalledTimes(1);
+    expect(neo4jSchema.applyNeo4jSchema.mock.invocationCallOrder[0])
+      .toBeLessThan(outboxService.leaseNextBatch.mock.invocationCallOrder[0]);
+  });
+
+  it('rejects and leases nothing when the apply fails', async () => {
+    neo4jSchema.applyNeo4jSchema.mockRejectedValueOnce(new Error('ConstraintCreationFailed'));
+
+    await expect(run()).rejects.toThrow('ConstraintCreationFailed');
+    expect(outboxService.leaseNextBatch).not.toHaveBeenCalled();
   });
 });

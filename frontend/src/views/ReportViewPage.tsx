@@ -98,15 +98,13 @@ export default function ReportViewPage() {
     window.print();
   };
 
-  const handleDelete = async () => {
-    if (!report) return;
-
-    if (!window.confirm(`Tem certeza que deseja excluir o relatório "${report.reportType}"?\n\nEsta ação não pode ser desfeita.`)) {
+  const handleDelete = async (target: Reports) => {
+    if (!window.confirm(`Tem certeza que deseja excluir o relatório "${target.reportType}"?\n\nEsta ação não pode ser desfeita.`)) {
       return;
     }
 
     try {
-      await reportsService.delete(report.reportID);
+      await reportsService.delete(target.reportID);
       // Redireciona para a lista de relatórios após exclusão
       navigate('/reports');
     } catch (err: any) {
@@ -382,10 +380,10 @@ export default function ReportViewPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {reportData.sensors.map((s: any, idx: number) => {
+                      {reportData.sensors.map((s: any) => {
                         const sensorId = s.sensorId || s.sensorID || s._id || 'N/A';
                         return (
-                          <tr key={s._id || sensorId || idx}>
+                          <tr key={s._id || sensorId}>
                             <td>{sensorId}</td>
                             <td>{s.sensorType}</td>
                             <td>{getMaintenanceStatusLabel(s.maintenanceStatus)}</td>
@@ -571,7 +569,7 @@ export default function ReportViewPage() {
             <Download size={18} />
             Download JSON
           </Button>
-          <Button onClick={handleDelete} variant="danger">
+          <Button onClick={() => handleDelete(report)} variant="danger">
             <Trash2 size={18} />
             Excluir
           </Button>

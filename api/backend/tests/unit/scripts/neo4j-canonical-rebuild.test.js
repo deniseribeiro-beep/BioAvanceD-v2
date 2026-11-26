@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { seedCanonicalOutbox } = require('../../../scripts/neo4j-canonical-rebuild');
+const { seedCanonicalOutbox, appendExtraEdgeRemovals } = require('../../../scripts/neo4j-canonical-rebuild');
 
 /**
  * Real query-matching fake (exact-match filter + sort + $in), not a canned
@@ -195,5 +195,132 @@ describe('neo4j-canonical-rebuild#seedCanonicalOutbox', () => {
 
     const qualityEvents = db.collections.graph_projection_outbox.docs.filter((e) => e.eventType === 'QUALITY_ASSESSED');
     expect(qualityEvents).toHaveLength(0);
+  });
+});
+
+// #1550: the drift check's inputs, the same shapes the reconcile's test
+// gives it. samples: the Mongo samples; openAssignments: their open
+// StorageAssignment rows; nodes: what the drift query reads per Sample node.
+function makeDriftDb(samples, openAssignments = []) {
+  return {
+    collection: (name) => {
+      if (name === 'specimenContainerAssignments' || name === 'containerPositionAssignments') {
+        return { find: () => ({ toArray: async () => [] }) };
+      }
+      if (name === 'storageAssignments') {
+        return {
+          find: (filter) => ({
+            toArray: async () => openAssignments.filter((a) => filter.specimenId.$in.includes(a.specimenId) && filter.removedAt === null),
+          }),
+        };
+      }
+      expect(name).toBe('samples');
+      return {
+        find: () => ({
+          async *[Symbol.asyncIterator]() { yield* samples; },
+        }),
+      };
+    },
+  };
+}
+
+function makeNeo4jSession(nodes) {
+  return {
+    run: async (_cypher, params) => ({
+      records: params.ids.filter((id) => id in nodes).map((id) => {
+        const row = { id, donorIds: [], openPositions: [], ...nodes[id] };
+        return { get: (key) => row[key] };
+      }),
+    }),
+  };
+}
+
+describe('neo4j-canonical-rebuild#appendExtraEdgeRemovals', () => {
+  const pseudonymizeDonorId = (participantId) => `DONOR_${participantId}`;
+  const samples = [
+    { _id: 'smp-ok', participantId: 'p-1' },
+    { _id: 'smp-moved', participantId: 'p-1' },
+    { _id: 'smp-nodonor', participantId: 'p-2' },
+    { _id: 'smp-wrongdonor', participantId: 'p-3' },
+    { _id: 'smp-extradonor', participantId: 'p-5' },
+    { _id: 'smp-released' },
+    { _id: 'smp-missing', participantId: 'p-4' },
+  ];
+  const openAssignments = [
+    { specimenId: 'smp-ok', boxId: 'box-1', positionCode: 'A01' },
+    { specimenId: 'smp-moved', boxId: 'box-2', positionCode: 'B02' },
+  ];
+  const nodes = {
+    'smp-ok': { donorIds: ['DONOR_p-1'], openPositions: ['box-1/A01'] },
+    'smp-moved': { donorIds: ['DONOR_p-1'], openPositions: ['box-1/A05'] },
+    'smp-nodonor': { donorIds: [] },
+    'smp-wrongdonor': { donorIds: ['DONOR_p-9'] },
+    'smp-extradonor': { donorIds: ['DONOR_p-5', 'DONOR_p-8'] },
+    'smp-released': { openPositions: ['box-1/C03'] },
+  };
+
+  it('appendExtraEdgeRemovals appends an unlink per extra donor and a release per open position Mongo holds nowhere, and nothing for what an event repairs', async () => {
+    const appended = [];
+    const outbox = { appendEvent: async (_db, event) => { appended.push(event); } };
+
+    const result = await appendExtraEdgeRemovals(
+      makeDriftDb(samples, openAssignments), outbox, makeNeo4jSession(nodes), { pseudonymizeDonorId },
+    );
+
+    expect(result).toEqual({ donorUnlinks: 2, positionReleases: 1, donorCheck: 'ran' });
+    expect(appended.map((event) => [event.eventType, event.aggregateType, event.aggregateId, event.payload.donorId])).toEqual([
+      ['SPECIMEN_DONOR_UNLINKED', 'Sample', 'smp-wrongdonor', 'DONOR_p-9'],
+      ['SPECIMEN_DONOR_UNLINKED', 'Sample', 'smp-extradonor', 'DONOR_p-8'],
+      ['STORAGE_POSITION_RELEASED', 'Sample', 'smp-released', undefined],
+    ]);
+    expect(appended[0].payload).toEqual({ specimenId: 'smp-wrongdonor', donorId: 'DONOR_p-9' });
+    expect(appended[1].payload).toEqual({ specimenId: 'smp-extradonor', donorId: 'DONOR_p-8' });
+    expect(appended[2].payload.specimenId).toBe('smp-released');
+    expect(new Date(appended[2].payload.releasedAt).toISOString()).toBe(appended[2].payload.releasedAt);
+    for (const event of appended) expect(event.sourceService).toBe('neo4j-canonical-rebuild');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A sample stored while the drift scan runs is projected before the
+  // release, with a validFrom after the Mongo read. The release instant is
+  // taken before that read, so the release leaves the new placement open.
+  it('appendExtraEdgeRemovals takes releasedAt before the drift scan reads anything', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-13T10:00:00.000Z'));
+    const appended = [];
+    const outbox = { appendEvent: async (_db, event) => { appended.push(event); } };
+    const session = makeNeo4jSession({ 'smp-released': { openPositions: ['box-1/C03'] } });
+    const run = session.run;
+    session.run = async (cypher, params) => {
+      vi.setSystemTime(new Date('2026-11-13T10:05:00.000Z'));
+      return run(cypher, params);
+    };
+
+    await appendExtraEdgeRemovals(makeDriftDb([{ _id: 'smp-released' }]), outbox, session, { pseudonymizeDonorId });
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0].payload).toEqual({ specimenId: 'smp-released', releasedAt: '2026-11-13T10:00:00.000Z' });
+  });
+
+  // A sample whose wrong donor needs the rebuild may also sit at a wrong but
+  // known position: that one is the position event's, not a release.
+  it('appendExtraEdgeRemovals unlinks the wrong donor of a sample whose known position moved, and releases nothing for it', async () => {
+    const appended = [];
+    const outbox = { appendEvent: async (_db, event) => { appended.push(event); } };
+
+    const result = await appendExtraEdgeRemovals(
+      makeDriftDb([{ _id: 'smp-both', participantId: 'p-6' }], [{ specimenId: 'smp-both', boxId: 'box-3', positionCode: 'C01' }]),
+      outbox,
+      makeNeo4jSession({ 'smp-both': { donorIds: ['DONOR_p-7'], openPositions: ['box-3/C09'] } }),
+      { pseudonymizeDonorId },
+    );
+
+    expect(result).toEqual({ donorUnlinks: 1, positionReleases: 0, donorCheck: 'ran' });
+    expect(appended.map((event) => [event.eventType, event.payload])).toEqual([
+      ['SPECIMEN_DONOR_UNLINKED', { specimenId: 'smp-both', donorId: 'DONOR_p-7' }],
+    ]);
   });
 });

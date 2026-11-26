@@ -22,7 +22,7 @@ Requirements: RF010 AC4-AC6, Requisitos v4.0.0; dictionary v2.0.0 ConsentDecisio
 
 ## The term's document control (RF010 AC1)
 
-13. **Every term records `language` (P1X-0093, BCP 47), `jurisdiction` (V2E-0430), `checksum` (V2E-0432) and `consentModel`,** on all three write paths (`createTemplate`, `updateTemplate`, `createPolicy`). The checksum is the SHA-256 of the exact text, computed by the server and never taken from the caller. Language and jurisdiction default to `pt-BR` and `BR`, this deployment's language and law.
+13. **Every term records `language` (P1X-0093, BCP 47), `jurisdiction` (V2E-0430), `checksum` (V2E-0432) and `consentModel`,** on all three write paths (`createTemplate`, `updateTemplate`, `createPolicy`). The checksum is the SHA-256 of the exact text, computed by the server and never taken from the caller. Language and jurisdiction default to `pt-BR` and `BR`, this deployment's language and law. Every term also records `documentUri` (P1X-0095), the controlled document's URI; it is optional, as CAAE is, until the builder sends one, and `createTemplate` and `createPolicy` refuse it with a 422 when it is not a URI (#1492).
 14. **`consentModel` is ENUM-0043..0046 (`specific`, `broad`, `tiered`, `dynamic`) and is optional on a term,** since the builder does not yet offer it. A Consent records its term's modality (ELM-0095), null when the term names none.
 
 ## Computable permissions (RF010 AC3)

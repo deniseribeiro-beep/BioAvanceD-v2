@@ -12,6 +12,23 @@ const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
 const { readingIdentityOf, screenReading, findClientReplay, recordClientReplay } = require('./telemetryReadingContract');
 
+// RULE-025, RF009 AC8 (#1582): the reading contract of POST
+// /api/temperature/reading and /api/temperature/system/reading, the top-level
+// fields this path reads: TemperatureModel.validate and create, the alert
+// policy, and the reading identity's client keys. Any other field is stripped
+// at receipt, before hash, screen and store. `temperature` is not one:
+// TemperatureModel requires temperatureValue, and nothing here reads it.
+const TEMPERATURE_API_READING_FIELDS = Object.freeze([
+  'logId', 'logID', 'timestamp', 'sensorId', 'sensorID', 'sensorName', 'sensorModel', 'sensorType',
+  'locationId', 'locationID', 'locationName', 'facility', 'zone',
+  'temperatureValue', 'temperatureUnit', 'precision', 'minThreshold', 'maxThreshold', 'targetTemperature',
+  'hysteresis', 'alertDelay', 'readingStatus', 'sensorStatus', 'signalQuality', 'batteryLevel',
+  'errorCode', 'errorMessage', 'lastCalibration', 'nextCalibration', 'calibrationCertificate',
+  'maintenanceStatus', 'dataQualityScore', 'operatorId', 'organizationId',
+  'policyId', 'policyID',
+  'idempotencyKey', 'sourceEventId', 'deviceMessageId', 'traceId', 'sequenceNumber',
+]);
+
 // RF009 AC7 (#1317, #1391): a replay answers the first reading's resultRef
 // from RF029's key store, which holds identifiers and times, never the value.
 function replayOf(resultRef, temperatureData, identity) {
@@ -61,7 +78,9 @@ async function assertOrganizationIdResolves(db, organizationId) {
  * RF009 - Registro de Temperatura e Alertas
  */
 class TemperatureService {
-  async createTemperatureReading(db, temperatureData) {
+  // RULE-025 (#1582): temperatureData holds contract fields only; the names
+  // of the fields stripped from it at receipt flag the reading.
+  async createTemperatureReading(db, temperatureData, { strippedFields = [] } = {}) {
     try {
       const validation = TemperatureModel.validate(temperatureData);
       if (!validation.isValid) {
@@ -86,7 +105,7 @@ class TemperatureService {
       // RF009 AC7 (#1317): a clock drift or an implausible value is recorded
       // as a TelemetryValidationIssue; an implausible value is a 422 with
       // nothing stored.
-      await screenReading(db, identity, temperatureData);
+      await screenReading(db, identity, temperatureData, { strippedFields });
 
       const temperature = { ...TemperatureModel.create(temperatureData), ...identity };
 
@@ -362,4 +381,5 @@ class TemperatureService {
 }
 
 module.exports = new TemperatureService();
+module.exports.TEMPERATURE_API_READING_FIELDS = TEMPERATURE_API_READING_FIELDS;
 

@@ -1,12 +1,17 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.env') });
 
+// #1550: also removes what the reconcile reports for a rebuild, a donor edge
+// Mongo does not hold and an open position Mongo holds nowhere, through the outbox.
+
 const logger = require('../src/utils/logger');
+const env = require('../src/config/env');
 const { connectDB } = require('../src/database/mongo');
 const { connectNeo4j } = require('../src/infrastructure/database/neo4j/connection');
 const { Neo4jOutboxService } = require('../src/services/neo4jOutbox.service');
 const { Neo4jCanonicalProjectionService } = require('../src/services/neo4jCanonicalProjection.service');
 const { runProjectionOnce } = require('../src/workers/neo4jProjection.worker');
 const rcsAssessmentService = require('../src/services/rcs-assessment.service');
+const { findSamplesDriftedFromGraph, planDriftRepair } = require('./graph-projection-reconcile');
 
 async function seedCanonicalOutbox(db, outbox) {
   const patients = await db.collection('patients').find({}, { projection: { _id: 1, participantId: 1, participantId: 1 } }).toArray();
@@ -110,6 +115,47 @@ async function seedCanonicalOutbox(db, outbox) {
   }
 }
 
+// #1550: what the reconcile reports for a rebuild has no re-appended event
+// that removes it. A donor edge to any donor but the sample's own is
+// unlinked, and the open position of a sample Mongo places nowhere is
+// released. A drift an event repairs (a missing donor, a wrong but known
+// position) is left to the re-appended SPECIMEN_UPSERTED and the reconcile.
+async function appendExtraEdgeRemovals(db, outbox, neo4jSession, options = {}) {
+  // Taken before the scan reads MongoDB: a sample stored after that read has
+  // a validFrom at or after releasedAt, and the release leaves it open.
+  const releasedAt = new Date().toISOString();
+  const { drifted, donorCheck } = await findSamplesDriftedFromGraph(db, neo4jSession, options);
+  let donorUnlinks = 0;
+  let positionReleases = 0;
+  for (const entry of drifted) {
+    if (!planDriftRepair(entry).needsRebuild) continue;
+    if (entry.donor) {
+      const extraDonorIds = entry.donor.actual.filter((id) => id !== entry.donor.expected);
+      for (const donorId of extraDonorIds) {
+        await outbox.appendEvent(db, {
+          eventType: 'SPECIMEN_DONOR_UNLINKED',
+          aggregateType: 'Sample',
+          aggregateId: entry.specimenId,
+          payload: { specimenId: entry.specimenId, donorId },
+          sourceService: 'neo4j-canonical-rebuild'
+        });
+        donorUnlinks += 1;
+      }
+    }
+    if (entry.position && !entry.position.expected) {
+      await outbox.appendEvent(db, {
+        eventType: 'STORAGE_POSITION_RELEASED',
+        aggregateType: 'Sample',
+        aggregateId: entry.specimenId,
+        payload: { specimenId: entry.specimenId, releasedAt },
+        sourceService: 'neo4j-canonical-rebuild'
+      });
+      positionReleases += 1;
+    }
+  }
+  return { donorUnlinks, positionReleases, donorCheck };
+}
+
 async function main() {
   const db = await connectDB();
   const neo4jDriver = await connectNeo4j();
@@ -118,6 +164,14 @@ async function main() {
 
   await outboxService.ensureIndexes(db);
   await seedCanonicalOutbox(db, outboxService, projector);
+
+  const neo4jSession = neo4jDriver.session({ database: env.NEO4J_DATABASE || 'neo4j', defaultAccessMode: 'READ' });
+  let removals;
+  try {
+    removals = await appendExtraEdgeRemovals(db, outboxService, neo4jSession);
+  } finally {
+    await neo4jSession.close();
+  }
 
   let iterations = 0;
   while (iterations < 100) {
@@ -128,7 +182,12 @@ async function main() {
     }
   }
 
-  logger.info('[GRAPH_OUTBOX] Reconstrução canônica concluída', { iterations });
+  logger.info('[GRAPH_OUTBOX] Reconstrução canônica concluída', {
+    iterations,
+    donorUnlinks: removals.donorUnlinks,
+    positionReleases: removals.positionReleases,
+    donorCheck: removals.donorCheck,
+  });
 }
 
 if (require.main === module) {
@@ -140,4 +199,5 @@ if (require.main === module) {
 
 module.exports = {
   seedCanonicalOutbox,
+  appendExtraEdgeRemovals,
 };

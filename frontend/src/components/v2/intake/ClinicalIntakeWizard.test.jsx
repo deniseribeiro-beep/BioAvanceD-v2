@@ -5,7 +5,25 @@ import { LanguageProvider } from '../../../contexts/LanguageContext';
 import { apiClient } from '../../../api/client';
 import { consentService } from '../../../services/api';
 
-const { buildSubmissionPayload, applyIntakeOrganization, createClinicalStepSchema } = _test;
+const {
+  buildSubmissionPayload,
+  applyIntakeOrganization,
+  applyIntakeCollection,
+  createClinicalStepSchema,
+  getDictionarySlug,
+  mapDictionaryOptions,
+  getDiagnosisLocalizedLabel,
+  getCidDisplayLabel,
+  getCidAliases,
+  normalizeCidOption,
+  normalizeDiseaseBiomarker,
+  normalizeDiseasePhenotype,
+  buildBiomarkerValuesMap,
+  normalizeCidCode,
+  pickBestOrphaCandidate,
+  filterAndRankDiagnosisResults,
+  consolidateDiagnosisCandidates,
+} = _test;
 
 // #871's mocking approach: replace apiClient/consentService at the network
 // boundary (not useSemanticCascade itself) so the real hook runs end to end
@@ -17,6 +35,7 @@ vi.mock('../../../api/client', () => ({
 
 vi.mock('../../../services/api', () => ({
   consentService: { getTemplates: vi.fn() },
+  collectionsService: { getAll: vi.fn().mockResolvedValue({ data: { data: [] }, status: 200 }) },
 }));
 
 describe('ClinicalIntakeWizard createClinicalStepSchema contracts', () => {
@@ -214,6 +233,18 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
 
     expect(payload).not.toHaveProperty('organizationId');
     expect(payload.specimen).not.toHaveProperty('collectionSite');
+  });
+
+  it('RF004 AC2 (#1497): the collection pick goes in specimen.collectionId', () => {
+    const payload = applyIntakeCollection(buildSubmissionPayload({ isHealthyControl: true, patientName: 'Paciente Teste', linkedProject: 'PROJ-1' }), 'COL-1');
+
+    expect(payload.specimen.collectionId).toBe('COL-1');
+  });
+
+  it('RF004 AC2 (#1497): with no collection pick the specimen carries no collectionId', () => {
+    const payload = applyIntakeCollection(buildSubmissionPayload({ isHealthyControl: true, patientName: 'Paciente Teste', linkedProject: 'PROJ-1' }), '');
+
+    expect(payload.specimen).not.toHaveProperty('collectionId');
   });
 });
 
@@ -432,5 +463,238 @@ describe('ClinicalIntakeWizard -- a diagnosis hit with no ORPHA code (#1433)', (
       ([url, options]) => url === '/terminologies' && /^ORPHA:/i.test(String(options?.params?.q || ''))
     );
     expect(orphaQueries).toEqual([]);
+  });
+});
+
+describe('ClinicalIntakeWizard dictionary option helpers', () => {
+  it('takes the slug from slug, value or code, in that order, and an empty slug from none', () => {
+    expect(getDictionarySlug({ slug: ' s ', value: 'v', code: 'c' })).toBe('s');
+    expect(getDictionarySlug({ value: 'v', code: 'c' })).toBe('v');
+    expect(getDictionarySlug({ code: 'c' })).toBe('c');
+    expect(getDictionarySlug(undefined)).toBe('');
+  });
+
+  it('maps label or name into options and drops a row missing its value or label', () => {
+    expect(mapDictionaryOptions([
+      { slug: 'a', label: 'Alpha' },
+      { code: 'b', name: 'Beta' },
+      { code: 'c' },
+      { label: 'No value' },
+    ])).toEqual([
+      { value: 'a', label: 'Alpha' },
+      { value: 'b', label: 'Beta' },
+    ]);
+    expect(mapDictionaryOptions('not a list')).toEqual([]);
+  });
+});
+
+describe('ClinicalIntakeWizard diagnosis label helpers', () => {
+  it('prefers a Portuguese name and marks it as the primary language', () => {
+    expect(getDiagnosisLocalizedLabel({ nameEn: 'Asthma', namePt: ' Asma ' })).toEqual({
+      label: 'Asma',
+      language: 'pt',
+      isEnglishFallback: false,
+    });
+  });
+
+  it('marks an English-only name with [EN] and language en when the item names no language', () => {
+    expect(getDiagnosisLocalizedLabel({ nameEn: 'Asthma' })).toEqual({
+      label: '[EN] Asthma',
+      language: 'en',
+      isEnglishFallback: true,
+    });
+  });
+
+  it('keeps an unmarked label when the item says its language is pt', () => {
+    expect(getDiagnosisLocalizedLabel({ label: 'Asma brônquica', lang: 'PT' })).toEqual({
+      label: 'Asma brônquica',
+      language: 'pt',
+      isEnglishFallback: false,
+    });
+  });
+
+  it('falls back to displayName and keeps the language the item names', () => {
+    expect(getDiagnosisLocalizedLabel({ displayName: 'Asma', language: 'es' })).toEqual({
+      label: '[EN] Asma',
+      language: 'es',
+      isEnglishFallback: true,
+    });
+  });
+
+  it('returns an empty label, with the item language or none, when the item has no name', () => {
+    expect(getDiagnosisLocalizedLabel({})).toEqual({ label: '', language: '', isEnglishFallback: false });
+    expect(getDiagnosisLocalizedLabel({ lang: 'en' })).toEqual({ label: '', language: 'en', isEnglishFallback: false });
+  });
+
+  it('joins the code and description, or shows whichever exists, or a placeholder', () => {
+    expect(getCidDisplayLabel({ Codigo_Tabulacao: 'J45', namePt: 'Asma' })).toBe('J45 - Asma');
+    expect(getCidDisplayLabel({ Codigos_CID10: 'J45.0' })).toBe('J45.0');
+    expect(getCidDisplayLabel({ codigo: 'E10' })).toBe('E10');
+    expect(getCidDisplayLabel({ code: 'E11' })).toBe('E11');
+    expect(getCidDisplayLabel({ descricao: 'Diabetes' })).toBe('Diabetes');
+    expect(getCidDisplayLabel(null)).toBe('Doença sem descrição');
+  });
+
+  it('collects aliases, synonyms and alternative names, trimmed, dropping empty entries', () => {
+    expect(getCidAliases({
+      aliases: [' a ', null],
+      synonyms: ['s'],
+      alternativeNames: ['t', ''],
+    })).toEqual(['a', 's', 't']);
+    expect(getCidAliases({ aliases: 'x', synonyms: 'y', alternativeNames: 'z' })).toEqual([]);
+  });
+});
+
+describe('ClinicalIntakeWizard normalizeCidOption', () => {
+  it('builds an option with no id from a bare cid field, using the CID as its code', () => {
+    const option = normalizeCidOption({ cid: 'J45', namePt: 'Asma' });
+    expect(option.id).toBe('');
+    expect(option.code).toBe('J45');
+    expect(option.cidCode).toBe('J45');
+    expect(option.description).toBe('Asma');
+    expect(option.displayName).toBe('Asma');
+    expect(option.orphaCode).toBe('');
+  });
+
+  it('gives an empty item empty fields and the no-description placeholder as display name', () => {
+    const option = normalizeCidOption({});
+    expect(option.description).toBe('');
+    expect(option.displayName).toBe('Doença sem descrição');
+    expect(option.metaLabel).toBe('CID: - | ORPHA: - | OMIM: -');
+    expect(option.definition).toBe('');
+    expect(option.language).toBe('');
+    expect(option.isEnglishFallback).toBe(false);
+  });
+
+  it('reads an ORPHA code from the code of an item whose system is ORPHA', () => {
+    const option = normalizeCidOption({ sistema: 'orpha', code: '558', descricao: 'Síndrome de Marfan' });
+    expect(option.orphaCode).toBe('ORPHA:558');
+    expect(option.description).toBe('Síndrome de Marfan');
+    expect(option.language).toBe('pt');
+  });
+
+  it('lists translation and names-object entries as localized names', () => {
+    const option = normalizeCidOption({ code: 'Q87.4', translations: { pt: 'Marfan', en: 'Marfan syndrome', es: 'Síndrome de Marfan' }, names: { en: 'MFS' } });
+    expect(option.localizedNames).toEqual(['Marfan', 'Marfan syndrome', 'Síndrome de Marfan', 'MFS']);
+    expect(option.description).toBe('Marfan');
+  });
+
+  it('merges sinonimos and synonyms, trimmed, dropping empty entries', () => {
+    const option = normalizeCidOption({ code: 'E10', sinonimos: [' tipo 1 ', null], synonyms: ['T1D'] });
+    expect(option.synonyms).toEqual(['tipo 1', 'T1D']);
+  });
+});
+
+describe('ClinicalIntakeWizard disease biomarker and phenotype helpers', () => {
+  it('takes the biomarker code from code, biomarkerType or hpoId and the label from display, label or name', () => {
+    expect(normalizeDiseaseBiomarker({ biomarkerType: 'BT', name: 'Glucose', value: 5 })).toEqual({
+      code: 'BT', label: 'Glucose', unit: '', value: '5',
+    });
+    expect(normalizeDiseaseBiomarker({ code: 'C', biomarkerType: 'BT', display: 'D', label: 'L', name: 'N', unit: 'mg' })).toEqual({
+      code: 'C', label: 'D', unit: 'mg', value: '',
+    });
+    expect(normalizeDiseaseBiomarker({ biomarkerType: 'BT', hpoId: 'HP:0002', label: 'L', name: 'N' })).toEqual({
+      code: 'BT', label: 'L', unit: '', value: '',
+    });
+    expect(normalizeDiseaseBiomarker({ hpoId: 'HP:0001' })).toEqual({ code: 'HP:0001', label: '', unit: '', value: '' });
+    expect(normalizeDiseaseBiomarker(undefined)).toEqual({ code: '', label: '', unit: '', value: '' });
+  });
+
+  it('gives an empty phenotype with no version key when the item has nothing', () => {
+    expect(normalizeDiseasePhenotype({})).toEqual({ hpoId: '', label: '' });
+  });
+
+  it('seeds a value per biomarker key, keeping values already set and skipping keyless rows', () => {
+    expect(buildBiomarkerValuesMap(
+      [{ label: 'Glucose', value: 7 }, { code: 'C1' }, { code: 'KEEP', value: 'new' }, {}],
+      { KEEP: 'old' },
+    )).toEqual({ KEEP: 'old', Glucose: '7', C1: '' });
+    expect(buildBiomarkerValuesMap('not a list', null)).toEqual({});
+  });
+});
+
+describe('ClinicalIntakeWizard normalizeCidCode and pickBestOrphaCandidate', () => {
+  it('skips ORPHA, OMIM and empty parts and returns the first CID-like part', () => {
+    expect(normalizeCidCode('ORPHA:123;;OMIM:456|J45')).toBe('J45');
+    expect(normalizeCidCode('ABC-1')).toBe('ABC-1');
+  });
+
+  it('never takes a bare number for a CID code', () => {
+    expect(normalizeCidCode('12345')).toBe('');
+  });
+
+  it('returns null without an ORPHA number', () => {
+    expect(pickBestOrphaCandidate([{ orphaCode: 'ORPHA:5' }], undefined)).toBeNull();
+  });
+
+  it('falls back to the whole list when no candidate has the ORPHA number', () => {
+    const only = { orphaCode: 'ORPHA:9', displayName: 'Other' };
+    expect(pickBestOrphaCandidate([only], '5')).toBe(only);
+  });
+
+  it('scores a CID code read from the raw relations above a bare display name', () => {
+    const plain = { orphaCode: 'ORPHA:5', displayName: 'Plain' };
+    const coded = { orphaCode: 'ORPHA:5', raw: { relacoes: { cid10: 'J45' } } };
+    expect(pickBestOrphaCandidate([plain, coded], '5')).toBe(coded);
+  });
+
+  it('scores an OMIM code read from the raw relations above a bare display name', () => {
+    const plain = { orphaCode: 'ORPHA:5', displayName: 'Plain' };
+    const coded = { orphaCode: 'ORPHA:5', raw: { relacoes: { omim: '100100' } } };
+    expect(pickBestOrphaCandidate([plain, coded], '5')).toBe(coded);
+  });
+});
+
+describe('ClinicalIntakeWizard filterAndRankDiagnosisResults', () => {
+  it('returns nothing for an empty query or a non-list', () => {
+    expect(filterAndRankDiagnosisResults([{ displayName: 'Asma' }], undefined)).toEqual([]);
+    expect(filterAndRankDiagnosisResults('not a list', 'asma')).toEqual([]);
+  });
+
+  it('matches on aliases, synonyms, sinonimos and localized names', () => {
+    const items = [
+      { code: 'A1', aliases: ['alpha'] },
+      { code: 'A2', synonyms: ['beta'] },
+      { code: 'A3', sinonimos: ['gama'] },
+      { code: 'A4', localizedNames: ['delta'] },
+    ];
+    expect(filterAndRankDiagnosisResults(items, 'beta').map((item) => item.code)).toEqual(['A2']);
+    expect(filterAndRankDiagnosisResults(items, 'gama').map((item) => item.code)).toEqual(['A3']);
+    expect(filterAndRankDiagnosisResults(items, 'delta').map((item) => item.code)).toEqual(['A4']);
+    expect(filterAndRankDiagnosisResults(items, 'alpha').map((item) => item.code)).toEqual(['A1']);
+  });
+
+  it('ranks an exact code match above a code-prefix match, and strips the search index', () => {
+    const items = [
+      { code: 'E101', description: 'prefix only' },
+      { code: 'E10', description: 'exact code' },
+    ];
+    const result = filterAndRankDiagnosisResults(items, 'e10');
+    expect(result.map((item) => item.code)).toEqual(['E10', 'E101']);
+    expect(result[0]).not.toHaveProperty('_searchIndex');
+  });
+
+  it('caps the results at six when max is not a number', () => {
+    const items = Array.from({ length: 8 }, (_, index) => ({ code: `X${index}`, description: 'match' }));
+    expect(filterAndRankDiagnosisResults(items, 'match', 'many')).toHaveLength(6);
+  });
+});
+
+describe('ClinicalIntakeWizard consolidateDiagnosisCandidates', () => {
+  it('returns an empty list for a non-list', () => {
+    expect(consolidateDiagnosisCandidates('not a list')).toEqual([]);
+  });
+
+  it('keys rows by code or id when they carry no terminology code, and drops keyless rows', () => {
+    const byCode = { code: 'LOCAL-1' };
+    const byId = { id: 'row-2' };
+    expect(consolidateDiagnosisCandidates([byCode, byId, {}])).toEqual([byCode, byId]);
+  });
+
+  it('keeps the richer of two rows with the same key', () => {
+    const bare = { displayName: 'K1' };
+    const richer = { displayName: 'K1', definition: 'Defined' };
+    expect(consolidateDiagnosisCandidates([bare, richer])).toEqual([richer]);
+    expect(consolidateDiagnosisCandidates([richer, bare])).toEqual([richer]);
   });
 });

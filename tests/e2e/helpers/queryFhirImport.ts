@@ -30,6 +30,20 @@ export async function closeFhirImportDb(): Promise<void> {
 }
 
 /**
+ * RNF031 C8 (FHIR is the boundary): the sorted names of the test stack's
+ * collections whose name contains "fhir". The runtime reading of the
+ * store-name rule fhir-boundary.arch.test.js reads in source, so it also
+ * sees a name a model derives only at run time.
+ */
+export async function listFhirNamedCollections(): Promise<string[]> {
+  const collections = await (await getDb()).listCollections({}, { nameOnly: true }).toArray();
+  return collections
+    .map((collection) => collection.name)
+    .filter((name) => /fhir/i.test(name))
+    .sort();
+}
+
+/**
  * #787 (RNF011 AC#4): the LGPD sample import's quarantine, which writes
  * into the same two collections as the FHIR path above. Reads the batch and
  * its rejected rows back out of Mongo, so an e2e spec can prove the rows

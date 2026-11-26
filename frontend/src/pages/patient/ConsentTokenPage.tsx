@@ -58,14 +58,18 @@ export default function ConsentTokenPage() {
   const [notice, setNotice] = useState('');
   const [govbrEnabled, setGovbrEnabled] = useState(false);
   const [identityProof, setIdentityProof] = useState<ConsentIdentityProof | null>(null);
+  const [accepted, setAccepted] = useState(false);
 
-  const loadPanel = useCallback(async () => {
+  // A validate that settles after the link changed is stale: its answer
+  // belongs to the previous token and must not replace the current panel.
+  const loadPanel = useCallback(async (isStale: () => boolean = () => false) => {
     if (!params.ok) {
       setError(params.message);
       setLoading(false);
       return;
     }
     const resp = await consentTokenService.validate(params.participantId, params.token);
+    if (isStale()) return;
     const data = resp.data?.data;
     const normalized = normalizeConsentTemplate(data?.template);
     const nextPanel: PanelMode = data?.panel === 'manage' || data?.panel === 'closed' ? data.panel : 'pending';
@@ -90,7 +94,7 @@ export default function ConsentTokenPage() {
     let cancelled = false;
     async function run() {
       try {
-        await loadPanel();
+        await loadPanel(() => cancelled);
         try {
           const status = await govbrConsentService.status();
           if (!cancelled) setGovbrEnabled(Boolean(status.data?.enabled));
@@ -147,6 +151,9 @@ export default function ConsentTokenPage() {
   }
 
   async function acceptConsent() {
+    // The accept button renders only with a loaded template and no error, and an
+    // invalid link always sets an error; this guard only narrows params and
+    // template for the type checker (#1445).
     if (!params.ok || !template) return;
     setSubmitting(true);
     setError('');
@@ -159,6 +166,7 @@ export default function ConsentTokenPage() {
         identityProof: identityProof || { provider: 'panel' },
       });
       await loadPanel();
+      setAccepted(true);
       setNotice('Aceite registrado. Este mesmo link continua disponível para revogar o termo inteiro ou algumas permissões.');
     } catch (err: unknown) {
       setError(mapConsentTokenRequestError(err));
@@ -172,6 +180,7 @@ export default function ConsentTokenPage() {
     setSubmitting(true);
     setError('');
     setNotice('');
+    setAccepted(false);
     try {
       const location = await readPanelLocation();
       await consentTokenService.revoke(params.participantId, params.token, {
@@ -259,7 +268,11 @@ export default function ConsentTokenPage() {
         </div>
       </div>
 
-      {notice && <p role="status" data-testid="consent-token-notice">{notice}</p>}
+      {notice && (
+        <div data-testid={accepted ? 'consent-token-success' : undefined}>
+          <p role="status" data-testid="consent-token-notice">{notice}</p>
+        </div>
+      )}
       {error && <p role="alert" data-testid="consent-token-error" style={{ color: 'var(--danger)' }}>{error}</p>}
 
       {template && (

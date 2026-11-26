@@ -60,14 +60,16 @@ async function clearSourceAttemptStore(): Promise<void> {
 // the real element through on first render.
 //
 // Known limitations, recorded rather than solved here:
-//   - /next/* (FoundationApp) may itself nest further lazy routes below the
-//     shell; visiting the FoundationApp entry point once does not warm those
-//     inner chunks.
+//   - /next/* (FoundationApp) nests no lazy route today: its nested
+//     IntakeWizardPage route was removed, and /next/intake is App.tsx's own
+//     route and chunk. A lazy route added inside FoundationApp later would be
+//     neither counted by the drift check below (it reads App.tsx only) nor
+//     warmed by visiting /next/warmup.
 //   - A route added to App.tsx but not mirrored into ROUTES_TO_WARM below is
 //     silently left cold -- this list is not derived from App.tsx at runtime.
 
 // Keep this list in step with the `lazy(() => import(...))` declarations in
-// frontend/src/App.tsx (39 as of #819). One concrete path per distinct lazy
+// frontend/src/App.tsx (50 as of #1542). One concrete path per distinct lazy
 // chunk; where a path takes a route param, a syntactically valid placeholder
 // is used -- the chunk loads because the element renders, not because the id
 // resolves to real data.
@@ -81,7 +83,6 @@ const ROUTES_TO_WARM: readonly string[] = [
   '/patients/import-fhir',
   '/patients/1/consent',
   '/import/quarantine',
-  '/import/lgpd',
   '/samples',
   '/samples/1',
   '/results',
@@ -109,6 +110,18 @@ const ROUTES_TO_WARM: readonly string[] = [
   '/settings/parameters',
   '/admin/dicionario',
   '/admin/tcle/new',
+  '/access-requests',
+  '/consents',
+  '/biomarker-associations',
+  '/biomarker-associations/new',
+  '/quality-descriptions/new',
+  '/reports/templates/new',
+  '/organizations/new',
+  '/collections/new',
+  '/collections/1/governance',
+  '/equipment/new',
+  '/sensors/new',
+  '/policies/new',
   '/next/warmup',
   '/next/intake',
 ];
@@ -124,12 +137,15 @@ const CONCURRENCY = 4;
 // lazy chunk without considering the warm list.
 //
 // The equality is a TRIPWIRE, not a semantic invariant, and it is worth knowing
-// why before trusting it. There are 40 lazy chunks, not 39: App.tsx declares 39
-// and foundation/FoundationApp.tsx nests one more (IntakeWizardPage). The counts
-// line up anyway because three App.tsx chunks each serve two route paths
-// (SampleDetailsPage, MFASetupPage, TcleBuilderPage), freeing the slots that
-// '/next/warmup' and '/next/intake' occupy. So a future change could keep the
-// counts equal while leaving a chunk cold. It still fires on the common case --
+// why before trusting it. App.tsx declares 50 lazy chunks and
+// foundation/FoundationApp.tsx nests none, so the list holds exactly one path
+// per chunk. But several App.tsx chunks serve more than one route path
+// (MFASetupPage at /mfa-setup and /security/mfa-setup, TcleBuilderPage at
+// /admin/tcle/new and /admin/tcle/edit/:templateId, and each entity form page
+// at its /new and /:id/edit paths), and the check counts paths against
+// declarations without mapping one to the other. So a future change could keep
+// the counts equal -- a path swapped for a second path of another chunk --
+// while leaving a chunk cold. It still fires on the common case --
 // somebody adds a route and does not touch this list. Best-effort: if App.tsx is not
 // readable -- e.g. inside playwright-runner, where the frontend source may not
 // be present -- the check is skipped rather than failing the run.

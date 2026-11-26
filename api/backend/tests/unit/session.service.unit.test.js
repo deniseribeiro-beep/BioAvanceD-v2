@@ -196,9 +196,9 @@ describe('SessionService.extractClientInfo', () => {
 // keys that nothing read. dict-02 P1X-0262 says Session.inactivityTimeoutMs "deve derivar
 // de SecurityConfiguration" and calls it the EFECTIVE limit -- a materialised value,
 // which is why it is snapshotted onto the session at creation rather than read live
-// on every request. The snapshot choice is also what keeps RF014 AC#8 meaningful:
-// under a live read a tightened timeout would apply instantly and AC#8 would have
-// nothing left to revoke on this path.
+// on every request. The snapshot choice is also what keeps #649's session
+// revocation meaningful: under a live read a tightened timeout would apply
+// instantly and the revocation would have nothing left to revoke on this path.
 describe('#914: session.timeoutMinutes drives inactivityTimeoutMs', () => {
   beforeEach(() => { sessionService.sessions.clear(); });
 

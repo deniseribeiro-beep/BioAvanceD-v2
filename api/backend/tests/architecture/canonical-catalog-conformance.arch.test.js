@@ -75,6 +75,9 @@ const ENTITY_TARGETS = {
   Biobank: () => require('../../src/models/Biobank').fieldsOf(),
   BiomarkerAssociation: () => require('../../src/models/BiomarkerAssociation').fieldsOf(),
   Network: () => require('../../src/models/Network').fieldsOf(),
+  ResearchResource: () => require('../../src/models/ResearchResource').fieldsOf(),
+  ResearchResourceCollection: () => require('../../src/models/ResearchResourceCollection').fieldsOf(),
+  ResearchResourceBiobank: () => require('../../src/models/ResearchResourceBiobank').fieldsOf(),
   ImagingStudy: () => require('../../src/models/ImagingStudy').fieldsOf(),
   ImagingDerivedData: () => require('../../src/models/ImagingDerivedData').fieldsOf(),
   ConfigurationValidationRun: () => require('../../src/models/ConfigurationValidationRun').fieldsOf(),
@@ -155,6 +158,10 @@ const KNOWN_DRIFT = {
       {
         key: 'passwordRules.minLengthWithMFA',
         note: '#1257: deliberate. NIST SP 800-63B-4 section 3.1.1.2 sets two length floors, 15 for a password used as a single factor and 8 for one used with MFA, and dict-02 has one minLength (P1X-0284), which carries the single-factor floor. The MFA floor has no canonical row.'
+      },
+      {
+        key: 'telemetry.clockDriftLimitMinutes',
+        note: "Deliberate, #1520: RNF025 AC6 asks for drift above a configured limit to be detected, and dict-02 has no row for the limit; it sits in the security configuration because that is the configuration ConfigurationReleases version."
       }
     ]
   },

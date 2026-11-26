@@ -67,6 +67,7 @@ const MINTED = [
   'CONSENT_SECRET',
   'ENCRYPTION_KEY',
   'USER_ANON_SALT',
+  'MONGO_REPLICA_SET_KEY',
 ];
 
 function makeSandbox() {
@@ -138,11 +139,14 @@ test('a fresh generate fills every minted secret and derives MONGO_URI from the 
       assert.match(env[name], /^[A-Za-z0-9_-]+$/, `${name} must be base64url with no CR`);
     }
     assert.equal(new Set(MINTED.map((n) => env[n])).size, MINTED.length, 'minted secrets must be pairwise distinct');
+    // RF023 AC3 (#1550): openssl rand -hex 48 prints 48 bytes as 96 hex digits, the
+    // base64 subset a mongod key file accepts.
+    assert.match(env.MONGO_REPLICA_SET_KEY, /^[0-9a-f]{96}$/, 'MONGO_REPLICA_SET_KEY must be 96 hex digits');
 
     assert.equal(
       env.MONGO_URI,
-      `mongodb://${env.MONGO_ROOT_USERNAME}:${env.MONGO_ROOT_PASSWORD}@mongodb:27017/${env.MONGO_DB}?authSource=admin`,
-      'MONGO_URI must embed the password written as MONGO_ROOT_PASSWORD',
+      `mongodb://${env.MONGO_ROOT_USERNAME}:${env.MONGO_ROOT_PASSWORD}@mongodb:27017/${env.MONGO_DB}?authSource=admin&replicaSet=rs0`,
+      'MONGO_URI must embed the password written as MONGO_ROOT_PASSWORD and name the replica set rs0',
     );
     assert.equal(env.MONGO_DB_NOVO, env.MONGO_DB);
     assert.ok(!content.includes('\r'), 'no line of the output may contain a carriage return');

@@ -25,6 +25,13 @@
  * Idempotent: a moved document carries no legacy name, so the second run
  * finds nothing. `remaining` counts the documents still carrying one.
  *
+ * One-way: no rollback. A moved document cannot be told from one a live write
+ * stored under the canonical names, and where both names were present the
+ * legacy value is removed, not kept. Nothing needs it undone, and putting the
+ * legacy names back would leave those fields unread: the readers read the
+ * canonical name only, and every write stores only it. Undo is restoring users
+ * and sessions from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:auth-canonical-names               applies
  *   npm run migrate:auth-canonical-names -- --dry-run  counts, writes nothing

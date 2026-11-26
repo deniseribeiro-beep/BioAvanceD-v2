@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   navigate: vi.fn(),
   getById: vi.fn(),
   getComplianceGraph: vi.fn(),
+  getGraphStatus: vi.fn(),
   getSampleLocation: vi.fn(),
   download: vi.fn(),
 }));
@@ -75,7 +76,7 @@ vi.mock('../services/storageApi', () => ({
 }));
 vi.mock('../services/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/api')>()),
-  sampleService: { getById: h.getById, getComplianceGraph: h.getComplianceGraph },
+  sampleService: { getById: h.getById, getComplianceGraph: h.getComplianceGraph, getGraphStatus: h.getGraphStatus },
   resultService: { download: h.download },
 }));
 
@@ -125,10 +126,11 @@ beforeEach(() => {
   h.samplesState = { samples: [], loading: false, error: null };
   h.results = [];
   h.equipment = [];
-  for (const fn of [h.updateSample, h.loadSamples, h.loadResults, h.navigate, h.getById, h.getComplianceGraph, h.getSampleLocation, h.download]) {
+  for (const fn of [h.updateSample, h.loadSamples, h.loadResults, h.navigate, h.getById, h.getComplianceGraph, h.getGraphStatus, h.getSampleLocation, h.download]) {
     fn.mockReset();
   }
   h.getComplianceGraph.mockResolvedValue({ data: null });
+  h.getGraphStatus.mockResolvedValue({ data: { success: true, data: { sampleId: 'oid-1', projected: false, status: null, compromisedAt: null, compromiseFreezerKey: null, compromiseBreachedSince: null } } });
   h.getSampleLocation.mockResolvedValue({ success: false });
   h.getById.mockRejectedValue(new Error('404'));
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -311,6 +313,12 @@ describe('SampleDetailsPage read-only view', () => {
     expect(screen.getByText('Disponível')).toBeInTheDocument();
     fireEvent.click(screen.getByText('close-specimen'));
     expect(await screen.findByText('Encerrada')).toBeInTheDocument();
+  });
+
+  it('shows the lineage card for a derivative', async () => {
+    renderWith({ ...baseSample, parentSpecimenIds: ['SPC-0'] });
+    await title();
+    expect(screen.getByTestId('sample-lineage-parent-link-SPC-0')).toHaveAttribute('href', '/samples/SPC-0');
   });
 });
 

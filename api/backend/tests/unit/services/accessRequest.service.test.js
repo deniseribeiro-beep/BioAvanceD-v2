@@ -63,6 +63,11 @@ function createFakeDb({
   accessPolicies = [],
   consentPermissions = [],
   terminologyRelations = [],
+  governedCollections = [],
+  collectionGovernanceApprovals = [],
+  custodianshipAssignments = [],
+  researchResourceCollections = [],
+  researchResourceBiobanks = [],
 } = {}) {
   const collections = {
     accessRequests: createFakeCollection(),
@@ -78,6 +83,11 @@ function createFakeDb({
     consentAuthorizationDecisions: createFakeCollection(),
     consentPermissions: createFakeCollection(consentPermissions),
     terminologyRelations: createFakeCollection(terminologyRelations),
+    collections: createFakeCollection(governedCollections),
+    collectionGovernanceApprovals: createFakeCollection(collectionGovernanceApprovals),
+    custodianshipAssignments: createFakeCollection(custodianshipAssignments),
+    researchResourceCollections: createFakeCollection(researchResourceCollections),
+    researchResourceBiobanks: createFakeCollection(researchResourceBiobanks),
   };
   return {
     collections,
@@ -192,15 +202,105 @@ describe('accessRequest.service', () => {
           itemId: 'SPEC-1',
           itemType: 'specimen',
           participantId: 'participant-1',
+          studyId: null,
+          protocolId: null,
+          collectionId: null,
+          biobankId: null,
+          biobankIds: [],
           consentValid: true,
           consentAuthorizationDecisionId: expect.any(String),
           consentAuthorizationResult: 'permit',
           consentAuthorizationReasons: ['consentimento vigente, sem restrição aplicável ao uso'],
           duoCompatible: true,
           studyActive: true,
+          governanceValid: null,
+          governanceReasons: [],
           compatible: true,
         },
       ]);
+    });
+
+    // #1495 (RF024 AC2): a specimen in a collection is evaluated against the
+    // collection's regime, its approval in force and the specimen's custody.
+    describe('collection regime, approval and custody (#1495)', () => {
+      const governedDb = (overrides = {}) => ({
+        samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1', collectionId: 'COL-1' }],
+        governedCollections: [{ collectionId: 'COL-1', governanceRegime: 'biobank', governanceContext: { biobankGovernanceContextId: 'ctx-1' } }],
+        collectionGovernanceApprovals: [{ approvalId: 'APPR-1', collectionId: 'COL-1', status: 'active', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }],
+        custodianshipAssignments: [{ specimenId: 'SPEC-1', assignmentStatus: 'active', authorizationId: 'APPR-1', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }],
+        ...overrides,
+      });
+
+      it('keeps the item compatible when the regime, the approval and the custody hold', async () => {
+        const { db, created } = await seedAndCreate({}, governedDb());
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.overallCompatible).toBe(true);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({ governanceValid: true, governanceReasons: [], compatible: true });
+        expect(evaluated.policyDecision.effect).not.toBe('deny');
+      });
+
+      it.each([
+        ['no regime', { governedCollections: [{ collectionId: 'COL-1', governanceContext: { biobankGovernanceContextId: 'ctx-1' } }] }, /sem regime de governança/],
+        ['an approval out of force', { collectionGovernanceApprovals: [{ approvalId: 'APPR-1', collectionId: 'COL-1', status: 'suspended', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }] }, /sem aprovação de governança vigente/],
+        ['no custody in force', { custodianshipAssignments: [] }, /sem custódia vigente/],
+        ['an unknown collection', { governedCollections: [] }, /Coleção COL-1 do espécime SPEC-1 não encontrada/],
+      ])('denies, naming the reason, a specimen whose collection has %s', async (_label, overrides, reason) => {
+        const { db, created } = await seedAndCreate({}, governedDb(overrides));
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.overallCompatible).toBe(false);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({ consentValid: true, governanceValid: false, compatible: false });
+        expect(evaluated.consentCompatibility[0].governanceReasons).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+        expect(evaluated.policyDecision.effect).toBe('deny');
+        expect(evaluated.policyDecision.reasons).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+      });
+    });
+
+    // RF019 AC3 (#1510): a quarantined specimen is not released for use, and
+    // the reason joins governanceReasons, which the policy decision names.
+    describe('a quarantined specimen (RF019 AC3, #1510)', () => {
+      it('denies a quarantined specimen item, naming the quarantine, and allows it once available', async () => {
+        const { db, created } = await seedAndCreate({}, {
+          samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1', specimenStatus: 'quarantined' }],
+        });
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.overallCompatible).toBe(false);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({
+          consentValid: true, governanceValid: false, governanceReasons: ['Espécime SPEC-1 em quarentena (RF019)'], compatible: false,
+        });
+        expect(evaluated.policyDecision.effect).toBe('deny');
+        expect(evaluated.policyDecision.reasons).toEqual(expect.arrayContaining(['Espécime SPEC-1 em quarentena (RF019)']));
+
+        db.collection('samples').docs[0].specimenStatus = 'available';
+        const released = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(released.overallCompatible).toBe(true);
+        expect(released.consentCompatibility[0]).toMatchObject({ governanceValid: null, governanceReasons: [], compatible: true });
+      });
+
+      it('denies a file item whose specimen is quarantined', async () => {
+        const fileId = new ObjectId();
+        const { db, created } = await seedAndCreate({ requestedItems: [{ itemType: 'file', itemId: fileId.toString() }] }, {
+          sampleFiles: [{ _id: fileId, specimenId: 'SPEC-1' }],
+          samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1', specimenStatus: 'quarantined' }],
+        });
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.overallCompatible).toBe(false);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({
+          itemType: 'file', governanceValid: false, governanceReasons: ['Espécime SPEC-1 em quarentena (RF019)'], compatible: false,
+        });
+      });
+
+      it('adds the quarantine to the reasons of a specimen whose collection governance holds', async () => {
+        const { db, created } = await seedAndCreate({}, {
+          samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1', collectionId: 'COL-1', specimenStatus: 'quarantined' }],
+          governedCollections: [{ collectionId: 'COL-1', governanceRegime: 'biobank', governanceContext: { biobankGovernanceContextId: 'ctx-1' } }],
+          collectionGovernanceApprovals: [{ approvalId: 'APPR-1', collectionId: 'COL-1', status: 'active', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }],
+          custodianshipAssignments: [{ specimenId: 'SPEC-1', assignmentStatus: 'active', authorizationId: 'APPR-1', effectivePeriod: { start: '2025-01-01T00:00:00.000Z', end: null } }],
+        });
+        const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+        expect(evaluated.consentCompatibility[0]).toMatchObject({
+          governanceValid: false, governanceReasons: ['Espécime SPEC-1 em quarentena (RF019)'], compatible: false,
+        });
+      });
     });
 
     // RF010 AC7: the consent in force answers for the requested use, and
@@ -425,6 +525,81 @@ describe('accessRequest.service', () => {
         consentValid: true,
         compatible: true,
       });
+    });
+
+    // RNF008 AC3 (#1496): the AccessPolicy collectionId condition reads it.
+    it('records the study, protocol and collection of each specimen and file item on its compatibility entry', async () => {
+      const fileId = new ObjectId();
+      const db = createFakeDb({
+        sampleFiles: [{ _id: fileId, specimenId: 'SPEC-2' }],
+        samples: [
+          { specimenId: 'SPEC-1', participantId: 'participant-1', studyId: 'study-1', protocolId: 'protocol-1', collectionId: 'COL-1' },
+          { specimenId: 'SPEC-2', participantId: 'participant-1', studyId: 'study-2', protocolId: 'protocol-2', collectionId: 'COL-2' },
+        ],
+        consents: [{ participantId: 'participant-1', status: 'ACTIVE' }],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({
+          requestedItems: [
+            { itemType: 'specimen', itemId: 'SPEC-1' },
+            { itemType: 'file', itemId: fileId.toString() },
+          ],
+        })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.consentCompatibility.map((entry) => [entry.itemType, entry.studyId, entry.protocolId, entry.collectionId])).toEqual([
+        ['specimen', 'study-1', 'protocol-1', 'COL-1'],
+        ['file', 'study-2', 'protocol-2', 'COL-2'],
+      ]);
+    });
+
+    // RNF008 AC3 (#1496): the AccessPolicy biobankId condition reads them.
+    it('records the biobanks each item\'s collection belongs to, through ResearchResource links in force', async () => {
+      const fileId = new ObjectId();
+      const db = createFakeDb({
+        sampleFiles: [{ _id: fileId, specimenId: 'SPEC-2' }],
+        samples: [
+          { specimenId: 'SPEC-1', participantId: 'participant-1', collectionId: 'COL-1' },
+          { specimenId: 'SPEC-2', participantId: 'participant-1', collectionId: 'COL-2' },
+          { specimenId: 'SPEC-3', participantId: 'participant-1', collectionId: 'COL-3' },
+        ],
+        consents: [{ participantId: 'participant-1', status: 'ACTIVE' }],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+        researchResourceCollections: [
+          { associationId: 'rrc-1', researchResourceId: 'RR-1', collectionId: 'COL-1' },
+          { associationId: 'rrc-2', researchResourceId: 'RR-2', collectionId: 'COL-2' },
+          { associationId: 'rrc-3', researchResourceId: 'RR-3', collectionId: 'COL-3', effectivePeriod: { start: '2999-01-01T00:00:00Z', end: null } },
+        ],
+        researchResourceBiobanks: [
+          { associationId: 'rrb-1', researchResourceId: 'RR-1', biobankId: 'BB-1' },
+          { associationId: 'rrb-old', researchResourceId: 'RR-1', biobankId: 'BB-OLD', effectivePeriod: { start: '2020-01-01T00:00:00Z', end: '2021-01-01T00:00:00Z' } },
+          { associationId: 'rrb-2', researchResourceId: 'RR-2', biobankId: 'BB-2' },
+          { associationId: 'rrb-3', researchResourceId: 'RR-2', biobankId: 'BB-1' },
+          { associationId: 'rrb-4', researchResourceId: 'RR-3', biobankId: 'BB-3' },
+        ],
+      });
+      const created = await accessRequestService.createRequest(
+        db,
+        baseRequestPayload({
+          requestedItems: [
+            { itemType: 'specimen', itemId: 'SPEC-1' },
+            { itemType: 'file', itemId: fileId.toString() },
+            { itemType: 'specimen', itemId: 'SPEC-3' },
+          ],
+        })
+      );
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.consentCompatibility.map((entry) => [entry.itemType, entry.biobankId, entry.biobankIds])).toEqual([
+        ['specimen', 'BB-1', ['BB-1']],
+        ['file', null, ['BB-1', 'BB-2']],
+        ['specimen', null, []],
+      ]);
     });
 
     it('#661: marks a file item incompatible when its resolved participant has no ACTIVE consent', async () => {

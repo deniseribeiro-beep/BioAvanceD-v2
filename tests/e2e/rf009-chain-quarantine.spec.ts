@@ -122,6 +122,7 @@ test.describe('Cold-chain quarantine through the physical chain (#1392, RF009 AC
     await expectCreated(await post('/locations', coordA, { storageLocationId: roomId, locationType: 'room', name: 'Sala criogenica', code: `R-QUAR-${suffix}`, organizationId: orgA }));
     await expectCreated(await post('/locations', coordA, { storageLocationId: freezerId, locationType: 'freezer', name: 'Freezer -80', code: `FZ-QUAR-${suffix}`, organizationId: orgA, parentLocationId: roomId }));
 
+    await expectCreated(await post('/racks', coordA, { storageRackId: rackId }));
     // Both containers sit in the rack at the freezer from m200. The held one
     // stays; the left one leaves its position at m130, before the excursion
     // starts at m121.

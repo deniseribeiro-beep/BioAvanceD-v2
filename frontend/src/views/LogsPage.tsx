@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { Fragment, useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Table from '../components/UI/Table';
@@ -31,7 +31,7 @@ import { formatEntityID } from '../utils/entityIdFormatter';
 import { useLanguage } from '../contexts/LanguageContext';
 import SessionAuditPanel from '../components/audit/SessionAuditPanel';
 
-type SortField = 'timestamp' | 'userName' | 'action' | 'entity' | 'severity' | 'result' | 'ipSource' | 'module';
+type SortField = 'timestamp' | 'action' | 'severity' | 'result';
 type SortOrder = 'asc' | 'desc';
 
 // The one reader of a log's time for the date filters, the sort and the
@@ -45,6 +45,20 @@ function readLogDate(log: Log): Date | null {
   if (value === null || value === undefined) return null;
   const date = value instanceof Date ? value : new Date(value);
   return isNaN(date.getTime()) ? null : date;
+}
+
+// The one reader of a log's id for its row key and its detail route (#1451):
+// a string or number as is, a serialized { _type: 'ObjectId', _value } or a
+// bare { _value } unwrapped, and an extended-JSON { $oid } read as its hex.
+// null for anything else, so a plain object never becomes "[object Object]".
+function readLogId(id: unknown): string | null {
+  if (id === null || id === undefined || id === '') return null;
+  if (typeof id !== 'object') return String(id);
+  const obj = id as Record<string, unknown>;
+  if (obj._type === 'ObjectId') return typeof obj._value === 'string' && obj._value ? obj._value : null;
+  if (obj._value) return String(obj._value);
+  if (typeof obj.$oid === 'string' && obj.$oid) return obj.$oid;
+  return null;
 }
 
 export default function LogsPage() {
@@ -225,17 +239,9 @@ export default function LogsPage() {
             bValue = 0;
           }
           break;
-        case 'userName':
-          aValue = (a.userName || '').toLowerCase();
-          bValue = (b.userName || '').toLowerCase();
-          break;
         case 'action':
           aValue = (a.action || '').toLowerCase();
           bValue = (b.action || '').toLowerCase();
-          break;
-        case 'entity':
-          aValue = (a.entity || '').toLowerCase();
-          bValue = (b.entity || '').toLowerCase();
           break;
         case 'severity':
           aValue = (a.severity || '').toLowerCase();
@@ -245,16 +251,6 @@ export default function LogsPage() {
           aValue = (a.result || '').toLowerCase();
           bValue = (b.result || '').toLowerCase();
           break;
-        case 'ipSource':
-          aValue = (a.ipSource || a.sourceIP || '').toLowerCase();
-          bValue = (b.ipSource || b.sourceIP || '').toLowerCase();
-          break;
-        case 'module':
-          aValue = (a.module || '').toLowerCase();
-          bValue = (b.module || '').toLowerCase();
-          break;
-        default:
-          return 0;
       }
 
       if (aValue < bValue) return sortOrder === 'asc' ? -1 : 1;
@@ -345,7 +341,7 @@ export default function LogsPage() {
     }
   };
 
-  const handleExport = async (format: 'csv' | 'xlsx') => {
+  const handleExport = async () => {
     setExporting(true);
     setExportError(null);
     
@@ -353,9 +349,7 @@ export default function LogsPage() {
       const queryFilters: any = { ...filters };
       if (searchTerm) queryFilters.search = searchTerm;
 
-      const response = format === 'xlsx'
-        ? await logService.exportExcel(queryFilters)
-        : await logService.exportCSV(queryFilters);
+      const response = await logService.exportExcel(queryFilters);
 
       // Verifica se a resposta é realmente um blob ou se é JSON de erro
       const contentType = String(response.headers['content-type'] || '');
@@ -386,18 +380,14 @@ export default function LogsPage() {
       }
 
       const blob = new Blob([response.data], {
-        type: format === 'xlsx' 
-          ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-          : 'text/csv;charset=utf-8;'
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
       
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       const dateStr = new Date().toISOString().split('T')[0];
-      const fileName = format === 'xlsx' 
-        ? `logs_${dateStr}.xlsx` 
-        : `logs_${dateStr}.csv`;
+      const fileName = `logs_${dateStr}.xlsx`;
       link.download = fileName;
       document.body.appendChild(link);
       link.click();
@@ -732,7 +722,7 @@ export default function LogsPage() {
           </Button>
           <Button
             variant="secondary"
-            onClick={() => handleExport('xlsx')}
+            onClick={() => handleExport()}
             disabled={exporting || loading}
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
             title={t('logs.exportExcel')}
@@ -1071,21 +1061,8 @@ export default function LogsPage() {
                   </tr>
                 ) : (
                   filteredLogs.map((log, index) => {
-                    // Extrai ID de forma segura, tratando ObjectIds serializados
-                    const getIdString = (id: any): string => {
-                      if (!id) return '';
-                      if (typeof id === 'string') return id;
-                      if (typeof id === 'object' && id._type === 'ObjectId') {
-                        return id._value || String(id);
-                      }
-                      if (typeof id === 'object' && id.toString) {
-                        return id.toString();
-                      }
-                      return String(id);
-                    };
-                    
-                    const rawId = log._id || log.logID;
-                    const logId = getIdString(rawId) || `log-${index}`;
+                    const navId = readLogId(log._id || log.logID);
+                    const logId = navId ?? `log-${index}`;
                     const isMessageExpanded = expandedMessages.has(logId);
                     const isRowExpanded = expandedRows.has(logId);
                     const message = log.message || 'N/A';
@@ -1108,8 +1085,8 @@ export default function LogsPage() {
                     }
                     
                     return (
-                      <>
-                        <tr 
+                      <Fragment key={logId}>
+                        <tr
                           key={logId}
                           className={`log-row severity-${(log.severity || 'info').toLowerCase()} ${isRowExpanded ? 'expanded' : ''}`}
                         >
@@ -1367,23 +1344,6 @@ export default function LogsPage() {
                                       e.preventDefault();
                                       e.stopPropagation();
                                       try {
-                                        // Extrai ID de forma segura para navegação
-                                        const getIdForNavigation = (id: any): string | null => {
-                                          if (!id) return null;
-                                          if (typeof id === 'string') return id;
-                                          if (typeof id === 'object' && (id as any)?._type === 'ObjectId') {
-                                            return (id as any)._value || null;
-                                          }
-                                          if (typeof id === 'object' && (id as any)?._value) {
-                                            return String((id as any)._value);
-                                          }
-                                          if (typeof id === 'object' && (id as any).toString) {
-                                            return (id as any).toString();
-                                          }
-                                          return String(id);
-                                        };
-                                        
-                                        const navId = getIdForNavigation(log._id || log.logID);
                                         if (navId) {
                                           navigate(`/logs/${navId}`);
                                         } else {
@@ -1404,7 +1364,7 @@ export default function LogsPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })
                 )}

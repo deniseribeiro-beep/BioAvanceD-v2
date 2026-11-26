@@ -14,6 +14,18 @@
  * or that has no boxId, positionCode or placedAt, is listed in skipped with
  * the reason.
  *
+ * One-way: no rollback. storageAssignments is only read, so its rows stay,
+ * but the chain records this run writes are the ones
+ * legacyPlacementChain.service.js (adoptLegacyPlacement) writes at run time
+ * when a specimen not yet adopted is moved, released or labelled, and a
+ * ContainerPositionAssignment carries no sourceEventId, so nothing tells
+ * this run's records from those. Every move since is written to the chain
+ * alone (no backend code writes storageAssignments, RULE-026) and builds on
+ * the adopted container, so deleting the adopted records would lose it.
+ * Undo it by restoring containers, specimenContainerAssignments,
+ * containerPositionAssignments, rackLocationAssignments and storageLocations
+ * from a backup taken before the run.
+ *
  * Usage (from api/backend):
  *   npm run migrate:storage-assignments-to-chain               applies
  *   npm run migrate:storage-assignments-to-chain -- --dry-run  counts, writes nothing

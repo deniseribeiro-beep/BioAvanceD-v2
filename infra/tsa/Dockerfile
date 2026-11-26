@@ -28,6 +28,10 @@ COPY tsa-server.js /app/tsa-server.js
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+# RNF014 C3 (#1470): compose.prod.yml runs this image as uid 10001.
+RUN addgroup -S -g 10001 app && adduser -S -u 10001 -G app app \
+  && chown -R app:app /etc/tsa/certs /etc/tsa/secrets /var/lib/tsa /run/secrets
+
 EXPOSE 8095
 
 ENTRYPOINT ["/app/entrypoint.sh"]

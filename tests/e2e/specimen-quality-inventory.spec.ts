@@ -18,6 +18,19 @@ import {
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { deleteOrganizations } from './helpers/listOrganizations';
+import { sampleMongoId, sampleOutboxEvents, quarantineActionOutboxEvents, closeOutboxDb } from './helpers/queryOutbox';
+import {
+  seedTelemetrySummary,
+  seedApprovalDocument,
+  cleanupGovernanceEvidence,
+  closeGovernanceEvidenceDb,
+} from './helpers/seedGovernanceEvidence';
+import {
+  seedGovernedCollection,
+  cleanupGovernedCollection,
+  closeGovernedCollectionDb,
+  type GovernedCollection,
+} from './helpers/seedGovernedCollection';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -43,6 +56,25 @@ function validSampleFields() {
     registeredAt: new Date().toISOString(),
   };
 }
+
+// #1497 (RF004 AC2, ELM-0118 Specimen.collectionId 1..1): the governed
+// collection every specimen this file registers enters, unless a test names
+// its own collection.
+let governed: GovernedCollection | null = null;
+
+function governedCollectionId(): string {
+  if (!governed) throw new Error('governed collection not seeded');
+  return governed.collectionId;
+}
+
+test.beforeAll(async () => {
+  governed = await seedGovernedCollection(`sqi-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+});
+
+test.afterAll(async () => {
+  await cleanupGovernedCollection(governed);
+  await closeGovernedCollectionDb();
+});
 
 test.describe('Specimen registration (RF004) — real backend, negative paths', () => {
   // Full RF004 happy path (specimenId generation/uniqueness, SPREC recording,
@@ -73,6 +105,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
       data: {
         participantId: '99999999', // well-formed (8 digits), never seeded
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
       },
@@ -89,6 +122,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
       data: {
         participantId: 'not-an-id',
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
       },
     });
 
@@ -101,7 +135,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
 
     const response = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: fields,
+      data: { ...fields, collectionId: governedCollectionId() },
     });
 
     expect(response.status()).toBe(422);
@@ -117,6 +151,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
       data: {
         participantId: '99999999',
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         sampleType: 'NOT_A_REAL_TYPE',
         sampleOrigin: 'NOT_A_REAL_ORIGIN',
         extractionProtocol: 'NOT_A_REAL_PROTOCOL',
@@ -137,6 +172,7 @@ test.describe('Specimen registration (RF004) — real backend, negative paths', 
       data: {
         participantId: '99999999',
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
       },
     });
 
@@ -173,6 +209,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
         data: {
           participantId: participant.participantId,
           ...validSampleFields(),
+          collectionId: governedCollectionId(),
           boxId,
           positionCode,
         },
@@ -228,6 +265,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         sprec,
@@ -245,7 +283,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     expect(persistedSprec).toMatchObject(sprec);
   });
 
-  test('blocks operations against a specimen whose participant has no active consent (criterion 6)', async ({
+  test('registers a specimen whose participant has no active consent, and blocks operations against it (criterion 6)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -262,12 +300,21 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.specimenId;
+    // RF004 AC7 (#1492), the ruling recorded: on the default (permissive)
+    // mount, registering a specimen with no consent in force is allowed. The
+    // block falls on the specimen's consent-bound operations (the withdraw
+    // below; the access-request evaluation, RF024 AC2) and on ingestion,
+    // whose consent gate fails closed.
+    const created = (await create.json()).data;
+    expect(created.operationMode).toBe('PERMISSIVE');
+    expect(created.specimenId).toBeTruthy();
+    const sampleID = created.specimenId;
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -300,8 +347,9 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
 });
 
 test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection linkage (#295)', () => {
-  // studyId/protocolId/collectionId are optional ("quando aplicável"), but
-  // once supplied each must resolve to a real, already-cadastrado document
+  // studyId/protocolId are optional ("quando aplicável") and collectionId is
+  // required (RF004 AC2, ELM-0118), but once supplied each must resolve to
+  // a real, already-cadastrado document
   // — not arbitrary client-supplied text. No CRUD API exists yet for any of
   // the three, so the referent is seeded directly against Mongo (same
   // pattern as seedStorageBoxLocation).
@@ -316,13 +364,12 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     await closeSeedDb();
   });
 
-  // RF004 AC3/AC4, RF021 AC2/AC3: give a biorepository collection its
-  // governance through the real API -- an organization, an ethics approval in
-  // force, then the `created` event carrying the context.
-  async function governBiorepository(
+  // An organization and an ethics approval in force for the collection, the
+  // two references a governance context names.
+  async function prepareGovernance(
     request: APIRequestContext,
     token: string,
-    ids: { collectionId: string; studyId: string; protocolId: string }
+    collectionId: string
   ): Promise<{ organizationId: string; approvalId: string }> {
     const headers = { Authorization: `Bearer ${token}` };
     const org = await request.post(`${apiBaseURL}/api/organizations`, {
@@ -333,7 +380,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     const organizationId = (await org.json()).data.organizationId as string;
     organizationIds.push(organizationId);
 
-    const approval = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/approvals`, {
+    const approval = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/approvals`, {
       headers,
       data: {
         authority: 'CEP sintético',
@@ -347,27 +394,77 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     });
     expect(approval.status(), await approval.text()).toBe(201);
     const approvalId = (await approval.json()).data.approvalId as string;
+    return { organizationId, approvalId };
+  }
+
+  // RF004 AC3/AC4, RF021 AC3: a complete biorepository context over those
+  // references.
+  function biorepositoryContext(
+    ids: { studyId: string; protocolId: string },
+    organizationId: string,
+    approvalId: string
+  ): Record<string, unknown> {
+    return {
+      studyId: ids.studyId,
+      protocolId: ids.protocolId,
+      protocolVersion: '1.0',
+      caae: '00000000.0.0000.0000',
+      responsibleOrganizationId: organizationId,
+      responsibleInvestigatorId: 'investigator-e2e',
+      ethicsApprovalId: approvalId,
+      validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
+      plannedEndDate: '2030-12-31',
+    };
+  }
+
+  // RF004 AC3/AC4, RF021 AC2/AC3: give a biorepository collection its
+  // governance through the real API -- an organization, an ethics approval in
+  // force, then the `created` event carrying the context.
+  async function governBiorepository(
+    request: APIRequestContext,
+    token: string,
+    ids: { collectionId: string; studyId: string; protocolId: string }
+  ): Promise<{ organizationId: string; approvalId: string }> {
+    const headers = { Authorization: `Bearer ${token}` };
+    const { organizationId, approvalId } = await prepareGovernance(request, token, ids.collectionId);
 
     const event = await request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
       headers,
       data: {
         justification: 'Contexto inicial do biorrepositório',
-        governanceContext: {
-          studyId: ids.studyId,
-          protocolId: ids.protocolId,
-          protocolVersion: '1.0',
-          caae: '00000000.0.0000.0000',
-          responsibleOrganizationId: organizationId,
-          responsibleInvestigatorId: 'investigator-e2e',
-          ethicsApprovalId: approvalId,
-          validityPeriod: { start: '2026-01-01', end: '2030-12-31' },
-          plannedEndDate: '2030-12-31',
-        },
+        governanceContext: biorepositoryContext(ids, organizationId, approvalId),
       },
     });
     expect(event.status(), await event.text()).toBe(201);
     expect((await event.json()).data.event).toMatchObject({ decisionType: 'created', newRegime: 'biorepository', approvalIds: [approvalId] });
     return { organizationId, approvalId };
+  }
+
+  // RF004 AC5: a biobank's access policy, scoped to the test's own organization.
+  async function createAccessPolicy(
+    request: APIRequestContext,
+    headers: Record<string, string>,
+    organizationId: string,
+    stamp: string
+  ): Promise<string> {
+    const policy = await request.post(`${apiBaseURL}/api/access-policies`, {
+      headers,
+      data: {
+        policyName: `RF020 e2e ${stamp}`,
+        policyVersion: '1.0.0',
+        applicableEntityTypes: ['AccessRequest'],
+        decisionEffect: 'review_required',
+        ruleExpression: 'all-conditions',
+        effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+        roleCodes: ['researcher'],
+        organizationScopeIds: [organizationId],
+        resourceScopes: ['Specimen'],
+        conditions: [{ consent: 'compatible' }],
+        decisionReasonsRequired: true,
+      },
+    });
+    expect(policy.status(), await policy.text()).toBe(201);
+    return (await policy.json()).data.accessPolicyId as string;
   }
 
   test('rejects a create when studyId does not resolve to a real Study', async ({ request }) => {
@@ -382,6 +479,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         studyId: 'does-not-exist',
@@ -405,6 +503,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         protocolId: 'does-not-exist',
@@ -437,6 +536,28 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     expect(response.status()).toBe(404);
     const body = await response.json();
     expect(body.message).toMatch(/collectionId/);
+  });
+
+  test('rejects a create that names no collection (RF004 AC2, ELM-0118)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+
+    const response = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId,
+        positionCode,
+      },
+    });
+
+    expect(response.status()).toBe(422);
+    const body = await response.json();
+    expect(body.message).toMatch(/collectionId é obrigatório/);
   });
 
   test('accepts and persists a create whose study/protocol/collection references all resolve', async ({ request }) => {
@@ -578,24 +699,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     expect(edit.status(), await edit.text()).toBe(422);
 
     // The biobank's policy, scoped to this test's own organization.
-    const policy = await request.post(`${apiBaseURL}/api/access-policies`, {
-      headers,
-      data: {
-        policyName: `RF020 e2e ${stamp}`,
-        policyVersion: '1.0.0',
-        applicableEntityTypes: ['AccessRequest'],
-        decisionEffect: 'review_required',
-        ruleExpression: 'all-conditions',
-        effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
-        roleCodes: ['researcher'],
-        organizationScopeIds: [organizationId],
-        resourceScopes: ['Specimen'],
-        conditions: [{ consent: 'compatible' }],
-        decisionReasonsRequired: true,
-      },
-    });
-    expect(policy.status(), await policy.text()).toBe(201);
-    const accessPolicyId = (await policy.json()).data.accessPolicyId as string;
+    const accessPolicyId = await createAccessPolicy(request, headers, organizationId, stamp);
 
     const biobankContext = {
       broadPurpose: { code: 'health-research' },
@@ -627,6 +731,147 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
       ['regime_change', 'biorepository', 'biobank'],
     ]);
   });
+
+  // RF004 AC4, RF021 AC3: each required biorepository field is checked on its
+  // own, and a context needs a planned end date or a closure condition.
+  test('refuses a biorepository context missing studyId, protocolVersion or responsibleInvestigatorId, or both plannedEndDate and closureCondition', async ({ request }) => {
+    const admin = await realLogin(request);
+    const headers = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `collection-incomplete-${stamp}`, studyId: `study-${stamp}`, protocolId: `protocol-${stamp}` };
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    const { organizationId, approvalId } = await prepareGovernance(request, admin.token, ids.collectionId);
+    const full = biorepositoryContext(ids, organizationId, approvalId);
+    const postContext = (governanceContext: Record<string, unknown>) =>
+      request.post(`${apiBaseURL}/api/collections/${ids.collectionId}/governance/events`, {
+        headers,
+        data: { justification: 'Contexto inicial do biorrepositório', governanceContext },
+      });
+
+    for (const field of ['studyId', 'protocolVersion', 'responsibleInvestigatorId']) {
+      const { [field]: _dropped, ...withoutField } = full;
+      const res = await postContext(withoutField);
+      expect(res.status(), await res.text()).toBe(422);
+      expect((await res.json()).details).toEqual([`${field} é obrigatório para biorrepositório`]);
+    }
+
+    const { plannedEndDate: _plannedEndDate, ...withoutEnd } = full;
+    const noEnd = await postContext(withoutEnd);
+    expect(noEnd.status(), await noEnd.text()).toBe(422);
+    expect((await noEnd.json()).details).toEqual(['biorrepositório exige plannedEndDate ou closureCondition (RF021 AC3)']);
+
+    // A refused event wrote no context, so the full one is still a `created`.
+    const res = await postContext(full);
+    expect(res.status(), await res.text()).toBe(201);
+    expect((await res.json()).data.event.decisionType).toBe('created');
+  });
+
+  // RF004 AC4: a biorepository specimen belongs to its context's study and
+  // protocol.
+  test('refuses a specimen naming another study or protocol than its biorepository collection\'s', async ({ request }) => {
+    const admin = await realLogin(request);
+    const headers = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `collection-linkage-${stamp}`, studyId: `study-a-${stamp}`, protocolId: `protocol-a-${stamp}` };
+    const otherStudyId = `study-b-${stamp}`;
+    const otherProtocolId = `protocol-b-${stamp}`;
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    await governBiorepository(request, admin.token, ids);
+    await seedStudy(otherStudyId);
+    await seedProtocol(otherProtocolId);
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const createSample = async (studyId: string, protocolId: string) => {
+      const seededStorageBox = await seedStorageBoxLocation();
+      seededStorageBoxes.push(seededStorageBox);
+      const { boxId, positionCode } = seededStorageBox;
+      return request.post(`${apiBaseURL}/api/samples`, {
+        headers,
+        data: {
+          participantId: participant.participantId,
+          ...validSampleFields(),
+          boxId,
+          positionCode,
+          studyId,
+          protocolId,
+          collectionId: ids.collectionId,
+        },
+      });
+    };
+
+    const otherStudy = await createSample(otherStudyId, ids.protocolId);
+    expect(otherStudy.status(), await otherStudy.text()).toBe(422);
+    expect((await otherStudy.json()).message).toBe(
+      `studyId ${otherStudyId} difere do studyId do biorrepositório da coleção (${ids.studyId})`
+    );
+
+    const otherProtocol = await createSample(ids.studyId, otherProtocolId);
+    expect(otherProtocol.status(), await otherProtocol.text()).toBe(422);
+    expect((await otherProtocol.json()).message).toBe(
+      `protocolId ${otherProtocolId} difere do protocolId do biorrepositório da coleção (${ids.protocolId})`
+    );
+
+    const own = await createSample(ids.studyId, ids.protocolId);
+    expect([201, 202], await own.text()).toContain(own.status());
+  });
+
+  // RF004 AC5: a biobank collection with an approval in force takes a
+  // specimen, and its context keeps every field it was given.
+  test('admits a specimen into a biobank collection with an approval and reads back every biobank context field', async ({ request }) => {
+    const admin = await realLogin(request);
+    const headers = { Authorization: `Bearer ${admin.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const collectionId = `collection-biobank-${stamp}`;
+    await seedCollectionEntity(collectionId);
+    await clearCollectionRegime(collectionId);
+    const { organizationId, approvalId } = await prepareGovernance(request, admin.token, collectionId);
+    const accessPolicyId = await createAccessPolicy(request, headers, organizationId, stamp);
+
+    const context = {
+      broadPurpose: { code: 'health-research' },
+      governancePolicyId: accessPolicyId,
+      accessCommitteeId: 'committee-e2e',
+      institutionalCustodianId: organizationId,
+      futureUseConditions: ['compatible_consent'],
+      applicableConsentModel: ['broad'],
+      newEthicsReviewRule: 'when_required_by_policy',
+    };
+    const event = await request.post(`${apiBaseURL}/api/collections/${collectionId}/governance/events`, {
+      headers,
+      data: { newRegime: 'biobank', approvalIds: [approvalId], justification: 'Biobanco para uso futuro', governanceContext: context },
+    });
+    expect(event.status(), await event.text()).toBe(201);
+    expect((await event.json()).data.event).toMatchObject({
+      decisionType: 'created',
+      previousRegime: null,
+      newRegime: 'biobank',
+      approvalIds: [approvalId],
+    });
+
+    const governance = (await (await request.get(`${apiBaseURL}/api/collections/${collectionId}/governance`, { headers })).json()).data;
+    expect(governance.governanceRegime).toBe('biobank');
+    expect(governance.governanceContext).toMatchObject({ ...context, collectionId });
+    expect(typeof governance.governanceContext.biobankGovernanceContextId).toBe('string');
+    expect(governance.governanceContext.studyId).toBeUndefined();
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers,
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId },
+    });
+    expect([201, 202], await create.text()).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId;
+
+    const get = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers });
+    expect((await get.json()).data.collectionId).toBe(collectionId);
+  });
 });
 
 test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible protocol and study rejection (#591, #592)', () => {
@@ -655,6 +900,7 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         studyId,
@@ -680,6 +926,7 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         protocolId,
@@ -707,6 +954,7 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId,
         positionCode,
         studyId,
@@ -751,6 +999,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         quantity: 10,
         boxId,
         positionCode,
@@ -821,6 +1070,8 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const partialBody = (await partial.json()).data;
     expect(partialBody.newStatus).toBe('available');
     expect(partialBody.quantityStatus).toBe('partial');
+    // RF006 AC4 (#1512): each withdrawal raises the quantity ledger version by one.
+    expect(partialBody.quantityLedgerVersion).toBe(1);
 
     const afterPartial = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -828,6 +1079,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const afterPartialBody = (await afterPartial.json()).data;
     expect(afterPartialBody.specimenStatus).toBe('available');
     expect(afterPartialBody.quantityStatus).toBe('partial');
+    expect(afterPartialBody.quantityLedgerVersion).toBe(1);
 
     // A specimen still holding material is not closed.
     const earlyClose = await request.post(`${apiBaseURL}/api/samples/${sampleID}/close`, {
@@ -849,6 +1101,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const totalBody = (await total.json()).data;
     expect(totalBody.newStatus).toBe('available');
     expect(totalBody.quantityStatus).toBe('depleted');
+    expect(totalBody.quantityLedgerVersion).toBe(2);
 
     const afterTotal = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -856,6 +1109,40 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     const afterTotalBody = (await afterTotal.json()).data;
     expect(afterTotalBody.specimenStatus).toBe('available');
     expect(afterTotalBody.quantityStatus).toBe('depleted');
+    expect(afterTotalBody.quantityLedgerVersion).toBe(2);
+
+    // RF006 AC4 (#1512): the balance reconciles with the ledger head, the movement stamped with the specimen's version.
+    const ledger = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(ledger.status()).toBe(200);
+    const movements = (await ledger.json()).data;
+    const ledgered = movements
+      .filter((m: any) => m.type === 'withdraw')
+      .map((m: any) => m.quantityLedgerVersion)
+      .sort();
+    expect(ledgered).toEqual([1, 2]);
+    const head = movements.find((m: any) => m.quantityLedgerVersion === 2);
+    expect(head.newQuantity).toBe(afterTotalBody.currentQuantity);
+    expect(afterTotalBody.currentQuantity).toBe(0);
+
+    // RF006 AC4 (#1531): an edit cannot move a ledgered quantity; the balance and version stay as the ledger left them.
+    for (const data of [{ currentQuantity: 5 }, { totalWithdrawn: 0 }, { totalReturned: 1 }, { initialQuantity: 50 }]) {
+      const edit = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data,
+      });
+      expect(edit.status(), JSON.stringify(data)).toBe(422);
+      const editBody = await edit.json();
+      expect(editBody.error).toBe('QUANTITY_LEDGER_WRITE_REFUSED');
+      expect(editBody.fields).toEqual(Object.keys(data));
+    }
+    const afterEdits = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const afterEditsBody = (await afterEdits.json()).data;
+    expect(afterEditsBody.currentQuantity).toBe(0);
+    expect(afterEditsBody.quantityLedgerVersion).toBe(2);
 
     // RF006 AC7 (#1315): withdrawals change no status, so they record no decision.
     const beforeClose = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
@@ -969,6 +1256,76 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     ]);
   });
 
+  test('refuses a manual write to quantityStatus and to the RCS result, on edit and on create (RNF018 AC4, #1489, #1526)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { sampleID } = await seedWithdrawableSample(request, admin);
+
+    const quantityWrite = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { quantityStatus: 'depleted' },
+    });
+    expect(quantityWrite.status()).toBe(422);
+    const quantityBody = await quantityWrite.json();
+    expect(quantityBody.error).toBe('SPECIMEN_STATUS_WRITE_REFUSED');
+    expect(quantityBody.message).toMatch(/quantityStatus é derivado/);
+
+    const rcsWrite = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { rcsScore: 99, finalGrade: 'A', gradeRoute: 'Score-based certification', biologicalPenalty: 0, axisPenalties: [] },
+    });
+    expect(rcsWrite.status()).toBe(422);
+    const rcsBody = await rcsWrite.json();
+    expect(rcsBody.error).toBe('RCS_DERIVED_WRITE_REFUSED');
+    expect(rcsBody.fields).toEqual(['biologicalPenalty', 'rcsScore', 'finalGrade', 'gradeRoute', 'axisPenalties']);
+
+    const governanceWrite = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        modelVersion: 'RCS-GOV-forged',
+        matrixType: 'solid',
+        governanceStatus: 1,
+        governanceFailureReasons: [],
+        governanceRuleCodes: [],
+        sealedRcsAssessmentId: 'forged-assessment',
+      },
+    });
+    expect(governanceWrite.status()).toBe(422);
+    const governanceBody = await governanceWrite.json();
+    expect(governanceBody.error).toBe('RCS_DERIVED_WRITE_REFUSED');
+    expect(governanceBody.fields).toEqual(['modelVersion', 'matrixType', 'governanceStatus', 'governanceFailureReasons', 'governanceRuleCodes', 'sealedRcsAssessmentId']);
+
+    const after = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const afterData = (await after.json()).data;
+    expect(afterData.quantityStatus).toBe('full');
+    expect(afterData.rcsScore ?? null).toBeNull();
+    expect(afterData.governanceStatus ?? null).toBeNull();
+    expect(afterData.sealedRcsAssessmentId ?? null).toBeNull();
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        collectionId: governedCollectionId(),
+        quantity: 10,
+        boxId: seededStorageBox.boxId,
+        positionCode: seededStorageBox.positionCode,
+        rcsScore: 99,
+        governanceStatus: 1,
+      },
+    });
+    expect(create.status()).toBe(422);
+    const createBody = await create.json();
+    expect(createBody.error).toBe('RCS_DERIVED_WRITE_REFUSED');
+    expect(createBody.fields).toEqual(['rcsScore', 'governanceStatus']);
+  });
+
   test('custody events cannot be altered or deleted — no route accepts a mutation (criterion 5)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedWithdrawableSample(request, admin);
@@ -1033,6 +1390,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     );
     await cleanupQuarantineActions(seededQuarantineActionIds).catch(() => {});
     await closeSeedDb();
+    await closeOutboxDb();
   });
 
   async function seedQuarantinableSample(request: import('@playwright/test').APIRequestContext, admin: { token: string }) {
@@ -1047,6 +1405,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         quantity: 10,
         boxId,
         positionCode,
@@ -1091,9 +1450,17 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect(body.message).toMatch(/quarantined/);
   });
 
-  test('release requires an authorized actor and is audited with an evidence trail (criteria 7, 8)', async ({ request }) => {
+  test('release requires an authorized actor and is audited with an evidence trail (criteria 5, 6)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedQuarantinableSample(request, admin);
+    // RF019 AC2: quarantine and its release move specimenStatus only; the
+    // quantity reading is the same before, during and after.
+    const readQuantityStatus = async () => {
+      const res = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: { Authorization: `Bearer ${admin.token}` } });
+      expect(res.status()).toBe(200);
+      return (await res.json()).data.quantityStatus;
+    };
+    expect(await readQuantityStatus()).toBe('full');
 
     const quarantine = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1103,6 +1470,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       },
     });
     expect(quarantine.status()).toBe(200);
+    expect(await readQuantityStatus()).toBe('full');
 
     // No token — release is not open to unauthenticated callers.
     const unauthorized = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
@@ -1136,8 +1504,208 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect((await specimen.json()).data.specimenStatus).toBe('available');
     const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, { headers: { Authorization: `Bearer ${admin.token}` } });
     expect((await decisions.json()).data.at(-1)).toMatchObject({ newStatus: 'available', rulesApplied: ['quarantine_release'] });
+    expect(await readQuantityStatus()).toBe('full');
 
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+
+  // RF019 AC2, AC4: the record of a quarantine is spread over reads. The
+  // QuarantineAction carries the dictionary's seven fields (cause and
+  // instant); the rule and the originating event are on the state decision,
+  // the event is the ledger movement, and the correlation to the
+  // nonconformance is on the sample.
+  test('a nonconformance quarantine records its action, rule, originating event and correlation, keeps quantityStatus, and its evidenced release closes the action (RF019 AC2, AC4)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const { sampleID } = await seedQuarantinableSample(request, admin);
+
+    const opened = await request.post(`${apiBaseURL}/api/nonconformances`, {
+      headers: auth,
+      data: {
+        nonconformanceType: 'deviation',
+        detectedAt: new Date().toISOString(),
+        description: 'RF019 e2e: tubo com rótulo ilegível',
+        affectedEntityIds: [sampleID],
+      },
+    });
+    expect(opened.status(), await opened.text()).toBe(201);
+    const openedBody = (await opened.json()).data;
+    expect(openedBody.quarantinedSpecimenCount).toBe(1);
+    const nonconformanceId = String(openedBody.nonconformanceId);
+    expect(nonconformanceId).toBeTruthy();
+
+    const actionsRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/quarantine-actions`, { headers: auth });
+    expect(actionsRes.status()).toBe(200);
+    const actions = (await actionsRes.json()).data;
+    expect(actions).toHaveLength(1);
+    const [action] = actions;
+    expect(action.specimenIds).toEqual([sampleID]);
+    expect(action.reasonCodes).toEqual(['nonconformance']);
+    expect(action.actionStatus).toBe('active');
+    expect(action.startedAt).toBeTruthy();
+    expect(action.releasedAt).toBeNull();
+
+    const sampleRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
+    expect(sampleRes.status()).toBe(200);
+    const quarantined = (await sampleRes.json()).data;
+    expect(quarantined.specimenStatus).toBe('quarantined');
+    expect(quarantined.quantityStatus).toBe('full');
+    expect(quarantined.quarantineSource).toBe('nonconformance');
+    expect(quarantined.quarantineSourceId).toBe(nonconformanceId);
+
+    const movementsRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/movements`, { headers: auth });
+    expect(movementsRes.status()).toBe(200);
+    const quarantineMovements = ((await movementsRes.json()).data as Array<Record<string, unknown>>)
+      .filter((movement) => movement.type === 'adjust' && movement.destination === 'Quarentena');
+    expect(quarantineMovements).toHaveLength(1);
+    const [movement] = quarantineMovements;
+    expect(movement.purpose).toBe('nonconformance_quarantine');
+
+    const decisionsRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, { headers: auth });
+    expect(decisionsRes.status()).toBe(200);
+    expect((await decisionsRes.json()).data.at(-1)).toMatchObject({
+      previousStatus: 'available',
+      newStatus: 'quarantined',
+      rulesApplied: ['nonconformance_quarantine'],
+      reasonCodes: ['nonconformance'],
+      // SampleMovement stores its id as movementId; the decision keeps it as a string.
+      triggerEventId: String(movement.movementId),
+    });
+
+    const release = await request.post(`${apiBaseURL}/api/samples/${sampleID}/quarantine/release`, {
+      headers: auth,
+      data: { evidenceIds: ['file-rf019-nc-review'], reason: 'RF019 e2e: nonconformance reviewed and cleared' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
+    const released = (await release.json()).data;
+    expect(released.releasedActions[0].quarantineActionId).toBe(action.quarantineActionId);
+    expect(released.evidenceIds).toEqual(['file-rf019-nc-review']);
+
+    const afterRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/quarantine-actions`, { headers: auth });
+    expect(afterRes.status()).toBe(200);
+    const closed = ((await afterRes.json()).data as Array<Record<string, unknown>>)
+      .find((candidate) => candidate.quarantineActionId === action.quarantineActionId);
+    expect(closed).toBeDefined();
+    expect(closed!.actionStatus).toBe('released');
+    expect(closed!.releasedAt).toBeTruthy();
+    expect(closed!.authorizedBy).toBe(String(admin.user._id));
+
+    // #1510 (RF019 AC6): the release appended one QUARANTINE_RELEASED outbox
+    // event. No status is asserted: the projector has no handler for it yet.
+    const releaseEvents = (await quarantineActionOutboxEvents(String(action.quarantineActionId)))
+      .filter((event) => event.eventType === 'QUARANTINE_RELEASED');
+    expect(releaseEvents).toHaveLength(1);
+    expect(releaseEvents[0].sourceService).toBe('quarantine-release');
+    expect(releaseEvents[0].payload).toMatchObject({
+      quarantineActionId: action.quarantineActionId,
+      specimenIds: [sampleID],
+      reasonCodes: ['nonconformance'],
+      actionStatus: 'released',
+      authorizedBy: String(admin.user._id),
+      evidenceIds: ['file-rf019-nc-review'],
+    });
+    expect(releaseEvents[0].payload.releasedAt).toBeTruthy();
+
+    // #1505 (RF019 AC6): the quarantine itself appended one QUARANTINE_APPLIED
+    // event in the action's insert, ahead of the release on the action's own
+    // version counter. No status is asserted: the projector has no handler
+    // for it yet.
+    const applyEvents = (await quarantineActionOutboxEvents(String(action.quarantineActionId)))
+      .filter((event) => event.eventType === 'QUARANTINE_APPLIED');
+    expect(applyEvents).toHaveLength(1);
+    expect(applyEvents[0].sourceService).toBe('quarantine-action');
+    expect(applyEvents[0].payload).toMatchObject({
+      quarantineActionId: action.quarantineActionId,
+      specimenIds: [sampleID],
+      reasonCodes: ['nonconformance'],
+      actionStatus: 'active',
+      authorizedBy: null,
+    });
+    expect(applyEvents[0].payload.startedAt).toBeTruthy();
+    expect(applyEvents[0].aggregateVersion).toBeLessThan(releaseEvents[0].aggregateVersion);
+
+    const afterRelease = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
+    expect((await afterRelease.json()).data.quantityStatus).toBe('full');
+  });
+
+  // RF019 AC1, AC4 (#1510): an intake whose quality governance fails stores
+  // the specimen quarantined, and the intake route records the action.
+  test('a quality governance failure at intake quarantines the specimen with a route-created QuarantineAction, keeps quantityStatus, and its evidenced release closes it (RF019 AC1, AC2, AC4)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    // The intake's automatic placement needs a usable box.
+    seededStorageBoxes.push(await seedStorageBoxLocation());
+
+    const intake = await request.post(`${apiBaseURL}/api/intake-wizard`, {
+      headers: auth,
+      // No SPREC: the missing critical metadata is the governance failure
+      // (governance_status 0, final grade E).
+      data: {
+        participant: { participantId: participant.participantId },
+        consent: { consentTemplateId: participant.consentTemplateId },
+        specimen: {
+          specimenId: 'placeholder',
+          participantId: participant.participantId,
+          sampleType: 'PLASMA',
+          sampleOrigin: 'VENOUS_BLOOD',
+          extractionProtocol: 'TUBE_EDTA',
+          quantity: 5,
+          linkedProject: 'RF019 e2e governance failure',
+          collectionId: governedCollectionId(),
+        },
+        clinical: {},
+        biomarkers: [],
+      },
+    });
+    expect(intake.status(), await intake.text()).toBe(200);
+    const body = await intake.json();
+    expect(body.consent.active).toBe(true);
+    expect(body.qualityAssessment.governance_status).toBe(0);
+    expect(body.qualityAssessment.final_grade).toBe('E');
+    expect(body.sample.specimenStatus).toBe('quarantined');
+    expect(body.sample.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
+    const sampleID = String(body.sample.specimenId);
+
+    const actionsRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/quarantine-actions`, { headers: auth });
+    expect(actionsRes.status()).toBe(200);
+    const actions = (await actionsRes.json()).data;
+    expect(actions).toHaveLength(1);
+    const [action] = actions;
+    expect(action.specimenIds).toEqual([sampleID]);
+    expect(action.reasonCodes).toEqual(['QUALITY_GOVERNANCE_FAILURE']);
+    expect(action.actionStatus).toBe('active');
+    expect(action.startedAt).toBeTruthy();
+    expect(action.releasedAt).toBeNull();
+
+    const sampleRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
+    expect(sampleRes.status()).toBe(200);
+    const quarantined = (await sampleRes.json()).data;
+    expect(quarantined.specimenStatus).toBe('quarantined');
+    expect(quarantined.quantityStatus).toBe('full');
+
+    const release = await request.post(`${apiBaseURL}/api/samples/${sampleID}/quarantine/release`, {
+      headers: auth,
+      data: { evidenceIds: ['file-rf019-governance-review'], reason: 'RF019 e2e: governance failure reviewed' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
+    expect((await release.json()).data.releasedActions[0].quarantineActionId).toBe(action.quarantineActionId);
+
+    const afterRes = await request.get(`${apiBaseURL}/api/samples/${sampleID}/quarantine-actions`, { headers: auth });
+    expect(afterRes.status()).toBe(200);
+    const closed = ((await afterRes.json()).data as Array<Record<string, unknown>>)
+      .find((candidate) => candidate.quarantineActionId === action.quarantineActionId);
+    expect(closed).toBeDefined();
+    expect(closed!.actionStatus).toBe('released');
+    expect(closed!.authorizedBy).toBe(String(admin.user._id));
+
+    const afterRelease = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: auth });
+    expect((await afterRelease.json()).data.quantityStatus).toBe('full');
   });
   // #1219: every QuarantineAction writer recorded the sample's Mongo _id, and
   // this read queried the canonical specimenId, so it could not return a
@@ -1186,6 +1754,20 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     };
   }
 
+  // #1524: the governance evidence test creates a real sample in a seeded
+  // box and seeds the records its references resolve against.
+  const seededStorageBoxes: SeededStorageBox[] = [];
+
+  test.afterAll(async () => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
+    await cleanupGovernanceEvidence().catch(() => {});
+    await closeSeedDb();
+    await closeOutboxDb();
+    await closeGovernanceEvidenceDb();
+  });
+
   test('scores a well-formed SPREC payload and returns a non-compensable-free grade', async ({ request }) => {
     const admin = await realLogin(request);
     const sprec = fluidSprec();
@@ -1220,6 +1802,469 @@ test.describe('Specimen quality (RF018) — real backend, SPREC/RCS scoring (#29
     expect(body.data.rcs_score).toBeNull();
     expect(body.data.grade_route).toBe('Governance failure');
     expect(body.data.governance_failure_reasons).toContain('Unknown SPREC code');
+  });
+
+  test('refuses certification when an axis is missing or its code is incompatible with the matrix (RNF018 AC5, #1489)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const { longTermStorage: _omitted, ...missingAxis } = fluidSprec();
+    const cases = [
+      { sprec: missingAxis, reason: 'Missing critical metadata', ruleCode: 'MISSING_CRITICAL_METADATA' },
+      { sprec: fluidSprec({ preCentrifugation: 'Q' }), reason: 'SPREC code incompatible with matrix or axis', ruleCode: 'MATRIX_INCOMPATIBLE_CODE' },
+    ];
+
+    for (const { sprec, reason, ruleCode } of cases) {
+      const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { matrixType: sprec.matrixType, sprec },
+      });
+
+      expect(response.status()).toBe(200);
+      const body = await response.json();
+      expect(body.data.governance_status).toBe(0);
+      expect(body.data.final_grade).toBe('E');
+      expect(body.data.grade_route).toBe('Governance failure');
+      expect(body.data.rcs_score).toBeNull();
+      expect(body.data.governance_failure_reasons).toContain(reason);
+      expect(body.data.governance_rule_codes).toContain(ruleCode);
+    }
+  });
+
+  test('refuses certification for each governance evidence with a missing hash or an unresolvable URI, and reads all three when they resolve (RNF018 AC5, #1524)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    // A real sample, created as the RF006 describe's seedWithdrawableSample does.
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        collectionId: governedCollectionId(),
+        quantity: 10,
+        boxId,
+        positionCode,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId: string = (await create.json()).data.specimenId;
+
+    // Its custody event, a telemetry summary of it and an approval document.
+    const events = await sampleOutboxEvents(await sampleMongoId(specimenId));
+    const custody = events.find((event) => event.eventType === 'CUSTODY_EVENT_RECORDED');
+    expect(custody).toBeTruthy();
+    const summary = await seedTelemetrySummary(specimenId);
+    // The owner's ruling on #1524 (RNF018 AC5): SOP documentation evidence is
+    // a governance approval of the specimen's collection.
+    const approval = await seedApprovalDocument(governedCollectionId());
+
+    type Ref = { uri: string; hash?: string };
+    const valid = (): Record<'traceability' | 'monitoring' | 'documentation', Ref[]> => ({
+      traceability: [{ uri: `urn:bioavanced:custody-event:${custody!.eventId}`, hash: `sha256:${custody!.payloadHash}` }],
+      monitoring: [{ uri: `urn:bioavanced:telemetry-exposure-summary:${summary.telemetryExposureSummaryId}`, hash: summary.sourceReadingSetHash }],
+      documentation: [{ uri: `urn:bioavanced:collection-governance-approval:${approval.approvalId}`, hash: approval.documentChecksum }],
+    });
+    const preview = async (extra: Record<string, unknown>) => {
+      const response = await request.post(`${apiBaseURL}/api/quality/preview`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { matrixType: 'fluid', sprec: fluidSprec(), specimenId, collectionId: governedCollectionId(), ...extra },
+      });
+      expect(response.status()).toBe(200);
+      return (await response.json()).data;
+    };
+
+    const passed = await preview({ governanceEvidence: valid() });
+    expect(passed.governance_status).toBe(1);
+    expect(passed.grade_route).toBe('Score-based certification');
+    expect(passed.final_grade).toBe('A');
+    expect(passed.governance_evidence.traceabilityOk).toBe(true);
+    expect(passed.governance_evidence.monitoringOk).toBe(true);
+    expect(passed.governance_evidence.documentationOk).toBe(true);
+    expect(passed.governance_evidence.semanticCompatible).toBe(true);
+    expect(passed.governance_evidence.gateResult).toBe('pass');
+
+    // With no collectionId, the approval is no collection's evidence (RNF018 AC5, #1524).
+    const noCollection = await preview({ governanceEvidence: valid(), collectionId: undefined });
+    expect(noCollection.governance_status).toBe(0);
+    expect(noCollection.governance_evidence.documentationOk).toBe(false);
+
+    const categories = [
+      { category: 'traceability', reason: 'Insufficient traceability', ruleCode: 'INSUFFICIENT_TRACEABILITY', flag: 'traceabilityOk' },
+      { category: 'monitoring', reason: 'Missing required monitoring', ruleCode: 'MISSING_REQUIRED_MONITORING', flag: 'monitoringOk' },
+      { category: 'documentation', reason: 'Insufficient documentation', ruleCode: 'INSUFFICIENT_DOCUMENTATION', flag: 'documentationOk' },
+    ] as const;
+    for (const { category, reason, ruleCode, flag } of categories) {
+      const missingHash = valid();
+      delete missingHash[category][0].hash;
+      const unresolvable = valid();
+      unresolvable[category][0].uri = unresolvable[category][0].uri.replace(/:[^:]+$/, ':no-such-record-1524');
+
+      for (const governanceEvidence of [missingHash, unresolvable]) {
+        const refused = await preview({ governanceEvidence });
+        expect(refused.governance_status).toBe(0);
+        expect(refused.final_grade).toBe('E');
+        expect(refused.grade_route).toBe('Governance failure');
+        expect(refused.governance_failure_reasons).toContain(reason);
+        expect(refused.governance_rule_codes).toContain(ruleCode);
+        expect(refused.governance_evidence[flag]).toBe(false);
+      }
+    }
+
+    // A resolution the client sends is never read: no criterion passes from it.
+    const resolved = (refs: Ref[]) => refs.map((ref) => ({ ...ref, status: 'resolved' }));
+    const references = valid();
+    const forged = await preview({
+      governanceEvidenceResolution: {
+        traceability: resolved(references.traceability),
+        monitoring: resolved(references.monitoring),
+        documentation: resolved(references.documentation),
+      },
+    });
+    expect(forged.governance_status).toBe(1);
+    expect(forged.governance_evidence.traceabilityOk).toBeNull();
+    expect(forged.governance_evidence.monitoringOk).toBeNull();
+    expect(forged.governance_evidence.documentationOk).toBeNull();
+  });
+
+  test('a sample registration resolves its governance evidence references, and refuses certification for a missing hash or an unresolvable URI (RNF018 AC5, #1524)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    // The owner's ruling on #1524 (RNF018 AC5): SOP documentation evidence is
+    // a governance approval of the specimen's collection, never another's.
+    const approval = await seedApprovalDocument(governedCollectionId());
+    const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
+
+    type Ref = { uri: string; hash?: string };
+    // Registers a sample through POST /api/samples with the documentation
+    // references given, and returns the RcsAssessment its create recorded.
+    const register = async (documentation: Ref[]) => {
+      const seededStorageBox = await seedStorageBoxLocation();
+      seededStorageBoxes.push(seededStorageBox);
+      const { boxId, positionCode } = seededStorageBox;
+      const create = await request.post(`${apiBaseURL}/api/samples`, {
+        headers: auth,
+        data: {
+          participantId: participant.participantId,
+          ...validSampleFields(),
+          collectionId: governedCollectionId(),
+          quantity: 10,
+          boxId,
+          positionCode,
+          sprec: fluidSprec(),
+          governanceEvidence: { documentation },
+        },
+      });
+      expect([201, 202]).toContain(create.status());
+      const specimenId: string = (await create.json()).data.specimenId;
+      const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+      expect(assessments.status()).toBe(200);
+      const rows = (await assessments.json()).data;
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+
+    const accepted = await register([{ uri: approvalUri, hash: approval.documentChecksum }]);
+    expect(accepted.governanceStatus).toBe(1);
+    expect(accepted.finalGrade).toBe('A');
+
+    const missingHash: Ref[] = [{ uri: approvalUri }];
+    const unresolvable: Ref[] = [{ uri: 'urn:bioavanced:collection-governance-approval:no-such-record-1524', hash: approval.documentChecksum }];
+    for (const documentation of [missingHash, unresolvable]) {
+      const refused = await register(documentation);
+      expect(refused.governanceStatus).toBe(0);
+      expect(refused.finalGrade).toBe('E');
+      expect(refused.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+    }
+
+    // Another collection's approval is not this sample's documentation.
+    const foreign = await seedApprovalDocument(`COL-1524-FOREIGN-${Date.now()}`);
+    const foreignRefused = await register([
+      { uri: `urn:bioavanced:collection-governance-approval:${foreign.approvalId}`, hash: foreign.documentChecksum },
+    ]);
+    expect(foreignRefused.governanceStatus).toBe(0);
+    expect(foreignRefused.finalGrade).toBe('E');
+    expect(foreignRefused.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+  });
+
+  test('the JSON sample import certifies each row from its sprec and resolves its governance evidence, storing no grade the row carries (RNF018 AC4, #1537)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    // Documentation evidence is an approval of the rows' collection (RNF018 AC5, #1524).
+    const approval = await seedApprovalDocument(governedCollectionId());
+    const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const acceptedId = `IMP-1537-OK-${stamp}`;
+    const refusedId = `IMP-1537-NOHASH-${stamp}`;
+    // Each row forges the grade its evidence would not earn; certification
+    // decides both from the sprec and the resolved references alone.
+    const rows = [
+      {
+        specimenId: acceptedId,
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        collectionId: governedCollectionId(),
+        sprec: fluidSprec(),
+        governanceEvidence: { documentation: [{ uri: approvalUri, hash: approval.documentChecksum }] },
+        rcsEvaluation: { final_grade: 'E', governance_status: 0, rcs_score: 1 },
+        finalGrade: 'E',
+        governanceStatus: 0,
+      },
+      {
+        specimenId: refusedId,
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        collectionId: governedCollectionId(),
+        sprec: fluidSprec(),
+        governanceEvidence: { documentation: [{ uri: approvalUri }] },
+        rcsEvaluation: { final_grade: 'A', governance_status: 1 },
+        finalGrade: 'A',
+        governanceStatus: 1,
+      },
+    ];
+
+    const upload = await request.post(`${apiBaseURL}/api/import/upload`, {
+      headers: auth,
+      multipart: {
+        dataType: 'samples',
+        file: { name: 'amostras-1537.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(rows), 'utf8') },
+      },
+    });
+    expect(upload.status()).toBe(200);
+    const uploadData = (await upload.json()).data;
+    expect(uploadData.errors).toEqual([]);
+    expect(uploadData.success).toBe(2);
+
+    const assessmentOf = async (specimenId: string) => {
+      const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+      expect(assessments.status()).toBe(200);
+      const recorded = (await assessments.json()).data;
+      expect(recorded).toHaveLength(1);
+      return recorded[0];
+    };
+
+    const accepted = await assessmentOf(acceptedId);
+    expect(accepted.governanceStatus).toBe(1);
+    expect(accepted.finalGrade).toBe('A');
+
+    const refused = await assessmentOf(refusedId);
+    expect(refused.governanceStatus).toBe(0);
+    expect(refused.finalGrade).toBe('E');
+    expect(refused.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+  });
+
+  test('the JSON sample import refuses a row that names no collection and stores no sample (RF004 AC2, ELM-0118, #1538)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const specimenId = `IMP-1538-NOCOL-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const rows = [{ specimenId, participantId: participant.participantId, ...validSampleFields() }];
+
+    const upload = await request.post(`${apiBaseURL}/api/import/upload`, {
+      headers: auth,
+      multipart: {
+        dataType: 'samples',
+        file: { name: 'amostras-1538.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(rows), 'utf8') },
+      },
+    });
+    expect(upload.status()).toBe(200);
+    const uploadData = (await upload.json()).data;
+    expect(uploadData.success).toBe(0);
+    expect(uploadData.errors[0].error).toMatch(/collectionId é obrigatório/);
+
+    const stored = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers: auth });
+    expect(stored.status()).toBe(404);
+  });
+
+  test('a sample edit refuses a SPREC change and keeps the certified SPREC and its one RcsAssessment (RF018 AC10, #1537)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: auth,
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        collectionId: governedCollectionId(),
+        quantity: 10,
+        boxId: seededStorageBox.boxId,
+        positionCode: seededStorageBox.positionCode,
+        sprec: fluidSprec(),
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId: string = (await create.json()).data.specimenId;
+
+    const changed = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { sprec: fluidSprec({ longTermStorage: 'A' }) },
+    });
+    expect(changed.status()).toBe(422);
+    const changedBody = await changed.json();
+    expect(changedBody.error).toBe('SPREC_WRITE_REFUSED');
+    expect(changedBody.fields).toEqual(['sprec']);
+
+    const after = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers: auth });
+    expect(after.status()).toBe(200);
+    expect((await after.json()).data.sprec.longTermStorage).toBe('C');
+
+    const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+    expect(assessments.status()).toBe(200);
+    expect((await assessments.json()).data).toHaveLength(1);
+
+    const repeated = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { sprec: fluidSprec(), linkedProject: 'RF018 AC10 e2e edit project' },
+    });
+    expect(repeated.status()).toBe(200);
+  });
+
+  test('a sample created through POST /api/samples is sealed after its snapshot pins, an edit cannot write the seal or its pin, and a clinicalData edit reseals it (#1548)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: auth,
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        collectionId: governedCollectionId(),
+        quantity: 10,
+        boxId: seededStorageBox.boxId,
+        positionCode: seededStorageBox.positionCode,
+        sprec: fluidSprec(),
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId: string = (await create.json()).data.specimenId;
+
+    const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+    expect(assessments.status()).toBe(200);
+    expect((await assessments.json()).data).toHaveLength(1);
+    const profiles = await request.get(`${apiBaseURL}/api/samples/${specimenId}/sprec-profiles`, { headers: auth });
+    expect(profiles.status()).toBe(200);
+    expect((await profiles.json()).data).toHaveLength(1);
+
+    const forged = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: {
+        merkleRoot: 'f'.repeat(64),
+        sealedSpecimenPreanalyticsId: 'forged-profile',
+        linkedProject: '#1548 e2e seal project',
+      },
+    });
+    expect(forged.status()).toBe(200);
+
+    const clinicalEdit = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { clinicalData: { notes: '#1548 e2e clinical edit' } },
+    });
+    expect(clinicalEdit.status()).toBe(200);
+
+    // Read once, last: a graph that is not releasable can quarantine the sample.
+    const graph = await request.get(`${apiBaseURL}/api/samples/${encodeURIComponent(specimenId)}/compliance-graph`, {
+      headers: auth,
+    });
+    const graphText = await graph.text();
+    expect(graph.status(), graphText).toBe(200);
+    expect(JSON.parse(graphText).data.graphPath.integrity.valid, graphText).toBe(true);
+  });
+
+  test('an intake resolves its governance evidence references, and refuses certification and quarantines the specimen for a missing hash or an unresolvable URI (RNF018 AC5, #1524)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    // The owner's ruling on #1524 (RNF018 AC5): SOP documentation evidence is
+    // a governance approval of the specimen's collection, never another's.
+    const approval = await seedApprovalDocument(governedCollectionId());
+    const approvalUri = `urn:bioavanced:collection-governance-approval:${approval.approvalId}`;
+
+    type Ref = { uri: string; hash?: string };
+    // Registers a specimen through POST /api/intake-wizard with the
+    // documentation references given; returns the intake's body and the
+    // RcsAssessments its create and the intake recorded.
+    const intake = async (documentation: Ref[]) => {
+      // The intake's automatic placement needs a usable box.
+      seededStorageBoxes.push(await seedStorageBoxLocation());
+      const response = await request.post(`${apiBaseURL}/api/intake-wizard`, {
+        headers: auth,
+        data: {
+          participant: { participantId: participant.participantId },
+          consent: { consentTemplateId: participant.consentTemplateId },
+          specimen: {
+            specimenId: 'placeholder',
+            participantId: participant.participantId,
+            sampleType: 'PLASMA',
+            sampleOrigin: 'VENOUS_BLOOD',
+            extractionProtocol: 'TUBE_EDTA',
+            quantity: 5,
+            linkedProject: 'RNF018 e2e intake governance evidence',
+            collectionId: governedCollectionId(),
+            sprec: { code: 'BLD-SST-A-A-A-A-C', version: '1.0', ...fluidSprec() },
+          },
+          clinical: {},
+          biomarkers: [],
+          governanceEvidence: { documentation },
+        },
+      });
+      expect(response.status(), await response.text()).toBe(200);
+      const body = await response.json();
+      const specimenId = String(body.sample.specimenId);
+      const assessments = await request.get(`${apiBaseURL}/api/samples/${specimenId}/rcs-assessments`, { headers: auth });
+      expect(assessments.status()).toBe(200);
+      const rows: Array<Record<string, unknown>> = (await assessments.json()).data;
+      expect(rows.length).toBeGreaterThan(0);
+      return { body, rows };
+    };
+
+    const accepted = await intake([{ uri: approvalUri, hash: approval.documentChecksum }]);
+    expect(accepted.body.qualityAssessment.governance_status).toBe(1);
+    expect(accepted.body.qualityAssessment.final_grade).toBe('A');
+    for (const row of accepted.rows) expect(row.governanceStatus).toBe(1);
+
+    const missingHash: Ref[] = [{ uri: approvalUri }];
+    const unresolvable: Ref[] = [{ uri: 'urn:bioavanced:collection-governance-approval:no-such-record-1524', hash: approval.documentChecksum }];
+    for (const documentation of [missingHash, unresolvable]) {
+      const refused = await intake(documentation);
+      expect(refused.body.qualityAssessment.governance_status).toBe(0);
+      expect(refused.body.qualityAssessment.final_grade).toBe('E');
+      expect(refused.body.qualityAssessment.governance_rule_codes).toContain('INSUFFICIENT_DOCUMENTATION');
+      expect(refused.body.sample.specimenStatus).toBe('quarantined');
+      expect(refused.body.sample.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
+      for (const row of refused.rows) {
+        expect(row.governanceStatus).toBe(0);
+        expect(row.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+      }
+    }
   });
 
   test('the backend enforces auth independently of the frontend — no token is rejected on its own merits', async ({ request }) => {
@@ -1257,7 +2302,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${token}` },
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: governedCollectionId() },
     });
     expect([201, 202]).toContain(create.status());
     const body = (await create.json()).data;
@@ -1375,7 +2420,7 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
 
     const create = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: governedCollectionId() },
     });
     expect([201, 202]).toContain(create.status());
     const sampleID = (await create.json()).data.specimenId;
@@ -1472,6 +2517,7 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
       data: {
         participantId: participant.participantId,
         ...validSampleFields(),
+        collectionId: governedCollectionId(),
         boxId: origin.boxId,
         positionCode: origin.positionCode,
       },
@@ -1586,7 +2632,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     const { boxId, positionCode } = seededStorageBox;
     const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: governedCollectionId() },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
     // #1216/#1219: an assay references the specimen by the canonical
@@ -1665,7 +2711,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     const { boxId, positionCode } = seededStorageBox;
     const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
+      data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode, collectionId: governedCollectionId() },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
     // #1216/#1219: an assay references the specimen by the canonical
@@ -1685,8 +2731,59 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     const organizationId = (await orgRes.json()).data.organizationId;
     organizationIdsToDelete.push(organizationId);
 
-    return { specimenId, operatorId: String(admin.user._id), organizationId };
+    return { specimenId, operatorId: String(admin.user._id), organizationId, participantId: participant.participantId };
   }
+
+  // RF019 AC3: a quarantined specimen is not processed. An assay naming it
+  // and a derivative naming it as its parent are both refused.
+  test('a quarantined specimen is refused for processing: an assay and a derivative naming it (RF019 AC3)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+    const { specimenId, operatorId, organizationId, participantId } = await seedRealAssayLinkage(request, admin);
+
+    const quarantine = await request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: auth,
+      data: { specimenStatus: 'quarantined', quarantineReason: 'RF019 e2e: processing block' },
+    });
+    expect(quarantine.status(), await quarantine.text()).toBe(200);
+
+    const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: auth,
+      data: {
+        studyId,
+        specimenIds: [specimenId],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId,
+        laboratoryId: organizationId,
+        assayDateTime: new Date().toISOString(),
+        intendedUse: 'RF019 e2e quarantined specimen',
+      },
+    });
+    expect(assayRes.status(), await assayRes.text()).toBe(409);
+    expect((await assayRes.json()).message).toMatch(/em quarentena e não pode ser processado/);
+
+    const derivativeBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(derivativeBox);
+    const derivativeRes = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: auth,
+      data: {
+        participantId,
+        ...validSampleFields(),
+        collectionId: governedCollectionId(),
+        boxId: derivativeBox.boxId,
+        positionCode: derivativeBox.positionCode,
+        parentSpecimenIds: [specimenId],
+      },
+    });
+    expect(derivativeRes.status(), await derivativeRes.text()).toBe(422);
+    expect((await derivativeRes.json()).message).toMatch(/em quarentena/);
+  });
 
   test('rejects a control entry with no valid controlType (criterion 4)', async ({ request }) => {
     const admin = await realLogin(request);
@@ -2007,6 +3104,110 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
     const certificate = (await certRes.json()).data;
     expect(certificate.affectedRecordIds).toEqual(['log-rf026-1', 'log-rf026-2']);
     expect(certificate.dispositionMethod).toBe('secure-wipe');
+  });
+
+  test('a return and a cancellation each pass the lifecycle: return is approved, executed with evidence and certified; a cancelled action admits nothing further (RF006 AC5, RF026 AC3 AC4, RNF022 AC4; #1509)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const retentionPolicyId = await createRetentionPolicy(request, admin, { reviewRequired: true });
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const record = async (dispositionAction: string, affectedRecordIds: string[]) => {
+      const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+        headers: auth,
+        data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+      return (await res.json()).data;
+    };
+
+    // A return is recorded planned and executes only once approved.
+    const returned = await record('return', [`log-rf026-return-${suffix}`]);
+    expect(returned).toMatchObject({ actionStatus: 'planned', dispositionAction: 'return' });
+    const returnBase = `${apiBaseURL}/api/disposition-actions/${returned.dispositionActionId}`;
+    const returnEvidence = { evidenceIds: ['file-rf026-return'] };
+    expect((await request.post(`${returnBase}/execute`, { headers: auth, data: returnEvidence })).status()).toBe(409);
+    const approvedReturn = await request.post(`${returnBase}/approve`, { headers: auth });
+    expect(approvedReturn.status(), await approvedReturn.text()).toBe(200);
+    expect((await approvedReturn.json()).data).toMatchObject({ actionStatus: 'approved', authorizationId: expect.any(String) });
+    const executedReturn = await request.post(`${returnBase}/execute`, { headers: auth, data: returnEvidence });
+    expect(executedReturn.status(), await executedReturn.text()).toBe(200);
+    const executedReturnBody = (await executedReturn.json()).data;
+    expect(executedReturnBody).toMatchObject({ actionStatus: 'executed', dispositionAction: 'return', evidenceIds: ['file-rf026-return'] });
+    expect(executedReturnBody.executedBy).toBeTruthy();
+    const returnCertificate = await request.get(`${returnBase}/certificate`, { headers: auth });
+    expect(returnCertificate.status(), await returnCertificate.text()).toBe(200);
+    expect((await returnCertificate.json()).data).toMatchObject({ dispositionAction: 'return', evidenceIds: ['file-rf026-return'] });
+
+    // A cancellation needs its reason, and a cancelled action admits no
+    // execution, approval or certificate.
+    const cancelled = await record('destroy', [`log-rf026-cancel-${suffix}`]);
+    const cancelBase = `${apiBaseURL}/api/disposition-actions/${cancelled.dispositionActionId}`;
+    const approvedCancel = await request.post(`${cancelBase}/approve`, { headers: auth });
+    expect(approvedCancel.status(), await approvedCancel.text()).toBe(200);
+    expect((await request.post(`${cancelBase}/cancel`, { headers: auth, data: {} })).status()).toBe(422);
+    const reason = 'Destinação desnecessária — RF026 e2e fixture';
+    const cancelRes = await request.post(`${cancelBase}/cancel`, { headers: auth, data: { reason } });
+    expect(cancelRes.status(), await cancelRes.text()).toBe(200);
+    const cancelBody = (await cancelRes.json()).data;
+    expect(cancelBody).toMatchObject({ actionStatus: 'cancelled', cancellationReason: reason });
+    expect(cancelBody.cancelledBy).toBeTruthy();
+    expect((await request.post(`${cancelBase}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-cancel'] } })).status()).toBe(409);
+    expect((await request.post(`${cancelBase}/approve`, { headers: auth })).status()).toBe(409);
+    expect((await request.get(`${cancelBase}/certificate`, { headers: auth })).status()).toBe(409);
+    const stored = await request.get(cancelBase, { headers: auth });
+    expect(stored.status(), await stored.text()).toBe(200);
+    expect((await stored.json()).data.actionStatus).toBe('cancelled');
+  });
+
+  test('an execution a legal hold refuses is stored blocked, and re-approved after the release it executes (RF006 AC5, RF026 AC4 AC6, RNF022 C3, C4; #1509)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const retentionPolicyId = await createRetentionPolicy(request, admin, { reviewRequired: true });
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const affectedRecordIds = [`log-rf026-blocked-${suffix}`];
+
+    // Recorded and approved while no hold covers the record.
+    const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: auth,
+      data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction: 'destroy' },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const action = (await res.json()).data;
+    expect(action).toMatchObject({ actionStatus: 'planned', legalHold: false });
+    const base = `${apiBaseURL}/api/disposition-actions/${action.dispositionActionId}`;
+    const approved = await request.post(`${base}/approve`, { headers: auth });
+    expect(approved.status(), await approved.text()).toBe(200);
+
+    const holdRes = await request.post(`${apiBaseURL}/api/legal-holds`, {
+      headers: auth,
+      data: { targetEntityType: 'Log', targetEntityIds: affectedRecordIds, reason: 'Ordem judicial superveniente — RF026 e2e fixture' },
+    });
+    expect(holdRes.status(), await holdRes.text()).toBe(201);
+    const hold = (await holdRes.json()).data;
+
+    // The hold refuses the execution and the action is stored blocked.
+    const evidence = { evidenceIds: ['file-rf026-blocked'] };
+    const refused = await request.post(`${base}/execute`, { headers: auth, data: evidence });
+    expect(refused.status(), await refused.text()).toBe(409);
+    expect((await refused.json()).message).toMatch(/bloqueio legal ou ético ativo/);
+    const stored = await request.get(base, { headers: auth });
+    expect(stored.status(), await stored.text()).toBe(200);
+    expect((await stored.json()).data).toMatchObject({ actionStatus: 'blocked', legalHold: true });
+    expect((await request.get(`${base}/certificate`, { headers: auth })).status()).toBe(409);
+    expect((await request.post(`${base}/execute`, { headers: auth, data: evidence })).status()).toBe(409);
+
+    // Released, the blocked action is approved again and executes.
+    const releaseRes = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, {
+      headers: auth,
+      data: { releaseReason: 'Ordem revogada — RF026 e2e fixture' },
+    });
+    expect(releaseRes.status(), await releaseRes.text()).toBe(200);
+    const reapproved = await request.post(`${base}/approve`, { headers: auth });
+    expect(reapproved.status(), await reapproved.text()).toBe(200);
+    expect((await reapproved.json()).data.actionStatus).toBe('approved');
+    const executed = await request.post(`${base}/execute`, { headers: auth, data: evidence });
+    expect(executed.status(), await executed.text()).toBe(200);
+    expect((await executed.json()).data).toMatchObject({ actionStatus: 'executed', legalHold: false });
   });
 
   test('rejects a disposition action whose retentionPolicyId does not resolve to a real policy (criterion 1)', async ({ request }) => {

@@ -108,8 +108,12 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
     const stored = await db.collection('patients').findOne({ participantId });
     expect(stored?.status).toBe('ACTIVE');
     expect(stored?.consentAcceptedAt).toBeTruthy();
-    // The token is single-use: acceptConsentToken nulls its hash (#1049).
-    expect(stored?.consentTokenHash).toBeNull();
+    // The accepted link stays the participant's panel (#1542): acceptance
+    // keeps the token's hash, still only its SHA-256 (#1049), and the page
+    // turns into the panel that revokes the term in whole or in part.
+    expect(stored?.consentTokenHash).toBe(crypto.createHash('sha256').update(token).digest('hex'));
+    await expect(page.getByTestId('consent-token-manage')).toBeVisible();
+    await expect(page.getByTestId('consent-token-revoke-all')).toBeVisible();
 
     // #821 (RF010 AC#2-4): the acceptance is a recorded Consent, not only a
     // status flag -- bound to the term the page showed, with the answers given
@@ -126,6 +130,16 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
     expect(consent.evidenceHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(consent.evidenceMimeType).toBe('application/json');
     expect(consent.evidenceEncryption?.algorithm).toBe('aes-256-gcm');
+
+    // Opened again, the same emailed link still resolves, now to the panel:
+    // the granted purpose is offered for revocation, the declined one is not,
+    // and no second acceptance is offered.
+    await page.goto(`/patients/${participantId}/consent?token=${token}`);
+    await expect(page.getByTestId('consent-token-manage')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('consent-token-revoke-research-809')).toBeVisible();
+    await expect(page.getByTestId('consent-token-revoke-recontact-809')).toHaveCount(0);
+    await expect(page.getByTestId('consent-token-accept')).toHaveCount(0);
+    await expect(page.getByTestId('consent-token-error')).toHaveCount(0);
   });
 
   // #1172 (#1152): in a real outage the request gets no response at all --

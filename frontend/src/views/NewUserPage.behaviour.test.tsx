@@ -185,6 +185,15 @@ describe('NewUserPage: create', () => {
     expect(usersHook.registerUser.mock.calls[0][0].organizationId).toBeNull();
   });
 
+  it('the untouched default role registers a Técnico with access type 2 (#1464)', async () => {
+    renderPage();
+    fillValidCreate();
+    expect(field('new-user-role-select').value).toBe('Técnico');
+    await submit();
+    const payload = usersHook.registerUser.mock.calls[0][0];
+    expect(payload).toMatchObject({ roleName: 'Técnico', accessType: 2 });
+  });
+
   it('switching the role to Administrador sets access type 4 and its description', async () => {
     renderPage();
     fillValidCreate();

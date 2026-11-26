@@ -53,6 +53,13 @@ vi.spyOn(auditV2Service, 'sealChain').mockResolvedValue({ treeSize: 2, anchorSta
 vi.spyOn(logger, 'info').mockImplementation(() => {});
 vi.spyOn(logger, 'warn').mockImplementation(() => {});
 vi.spyOn(logger, 'error').mockImplementation(() => {});
+// #1468: connectDB's { __fakeDb: true } has no collection(), so a real
+// recordJob would warn and break the logger.warn counts below. The job calls
+// it on the module, so this spy intercepts it; its own behaviour is proven in
+// tests/unit/infrastructure/metrics/jobMetrics.test.js.
+const jobMetrics = require('../../src/infrastructure/metrics/jobMetrics');
+const requestContext = require('../../src/utils/requestContext');
+vi.spyOn(jobMetrics, 'recordJob').mockResolvedValue(undefined);
 const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 // Single require: this is where the module's top-level auto scheduleNextRun() fires,
@@ -71,6 +78,7 @@ function resetAllMocks() {
   logger.info.mockClear();
   logger.warn.mockClear();
   logger.error.mockClear();
+  jobMetrics.recordJob.mockReset().mockResolvedValue(undefined);
 }
 
 describe('daily-merkle.job', () => {
@@ -160,6 +168,60 @@ describe('daily-merkle.job', () => {
 
       expect(logger.error).toHaveBeenCalledTimes(1);
       expect(mongo.closeConnection).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1468 (RNF015 C1/C3): each run is recorded once, under its own id.
+  describe('#1468 run metrics', () => {
+    function captureRecords() {
+      const records = [];
+      jobMetrics.recordJob.mockImplementation(async (db, entry) => {
+        records.push({ db, ...entry, requestId: requestContext.currentRequestId() });
+      });
+      return records;
+    }
+
+    it('records a completed run once, under a fresh well-formed correlation id', async () => {
+      const records = captureRecords();
+      const db = makeFakeDb([]);
+      mongo.connectDB.mockResolvedValue(db);
+
+      await requestContext.runAsJob('req-outer-0004', () => job.runOnce());
+
+      expect(records).toHaveLength(1);
+      expect(records[0].db).toBe(db);
+      expect(records[0]).toMatchObject({ worker: 'daily-merkle', job: 'run', outcome: 'completed' });
+      expect(records[0].durationMs).toBeGreaterThanOrEqual(0);
+      expect(requestContext.WELL_FORMED.test(records[0].requestId)).toBe(true);
+      expect(records[0].requestId).not.toBe('req-outer-0004');
+    });
+
+    it('records an invalid Merkle result, which ends the run early, as completed', async () => {
+      const records = captureRecords();
+      integrityService.buildMerkleForDate.mockResolvedValue({ root: null, leaves: [] });
+
+      await job.runOnce();
+
+      expect(records.map((r) => r.outcome)).toEqual(['completed']);
+    });
+
+    it('records a run whose body throws as failed, and still resolves', async () => {
+      const records = captureRecords();
+      auditRootService.saveDailyRoot.mockRejectedValue(new Error('save failed'));
+
+      await expect(job.runOnce()).resolves.toBeUndefined();
+
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ worker: 'daily-merkle', job: 'run', outcome: 'failed' });
+    });
+
+    it('records nothing when connectDB fails, and still resolves', async () => {
+      const records = captureRecords();
+      mongo.connectDB.mockRejectedValue(new Error('mongo down'));
+
+      await expect(job.runOnce()).resolves.toBeUndefined();
+
+      expect(records).toEqual([]);
     });
   });
 

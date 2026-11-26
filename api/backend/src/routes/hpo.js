@@ -1,5 +1,7 @@
 // backend/src/routes/hpo.js
 const express = require('express');
+const { authenticate } = require('../infrastructure/middleware/auth');
+
 const router = express.Router();
 
 const COLLECTION = 'hpo_terms';
@@ -8,7 +10,7 @@ const COLLECTION = 'hpo_terms';
 // GET /api/hpo/search?q=termo
 const { searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled } = require('../services/hpoService');
 const logger = require('../utils/logger');
-router.get('/search', async (req, res) => {
+router.get('/search', authenticate, async (req, res) => {
   const { q = '' } = req.query;
   if (typeof q !== 'string') return res.status(400).json({ error: 'Invalid query' });
   if (!q.trim()) return res.status(400).json({ error: 'Missing query' });
@@ -38,7 +40,7 @@ router.get('/search', async (req, res) => {
 });
 
 // GET /api/hpo/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', authenticate, async (req, res) => {
   const { id } = req.params;
   // #834: this had no try/catch, so a rejected findOne -- Mongo unreachable, a
   // driver timeout, a topology change -- was an unhandled promise rejection,

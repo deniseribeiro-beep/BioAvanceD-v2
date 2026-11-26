@@ -11,11 +11,21 @@
  * BaseRecord field — dict-02 only defines it per-entity (Consent.
  * authorizedPurposes, AccessRequest.requestedPurpose) — so it's an
  * ingestion-specific addition here, not a BaseRecord field name.
+ *
+ * RF029 AC2 (política, #1523): accessPolicyId is ELM-0022's BaseRecord
+ * field, a Reference to AccessPolicy, cardinality 0..*. It is optional, so it
+ * is not in REQUIRED_FIELDS (the provenance completeness score reads that
+ * list); an array of non-empty strings normalizes to its trimmed unique ids,
+ * and any other present value is a violation.
  */
 const REQUIRED_FIELDS = ['sourceSystem', 'createdBy', 'retrievedAt', 'purpose'];
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function isPolicyIdList(value) {
+  return Array.isArray(value) && value.every((id) => typeof id === 'string' && id.trim() !== '');
 }
 
 function buildProvenanceEnvelope(raw = {}) {
@@ -26,6 +36,7 @@ function buildProvenanceEnvelope(raw = {}) {
     retrievedAt: source.retrievedAt ? new Date(source.retrievedAt) : null,
     purpose: normalizeString(source.purpose) || null,
     sourceRecordId: normalizeString(source.sourceRecordId) || null,
+    accessPolicyId: isPolicyIdList(source.accessPolicyId) ? [...new Set(source.accessPolicyId.map((id) => id.trim()))] : [],
   };
 }
 
@@ -47,6 +58,15 @@ function validateProvenanceEnvelope(rawEnvelope) {
         message: `provenance.${field} é obrigatório`,
       });
     }
+  }
+
+  const rawPolicy = rawEnvelope && typeof rawEnvelope === 'object' ? rawEnvelope.accessPolicyId : undefined;
+  if (rawPolicy !== undefined && rawPolicy !== null && !isPolicyIdList(rawPolicy)) {
+    violations.push({
+      code: 'PROVENANCE_FIELD_INVALID',
+      field: 'provenance.accessPolicyId',
+      message: 'provenance.accessPolicyId deve ser um array de identificadores de AccessPolicy',
+    });
   }
 
   return { valid: violations.length === 0, violations, envelope };

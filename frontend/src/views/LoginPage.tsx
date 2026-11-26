@@ -343,10 +343,6 @@ export default function LoginPage() {
                 <Button
                   data-testid="forgot-password-send-button"
                   onClick={async () => {
-                    if (!forgotPasswordEmail) {
-                      setForgotPasswordError(t('auth.enterEmail', 'Digite seu email'));
-                      return;
-                    }
                     setForgotPasswordLoading(true);
                     setForgotPasswordError('');
                     try {

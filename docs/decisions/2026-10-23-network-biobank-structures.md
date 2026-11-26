@@ -22,7 +22,7 @@ Also read off the dictionary: a country code is ISO 3166-1 alpha-2 and upper-cas
 ## Not decided here
 
 - **The MIABIS export** of Biobank and Collection and its round-trip loss report (RF020 AC5-AC7).
-- **A Collection-to-Biobank link**: the dictionary has none.
+- **A Collection-to-Biobank link**: the dictionary links them through a ResearchResource (P1X-0142..0151), stored since 2026-11-10 (`2026-11-10-research-resource-structures.md`).
 - **A MongoDB unique index** on `biobankId` or `networkId`.
 - **The Neo4j projection** of these entities.
 - **The frontend** screens that enter them.

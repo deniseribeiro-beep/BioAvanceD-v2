@@ -7,6 +7,14 @@
  * institution/institutionalScope são removidos do documento após a reescrita,
  * não mantidos como alias legado.
  *
+ * One-way: sem rollback. O run remove institution e institutionalScope
+ * depois de reescrever (corte definitivo, já dito acima), e os textos livres
+ * não são guardados no User: só sobrevivem como officialName de uma
+ * Organization que o próprio run criou (aparado, só a primeira grafia de cada
+ * nome normalizado; um nome que casou com Organization existente, ou um
+ * vazio, não deixa rastro), e essas Organizations não se distinguem das
+ * criadas depois. Desfazer é restaurar users e organizations de um backup.
+ *
  * Uso: node backend/src/scripts/migrateUserOrganizations.js
  */
 

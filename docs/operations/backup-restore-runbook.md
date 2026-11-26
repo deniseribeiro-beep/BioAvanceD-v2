@@ -71,7 +71,7 @@ The Neo4j and InfluxDB exports run after the MongoDB dump, in both the `mongodum
 | `rpoHours` | 24 | 1 to 24 |
 | `rtoHours` | 12 | 1 to 12 |
 
-`rpoHours` and `rtoHours` are stored and validated, but **nothing measures or enforces them** (section 10). Each changed field is written to the audit log.
+`rpoHours` is checked by the platform alert `BACKUP_RPO`: every `PLATFORM_ALERT_CRON` run reads the age of the newest `backupHistory` row with status `success`, and the alert fires past `rpoHours`, or when runs are recorded and none succeeded; before the first run it is unknown. `rtoHours` is compared with each restore test's wall time (section 9). Each changed field is written to the audit log.
 
 ## 8. Restore
 
@@ -101,13 +101,13 @@ It:
 3. decrypts an encrypted backup into a scratch copy, as in section 8;
 4. restores into a scratch database `<db>_restoretest_<ms>`, never the live one;
 5. counts the restored collections and documents (`restoredCollections`, `restoredDocuments`);
-6. drops the scratch database on every exit path, and writes one `restoreTestHistory` row (`status`, `mode`, `scratchDb`, `checksumVerified`, `restoredCollections`, `restoredDocuments`, `stores`, `error`).
+6. drops the scratch database on every exit path, and writes one `restoreTestHistory` row (`status`, `mode`, `scratchDb`, `checksumVerified`, `restoredCollections`, `restoredDocuments`, `stores`, `durationMs`, `rtoHours`, `withinRto`, `error`). A run that succeeds slower than `rtoHours` logs `Teste de restauração excedeu o RTO` as an error; its `success` is unchanged.
 
 A run whose checksum does not match, or whose folder has no manifest checksum, still restores into the scratch database for its counts, but reports `success: false` with `checksumVerified: false` and an `error`, and records `status: error`; the scheduled run logs an error (`Teste de restauração periódico falhou`). A store that fails its check fails the run the same way, with an `error` naming the store. When dropping the scratch database fails, the error log names it, for removal by hand.
 
 ## 10. Gaps (RNF010)
 
-RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias criptografadas e restauração testada." Each row is **not implemented**; none is a procedure the code runs. Tracking issue: #1325.
+RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias criptografadas e restauração testada." Each row lists what is **not implemented**; none of it is a procedure the code runs. Tracking issue: #1325.
 
 | Criterion | What the code does today | Gap |
 |---|---|---|
@@ -117,7 +117,7 @@ RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias cript
 | File binaries | Uploads and stored files live in `uploads_data` and `storage_data` (and in an object store when `OBJECT_STORE_DRIVER` configures one). Not backed up. | Not implemented: no backup of file binaries. |
 | TSA and witness keys | `tsa_certs`, `tsa_state`, `tsa_secrets` and `witness_secrets` are not backed up; `compose.prod.yml` records that losing them invalidates previously issued timestamps and signatures. | Not implemented: no backup of these volumes. |
 | Encryption key | The key is not in the backup and the code escrows it nowhere (section 3). | Not implemented: no key escrow. |
-| RNF010 C2, RPO 24 h ("até 24 horas") | `rpoHours` is stored and validated (1-24); nothing measures it. | Not implemented: RPO is not measured or alerted on. |
-| RNF010 C3, RTO 12 h ("até 12 horas") | `rtoHours` is stored and validated (1-12); nothing measures it. | Not implemented: RTO is not measured; no timed full recovery. |
+| RNF010 C2, RPO 24 h ("até 24 horas") | `rpoHours` is stored and validated (1-24); the platform alert `BACKUP_RPO` fires when the newest successful backup is older than it, or when runs are recorded and none succeeded (section 7). | The age is read from `backupHistory`, not from the folders on disk or the off-site bucket; the alert is a `platformAlerts` episode and a `platform_alert` notification, delivered only where a NotificationRule for it exists. |
+| RNF010 C3, RTO 12 h ("até 12 horas") | `rtoHours` is stored and validated (1-12); each restore test records its wall time (`durationMs`) and `withinRto` against it, and logs an error past it (section 9). | Not implemented: no timed full recovery; the restore test's time covers a MongoDB restore into a scratch database and a parse of the other exports, a lower bound of a full recovery. |
 | RNF010 C5, periodic restore test validated by checksum | Weekly restore test of MongoDB, with a parse check of the Neo4j and InfluxDB exports (section 9); a checksum mismatch or a failed store check fails the run and is logged as an error. | Not implemented: no load of the Neo4j and InfluxDB exports, no full-system restore has been run, no restore test reads the off-site copy (it must be copied back first, section 8), and no alert is raised beyond the error log. |
 | Restore integrity | A restore does not verify the manifest checksum and takes no safety backup (section 8). | Not implemented: no checksum check or safety backup before a live restore. |

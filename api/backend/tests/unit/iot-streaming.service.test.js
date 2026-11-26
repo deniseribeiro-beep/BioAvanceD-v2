@@ -4,6 +4,8 @@ const service = require('../../src/services/iot-streaming.service');
 const queueConfig = require('../../src/config/queue');
 const influxTelemetryWriteRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const logger = require('../../src/utils/logger');
+const auditLogger = require('../../src/utils/auditLogger');
+const mongoConnection = require('../../src/infrastructure/database/mongodb/connection');
 const { createFakeDb } = require('./ingestion/testHelpers');
 
 function makeSocket(id = 'sock1') {
@@ -420,6 +422,198 @@ describe('iot-streaming.service', () => {
 
       const io2 = service.initSocketIO(fakeServer);
       expect(io2).toBe(io1);
+    });
+  });
+
+  // RULE-025, RF009 AC8 (#1582): the socket handler strips a reading's fields
+  // outside the queue's reading contract before it is queued, writes one
+  // security audit at receipt whatever the reading's fate, and the job carries
+  // the listable names only; the worker's processTemperatureData flags the
+  // kept reading and writes no second audit on a retry.
+  describe('RULE-025 on the queue (#1582)', () => {
+    const PII_VALUE = 'Maria da Silva 123.456.789-09';
+    const S1_DATASTREAM = {
+      telemetryDatastreamId: 'ds-s1', sensorId: 's1', observedProperty: 'temperature', validityPeriod: { start: new Date('2020-01-01T00:00:00.000Z'), end: null },
+    };
+    const S1_REGISTRATION = { deviceRegistrationId: 'reg-s1', deviceId: 's1', status: 'active' };
+    const S1_DEVICE = { deviceId: 's1', deviceType: 'sensor', qualificationStatus: 'qualified', retiredAt: null };
+
+    // Sensor s1 is bound and a usable device, so a synchronized plausible
+    // reading carries no issue but the one under test.
+    function boundDb() {
+      const collections = {};
+      const collectionOf = (name) => {
+        collections[name] = collections[name] || {
+          createIndex: vi.fn().mockResolvedValue('ok'),
+          findOne: vi.fn().mockResolvedValue({ deviceRegistrations: S1_REGISTRATION, devices: S1_DEVICE }[name] || null),
+          find: vi.fn(() => ({ toArray: async () => (name === 'telemetryDatastreams' ? [S1_DATASTREAM] : []) })),
+          insertOne: vi.fn().mockResolvedValue({ insertedId: `${name}-id` }),
+          insertMany: vi.fn().mockResolvedValue({ insertedCount: 1 }),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }),
+        };
+        return collections[name];
+      };
+      return { db: { collection: vi.fn(collectionOf) }, collectionOf };
+    }
+
+    function freshServiceWithQueue() {
+      delete require.cache[require.resolve('../../src/config/queue')];
+      delete require.cache[require.resolve('../../src/services/iot-streaming.service')];
+      const freshQueueConfig = require('../../src/config/queue');
+      const addMock = vi.fn().mockResolvedValue({ id: 'job1' });
+      vi.spyOn(freshQueueConfig, 'getQueue').mockReturnValue({ add: addMock });
+      return { freshService: require('../../src/services/iot-streaming.service'), addMock };
+    }
+
+    let auditDb;
+    let logSpy;
+    beforeEach(() => {
+      // The audit at socket receipt resolves the Mongo connection itself.
+      auditDb = { name: 'audit-db' };
+      vi.spyOn(mongoConnection, 'connectMongoDB').mockResolvedValue(auditDb);
+      logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    });
+
+    const strippedAudits = () => logSpy.mock.calls.filter(([entry]) => entry.action === 'TELEMETRY_PII_STRIPPED');
+    const issuesOf = (collectionOf) => collectionOf('telemetryValidationIssues').insertMany.mock.calls.flatMap(([rows]) => rows);
+    const queuedReading = (overrides = {}) => ({
+      sensorId: 's1', temperatureValue: 4, temperatureUnit: '°C', timestamp: new Date(), readingStatus: 'valid', sensorStatus: 'normal', source: 'iot-streaming', ...overrides,
+    });
+
+    async function receive(data) {
+      const { freshService, addMock } = freshServiceWithQueue();
+      const socket = makeSocket('sock1');
+      await freshService.handleDeviceRegistration(socket, { deviceId: 'd1', sensorId: 's1' });
+      await freshService.handleTemperatureData(socket, data);
+      return { freshService, addMock, socket };
+    }
+
+    it('(a) queues a valid reading without its extra fields and audits it once at receipt', async () => {
+      const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const { db, collectionOf } = boundDb();
+
+      const { freshService, addMock } = await receive({ deviceId: 'd1', temperature: 4, patientName: PII_VALUE, cpf: '123.456.789-09' });
+
+      const jobData = addMock.mock.calls[0][1];
+      expect(jobData.strippedFields).toEqual(['cpf', 'patientName']);
+      expect(jobData.unlistedFieldCount).toBe(0);
+      expect(JSON.stringify(jobData)).not.toContain('Maria');
+      expect(JSON.stringify(jobData)).not.toContain('123.456');
+      expect(strippedAudits()).toHaveLength(1);
+      expect(strippedAudits()[0][0]).toMatchObject({ source: 'worker', resourceId: 's1', payload: { ingestionService: 'iot-queue', fieldNames: ['cpf', 'patientName'], unlistedFieldCount: 0 } });
+
+      await freshService.processTemperatureData(db, queuedReading(), { strippedFields: jobData.strippedFields });
+
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(strippedAudits()).toHaveLength(1);
+      expect(collectionOf('telemetryIngestionEvents').insertOne.mock.calls[0][0]).toMatchObject({ protocol: 'adapter', validationStatus: 'quarantined' });
+      expect(issuesOf(collectionOf)).toEqual([
+        expect.objectContaining({ issueCode: 'personal_data_stripped', disposition: 'quarantined', fieldPath: 'cpf,patientName' }),
+      ]);
+    });
+
+    it('(a) a retried job writes no further security audit', async () => {
+      vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const { db, collectionOf } = boundDb();
+
+      await service.processTemperatureData(db, queuedReading(), { strippedFields: ['cpf', 'patientName'] });
+      await service.processTemperatureData(db, queuedReading(), { strippedFields: ['cpf', 'patientName'] });
+
+      expect(strippedAudits()).toHaveLength(0);
+      expect(issuesOf(collectionOf).map((issue) => issue.issueCode)).toEqual(['personal_data_stripped', 'personal_data_stripped']);
+    });
+
+    it('(b) refuses an implausible queued reading whole and still audits its extra fields', async () => {
+      const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const { db, collectionOf } = boundDb();
+
+      const { freshService, addMock } = await receive({ deviceId: 'd1', temperature: 900, patientName: PII_VALUE, cpf: '123.456.789-09' });
+      const { temperatureData, strippedFields } = addMock.mock.calls[0][1];
+
+      await expect(freshService.processTemperatureData(db, temperatureData, { strippedFields }))
+        .rejects.toMatchObject({ statusCode: 422 });
+
+      expect(write).not.toHaveBeenCalled();
+      expect(strippedAudits()).toHaveLength(1);
+      expect(issuesOf(collectionOf).map((issue) => issue.issueCode)).toEqual(['invalid_value', 'personal_data_stripped']);
+    });
+
+    it('(b) a socket reading refused for a missing temperature still audits its extra fields', async () => {
+      const { addMock, socket } = await receive({ deviceId: 'd1', patientName: PII_VALUE, cpf: '123.456.789-09' });
+
+      expect(addMock).not.toHaveBeenCalled();
+      expect(socket.emit).toHaveBeenCalledWith('error', { message: 'deviceId e temperature são obrigatórios' });
+      expect(strippedAudits()).toHaveLength(1);
+      expect(strippedAudits()[0][0]).toMatchObject({ resourceId: 's1', payload: { ingestionService: 'iot-queue', fieldNames: ['cpf', 'patientName'] } });
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain('123.456');
+    });
+
+    it('(b) a socket reading from an unregistered device still audits its extra fields', async () => {
+      const { addMock, socket } = await receive({ deviceId: 'unknown-device', temperature: 4, patientName: PII_VALUE, cpf: '123.456.789-09' });
+
+      expect(addMock).not.toHaveBeenCalled();
+      expect(socket.emit).toHaveBeenCalledWith('error', { message: 'Dispositivo não registrado' });
+      expect(strippedAudits()).toHaveLength(1);
+      expect(strippedAudits()[0][0]).toMatchObject({ resourceId: 'unknown-device', payload: { ingestionService: 'iot-queue', fieldNames: ['cpf', 'patientName'] } });
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain('123.456');
+    });
+
+    it('(c) a contract-only queued reading writes no security audit and no personal_data_stripped issue', async () => {
+      const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const { db, collectionOf } = boundDb();
+
+      const { freshService, addMock } = await receive({ deviceId: 'd1', temperature: 4 });
+      const { temperatureData, strippedFields } = addMock.mock.calls[0][1];
+      expect(strippedFields).toEqual([]);
+      await freshService.processTemperatureData(db, temperatureData, { strippedFields });
+
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(strippedAudits()).toHaveLength(0);
+      expect(issuesOf(collectionOf).filter((issue) => issue.issueCode === 'personal_data_stripped')).toHaveLength(0);
+    });
+
+    it('(c) an MQTT reading is not audited twice by processTemperatureData', async () => {
+      const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const { db, collectionOf } = boundDb();
+
+      await service.processTemperatureData(db, queuedReading({ source: 'mqtt' }), { strippedFields: ['cpf', 'patientName'] });
+
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(strippedAudits()).toHaveLength(0);
+      expect(issuesOf(collectionOf)).toEqual([
+        expect.objectContaining({ issueCode: 'personal_data_stripped' }),
+      ]);
+    });
+
+    it('(d) no extra field value reaches a log or a socket message or a queued job', async () => {
+      vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const { db, collectionOf } = boundDb();
+
+      const { freshService, addMock, socket } = await receive({ deviceId: 'd1', temperature: 4, patientName: PII_VALUE, cpf: '123.456.789-09' });
+      const { temperatureData, strippedFields } = addMock.mock.calls[0][1];
+      await freshService.processTemperatureData(db, temperatureData, { strippedFields });
+
+      const seen = JSON.stringify([
+        ...['info', 'error', 'debug', 'warn'].map((level) => logger[level].mock.calls),
+        socket.emit.mock.calls,
+        addMock.mock.calls,
+        logSpy.mock.calls,
+        collectionOf('telemetryIngestionEvents').insertOne.mock.calls,
+        collectionOf('telemetryValidationIssues').insertMany.mock.calls,
+      ]);
+      expect(seen).toContain('patientName');
+      expect(seen).not.toContain('Maria');
+      expect(seen).not.toContain('123.456');
+    });
+
+    it('(d) a non-listable field name never reaches the queued job and is counted instead', async () => {
+      const { addMock } = await receive({ deviceId: 'd1', temperature: 4, patientName: 'x', [PII_VALUE]: true });
+
+      const jobData = addMock.mock.calls[0][1];
+      expect(jobData.strippedFields).toEqual(['patientName']);
+      expect(jobData.unlistedFieldCount).toBe(1);
+      expect(JSON.stringify(addMock.mock.calls)).not.toContain('Maria');
+      expect(strippedAudits()[0][0].payload).toEqual({ ingestionService: 'iot-queue', fieldNames: ['patientName'], unlistedFieldCount: 1 });
     });
   });
 });

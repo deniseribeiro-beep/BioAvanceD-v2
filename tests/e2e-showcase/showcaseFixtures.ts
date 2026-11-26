@@ -21,7 +21,18 @@ const CAPTIONS: Array<[RegExp, string, string]> = [
   [/RF010 AC6/, 'Revogação de consentimento', 'Uma revogação muda a decisão de acesso de permitir para negar'],
   [/RF009/, 'Monitoramento de freezers', 'Leitura fora da faixa gera um alerta para o operador'],
   [/RF017\/RF006/, 'Armazenamento e estado do espécime', 'Freezer, prateleira, rack, caixa e posição até o esgotamento'],
+  [/RF003\/RNF008/, 'Gestão de usuários', 'Cadastro, troca de papel que encerra a sessão e inativação'],
+  [/RNF021 AC6/, 'Sessões, auditoria e permissões', 'O usuário encerra suas sessões; o administrador consulta os Logs e as permissões'],
   [/Inventário de Amostras/, 'Login e inventário de amostras', 'Acesso real, as amostras registradas, uma busca e o detalhe do espécime'],
+  [/RF007 an operator/, 'Arquivos científicos da amostra', 'O envio pela página da amostra e a nova versão no lugar'],
+  [/RF029 a specimen/, 'Ingestão de registros', 'Um registro enviado por outro sistema entra no inventário'],
+  [/RF020 AC5/, 'Exportação MIABIS', 'A coleção cadastrada sai no formato do diretório MIABIS'],
+  [/Cadastro integrado/, 'Cadastro integrado de amostras', 'Três passos, análise de qualidade e alocação no freezer'],
+  [/RNF027 an administrator/, 'Navegação por teclado', 'Login e menu lateral só com o teclado, cada foco visível'],
+  [/RNF010 an administrator/, 'Backup e teste de restauração', 'MongoDB, Neo4j e InfluxDB copiados, e a cópia verificada'],
+  [/RF010 AC1\/AC5\/AC8/, 'Nova versão do termo', 'Pendentes convidados e titulares avisados da mudança'],
+  [/RF020 AC4/, 'Conversão de regime', 'Biorrepositório convertido em biobanco, com justificativa registrada'],
+  [/RF023 an operator/, 'Linhagem da amostra', 'Uma amostra derivada registrada pelo cadastro integrado nomeia sua origem'],
 ];
 
 function captionFor(title: string): [string, string] {

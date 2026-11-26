@@ -33,6 +33,7 @@ import {
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 import { fetchWithRequestId, withRequestId } from '../api/requestId';
+import { installTimingReporter } from '../api/timingReporter';
 import { getLanguage } from '../i18n';
 
 // Opt-out for background/speculative requests (e.g. a prefetch for a later
@@ -74,6 +75,16 @@ export type SpecimenCloseResult = {
   quantityStatus: 'depleted';
   operationalStateDecisionId: string;
   triggerEventId: string;
+};
+
+// GET /samples/:id/graph-status's 200 body `data` (#1559).
+export type SampleGraphStatus = {
+  sampleId: string;
+  projected: boolean;
+  status: string | null;
+  compromisedAt: string | null;
+  compromiseFreezerKey: string | null;
+  compromiseBreachedSince: string | null;
 };
 
 const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
@@ -311,6 +322,9 @@ api.interceptors.response.use(
   }
 );
 
+// RNF001 C4 (#1469): installed last, so it times each call around the other interceptors.
+installTimingReporter(api);
+
 // ========== PATIENT SERVICES ==========
 export const patientService = {
   // paciente.controller.js's listar() nests the page inside `data`
@@ -347,6 +361,8 @@ export const sampleService = {
     api.get<ApiEnvelope<Sample[]>>('/samples', { params }),
   getById: (id: number | string) => api.get<Sample>(`/samples/${id}`),
   getComplianceGraph: (id: number | string) => api.get(`/samples/${id}/compliance-graph`),
+  // #1559: the sample's projected graph status and cold-chain compromise.
+  getGraphStatus: (id: number | string) => api.get<ApiEnvelope<SampleGraphStatus>>(`/samples/${id}/graph-status`),
   getByBarcode: (barcode: string) => api.get<{ sample: Sample; patient: { participantId: number; patientName: string; recordNumber: number } | null }>(`/samples/by-barcode/${encodeURIComponent(barcode)}`),
   getResults: (id: number) => api.get<ApiEnvelope<Result[]>>(`/samples/${id}/results`), // Implementa Sample.getResults()
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
@@ -549,10 +565,6 @@ export const temperatureService = {
   getAll: () => api.get<ApiEnvelope<{ temperatures: Temperature[]; total: number; limit: number; skip: number }>>('/temperature'),
   // #1391 (RF009 AC1): a reading is read from InfluxDB by its telemetryReadingId.
   getById: (telemetryReadingId: string) => api.get<ApiEnvelope<Temperature>>(`/temperature/${encodeURIComponent(telemetryReadingId)}`),
-  viewControl: (sensorID?: string, policyID?: string) => 
-    api.get<any>('/temperature/control', { 
-      params: { sensorID, policyID } 
-    }), // Implementa User.viewTemperatureControl()
 };
 
 // ========== SENSOR SERVICES ==========
@@ -795,7 +807,6 @@ export const logService = {
   getById: (id: number | string) => api.get<{ success: boolean; data: Log }>(`/logs/${id}`),
   getLogs: (filters?: any) => api.get<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs', { params: filters }),
   queryLogs: (filters: any) => api.post<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs/query', filters),
-  exportCSV: (filters?: any) => api.get('/logs/export/csv', { params: filters, responseType: 'blob' }),
   exportExcel: (filters?: any) => api.get('/logs/export/xlsx', { params: filters, responseType: 'blob' }),
   // #1005: every user's sessions, revoked ones included, pseudonymised.
   getSessions: (filters?: SessionAuditFilters) =>
@@ -1172,6 +1183,8 @@ export const securityService = {
   // rollback to one of them, recorded as a new release.
   getReleases: () => api.get('/security/config/releases'),
   rollbackConfig: (configurationReleaseId: string) => api.post('/security/config/rollback', { configurationReleaseId }),
+  // RF014 AC1: the setting catalog, each key with its type, scope and allowed values.
+  getCatalog: () => api.get('/security/config/catalog'),
   // #1149: read-only. The PUT it paired with wrote a store nothing enforced.
   getPermissions: () => api.get('/security/permissions'),
   getSessions: () => api.get('/auth/sessions'),

@@ -9,6 +9,14 @@
  * a coleção não pode ser removida. Este script não altera nenhum código de
  * runtime (service/controller/routes) — apenas os dados.
  *
+ * One-way: sem rollback. Sobrescreve `clinicalUnitId`, `clinicalUnit` e
+ * `unitAcronym` do Patient sem guardar o valor anterior: o ObjectId de
+ * clinicalUnits se perde, e o texto livre só sobrevive como `officialName` de
+ * uma Organization que o próprio run criou (aparado, e só a primeira grafia de
+ * cada nome normalizado; um nome que casou com Organization existente não
+ * deixa rastro). As Organizations que cria não se distinguem das criadas
+ * depois. Desfazer é restaurar patients e organizations de um backup.
+ *
  * Uso: node backend/src/scripts/migrateClinicalUnitOrganizations.js
  */
 

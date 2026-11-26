@@ -262,6 +262,59 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     );
   });
 
+  // RNF018 AC4 (#1489): this route skips validateCreateSamplePayload, so it
+  // refuses a caller's RCS result as that validator does.
+  it('RNF018 AC4: refuses an RCS-derived field with no sprec with 422 RCS_DERIVED_WRITE_REFUSED and creates nothing', async () => {
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, rcsScore: 99, finalGrade: 'A' })
+    );
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      success: false,
+      error: 'RCS_DERIVED_WRITE_REFUSED',
+      fields: ['rcsScore', 'finalGrade'],
+      details: [
+        'rcsScore: derivado da certificação RCS e não pode ser informado',
+        'finalGrade: derivado da certificação RCS e não pode ser informado'
+      ]
+    });
+    expect(sampleService.createSample).not.toHaveBeenCalled();
+  });
+
+  it('RNF018 AC4: refuses a governance or seal field of the RCS result with 422 RCS_DERIVED_WRITE_REFUSED and creates nothing (#1526)', async () => {
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, governanceStatus: 1, sealedRcsAssessmentId: 'forged' })
+    );
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      success: false,
+      error: 'RCS_DERIVED_WRITE_REFUSED',
+      fields: ['governanceStatus', 'sealedRcsAssessmentId'],
+      details: [
+        'governanceStatus: derivado da certificação RCS e não pode ser informado',
+        'sealedRcsAssessmentId: derivado da certificação RCS e não pode ser informado'
+      ]
+    });
+    expect(sampleService.createSample).not.toHaveBeenCalled();
+  });
+
+  it('RNF018 AC4: passes a sprec with no RCS-derived field on to createSample', async () => {
+    const sprec = { matrixType: 'fluid', sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A' };
+
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, sprec })
+    );
+
+    expect([201, 202]).toContain(response.status);
+    expect(sampleService.createSample).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sprec }),
+      expect.anything()
+    );
+  });
+
   it('deve bloquear em STRICT_MODE_BLOCKED na rota alternativa (403)', async () => {
     // Given
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);

@@ -1,5 +1,7 @@
 # Canonical Active Surface
 
+Superseded on 2026-11-17 by legacy-surface-inventory.md; kept as the 2026-07-08 record.
+
 Branch: `refactor/canonical-data-contracts`
 Date: `2026-07-08`
 
@@ -99,7 +101,6 @@ Classification:
 - `api/backend/src/controllers/import-async.controller.js` - verify active imports.
 - `api/backend/src/controllers/import-batch.controller.js` - verify active imports.
 - `api/backend/src/controllers/fhir-import-staging.controller.js` - verify active imports.
-- `api/backend/src/routes/orphanet-count.js` - likely operational helper, classify before deletion.
 - `api/backend/scripts/migrate-patients-to-modular.js` - likely legacy operational script candidate.
 
 ## Frontend active surface

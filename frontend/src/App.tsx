@@ -229,7 +229,7 @@ function App() {
                     path="/import"
                     element={
                       <ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}>
-                        <ImportForm onSuccess={() => {}} onError={() => {}} />
+                        <ImportForm />
                       </ProtectedRoute>
                     }
                   />

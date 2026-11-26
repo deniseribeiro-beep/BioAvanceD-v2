@@ -98,7 +98,7 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
   });
 
   const merkleServiceModule = require(merkleServicePath);
-  merkleServiceModule.generateSampleHash = vi.fn(() => 'hash-1');
+  merkleServiceModule.generateSampleHashFromSample = vi.fn(async () => 'hash-1');
 
   const consentsCollection = {
     findOne: vi.fn((query) => {

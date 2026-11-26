@@ -10,7 +10,8 @@ export type InventoryBox = {
   occupants: CryoBoxOccupant[];
 };
 
-function sampleWellCode(sample: Sample): string {
+// The list page passes its SampleWithId rows, whose id is the last fallback.
+function sampleWellCode(sample: Sample & { id?: string }): string {
   const specimenId = String(sample.specimenId || '').trim();
   if (specimenId) return specimenId;
   const barcode = String(sample.barcode || '').trim();

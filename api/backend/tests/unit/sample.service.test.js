@@ -125,8 +125,35 @@ function makeSession() {
   return session;
 }
 
+// RF004 AC2, ELM-0118: createSample refuses a specimen with no collectionId,
+// so validSampleData() names this biobank collection, governed and with an
+// approval in force, which every makeDb() resolves.
+const DEFAULT_COLLECTION_ID = 'COL-BIOBANK-1';
+const DEFAULT_COLLECTION = {
+  collectionId: DEFAULT_COLLECTION_ID,
+  governanceRegime: 'biobank',
+  governanceContext: { biobankGovernanceContextId: 'BGC-1' },
+};
+const DEFAULT_APPROVAL = {
+  approvalId: 'APR-BGC-1',
+  collectionId: DEFAULT_COLLECTION_ID,
+  status: 'active',
+  effectivePeriod: { start: '2020-01-01', end: null },
+};
+
+function makeGovernedCollections() {
+  const collections = makeCollection('collections');
+  collections.findOne.mockImplementation(async (filter = {}) =>
+    (filter.collectionId === DEFAULT_COLLECTION_ID ? DEFAULT_COLLECTION : null));
+  const approvals = makeCollection('collectionGovernanceApprovals');
+  approvals.find.mockImplementation((filter = {}) =>
+    makeCursor(filter.collectionId === DEFAULT_COLLECTION_ID ? [DEFAULT_APPROVAL] : []));
+  return { collections, collectionGovernanceApprovals: approvals };
+}
+
 function makeDb(overrides = {}) {
   const collections = {
+    ...makeGovernedCollections(),
     samples: makeCollection('samples'),
     sample_movements: makeCollection('sample_movements'),
     // #779: generateUniqueBarcode seeds a per-year counter then advances it
@@ -166,6 +193,7 @@ function validSampleData(overrides = {}) {
     specimenId: 555001,
     boxId: BOX_ID.toString(),
     positionCode: 'A1',
+    collectionId: DEFAULT_COLLECTION_ID,
     registeredAt: new Date('2024-01-01'),
     ...overrides
   };
@@ -232,7 +260,16 @@ function mockOperationalStorage(db) {
   db.collections.samples.findOne.mockImplementation((query) => {
     if (query && query._id !== undefined) {
       const inserted = db.insertedSamples.at(-1);
-      return Promise.resolve({ _id: query._id, specimenId: inserted?.specimenId, barcode: null, storageLocation: null });
+      // #1548: the stored snapshot pins, as the insert stored them (null) and
+      // the pin updateOnes on this _id set them since.
+      const pins = { sealedRcsAssessmentId: null, sealedSpecimenPreanalyticsId: null };
+      for (const [filter, update] of db.collections.samples.updateOne.mock?.calls ?? []) {
+        if (filter?._id !== query._id || !update?.$set) continue;
+        for (const key of Object.keys(pins)) {
+          if (key in update.$set) pins[key] = update.$set[key];
+        }
+      }
+      return Promise.resolve({ _id: query._id, specimenId: inserted?.specimenId, barcode: null, storageLocation: null, ...pins });
     }
     return Promise.resolve(null);
   });
@@ -267,6 +304,57 @@ describe('sample.service', () => {
       const [movementArg] = db.collections.sample_movements.insertOne.mock.calls[0];
       expect(movementArg.type).toBe('create');
       expect(movementArg.destination).toBe(`storage:${BOX_ID.toString()}:A1`);
+    });
+
+    it.each([
+      ['a formatted CPF', '123.456.789-09'],
+      ['a bare CPF', '52998224725'],
+      ['an e-mail', 'joana@example.com']
+    ])('refuses a caller-supplied barcode holding %s with BARCODE_PERSONAL_DATA before any write (RNF007 AC4, #1463)', async (_kind, barcode) => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await expect(sampleService.createSample(db, validSampleData({ barcode })))
+        .rejects.toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      expect(db.collections.sample_movements.insertOne).not.toHaveBeenCalled();
+    });
+
+    it.each([['JOANA-001'], ['JoanaXimenes'], ['XIMENES2026']])('refuses a caller-supplied barcode %s holding the participant name (RNF007 AC4, #1463)', async (barcode) => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collection('participantIdentities').findOne.mockResolvedValue({ participantId: '12345678', patientName: 'Joana Ximenes dos Santos' });
+
+      const error = await sampleService.createSample(db, validSampleData({ barcode })).catch((caught) => caught);
+      expect(error).toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      expect(error.message).not.toContain('Joana');
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      expect(db.collections.sample_movements.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('reads the participant name from a ciphertext-only identity record (RNF007 AC4, #1463)', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const encrypted = participantIdentityService.encryptIdentityFields({
+        participantId: '12345678',
+        patientName: 'Joana Ximenes dos Santos'
+      });
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collection('participantIdentities').findOne.mockResolvedValue({ ...encrypted, patientName: null });
+
+      await expect(sampleService.createSample(db, validSampleData({ barcode: 'JOANA-001' })))
+        .rejects.toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('keeps an opaque caller-supplied barcode when the participant has a name on file (RNF007 AC4, #1463)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collection('participantIdentities').findOne.mockResolvedValue({ participantId: '12345678', patientName: 'Joana Ximenes dos Santos' });
+
+      const result = await sampleService.createSample(db, validSampleData());
+
+      expect(result.barcode).toBe('BR-TEST-001');
     });
 
     it('persists the resolved storageLocation (boxId/positionCode) on the created sample, per issue #462', async () => {
@@ -512,6 +600,29 @@ describe('sample.service', () => {
       db.collections.collectionGovernanceApprovals.find.mockReturnValue(makeCursor(approvals));
       return db;
     }
+
+    it('rejects with 422 a create that names no collection (RF004 AC2, ELM-0118)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      const { collectionId, ...withoutCollection } = validSampleData();
+
+      await expect(
+        sampleService.createSample(db, withoutCollection)
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/collectionId é obrigatório/) });
+      expect(db.collections.collections.findOne).not.toHaveBeenCalled();
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects with 422 a create whose collectionId is blank (RF004 AC2, ELM-0118)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionId: '   ' }))
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/collectionId é obrigatório/) });
+      expect(db.collections.collections.findOne).not.toHaveBeenCalled();
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
 
     it('rejects with 422 a collection with a regime and no governance context', async () => {
       const db = governedDb({ collectionId: 'COL-1', governanceRegime: 'biorepository' }, []);
@@ -919,6 +1030,16 @@ describe('sample.service', () => {
 
         await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
           .rejects.toMatchObject({ statusCode: 422, message: expect.stringContaining('encerrada') });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      });
+
+      it('refuses a quarantined parent with 422 before any write (RF019 AC3)', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, [parentSample({ specimenStatus: 'quarantined' })]);
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
+          .rejects.toMatchObject({ statusCode: 422, message: expect.stringContaining('em quarentena') });
 
         expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
       });
@@ -1379,6 +1500,116 @@ describe('sample.service', () => {
         expect(inserted.targetAnalyte).toBe(qualificationContext.targetAnalyte);
       });
 
+      // RNF018 AC5 (#1524): the create resolves the body's governanceEvidence
+      // references against the stored records before certification, as the
+      // preview does; a reference that does not resolve refuses it.
+      describe('governance evidence references (RNF018 AC5, #1524)', () => {
+        const APPROVAL_ID = 'APR-1524';
+        const OTHER_APPROVAL_ID = 'APR-1524-OTHER';
+        const CHECKSUM = `sha256:${'a'.repeat(64)}`;
+        const approvalUri = `urn:bioavanced:collection-governance-approval:${APPROVAL_ID}`;
+        const fluidSprec = {
+          matrixType: 'fluid', sampleType: 'BLD', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+          secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'C'
+        };
+        const fakeCollection = () => ({
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'ignored' }),
+          deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
+        });
+        const createWith = async (extra) => {
+          const db = makeDb();
+          mockOperationalStorage(db);
+          db.collections.rcsAssessments = fakeCollection();
+          db.collections.rcsInputSnapshots = fakeCollection();
+          db.collections.rcsGovernanceEvidenceSnapshots = fakeCollection();
+          // keeps makeDb()'s find, which lists the default collection's approval
+          db.collections.collectionGovernanceApprovals = {
+            ...db.collections.collectionGovernanceApprovals,
+            findOne: vi.fn(async (filter) => {
+              if (filter.approvalId === APPROVAL_ID) {
+                return { approvalId: APPROVAL_ID, collectionId: DEFAULT_COLLECTION_ID, documentChecksum: CHECKSUM };
+              }
+              if (filter.approvalId === OTHER_APPROVAL_ID) {
+                return { approvalId: OTHER_APPROVAL_ID, collectionId: 'COL-OTHER-1524', documentChecksum: CHECKSUM };
+              }
+              return null;
+            })
+          };
+          const result = await sampleService.createSample(db, validSampleData({ sprec: fluidSprec, ...extra }));
+          const evidence = db.collections.rcsGovernanceEvidenceSnapshots.insertOne.mock.calls[0][0];
+          return { result, evidence };
+        };
+
+        it('reads documentation true and keeps the reference when it resolves', async () => {
+          const { result, evidence } = await createWith({
+            governanceEvidence: { documentation: [{ uri: approvalUri, hash: CHECKSUM }] }
+          });
+
+          expect(result.governanceStatus).toBe(1);
+          expect(evidence.documentationOk).toBe(true);
+          expect(evidence.evidenceRefs).toEqual([approvalUri]);
+        });
+
+        it.each([
+          ['a missing hash', { uri: approvalUri }],
+          ['an unresolvable URI', { uri: 'urn:bioavanced:collection-governance-approval:no-such-1524', hash: CHECKSUM }],
+          ['a wrong hash', { uri: approvalUri, hash: `sha256:${'b'.repeat(64)}` }],
+        ])('refuses certification for a documentation reference with %s', async (_label, reference) => {
+          const { result, evidence } = await createWith({ governanceEvidence: { documentation: [reference] } });
+
+          expect(result.governanceStatus).toBe(0);
+          expect(result.finalGrade).toBe('E');
+          expect(result.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+          expect(evidence.documentationOk).toBe(false);
+          expect(evidence.evidenceRefs).toEqual([]);
+        });
+
+        // The owner's ruling on #1524: SOP documentation evidence is the
+        // specimen's collection's governance approval, never another's.
+        it("refuses certification for a documentation reference to another collection's approval", async () => {
+          const { result, evidence } = await createWith({
+            governanceEvidence: {
+              documentation: [{ uri: `urn:bioavanced:collection-governance-approval:${OTHER_APPROVAL_ID}`, hash: CHECKSUM }]
+            }
+          });
+
+          expect(result.governanceStatus).toBe(0);
+          expect(result.finalGrade).toBe('E');
+          expect(result.governanceRuleCodes).toContain('INSUFFICIENT_DOCUMENTATION');
+          expect(evidence.documentationOk).toBe(false);
+          expect(evidence.evidenceRefs).toEqual([]);
+        });
+
+        it('refuses a custody-event reference, since the sample being created has no custody event yet', async () => {
+          const { result, evidence } = await createWith({
+            governanceEvidence: { traceability: [{ uri: 'urn:bioavanced:custody-event:evt-1', hash: CHECKSUM }] }
+          });
+
+          expect(result.governanceStatus).toBe(0);
+          expect(result.governanceRuleCodes).toContain('INSUFFICIENT_TRACEABILITY');
+          expect(evidence.traceabilityOk).toBe(false);
+        });
+
+        it('never reads a governanceEvidenceResolution the body sends', async () => {
+          const { result, evidence } = await createWith({
+            governanceEvidenceResolution: { documentation: [{ uri: approvalUri, hash: CHECKSUM, status: 'resolved' }] }
+          });
+
+          expect(result.governanceStatus).toBe(1);
+          expect(evidence.documentationOk).toBeNull();
+          expect(evidence.evidenceRefs).toEqual([]);
+        });
+
+        it('leaves the criteria unread when no evidence is presented', async () => {
+          const { result, evidence } = await createWith({});
+
+          expect(result.governanceStatus).toBe(1);
+          expect(evidence.traceabilityOk).toBeNull();
+          expect(evidence.monitoringOk).toBeNull();
+          expect(evidence.documentationOk).toBeNull();
+        });
+      });
+
       it('does not fail sample creation when recording the RcsAssessment snapshot rejects', async () => {
         const db = makeDb();
         mockOperationalStorage(db);
@@ -1760,6 +1991,49 @@ describe('sample.service', () => {
       expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
       expect(db.session.endSession).toHaveBeenCalledTimes(1);
     });
+
+    it('stamps quantityLedgerVersion v+1 on the balance and its movement, written only on the version it read (RF006 AC4)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1', quantityLedgerVersion: 3 }));
+
+      const result = await sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Parcial',
+        withdrawalQuantity: 2,
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ specimenId: 'SPC-1', quantityLedgerVersion: 3 });
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.quantityLedgerVersion).toBe(4);
+      expect(db.collections.sample_movements.insertOne.mock.calls[0][0].quantityLedgerVersion).toBe(4);
+      expect(result.quantityLedgerVersion).toBe(4);
+    });
+
+    it('reads a specimen with no quantityLedgerVersion as version 0 (RF006 AC4)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1' }));
+
+      await sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][0].quantityLedgerVersion).toBeNull();
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.quantityLedgerVersion).toBe(1);
+    });
+
+    it('refuses with 409 when the ledger version moved between read and write (RF006 AC4)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1', quantityLedgerVersion: 3 }));
+      db.collections.samples.updateOne.mockResolvedValue({ matchedCount: 0 });
+
+      await expect(sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      })).rejects.toMatchObject({ statusCode: 409, message: 'Amostra alterada concorrentemente; leia-a de novo' });
+    });
   });
 
   // -------------------------------------------------------------------
@@ -1923,6 +2197,18 @@ describe('sample.service', () => {
       expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
     });
 
+    it('refuses a barcode update holding a CPF or the participant name with BARCODE_PERSONAL_DATA (RNF007 AC4, #1463)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-U', participantId: '12345678', initialQuantity: 10, currentQuantity: 10 });
+      db.collection('participantIdentities').findOne.mockResolvedValue({ participantId: '12345678', patientName: 'Joana Ximenes dos Santos' });
+
+      for (const barcode of ['52998224725', 'JOANA-001']) {
+        await expect(sampleService.updateSample(db, 'SPC-U', { barcode }))
+          .rejects.toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+      }
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
     it('recomputes quantityStatus and persists the update, leaving specimenStatus alone (RF006 AC2/AC3)', async () => {
       const db = makeDb();
       const existing = {
@@ -1934,19 +2220,20 @@ describe('sample.service', () => {
       };
       db.collections.samples.findOne
         .mockResolvedValueOnce(existing) // initial lookup
-        .mockResolvedValueOnce({ ...existing, currentQuantity: 4 }); // post-update re-fetch
+        .mockResolvedValueOnce({ ...existing, initialQuantity: 25, currentQuantity: 25 }); // post-update re-fetch
 
-      const result = await sampleService.updateSample(db, 'sample-1', { currentQuantity: 4 });
+      const result = await sampleService.updateSample(db, 'sample-1', { initialQuantity: 25 });
 
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
       // The legacy lifecycleStatus/availabilityStatus dual-write was removed
-      // in #408; quantity moves quantityStatus, never specimenStatus.
-      expect(updateArg.$set.quantityStatus).toBe('partial');
+      // in #408; quantity moves quantityStatus, never specimenStatus. Before
+      // any movement the correction re-derives the balance (#1531): full.
+      expect(updateArg.$set.quantityStatus).toBe('full');
       expect(updateArg.$set.specimenStatus).toBeUndefined();
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
-      expect(result.currentQuantity).toBe(4);
+      expect(result.initialQuantity).toBe(25);
     });
 
     it('appends an OperationalStateDecision when an edit changes specimenStatus, and none for a quantity edit or no change (RF006 AC7, #1315)', async () => {
@@ -1954,7 +2241,7 @@ describe('sample.service', () => {
       const existing = { _id: 'sample-1', specimenId: 'SPC-U', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' };
       db.collections.samples.findOne.mockResolvedValue(existing);
 
-      await sampleService.updateSample(db, 'SPC-U', { currentQuantity: 4 });
+      await sampleService.updateSample(db, 'SPC-U', { initialQuantity: 20 });
       expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
 
       await sampleService.updateSample(db, 'SPC-U', { specimenStatus: 'reserved' });
@@ -2068,6 +2355,225 @@ describe('sample.service', () => {
       expect(updateArg.$set.quantity).toBe(5);
       expect(updateArg.$set.hacked).toBeUndefined();
       expect(updateArg.$set.participantId).toBeUndefined();
+    });
+
+    it('refuses a write to an RCS-derived field and persists nothing (RNF018 AC4, #1489)', async () => {
+      const writes = [
+        { rcsScore: 99 },
+        { gradeRoute: 'Score-based certification' },
+        { axisPenalties: [] },
+        { biologicalPenalty: 0 }
+      ];
+      for (const write of writes) {
+        const db = makeDb();
+        db.collections.samples.findOne.mockResolvedValue({
+          _id: 'sample-1',
+          quantity: 10,
+          initialQuantity: 10,
+          currentQuantity: 10,
+          specimenStatus: 'available'
+        });
+
+        await expect(sampleService.updateSample(db, 'sample-1', write)).rejects.toMatchObject({
+          statusCode: 422,
+          code: 'RCS_DERIVED_WRITE_REFUSED',
+          fields: Object.keys(write)
+        });
+        expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      }
+    });
+
+    it('refuses a write to a governance or seal field of the RCS result and persists nothing (RNF018 AC4, #1526)', async () => {
+      const writes = [
+        { modelVersion: 'RCS-GOV-v9' },
+        { matrixType: 'solid' },
+        { governanceStatus: 1 },
+        { governanceFailureReasons: [] },
+        { governanceRuleCodes: [] },
+        { sealedRcsAssessmentId: 'forged-assessment' },
+        { governanceStatus: null }
+      ];
+      for (const write of writes) {
+        const db = makeDb();
+        db.collections.samples.findOne.mockResolvedValue({
+          _id: 'sample-1',
+          quantity: 10,
+          initialQuantity: 10,
+          currentQuantity: 10,
+          specimenStatus: 'available',
+          governanceStatus: 0
+        });
+
+        await expect(sampleService.updateSample(db, 'sample-1', write)).rejects.toMatchObject({
+          statusCode: 422,
+          code: 'RCS_DERIVED_WRITE_REFUSED',
+          fields: Object.keys(write)
+        });
+        expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      }
+    });
+
+    it('refuses an edit that changes sprec and persists nothing (RF018 AC10, #1537)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({
+        _id: 'sample-1',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available',
+        sprec: { sampleType: 'BLD', primaryContainer: 'SST', longTermStorage: 'C' }
+      });
+
+      await expect(sampleService.updateSample(db, 'sample-1', {
+        sprec: { sampleType: 'BLD', primaryContainer: 'SST', longTermStorage: 'A' }
+      })).rejects.toMatchObject({ statusCode: 422, code: 'SPREC_WRITE_REFUSED', fields: ['sprec'] });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('accepts an edit that repeats the stored sprec without rewriting it (#1537)', async () => {
+      const db = makeDb();
+      const sprec = { sampleType: 'BLD', primaryContainer: 'SST', longTermStorage: 'C' };
+      db.collections.samples.findOne.mockResolvedValue({
+        _id: 'sample-1',
+        quantity: 10,
+        initialQuantity: 10,
+        currentQuantity: 10,
+        specimenStatus: 'available',
+        sprec
+      });
+
+      await expect(sampleService.updateSample(db, 'sample-1', { sprec: { ...sprec }, linkedProject: 'Projeto 1537' })).resolves.toBeTruthy();
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      expect(updateArg.$set.linkedProject).toBe('Projeto 1537');
+      expect(updateArg.$set).not.toHaveProperty('sprec');
+    });
+
+    it('refuses a negative or non-numeric quantity and persists nothing (RNF018 AC1, #1525)', async () => {
+      const writes = [
+        { currentQuantity: -1 },
+        { quantity: -0.5 },
+        { initialQuantity: -10 },
+        { currentQuantity: 'abc' }
+      ];
+      for (const write of writes) {
+        const db = makeDb();
+        db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10, initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' });
+
+        await expect(sampleService.updateSample(db, 'sample-1', write)).rejects.toMatchObject({
+          statusCode: 422,
+          code: 'INVALID_QUANTITY',
+          fields: Object.keys(write)
+        });
+        expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      }
+    });
+
+    it('writes an initialQuantity of zero, the lowest the edit allows (RNF018 AC1, #1525)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-1', quantity: 10, initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' });
+
+      await sampleService.updateSample(db, 'sample-1', { initialQuantity: 0 });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.initialQuantity).toBe(0);
+    });
+
+    // RF006 AC4 (#1531): a ledgered quantity moves only by a withdrawal or return.
+    const ledgered = { _id: 'sample-1', specimenId: 'SPC-L', quantity: 10, initialQuantity: 10, currentQuantity: 4, totalWithdrawn: 6, totalReturned: 0, quantityLedgerVersion: 2, specimenStatus: 'available' };
+    const unmoved = { _id: 'sample-1', specimenId: 'SPC-N', quantity: 10, initialQuantity: 10, currentQuantity: 10, totalWithdrawn: 0, totalReturned: 0, quantityLedgerVersion: 0, specimenStatus: 'available' };
+    it.each([
+      ['currentQuantity after a movement', ledgered, { currentQuantity: 9 }],
+      ['totalWithdrawn after a movement', ledgered, { totalWithdrawn: 0 }],
+      ['totalReturned after a movement', ledgered, { totalReturned: 3 }],
+      ['initialQuantity after a movement', ledgered, { initialQuantity: 50 }],
+      ['quantity after a movement', ledgered, { quantity: 50 }],
+      ['initialQuantity on a pre-version specimen with a withdrawal', { ...ledgered, quantityLedgerVersion: undefined }, { initialQuantity: 50 }],
+      ['currentQuantity before any movement', unmoved, { currentQuantity: 4 }],
+      ['totalWithdrawn before any movement', unmoved, { totalWithdrawn: 6 }],
+      ['every ledgered field at once', ledgered, { currentQuantity: 9, totalWithdrawn: 1, totalReturned: 1 }],
+    ])('refuses an edit of %s with QUANTITY_LEDGER_WRITE_REFUSED and writes nothing (RF006 AC4, #1531)', async (_label, stored, write) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(stored);
+
+      await expect(sampleService.updateSample(db, 'sample-1', write)).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'QUANTITY_LEDGER_WRITE_REFUSED',
+        fields: Object.keys(write)
+      });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('writes an edit that echoes the stored ledgered quantities, leaving them out of the write (RF006 AC4, #1531)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(ledgered);
+
+      await sampleService.updateSample(db, 'sample-1', { currentQuantity: 4, totalWithdrawn: 6, totalReturned: 0, linkedProject: 'P-1531' });
+
+      const [, update] = db.collections.samples.updateOne.mock.calls[0];
+      expect(update.$set.linkedProject).toBe('P-1531');
+      expect(update.$set).not.toHaveProperty('currentQuantity');
+      expect(update.$set).not.toHaveProperty('totalWithdrawn');
+      expect(update.$set).not.toHaveProperty('totalReturned');
+    });
+
+    it('writes a quantity correction before any movement (RF006 AC4, #1531)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(unmoved);
+
+      await sampleService.updateSample(db, 'sample-1', { quantity: 12, initialQuantity: 12 });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set).toMatchObject({ quantity: 12, initialQuantity: 12 });
+    });
+
+    it.each([
+      ['initialQuantity', { initialQuantity: 12 }],
+      ['quantity', { quantity: 12 }, { initialQuantity: undefined }],
+      ['quantity (initialQuantity sent as null)', { quantity: 12, initialQuantity: null }, { initialQuantity: undefined }],
+    ])('re-derives currentQuantity from a %s correction before any movement, so the specimen stays full (RF006 AC4, #1531)', async (_label, write, storedOverride = {}) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ ...unmoved, ...storedOverride });
+
+      await sampleService.updateSample(db, 'sample-1', write);
+
+      const { $set } = db.collections.samples.updateOne.mock.calls[0][1];
+      expect($set.currentQuantity).toBe(12);
+      expect($set.quantityStatus).toBe('full');
+    });
+
+    it('keeps the balance on a quantity-only correction when a stored initialQuantity is the base (RF006 AC4, #1531)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ ...unmoved, initialQuantity: 20, quantity: 10, currentQuantity: 20 });
+
+      await sampleService.updateSample(db, 'sample-1', { quantity: 12 });
+
+      const { $set } = db.collections.samples.updateOne.mock.calls[0][1];
+      expect($set).not.toHaveProperty('currentQuantity');
+      expect($set.quantityStatus).toBe('full');
+    });
+
+    it.each([
+      ['the stored quantity', { initialQuantity: null }, 10],
+      ['the sent quantity', { quantity: 12, initialQuantity: null }, 12],
+    ])('re-derives currentQuantity from %s when an edit clears a stored initialQuantity before any movement (RF006 AC4, #1531)', async (_label, write, expected) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ ...unmoved, initialQuantity: 20, quantity: 10, currentQuantity: 20 });
+
+      await sampleService.updateSample(db, 'sample-1', write);
+
+      const { $set } = db.collections.samples.updateOne.mock.calls[0][1];
+      expect($set.currentQuantity).toBe(expected);
+      expect($set.quantityStatus).toBe('full');
+    });
+
+    it('keeps the balance of a pre-ledger specimen consumed with no recorded movement on an initialQuantity correction (RF006 AC4, #1531)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-P', quantity: 10, initialQuantity: 10, currentQuantity: 4, specimenStatus: 'available' });
+
+      await sampleService.updateSample(db, 'sample-1', { initialQuantity: 12 });
+
+      const { $set } = db.collections.samples.updateOne.mock.calls[0][1];
+      expect($set).not.toHaveProperty('currentQuantity');
+      expect($set.quantityStatus).toBe('partial');
     });
 
     it('returns null when updateOne matches nothing', async () => {
@@ -2415,6 +2921,21 @@ describe('sample.service', () => {
       expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
     });
 
+    it('a return moves quantityLedgerVersion too, on the version it read (RF006 AC4)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample({ specimenId: 'SPC-1', quantityLedgerVersion: 1 }));
+
+      await sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Parcial',
+        returnQuantity: 3
+      });
+
+      expect(db.collections.samples.updateOne.mock.calls[0][0].quantityLedgerVersion).toBe(1);
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.quantityLedgerVersion).toBe(2);
+    });
+
     it('refuses a return to a closed specimen (RF026 AC7)', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(withdrawnSample({ specimenStatus: 'closed' }));
@@ -2631,6 +3152,34 @@ describe('sample.service', () => {
   });
 
   // -------------------------------------------------------------------
+  describe('reconcileQuantityLedger', () => {
+    function reconcileDb(sample, movements) {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(sample);
+      db.collections.sample_movements.find.mockReturnValue(makeCursor(movements));
+      return db;
+    }
+
+    it('reconciles when the ledger head carries the specimen version and currentQuantity', async () => {
+      const db = reconcileDb({ specimenId: 'SPC-1', currentQuantity: 6, quantityLedgerVersion: 2 }, [{ quantityLedgerVersion: 2, newQuantity: 6 }]);
+      const result = await sampleService.reconcileQuantityLedger(db, 'SPC-1');
+      expect(result.reconciled).toBe(true);
+    });
+
+    it('does not reconcile when currentQuantity differs from the ledger head', async () => {
+      const db = reconcileDb({ specimenId: 'SPC-1', currentQuantity: 5, quantityLedgerVersion: 2 }, [{ quantityLedgerVersion: 2, newQuantity: 6 }]);
+      const result = await sampleService.reconcileQuantityLedger(db, 'SPC-1');
+      expect(result.reconciled).toBe(false);
+    });
+
+    it('does not reconcile a versioned specimen with no versioned movement', async () => {
+      const db = reconcileDb({ specimenId: 'SPC-1', currentQuantity: 6, quantityLedgerVersion: 2 }, []);
+      const result = await sampleService.reconcileQuantityLedger(db, 'SPC-1');
+      expect(result.reconciled).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------
   describe('getSampleMovements', () => {
     it('queries movements by specimenId/barcode and sorts by newest first', async () => {
       const db = makeDb();
@@ -2833,6 +3382,179 @@ describe('sample.service', () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(null);
       expect(await sampleService.closeSpecimen(db, 'missing')).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------
+  describe('merkleRoot seal (#1548)', () => {
+    const MerkleService = require('../../src/services/MerkleService');
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function mockSnapshotCollections(db) {
+      db.collections.rcsAssessments = {
+        insertOne: vi.fn().mockImplementation((doc) => {
+          doc._id = 'assessment-1';
+          return Promise.resolve({ insertedId: 'assessment-1' });
+        })
+      };
+      db.collections.specimenPreanalytics = {
+        insertOne: vi.fn().mockImplementation((doc) => {
+          doc._id = 'profile-1';
+          return Promise.resolve({ insertedId: 'profile-1' });
+        })
+      };
+      vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+        governance_status: 1,
+        final_grade: 'A',
+        rcs_score: 87.5,
+        score_based_grade: 'A',
+        model_version: 'v1',
+        matrix_type: 'PLASMA',
+        governance_failure_reasons: [],
+        governance_rule_codes: [],
+        grade_route: 'DIRECT',
+        axis_penalties: [],
+        calculation_trace: {}
+      });
+    }
+
+    function storedSample(fields) {
+      return {
+        _id: 'sample-1', specimenId: 'SPC-1', quantity: 10, initialQuantity: 10, currentQuantity: 10,
+        specimenStatus: 'available', ...fields
+      };
+    }
+
+    const setOf = (db, index = 0) => db.collections.samples.updateOne.mock.calls[index][1].$set;
+    const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+    it('seals merkleRoot last, from the sample with both snapshots pinned (#1548)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      mockSnapshotCollections(db);
+      const seal = vi.spyOn(MerkleService, 'generateSampleHashFromSample').mockResolvedValue('sealed-root');
+
+      const result = await sampleService.createSample(db, validSampleData({ sprec: { matrixType: 'PLASMA', sampleType: 'PLASMA' } }));
+
+      expect(seal).toHaveBeenCalledWith(db, expect.objectContaining({
+        sealedRcsAssessmentId: 'assessment-1',
+        sealedSpecimenPreanalyticsId: 'profile-1'
+      }));
+      const calls = db.collections.samples.updateOne.mock.calls;
+      const indexOfSet = (key) => calls.findIndex(([, update]) => update?.$set && key in update.$set);
+      expect(calls[indexOfSet('merkleRoot')]).toEqual([{ _id: 'generated-id' }, { $set: { merkleRoot: 'sealed-root' } }]);
+      expect(indexOfSet('merkleRoot')).toBeGreaterThan(indexOfSet('sealedRcsAssessmentId'));
+      expect(indexOfSet('merkleRoot')).toBeGreaterThan(indexOfSet('sealedSpecimenPreanalyticsId'));
+      expect(result.merkleRoot).toBe('sealed-root');
+    });
+
+    it('ignores a body merkleRoot and leaves it null when the seal rejects, still creating the sample (#1548)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      vi.spyOn(MerkleService, 'generateSampleHashFromSample').mockRejectedValue(new Error('snapshot read failed'));
+
+      const result = await sampleService.createSample(db, validSampleData({ merkleRoot: 'forged-root' }));
+
+      expect(result._id).toBe('generated-id');
+      expect(db.collections.samples.insertOne.mock.calls[0][0].merkleRoot).toBeNull();
+      expect(db.collections.samples.updateOne.mock.calls.some(([, update]) => update?.$set && 'merkleRoot' in update.$set)).toBe(false);
+      expect(result.merkleRoot).toBeNull();
+    });
+
+    it('ignores a body sealedSpecimenPreanalyticsId on create, so the seal hashes no forged profile (#1548)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      const seal = vi.spyOn(MerkleService, 'generateSampleHashFromSample').mockResolvedValue('sealed-root');
+
+      const result = await sampleService.createSample(db, validSampleData({ sealedSpecimenPreanalyticsId: 'forged-profile' }));
+
+      expect(db.collections.samples.insertOne.mock.calls[0][0].sealedSpecimenPreanalyticsId).toBeNull();
+      expect(seal).toHaveBeenCalledWith(db, expect.objectContaining({ sealedSpecimenPreanalyticsId: null }));
+      expect(result.sealedSpecimenPreanalyticsId).toBeNull();
+    });
+
+    it('ignores a client-sent merkleRoot or sealedSpecimenPreanalyticsId and writes the other fields (#1548)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(storedSample({ merkleRoot: 'stored-root', sealedSpecimenPreanalyticsId: 'profile-1' }));
+
+      await sampleService.updateSample(db, 'sample-1', {
+        merkleRoot: 'forged-root', sealedSpecimenPreanalyticsId: 'forged-profile', notes: 'nota'
+      });
+
+      const set = setOf(db);
+      expect(hasOwn(set, 'merkleRoot')).toBe(false);
+      expect(hasOwn(set, 'sealedSpecimenPreanalyticsId')).toBe(false);
+      expect(set.notes).toBe('nota');
+    });
+
+    it('reseals in the same write an edit that changes clinicalData on a sample whose seal verifies (#1548)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(storedSample({ merkleRoot: 'stored-root', clinicalData: { diagnosis: 'A' } }));
+      const seal = vi.spyOn(MerkleService, 'generateSampleHashFromSample')
+        .mockImplementation(async (_db, sample) => (sample.clinicalData?.diagnosis === 'A' ? 'stored-root' : 'resealed-root'));
+
+      await sampleService.updateSample(db, 'sample-1', { clinicalData: { diagnosis: 'B' } });
+
+      expect(seal).toHaveBeenCalledWith(db, expect.objectContaining({ clinicalData: { diagnosis: 'B' } }));
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      expect(setOf(db).clinicalData).toEqual({ diagnosis: 'B' });
+      expect(setOf(db).merkleRoot).toBe('resealed-root');
+    });
+
+    it('reseals in the same write an edit that changes pharmacologyData on a sample whose seal verifies (#1548)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(storedSample({ merkleRoot: 'stored-root', pharmacologyData: { atcCode: 'A01' } }));
+      const seal = vi.spyOn(MerkleService, 'generateSampleHashFromSample')
+        .mockImplementation(async (_db, sample) => (sample.pharmacologyData?.atcCode === 'A01' ? 'stored-root' : 'resealed-root'));
+
+      await sampleService.updateSample(db, 'sample-1', { pharmacologyData: { atcCode: 'B02' } });
+
+      expect(seal).toHaveBeenCalledWith(db, expect.objectContaining({ pharmacologyData: { atcCode: 'B02' } }));
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      expect(setOf(db).pharmacologyData).toEqual({ atcCode: 'B02' });
+      expect(setOf(db).merkleRoot).toBe('resealed-root');
+    });
+
+    it('answers 409 and stores nothing when the stored root changed between the read and a resealing write (#1548)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(storedSample({ merkleRoot: 'stored-root', clinicalData: { diagnosis: 'A' } }));
+      // A concurrent edit already resealed the stored document: a write that
+      // names the root this edit read matches nothing, any other write matches.
+      db.collections.samples.updateOne.mockImplementation(async (filter) => (
+        filter.merkleRoot === undefined || filter.merkleRoot === 'concurrent-root'
+          ? { matchedCount: 1, modifiedCount: 1 }
+          : { matchedCount: 0, modifiedCount: 0 }));
+      vi.spyOn(MerkleService, 'generateSampleHashFromSample')
+        .mockImplementation(async (_db, sample) => (sample.clinicalData?.diagnosis === 'A' ? 'stored-root' : 'resealed-root'));
+
+      await expect(sampleService.updateSample(db, 'sample-1', { clinicalData: { diagnosis: 'B' } }))
+        .rejects.toMatchObject({ statusCode: 409, code: 'SAMPLE_SEAL_WRITE_CONFLICT' });
+
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ specimenId: 'SPC-1', merkleRoot: 'stored-root' });
+    });
+
+    it('does not reseal an edit to a sample whose stored seal does not verify, nor one that changes no sealed input (#1548)', async () => {
+      const cases = [
+        // A stored root the recompute does not match (forged), none at all, and
+        // a verifying root under an edit that leaves the sealed input as stored.
+        { existing: { merkleRoot: 'forged-root', clinicalData: { diagnosis: 'A' } }, update: { clinicalData: { diagnosis: 'B' } } },
+        { existing: { merkleRoot: null, pharmacologyData: { atcCode: 'A01' } }, update: { pharmacologyData: { atcCode: 'B02' } } },
+        { existing: { merkleRoot: 'stored-root', clinicalData: { diagnosis: 'A' } }, update: { clinicalData: { diagnosis: 'A' }, notes: 'nota' } }
+      ];
+      for (const { existing, update } of cases) {
+        const db = makeDb();
+        db.collections.samples.findOne.mockResolvedValue(storedSample(existing));
+        vi.spyOn(MerkleService, 'generateSampleHashFromSample').mockResolvedValue('stored-root');
+
+        await sampleService.updateSample(db, 'sample-1', update);
+
+        expect(hasOwn(setOf(db), 'merkleRoot')).toBe(false);
+        vi.restoreAllMocks();
+      }
     });
   });
 });

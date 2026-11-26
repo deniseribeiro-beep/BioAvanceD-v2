@@ -20,6 +20,8 @@ vi.mock('../../../services/api', () => ({
     getMine: vi.fn().mockResolvedValue({ data: { data: { scope: 'none' } } }),
     getAll: vi.fn(),
   },
+  // RF004 AC2 (#1497): the wizard's collection pick lists one governed collection.
+  collectionsService: { getAll: vi.fn().mockResolvedValue({ data: { success: true, data: [{ collectionId: 'COL-1', collectionName: 'Coleção Governada' }] }, status: 200 }) },
 }));
 
 const FIXTURE_DICTIONARIES = {
@@ -105,6 +107,7 @@ async function fillStep2() {
   fireEvent.change(screen.getByTestId('wizard-quantity'), { target: { value: '5' } });
   fireEvent.change(screen.getByTestId('wizard-linked-project'), { target: { value: 'PROJ-1' } });
   fireEvent.change(screen.getByTestId('wizard-institution-name'), { target: { value: 'Hospital Teste' } });
+  fireEvent.change(screen.getByTestId('wizard-collection'), { target: { value: 'COL-1' } });
   fireEvent.click(screen.getByTestId('wizard-next-button'));
   await waitFor(() => expect(screen.getByTestId('wizard-diagnosis-search')).toBeInTheDocument());
 }

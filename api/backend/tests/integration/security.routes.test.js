@@ -185,6 +185,27 @@ describe('Security routes', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  it('PUT /config devolve violatedInvariants e violations de uma ConfigurationValidationError (RNF018 AC2)', async () => {
+    const handler = getHandler(securityRoutes, 'put', '/config');
+    vi.spyOn(securityService, 'getConfig').mockResolvedValue({});
+    vi.spyOn(securityService, 'updateConfig').mockRejectedValue(Object.assign(new Error('recusada'), {
+      statusCode: 422,
+      validationRun: { configurationValidationRunId: 'run-1' },
+      violatedInvariants: ['INV-SCOPE-001'],
+      violations: [{ invariantId: 'INV-SCOPE-001', fieldPath: 'outbox' }],
+    }));
+    const res = createResponse();
+
+    await handler(createRequest({ body: { outbox: { enabled: false } } }), res);
+
+    expect(res.statusCode).toBe(422);
+    expect(res.payload).toMatchObject({
+      configurationValidationRunId: 'run-1',
+      violatedInvariants: ['INV-SCOPE-001'],
+      violations: [{ invariantId: 'INV-SCOPE-001', fieldPath: 'outbox' }],
+    });
+  });
+
   it('GET /config/releases lista as releases, com o limite limitado a 200 (RF014 AC4)', async () => {
     const handler = getHandler(securityRoutes, 'get', '/config/releases');
     const list = vi.spyOn(securityService, 'listReleases').mockResolvedValue([{ configurationReleaseId: 'r2' }, { configurationReleaseId: 'r1' }]);
@@ -206,7 +227,7 @@ describe('Security routes', () => {
     handler(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.payload.data.catalogVersion).toBe('1.0.0');
+    expect(res.payload.data.catalogVersion).toBe('1.1.0');
     expect(res.payload.data.settings.find(({ path }) => path === 'session.timeoutMinutes'))
       .toEqual(expect.objectContaining({ type: 'number', scope: 'environment', allowedValues: { kind: 'range', min: 5, max: 480 }, default: 30 }));
   });

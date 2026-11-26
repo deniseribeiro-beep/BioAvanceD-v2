@@ -50,6 +50,10 @@ CREATE CONSTRAINT research_project_id_unique IF NOT EXISTS
 FOR (r:ResearchProject)
 REQUIRE r.id IS UNIQUE;
 
+CREATE CONSTRAINT terminology_concept_id_unique IF NOT EXISTS
+FOR (tc:TerminologyConcept)
+REQUIRE tc.id IS UNIQUE;
+
 CREATE INDEX sample_mongo_sample_id_idx IF NOT EXISTS
 FOR (s:Sample)
 ON (s.specimenId);

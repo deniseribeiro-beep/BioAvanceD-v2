@@ -12,10 +12,14 @@
 const { randomUUID } = require('crypto');
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
+const { DICTIONARY_VERSION } = require('../reference-data/canonical-dictionary/v2');
 const LabelIdentifierModel = require('../models/LabelIdentifier');
+const { policiesInForce } = require('../models/AccessPolicy');
 const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
+const { resolveClockDriftLimitMs } = require('../services/clockDriftLimit');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const { ingestRecord } = require('./ingestionGateway');
+const { buildProvenanceEnvelope } = require('./provenanceEnvelope');
 const { resolveIngestionTarget, resolveOtherStoreEntityType } = require('./ingestionTargets');
 const { validateMissingDataReasons, buildMissingDataReasons } = require('./missingness');
 const { assessIngestedRecord, findSourceDuplicate, insertDataQualityAssessment } = require('./dataQualityAssessment');
@@ -169,6 +173,29 @@ async function checkReferences(db, target, payload) {
   }
 }
 
+// RF029 AC2 (#1523): each AccessPolicy the provenance names (ELM-0022) is
+// accepted only on positive evidence, the highest version in force naming the
+// exact entityType in applicableEntityTypes; an unknown id, a policy out of
+// force or one not applicable quarantines. A read error is a failure, not a
+// verdict, and throws.
+async function checkAccessPolicies(db, entityType, provenance) {
+  const ids = buildProvenanceEnvelope(provenance).accessPolicyId;
+  if (ids.length === 0) return [];
+  const rows = await db.collection(CANONICAL_COLLECTIONS.accessPolicies).find({ accessPolicyId: { $in: ids } }).toArray();
+  const inForce = policiesInForce(rows, new Date());
+  const violations = [];
+  for (const id of ids) {
+    const policies = inForce.filter((policy) => policy.accessPolicyId === id);
+    const applicable = policies.some((policy) => Array.isArray(policy.applicableEntityTypes) && policy.applicableEntityTypes.includes(entityType));
+    if (!applicable) violations.push({
+      code: 'ACCESS_POLICY_NOT_APPLICABLE',
+      field: 'provenance.accessPolicyId',
+      message: `AccessPolicy ${id} inexistente, fora de vigência ou não aplicável a ${entityType}`,
+    });
+  }
+  return violations;
+}
+
 // A replay reports the first call's outcome: a quarantine answers again as
 // a quarantine, with its record's violations. A key recorded without an
 // outcome replays bare.
@@ -199,6 +226,8 @@ async function ingestAndPersist({
 
   const canonicalModelReleaseId = await assertCanonicalReleaseActive(db);
   const configurationReleaseId = await activeConfigurationReleaseId(db);
+  // RNF025 AC6 (#1520): the clock-drift limit the timeliness metric reads.
+  const clockDriftLimitMs = await resolveClockDriftLimitMs(db);
   const releases = { canonicalModelReleaseId, configurationReleaseId };
 
   try {
@@ -208,7 +237,7 @@ async function ingestAndPersist({
     if (otherStore) {
       throw ingestionError(422, 'INGESTION_STORE_UNSUPPORTED', `${entityType} ${STORE_PHRASES[otherStore.store]}, não suportado pela ingestão; registre ${otherStore.record} por ${otherStore.route}`);
     }
-    return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope });
+    return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, clockDriftLimitMs, resolveOrganizationScope });
   } catch (error) {
     // CFG-004: a refusal after the releases were read still names them.
     if (error && typeof error === 'object') {
@@ -219,7 +248,7 @@ async function ingestAndPersist({
   }
 }
 
-async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope }) {
+async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, clockDriftLimitMs, resolveOrganizationScope }) {
   // Before the replay, so an out-of-scope caller learns nothing of a key.
   await assertInOrganizationScope(target, payload, resolveOrganizationScope);
   assertStoredHere(target, entityType, payload);
@@ -237,6 +266,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   // bypassed (idempotencyKey: null) because it claims before the write, and a
   // failed write would leave a claimed key with no record.
   const references = await checkReferences(db, target, payload);
+  const policyViolations = await checkAccessPolicies(db, entityType, provenance);
   const outcome = await ingestRecord({
     db,
     entityType,
@@ -244,7 +274,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
     payload,
     provenance: { ...(provenance && typeof provenance === 'object' ? provenance : {}), createdBy: `Actor/${actorId}` },
     idempotencyKey: null,
-    entityValidator: entityValidatorFor(target, missingDataReasons, references.violations),
+    entityValidator: entityValidatorFor(target, missingDataReasons, [...references.violations, ...policyViolations]),
     missingDataReasons,
   });
 
@@ -267,6 +297,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
       scopeId: `IngestionQuarantineRecord/${ingestionQuarantineRecordId}`,
       releases,
       actorId,
+      clockDriftLimitMs,
     });
     await insertDataQualityAssessment(db, assessment);
     return {
@@ -294,8 +325,15 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   // BaseRecord provenance (ELM-0010/0011/0013) and the releases in force.
   doc.sourceSystem = outcome.provenance.sourceSystem;
   doc.sourceRecordId = outcome.provenance.sourceRecordId;
+  // ELM-0022 (RF029 AC2, #1523): the verified policies; none named, no key.
+  if (outcome.provenance.accessPolicyId.length > 0) doc.accessPolicyId = [...outcome.provenance.accessPolicyId];
   doc.retrievedAt = outcome.provenance.retrievedAt;
   doc.canonicalModelReleaseId = releases.canonicalModelReleaseId;
+  // ELM-0004, RNF023 AC1: the schema version that validated the document.
+  // INFERENCE, not a citation: the release in force is release-<dictionary
+  // version> (readiness.js), so the schema version is DICTIONARY_VERSION;
+  // the server value overrides any payload value, as the release id does.
+  doc.schemaVersion = DICTIONARY_VERSION;
   doc.configurationReleaseId = releases.configurationReleaseId;
   // INFERENCE, not a citation: createdBy (ELM-0007) is the ator, per
   // provenanceEnvelope.js's header, so the server's Actor/<id> overrides any
@@ -328,6 +366,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
     scopeId: `${entityType}/${entityId}`,
     releases,
     actorId,
+    clockDriftLimitMs,
   });
   const dataQualityAssessmentId = assessment.dataQualityAssessmentId;
 

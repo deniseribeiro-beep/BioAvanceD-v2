@@ -52,6 +52,7 @@ class SampleMovementModel {
       userAgent: data.userAgent || null,
       previousQuantity: data.previousQuantity ?? null,
       newQuantity: data.newQuantity ?? null,
+      quantityLedgerVersion: data.quantityLedgerVersion ?? null,
       previousState: data.previousState || null,
       newState: data.newState || null,
       hash: data.hash || null,

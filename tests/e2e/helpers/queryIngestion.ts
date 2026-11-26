@@ -128,3 +128,16 @@ export async function countDataQualityAssessmentsByScope(scopeId: string): Promi
   const db = await getDb();
   return db.collection('dataQualityAssessments').countDocuments({ scopeId });
 }
+
+// #1515 (RF009 AC7): the TelemetryIngestionEvent POST /api/iot/telemetry
+// screened a reading into, matched by its telemetryReadingId or sourceEventId.
+export async function findTelemetryIngestionEvent(filter: Record<string, unknown>): Promise<any> {
+  const db = await getDb();
+  return db.collection('telemetryIngestionEvents').findOne(filter);
+}
+
+// #1515 (RF009 AC7): the TelemetryValidationIssues of one ingestion event.
+export async function findTelemetryValidationIssues(ingestionEventId: string): Promise<any[]> {
+  const db = await getDb();
+  return db.collection('telemetryValidationIssues').find({ ingestionEventId }).toArray();
+}

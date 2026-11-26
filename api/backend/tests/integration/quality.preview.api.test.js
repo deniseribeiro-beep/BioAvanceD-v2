@@ -83,6 +83,100 @@ describe('POST /api/quality/preview RCS-GOV 1.0', () => {
     }));
   });
 
+  // RNF018 AC5 (#1524): presented evidence references are resolved
+  // against the stored records before certification.
+  describe('governanceEvidence (RNF018 AC5, #1524)', () => {
+    const { COLLECTION_NAME } = require('../../src/services/neo4jOutbox.service');
+    const hex = (digit) => digit.repeat(64);
+    const SPRECS = {
+      matrixType: 'fluid',
+      sampleType: 'BLD',
+      primaryContainer: 'SST',
+      preCentrifugation: 'C',
+      centrifugation: 'A',
+      secondCentrifugation: 'A',
+      postCentrifugationDelay: 'A',
+      longTermStorage: 'C',
+    };
+    const STORES = {
+      samples: [{ _id: 'mongo-sample-1', specimenId: 'SPC-PREVIEW-1' }],
+      [COLLECTION_NAME]: [{ eventId: 'evt-1', eventType: 'CUSTODY_EVENT_RECORDED', aggregateType: 'Sample', aggregateId: 'mongo-sample-1', payloadHash: hex('1') }],
+      telemetryExposureSummaries: [{ telemetryExposureSummaryId: 'tes-1', specimenId: 'SPC-PREVIEW-1', sourceReadingSetHash: `sha256:${hex('2')}` }],
+      collectionGovernanceApprovals: [{ approvalId: 'apr-1', collectionId: 'COL-PREVIEW-1', documentChecksum: `sha256:${hex('3')}` }],
+    };
+    const evidence = () => ({
+      traceability: [{ uri: 'urn:bioavanced:custody-event:evt-1', hash: `sha256:${hex('1')}` }],
+      monitoring: [{ uri: 'urn:bioavanced:telemetry-exposure-summary:tes-1', hash: `sha256:${hex('2')}` }],
+      documentation: [{ uri: 'urn:bioavanced:collection-governance-approval:apr-1', hash: `sha256:${hex('3')}` }],
+    });
+
+    beforeEach(() => {
+      app.locals.db = {
+        collection: (name) => ({
+          findOne: vi.fn(async (filter) => (STORES[name] || [])
+            .find((doc) => Object.entries(filter).every(([key, value]) => doc[key] === value)) || null),
+          createIndex: vi.fn().mockResolvedValue('ok'),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'audit-1' }),
+        }),
+      };
+    });
+
+    const preview = (governanceEvidence, collectionId = 'COL-PREVIEW-1') => request(app)
+      .post('/api/quality/preview')
+      .set('Authorization', `Bearer ${createAuthToken()}`)
+      .send({ sprec: SPRECS, specimenId: 'SPC-PREVIEW-1', collectionId, governanceEvidence });
+
+    it('reads the three evidence criteria true when every reference resolves', async () => {
+      const response = await preview(evidence());
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({ governance_status: 1, final_grade: 'A', grade_route: 'Score-based certification' });
+      expect(response.body.data.governance_evidence).toMatchObject({
+        traceabilityOk: true, monitoringOk: true, documentationOk: true, semanticCompatible: true, gateResult: 'pass',
+      });
+      // RNF018 AC5 (#1524), V2E-0532: the URIs of the resolved references.
+      expect(response.body.data.governance_evidence.evidenceRefs).toEqual([
+        'urn:bioavanced:custody-event:evt-1',
+        'urn:bioavanced:telemetry-exposure-summary:tes-1',
+        'urn:bioavanced:collection-governance-approval:apr-1',
+      ]);
+    });
+
+    it('refuses certification when a reference is missing its hash', async () => {
+      const governanceEvidence = evidence();
+      delete governanceEvidence.documentation[0].hash;
+      const response = await preview(governanceEvidence);
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({
+        governance_status: 0,
+        final_grade: 'E',
+        grade_route: 'Governance failure',
+        governance_failure_reasons: ['Insufficient documentation'],
+        governance_rule_codes: ['INSUFFICIENT_DOCUMENTATION'],
+      });
+      expect(response.body.data.governance_evidence).toMatchObject({
+        traceabilityOk: true, monitoringOk: true, documentationOk: false, gateResult: 'fail',
+      });
+      // RNF018 AC5 (#1524), V2E-0532: the reference missing its hash is left out.
+      expect(response.body.data.governance_evidence.evidenceRefs).toEqual([
+        'urn:bioavanced:custody-event:evt-1',
+        'urn:bioavanced:telemetry-exposure-summary:tes-1',
+      ]);
+    });
+
+    // The owner's ruling on #1524: SOP documentation evidence is an approval
+    // of the specimen's collection, so with no collectionId it cannot resolve.
+    it('refuses documentation evidence when the body names no collectionId', async () => {
+      const response = await preview(evidence(), null);
+      expect(response.status).toBe(200);
+      expect(response.body.data.governance_status).toBe(0);
+      expect(response.body.data.governance_rule_codes).toContain('INSUFFICIENT_DOCUMENTATION');
+      expect(response.body.data.governance_evidence).toMatchObject({
+        traceabilityOk: true, monitoringOk: true, documentationOk: false,
+      });
+    });
+  });
+
   it('retorna Grade E por falha de governanca sem calcular score', async () => {
     const response = await request(app)
       .post('/api/quality/preview')

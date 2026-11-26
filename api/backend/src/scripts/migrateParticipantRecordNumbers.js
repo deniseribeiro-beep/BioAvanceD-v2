@@ -47,6 +47,15 @@
  * Idempotent: a migrated Patient carries no recordNumber, so the second run
  * finds nothing. `remaining` counts the Patients still holding one.
  *
+ * One-way: no rollback. It unsets the plaintext `patients.recordNumber` once
+ * the number is enciphered on the identity, or already held there; writing it
+ * back would store a personal identifier in plaintext again, which is what the
+ * move removes, and a moved number cannot be told from one a writer enciphered
+ * since. Where the stored number is null or empty (cleared), or the identity's
+ * number was set to null, the Patient field is unset with the number enciphered
+ * nowhere, so that value is dropped. Undo is restoring patients and
+ * participantIdentities from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:participant-record-numbers               applies
  *   npm run migrate:participant-record-numbers -- --dry-run  counts, writes nothing

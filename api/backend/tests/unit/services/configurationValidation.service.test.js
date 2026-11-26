@@ -93,10 +93,33 @@ describe('an invariant broken by a change is refused and recorded (RF014 AC6/AC7
     const db = createFakeDb();
     const initial = await securityService.getConfig(db);
     await expect(securityService.updateConfig(db, { session: { outboxEnabled: false } }, initial, req))
-      .rejects.toMatchObject({ statusCode: 422, violatedInvariants: ['INV-SCOPE-001'] });
+      .rejects.toMatchObject({
+        statusCode: 422,
+        violatedInvariants: ['INV-SCOPE-001'],
+        violations: [{ invariantId: 'INV-SCOPE-001', fieldPath: 'session.outboxEnabled' }],
+      });
     const [run] = runsOf(db);
     expect(run).toMatchObject({ structuralResult: 'fail', status: 'failed' });
     expect(run.invariantResults.find((entry) => entry.invariantId === 'INV-SCOPE-001').paths).toEqual(['session.outboxEnabled']);
+  });
+
+  it('a top-level key outside the policy groups fails the structural gate and INV-SCOPE-001, naming its fieldPath', async () => {
+    const db = createFakeDb();
+    const initial = await securityService.getConfig(db);
+    await securityService.updateConfig(db, { session: { timeoutMinutes: 20 } }, initial, req);
+    const before = await securityService.getConfig(db);
+    await expect(securityService.updateConfig(db, { outbox: { enabled: false } }, before, req))
+      .rejects.toMatchObject({
+        statusCode: 422,
+        violatedInvariants: ['INV-SCOPE-001'],
+        violations: [{ invariantId: 'INV-SCOPE-001', fieldPath: 'outbox' }],
+      });
+    const run = runsOf(db).find((entry) => entry.status === 'failed');
+    expect(run).toMatchObject({ structuralResult: 'fail', status: 'failed' });
+    expect(run.invariantResults.find((entry) => entry.invariantId === 'INV-SCOPE-001').paths).toEqual(['outbox']);
+    // RNF018 AC3: the configuration in force did not move.
+    expect((await securityService.getConfig(db)).configurationReleaseId).toBe(before.configurationReleaseId);
+    expect(releasesOf(db).filter((release) => release.status === 'active')).toHaveLength(1);
   });
 
   it('a refused draft cannot be rolled back to', async () => {

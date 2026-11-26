@@ -154,6 +154,65 @@ export async function countTerminologyConceptsBySystemUri(systemUri: string): Pr
 }
 
 /**
+ * RF028/RNF032 (#1476): the reference release lifecycle's own records, read
+ * from Mongo for the same reason as above: no route reads them back.
+ */
+export async function findReferenceRelease(referenceDatasetReleaseId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('referenceDatasetReleases').findOne({ referenceDatasetReleaseId });
+}
+
+/** Every ReferenceImportRun of a release, any importMode (full, dry_run, rollback). */
+export async function referenceImportRunsForRelease(referenceDatasetReleaseId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('referenceImportRuns').find({ referenceDatasetReleaseId }).toArray();
+}
+
+/** The ReferenceImportIssues (the quarantine) one import run recorded. */
+export async function referenceImportIssuesForRun(referenceImportRunId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('referenceImportIssues').find({ referenceImportRunId }).toArray();
+}
+
+/** The staging rows one import run wrote, concepts and relations together. */
+export async function countReferenceImportStagingForRun(referenceImportRunId: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('referenceImportStaging').countDocuments({ referenceImportRunId });
+}
+
+/** The staging rows one import run wrote, as documents (entityType and candidate). */
+export async function referenceImportStagingForRun(referenceImportRunId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('referenceImportStaging').find({ referenceImportRunId }).toArray();
+}
+
+export async function findReferenceCoverageManifest(referenceCoverageManifestId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('referenceCoverageManifests').findOne({ referenceCoverageManifestId });
+}
+
+export async function findDataQualityAssessment(dataQualityAssessmentId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('dataQualityAssessments').findOne({ dataQualityAssessmentId });
+}
+
+export async function terminologyConceptsBySystemUri(systemUri: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('terminologyConcepts').find({ systemUri }).toArray();
+}
+
+export async function countTerminologyRelationsByRelease(referenceDatasetReleaseId: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('terminologyRelations').countDocuments({ referenceDatasetReleaseId });
+}
+
+/** The audit log entry auditLogger wrote for an action on a resource, newest first. */
+export async function findAuditLog(action: string, resourceId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('logs').find({ action, resourceId }).sort({ createdAt: -1 }).limit(1).next();
+}
+
+/**
  * RF022 AC9, RNF014 C7: the newest ReadinessReport the Foundation job wrote
  * for an environment. The API starts only when it is `ready`.
  */
@@ -171,9 +230,53 @@ export async function invariantViolationsFor(correlationId: string): Promise<Rec
   return db.collection('invariantViolations').find({ correlationId }).toArray();
 }
 
+/**
+ * RF014 AC7, CFG-008 (#1487): the ConfigurationChangeEvents one configuration
+ * release recorded, in the order they were written. No route reads them.
+ */
+export async function configurationChangeEventsFor(releaseId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('configurationChangeEvents').find({ releaseId }).sort({ _id: 1 }).toArray();
+}
+
+/**
+ * RF014 AC3: one ConfigurationValidationRun, read by its id, with its four
+ * gate results. No route reads a run back.
+ */
+export async function configurationValidationRunById(configurationValidationRunId: string): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('configurationValidationRuns').findOne({ configurationValidationRunId });
+}
+
 /** RF022 AC2: the index names a collection carries, read from Mongo itself. */
 export async function indexNamesOf(collection: string): Promise<string[]> {
   const db = await getDb();
   const indexes = await db.collection(collection).listIndexes().toArray();
   return indexes.map((index) => index.name as string);
+}
+
+/**
+ * #1485: the foundation-runs test-support route runs the Foundation job
+ * against an e2e_foundation_ scratch database on the same Mongo server,
+ * never the stack's own; these read and seed that database.
+ */
+async function scratchDb(database: string): Promise<Db> {
+  await getDb();
+  return client!.db(database);
+}
+export async function insertScratchFoundationDataRun(database: string, run: Record<string, unknown>): Promise<void> {
+  await (await scratchDb(database)).collection('foundationDataRuns').insertOne(run);
+}
+export async function scratchFoundationDataRun(database: string, foundationDataRunId: string): Promise<Record<string, any> | null> {
+  return (await scratchDb(database)).collection('foundationDataRuns').findOne({ foundationDataRunId });
+}
+export async function countScratchFoundationEvidence(database: string): Promise<{ runs: number; reports: number }> {
+  const db = await scratchDb(database);
+  return { runs: await db.collection('foundationDataRuns').countDocuments(), reports: await db.collection('readinessReports').countDocuments() };
+}
+export async function setScratchGovernanceChecksum(database: string, collection: 'canonicalModelReleases' | 'governanceInvariantCatalogs', canonicalModelReleaseId: string, checksum: string): Promise<void> {
+  await (await scratchDb(database)).collection(collection).updateOne({ canonicalModelReleaseId }, { $set: { checksum } });
+}
+export async function dropScratchFoundationDb(database: string): Promise<void> {
+  await (await scratchDb(database)).dropDatabase();
 }

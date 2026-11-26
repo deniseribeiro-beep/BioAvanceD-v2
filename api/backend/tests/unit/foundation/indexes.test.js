@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 const { INDEX_TARGETS, buildFoundationIndexes, verifyFoundationIndexes } = require('../../../src/foundation/indexes');
 const { ensureSessionIndexes } = require('../../../src/utils/sessionIndexes');
+const { ensureTerminologyConceptIndexes, ensureTerminologyRelationIndexes } = require('../../../src/utils/terminologyIndexes');
 const { CANONICAL_COLLECTIONS } = require('../../../src/config/collections');
 const { createFakeDb } = require('./helpers/fake-db');
 
@@ -61,6 +62,169 @@ describe('Foundation index builds', () => {
     const builds = await buildFoundationIndexes(createFakeDb());
     expect(builds.find((build) => build.name === 'uniq_telemetryExposureSummaryId')).toMatchObject({
       collection: CANONICAL_COLLECTIONS.telemetryExposureSummaries, unique: true, ok: true,
+    });
+  });
+
+  // #1561 (RF028): the natural keys the reference promotion looks up.
+  it('builds the TerminologyConcept and TerminologyRelation natural-key unique indexes by name (#1561)', async () => {
+    const builds = await buildFoundationIndexes(createFakeDb());
+    expect(builds.find((build) => build.name === 'uniq_terminologyConcept_systemUri_code_version')).toMatchObject({
+      collection: CANONICAL_COLLECTIONS.terminologyConcepts, keys: { systemUri: 1, code: 1, version: 1 }, unique: true, ok: true,
+    });
+    expect(builds.find((build) => build.name === 'uniq_terminologyRelation_source_target_type_version')).toMatchObject({
+      collection: CANONICAL_COLLECTIONS.terminologyRelations,
+      keys: { sourceConceptId: 1, targetConceptId: 1, relationType: 1, relationVersion: 1 },
+      unique: true,
+      ok: true,
+    });
+  });
+
+  // #1561: a unique natural-key build over rows that already share a key is
+  // refused before createIndex, with an error naming the duplicate keys, and
+  // the Foundation job records that refusal as a failed unique build.
+  describe('terminology natural-key duplicate check (#1561)', () => {
+    // The $group / $match count / $limit pipeline the check issues, run over
+    // the fake collection's rows.
+    function withAggregate(collection, created) {
+      collection.aggregate = (pipeline) => {
+        const [{ $group }, { $match }, { $limit }] = pipeline;
+        const fields = Object.entries($group._id).map(([key, path]) => [key, path.slice(1)]);
+        const groups = new Map();
+        for (const doc of collection.docs) {
+          const id = Object.fromEntries(fields.map(([key, path]) => [key, doc[path]]));
+          const at = JSON.stringify(id);
+          if (!groups.has(at)) groups.set(at, { _id: id, count: 0 });
+          groups.get(at).count += 1;
+        }
+        const rows = [...groups.values()].filter((group) => group.count > $match.count.$gt).slice(0, $limit);
+        return { toArray: async () => rows };
+      };
+      const createIndex = collection.createIndex.bind(collection);
+      collection.createIndex = (keys, options) => {
+        created.push(options.name);
+        return createIndex(keys, options);
+      };
+      return collection;
+    }
+
+    const conceptRow = (code, n) => ({
+      terminologyConceptId: `tc-${code}-${n}`, systemUri: 'http://www.orpha.net', code, version: 'e2e-696',
+    });
+
+    it('throws naming the duplicate key and builds no index when two concepts share one key', async () => {
+      const created = [];
+      const concepts = withAggregate(createFakeDb().collection(CANONICAL_COLLECTIONS.terminologyConcepts), created);
+      concepts.docs.push(conceptRow('ORPHA:558', 1), conceptRow('ORPHA:558', 2), conceptRow('ORPHA:365', 1));
+
+      const error = await ensureTerminologyConceptIndexes(concepts).then(() => null, (thrown) => thrown);
+      expect(error).toMatchObject({ code: 'DUPLICATE_NATURAL_KEY' });
+      expect(error.message).toContain('{"systemUri":"http://www.orpha.net","code":"ORPHA:558","version":"e2e-696"} x2');
+      expect(error.message).toContain('troubleshooting-runbook.md');
+      expect(error.message).not.toContain('ORPHA:365');
+      expect(created).toEqual([]);
+    });
+
+    it('builds the index as before when no two concepts share a key', async () => {
+      const created = [];
+      const concepts = withAggregate(createFakeDb().collection(CANONICAL_COLLECTIONS.terminologyConcepts), created);
+      concepts.docs.push(conceptRow('ORPHA:558', 1), conceptRow('ORPHA:365', 1));
+
+      await ensureTerminologyConceptIndexes(concepts);
+      expect(created).toEqual(['uniq_terminologyConcept_systemUri_code_version']);
+    });
+
+    it('checks the relation natural key the same way', async () => {
+      const created = [];
+      const relations = withAggregate(createFakeDb().collection(CANONICAL_COLLECTIONS.terminologyRelations), created);
+      const relation = { sourceConceptId: 'a', targetConceptId: 'b', relationType: 'is_a', relationVersion: 'v1' };
+      relations.docs.push({ ...relation, terminologyRelationId: 'r1' }, { ...relation, terminologyRelationId: 'r2' });
+
+      await expect(ensureTerminologyRelationIndexes(relations)).rejects.toThrow('"sourceConceptId":"a","targetConceptId":"b"');
+      expect(created).toEqual([]);
+    });
+
+    it('skips the duplicate scan and the build when the unique index is already there', async () => {
+      const created = [];
+      const concepts = createFakeDb().collection(CANONICAL_COLLECTIONS.terminologyConcepts);
+      await concepts.createIndex({ systemUri: 1, code: 1, version: 1 }, { unique: true, name: 'uniq_terminologyConcept_systemUri_code_version' });
+      withAggregate(concepts, created);
+      let scans = 0;
+      const aggregate = concepts.aggregate;
+      concepts.aggregate = (...args) => { scans += 1; return aggregate(...args); };
+
+      await ensureTerminologyConceptIndexes(concepts);
+      expect(scans).toBe(0);
+      expect(created).toEqual([]);
+    });
+
+    it('still scans and builds when only a non-unique index has the same keys', async () => {
+      const created = [];
+      const concepts = createFakeDb().collection(CANONICAL_COLLECTIONS.terminologyConcepts);
+      await concepts.createIndex({ systemUri: 1, code: 1, version: 1 }, { name: 'lookup_systemUri_code_version' });
+      withAggregate(concepts, created);
+      concepts.docs.push(conceptRow('ORPHA:558', 1), conceptRow('ORPHA:558', 2));
+
+      await expect(ensureTerminologyConceptIndexes(concepts)).rejects.toMatchObject({ code: 'DUPLICATE_NATURAL_KEY' });
+      expect(created).toEqual([]);
+    });
+
+    it('reads a collection that does not exist yet as holding no index, and builds', async () => {
+      const created = [];
+      const concepts = withAggregate(createFakeDb().collection(CANONICAL_COLLECTIONS.terminologyConcepts), created);
+      concepts.listIndexes = () => ({
+        toArray: async () => { throw Object.assign(new Error('ns does not exist'), { code: 26 }); },
+      });
+
+      await ensureTerminologyConceptIndexes(concepts);
+      expect(created).toEqual(['uniq_terminologyConcept_systemUri_code_version']);
+    });
+
+    it('records a failed unique build, with its message, when the duplicate scan itself fails', async () => {
+      const db = createFakeDb();
+      const concepts = db.collection(CANONICAL_COLLECTIONS.terminologyConcepts);
+      const created = [];
+      withAggregate(concepts, created);
+      concepts.aggregate = () => ({ toArray: async () => { throw new Error('operation exceeded time limit'); } });
+
+      const error = await ensureTerminologyConceptIndexes(concepts).then(() => null, (thrown) => thrown);
+      expect(error.indexBuild).toEqual({
+        keys: { systemUri: 1, code: 1, version: 1 }, name: 'uniq_terminologyConcept_systemUri_code_version', unique: true,
+      });
+
+      const builds = await buildFoundationIndexes(db, [
+        { collection: CANONICAL_COLLECTIONS.terminologyConcepts, ensure: ensureTerminologyConceptIndexes },
+      ]);
+      expect(builds).toEqual([{
+        collection: CANONICAL_COLLECTIONS.terminologyConcepts,
+        keys: { systemUri: 1, code: 1, version: 1 },
+        name: 'uniq_terminologyConcept_systemUri_code_version',
+        unique: true,
+        ok: false,
+        error: 'operation exceeded time limit',
+      }]);
+      expect(await verifyFoundationIndexes(db, builds)).toEqual(builds);
+      expect(created).toEqual([]);
+    });
+
+    it('records the refusal as a failed unique build carrying the duplicate keys', async () => {
+      const db = createFakeDb();
+      withAggregate(db.collection(CANONICAL_COLLECTIONS.terminologyConcepts), []);
+      db.collection(CANONICAL_COLLECTIONS.terminologyConcepts).docs.push(conceptRow('ORPHA:558', 1), conceptRow('ORPHA:558', 2));
+
+      const builds = await buildFoundationIndexes(db, [
+        { collection: CANONICAL_COLLECTIONS.terminologyConcepts, ensure: ensureTerminologyConceptIndexes },
+      ]);
+      expect(builds).toHaveLength(1);
+      expect(builds[0]).toMatchObject({
+        collection: CANONICAL_COLLECTIONS.terminologyConcepts,
+        name: 'uniq_terminologyConcept_systemUri_code_version',
+        keys: { systemUri: 1, code: 1, version: 1 },
+        unique: true,
+        ok: false,
+      });
+      expect(builds[0].error).toContain('"code":"ORPHA:558"');
+      expect(builds[0]).not.toHaveProperty('settled');
+      expect(await verifyFoundationIndexes(db, builds)).toEqual(builds);
     });
   });
 

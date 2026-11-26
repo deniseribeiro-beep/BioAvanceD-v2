@@ -1,3 +1,11 @@
+/**
+ * Creates the seven RCS governance indexes by name on their collections.
+ *
+ * Rollback: it rewrites no stored document; it only creates indexes, and
+ * dropping each by its name on its collection (`dropIndex('<name>')`) undoes
+ * it. `createIndex` creates a collection that does not exist yet, and
+ * `dropIndex` leaves that (empty) collection in place. No rollback script.
+ */
 const { connectDB, closeConnection } = require('../database/mongo');
 
 async function createIndex(collection, keys, options) {

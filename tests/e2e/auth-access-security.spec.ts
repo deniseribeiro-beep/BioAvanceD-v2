@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { test, expect, APIRequestContext } from '@playwright/test';
 import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
@@ -6,7 +7,8 @@ import { computeTotp } from './helpers/totp';
 import { deleteOrganizations } from './helpers/listOrganizations';
 import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb, findLogRows } from './helpers/queryLoginAttempts';
 import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
-import { invariantViolationsFor, closeFoundationDb } from './helpers/queryFoundationData';
+import { invariantViolationsFor, configurationChangeEventsFor, configurationValidationRunById, closeFoundationDb } from './helpers/queryFoundationData';
+import { findStoredUser, setStoredSessionTimeoutMinutes, closeStoredCredentialsDb } from './helpers/storedCredentials1456';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
 // same skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -686,16 +688,20 @@ test.describe('User management (RF003) — real backend', () => {
 // (security.routes.js's GET/PUT /api/security/config) -- product-side
 // foundation already existed (confirmed by reading the service, not
 // assumed from the issue's own "likely" framing), this file just never
-// proved it against the real backend. AC#4 (force a user's password reset)
-// and AC#8 (revoke sessions when a policy change requires it) are NOT
-// implemented anywhere in the backend -- filed as gaps rather than built
-// here, since AC#8 in particular needs a design call (which policy
-// changes require revocation?) bigger than this slice.
+// proved it against the real backend. That list, superseded by v2.0.0,
+// also asked to force a user's password reset (#648, built later in this
+// file) and to revoke sessions when a policy change requires it (#649,
+// pinned in security.service.unit.test.js), which v2.0.0 moves out of
+// RF014.
 test.describe('Security policy management (RF014) — real backend', () => {
   // security_config is a single global singleton document ('main') shared
   // by the whole stack, not a per-test fixture -- capture and restore it so
   // this test doesn't leave the live policy mutated for every other spec/
   // session sharing the same compose.test.yml stack.
+  // RF022 AC6, RNF023 C6, RNF028 C4, RNF031 C5: every candidate gets a
+  // ConfigurationValidationRun before activation and a refused one stays a
+  // draft; each change and the rollback record a ConfigurationChangeEvent;
+  // and this e2e gate reads each ConfigurationValidationRun back on CI.
   test('admin updates session/login/password/MFA policy — versioned, validated, and audited as critical (criteria 1,2,3,5,6,7)', async ({
     request,
   }) => {
@@ -804,6 +810,24 @@ test.describe('Security policy management (RF014) — real backend', () => {
       ]);
       expect(await invariantViolationsFor(secondRefusal.configurationReleaseId)).toEqual([]);
       expect(secondRefusal.settings.session.timeoutMinutes).toBe(1);
+      // RF014 AC7, CFG-008 (#1487): each lifecycle step is a ConfigurationChangeEvent
+      // keyed by its release: proposal, approval and activation for a change,
+      // rollback naming the activation it undoes, and a violation attempt for
+      // the refusal that broke an invariant (none for the plain 400).
+      const changeTypes = (events: Record<string, any>[]) => events.map((event) => event.changeType);
+      const updateEvents = await configurationChangeEventsFor(updated.configurationReleaseId);
+      expect(changeTypes(updateEvents)).toEqual(['proposed', 'approved', 'activated']);
+      const rollbackEvents = await configurationChangeEventsFor(restored.configurationReleaseId);
+      expect(changeTypes(rollbackEvents)).toEqual(['proposed', 'approved', 'rolled_back']);
+      expect(rollbackEvents[2].rollbackOf).toBe(updateEvents[2].configurationChangeEventId);
+      const overrideEvents = await configurationChangeEventsFor(firstRefusal.configurationReleaseId);
+      expect(changeTypes(overrideEvents)).toEqual(['proposed', 'violation_attempted']);
+      expect(overrideEvents[1].impactSummary).toContain('INV-AUDIT-001');
+      expect(changeTypes(await configurationChangeEventsFor(secondRefusal.configurationReleaseId))).toEqual(['proposed']);
+      for (const event of [...updateEvents, ...rollbackEvents, ...overrideEvents]) {
+        expect(event.actorId, event.changeType).toBe(updated.lastUpdatedBy);
+        expect(event.occurredAt, event.changeType).toBeInstanceOf(Date);
+      }
       expect(afterRefusals.filter((release: { status: string }) => release.status === 'active')
         .map((release: { configurationReleaseId: string }) => release.configurationReleaseId)).toEqual([restored.configurationReleaseId]);
       const inForce = (await (await request.get(`${apiBaseURL}/api/security/config`, {
@@ -811,6 +835,69 @@ test.describe('Security policy management (RF014) — real backend', () => {
       })).json()).data;
       expect(inForce.configurationReleaseId).toBe(restored.configurationReleaseId);
       expect(inForce.logging.logAllActions).toBe(true);
+
+      // RF014 AC3/AC6, RNF018 AC2/AC3, RNF028 AC5 — the structural,
+      // dependency and security gates each refuse a candidate before
+      // activation, and a key outside the policy (an unknown one, or an
+      // attempt to switch off the outbox, provenance, store authority or RCS)
+      // is a 422 naming INV-SCOPE-001 and each fieldPath. Identity, consent
+      // and audit are proven at the #1260 #1261 test.
+      const gateCases: {
+        data: Record<string, unknown>;
+        status: number;
+        violatedInvariants: string[];
+        fieldPaths: string[];
+        gates: [string, string, string, string];
+      }[] = [
+        { data: { session: { timeoutMinutes: 'thirty' } }, status: 400, violatedInvariants: [], fieldPaths: [], gates: ['fail', 'pass', 'pass', 'pass'] },
+        { data: { passwordRules: { minLength: 10, minLengthWithMFA: 12 } }, status: 400, violatedInvariants: [], fieldPaths: [], gates: ['pass', 'pass', 'fail', 'pass'] },
+        { data: { passwordRules: { minLength: 7 } }, status: 400, violatedInvariants: [], fieldPaths: [], gates: ['pass', 'pass', 'pass', 'fail'] },
+        { data: { authentication: { mfaMethod: 'sms' } }, status: 400, violatedInvariants: [], fieldPaths: [], gates: ['pass', 'pass', 'pass', 'fail'] },
+        { data: { session: { timeout: 20 } }, status: 422, violatedInvariants: ['INV-SCOPE-001'], fieldPaths: ['session.timeout'], gates: ['fail', 'pass', 'pass', 'pass'] },
+        {
+          data: { outbox: { enabled: false }, provenance: { enabled: false }, storeAuthority: { mongo: false }, rcs: { admissibility: false } },
+          status: 422,
+          violatedInvariants: ['INV-SCOPE-001'],
+          fieldPaths: ['outbox', 'provenance', 'storeAuthority', 'rcs'],
+          gates: ['fail', 'pass', 'pass', 'pass'],
+        },
+      ];
+      const gateRuns: Record<string, any>[] = [];
+      for (const gateCase of gateCases) {
+        const label = JSON.stringify(gateCase.data);
+        const response = await request.put(`${apiBaseURL}/api/security/config`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
+          data: gateCase.data,
+        });
+        expect(response.status(), `${label}: ${await response.text()}`).toBe(gateCase.status);
+        const body = await response.json();
+        expect(body.violatedInvariants, label).toEqual(gateCase.violatedInvariants);
+        expect(body.violations, label).toEqual(gateCase.fieldPaths.map((fieldPath) => ({ invariantId: 'INV-SCOPE-001', fieldPath })));
+        const run = await configurationValidationRunById(body.configurationValidationRunId);
+        expect(run, label).toBeTruthy();
+        expect([run!.structuralResult, run!.semanticResult, run!.dependencyResult, run!.securityResult], label).toEqual(gateCase.gates);
+        expect(run!.status, label).toBe('failed');
+        if (gateCase.status === 422) {
+          expect(await invariantViolationsFor(run!.releaseId), label).toEqual([
+            expect.objectContaining({ invariantId: 'INV-SCOPE-001', outcome: 'block' }),
+          ]);
+        }
+        gateRuns.push(run!);
+      }
+      // RNF018 AC3: none of the refusals moved the active release; each
+      // refused candidate is a draft.
+      const inForceAfterGates = (await (await request.get(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data;
+      expect(inForceAfterGates.configurationReleaseId).toBe(restored.configurationReleaseId);
+      const afterGates = (await (await request.get(`${apiBaseURL}/api/security/config/releases?limit=200`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data as { configurationReleaseId: string; status: string }[];
+      expect(afterGates.filter((release) => release.status === 'active').map((release) => release.configurationReleaseId))
+        .toEqual([restored.configurationReleaseId]);
+      for (const run of gateRuns) {
+        expect(afterGates.find((release) => release.configurationReleaseId === run.releaseId)?.status, run.releaseId).toBe('draft');
+      }
 
       // Criterion 7 — the change is registered as a critical AuditEvent.
       // requireMFA is one of security.service.js's own criticalPaths, so
@@ -2339,7 +2426,7 @@ test.describe('Session and account lifecycle (RF001 criteria 2 and 4, RNF021, #1
     expect(enable.ok(), await enable.text()).toBeTruthy();
     const refreshCookie = /refresh_token=[^;]+/.exec(enable.headers()['set-cookie'] || '')?.[0];
     expect(refreshCookie, 'enrolment sets the refresh cookie').toBeTruthy();
-    return { token: (await enable.json()).data.token as string, refreshCookie: refreshCookie! };
+    return { token: (await enable.json()).data.token as string, refreshCookie: refreshCookie!, secret: secret as string };
   }
 
   const status = (request: APIRequestContext, token: string) =>
@@ -2400,6 +2487,27 @@ test.describe('Session and account lifecycle (RF001 criteria 2 and 4, RNF021, #1
     expect((await status(request, session.token)).status()).toBe(401);
     const login = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username: target.username, password } });
     expect(login.ok()).toBeFalsy();
+
+    // RNF022 criterion 5: the inactivated account's historical events are
+    // kept, pseudonymized: its session history reads back under its stored
+    // pseudonym, never its raw id or username.
+    const stored = await findStoredUser(String(target.userID));
+    expect(stored?.anonId).toMatch(/^USR-[0-9A-F]{8}$/);
+    const historyResponse = await request.get(`${apiBaseURL}/api/logs/sessions?userId=${target.userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(historyResponse.ok(), await historyResponse.text()).toBeTruthy();
+    const sessionHistory = (await historyResponse.json()).data;
+    expect(sessionHistory.sessions.length).toBeGreaterThan(0);
+    for (const s of sessionHistory.sessions) expect(s.user).toBe(stored!.anonId);
+    const adminEnded = sessionHistory.sessions.find((s: { revocationReason: string }) => s.revocationReason === 'admin_action');
+    expect(adminEnded, 'the delete ended a session by admin action').toBeTruthy();
+    expect(adminEnded.revokedBy).toMatch(/^USR-[0-9A-F]{8}$/);
+    expect(adminEnded.revokedBy).not.toBe(stored!.anonId);
+    const rawHistory = JSON.stringify(sessionHistory);
+    expect(rawHistory).not.toContain(String(target.userID));
+    expect(rawHistory).not.toContain(target.username);
+    await closeStoredCredentialsDb();
   });
 
   test('logout ends the session it was sent on (RF001 criterion 4)', async ({ request }) => {
@@ -2451,5 +2559,192 @@ test.describe('Session and account lifecycle (RF001 criteria 2 and 4, RNF021, #1
       await clearLoginAttempts();
       await closeLoginAttemptsDb();
     }
+  });
+
+  // #1456: a JWT's claims, read without verifying it (the runner holds no secret).
+  const claimsOf = (jwt: string) => JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+  const sha256 = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
+  const refreshCookieLine = (setCookie: string) => setCookie.split('\n').find((line) => line.startsWith('refresh_token='));
+
+  test('a session is created with an expiry and the account role (RF001 criterion 3, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const username = `coordenador.rf001ac3.${Date.now()}`;
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { name: 'Fixture rf001ac3', email: `${username}@example.com`, username, password, accessType: 3, roleName: 'Coordenador' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const registered = await register.json();
+    const userID = registered.data?._id || registered.data?.id;
+    const session = await openSession(request, username);
+
+    // The role rides on the session's access token and is resolved from the
+    // live assignment by /verify.
+    expect(claimsOf(session.token).accessType).toBe(3);
+    const verify = await request.get(`${apiBaseURL}/api/auth/verify`, { headers: { Authorization: `Bearer ${session.token}` } });
+    expect(verify.ok(), await verify.text()).toBeTruthy();
+    const verified = (await verify.json()).data.user;
+    expect(verified.roleName).toBe('Coordenador');
+    expect(verified.accessType).toBe(3);
+
+    // The expiry is on the stored session.
+    const stored = await findLatestSession(userID);
+    expect(new Date(stored!.expiresAt).getTime() - new Date(stored!.sessionStartedAt).getTime()).toBe(15 * 60 * 1000);
+    expect(new Date(stored!.refreshExpiresAt).getTime()).toBeGreaterThan(new Date(stored!.expiresAt).getTime());
+    await closeSessionsDb();
+  });
+
+  test('an edit and a block of an account are each audited (RF003 criterion 6, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'audit1456');
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const edit = await request.put(`${apiBaseURL}/api/users/${target.userID}`, { headers: auth, data: { name: 'Fixture audit1456 edited' } });
+    expect(edit.ok(), await edit.text()).toBeTruthy();
+    const block = await request.put(`${apiBaseURL}/api/users/${target.userID}`, { headers: auth, data: { status: 'blocked' } });
+    expect(block.ok(), await block.text()).toBeTruthy();
+    expect((await block.json()).data.status).toBe('Bloqueado');
+
+    const rows = await findLogRows({ action: 'UPDATE', resourceType: 'User', resourceId: String(target.userID) });
+    const editRow = rows.find((row) => row.payload == null);
+    expect(editRow, 'the edit wrote an UPDATE row with no status change').toBeTruthy();
+    const blockRow = rows.find((row) => row.payload?.status?.to === 'blocked');
+    expect(blockRow, 'the block wrote an UPDATE row naming the status change').toBeTruthy();
+    expect(blockRow!.payload.status.from).toBe('active');
+    expect(blockRow).not.toBe(editRow);
+    await closeLoginAttemptsDb();
+  });
+
+  test('the access token is short-lived, a rotated refresh token is refused, tokens are stored only as hashes, and the refresh cookie is HttpOnly and SameSite (RNF021 criteria 1, 4 and 5, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'rot1456');
+    const session = await openSession(request, target.username);
+
+    // Criterion 1: a 15-minute access token.
+    const claims = claimsOf(session.token);
+    expect(claims.exp - claims.iat).toBe(15 * 60);
+
+    // Criterion 1: rotation. Each refresh issues a new refresh token, and the
+    // one it replaced is refused from then on.
+    const refresh = (cookie: string) => request.post(`${apiBaseURL}/api/auth/refresh`, { headers: { Cookie: cookie } });
+    const first = await refresh(session.refreshCookie);
+    expect(first.ok(), await first.text()).toBeTruthy();
+    const firstLine = refreshCookieLine(first.headers()['set-cookie'] || '');
+    expect(firstLine, 'the refresh sets a new refresh cookie').toBeTruthy();
+    const second = /refresh_token=[^;]+/.exec(firstLine!)![0];
+    expect(second).not.toBe(session.refreshCookie);
+
+    // Criterion 5: HttpOnly and SameSite on the stack. It runs NODE_ENV=test
+    // over plain HTTP, where the cookie is SameSite=Lax and not Secure;
+    // production's Secure and SameSite=Strict are pinned by the backend's
+    // auth.refresh-cookie.1456 test.
+    expect(firstLine).toMatch(/;\s*HttpOnly(;|$)/i);
+    expect(firstLine).toMatch(/;\s*SameSite=Lax(;|$)/i);
+    expect(firstLine).toMatch(/;\s*Path=\/api\/auth(;|$)/i);
+
+    const reused = await refresh(session.refreshCookie);
+    expect(reused.status(), 'the refresh token rotated away is refused').toBe(401);
+    expect((await reused.json()).data?.token).toBeFalsy();
+
+    const third = await refresh(second);
+    expect(third.ok(), await third.text()).toBeTruthy();
+    const latestCookie = /refresh_token=[^;]+/.exec(refreshCookieLine(third.headers()['set-cookie'] || '') || '')?.[0];
+    expect(latestCookie).toBeTruthy();
+    expect(latestCookie).not.toBe(second);
+    const latestAccess = (await third.json()).data.token as string;
+    const reusedSecond = await refresh(second);
+    expect(reusedSecond.status(), 'a token rotated away inside the same second is refused too').toBe(401);
+
+    // Criterion 4: the stored session holds the sha256 of the live tokens and
+    // no token in clear.
+    const stored = await findLatestSession(target.userID);
+    const rawRefresh = latestCookie!.slice('refresh_token='.length);
+    expect(stored!.accessTokenHash).toBe(sha256(latestAccess));
+    expect(stored!.refreshTokenHash).toBe(sha256(rawRefresh));
+    const text = JSON.stringify(stored);
+    for (const raw of [session.token, latestAccess, session.refreshCookie.slice('refresh_token='.length), second.slice('refresh_token='.length), rawRefresh]) {
+      expect(text.includes(raw), 'no raw token in the session document').toBe(false);
+    }
+    for (const field of ['token', 'accessToken', 'refreshToken']) {
+      expect(stored).not.toHaveProperty(field);
+    }
+    await closeSessionsDb();
+  });
+
+  test('a session idle past its inactivity timeout is refused and ended as an expiry (RNF021 criterion 3, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const config = await request.get(`${apiBaseURL}/api/security/config`, { headers: { Authorization: `Bearer ${admin.token}` } });
+    expect(config.ok(), await config.text()).toBeTruthy();
+    expect((await config.json()).data.enhancedSecurity?.enabled, 'precondition: the enhanced mode would replace the timeout').not.toBe(true);
+    const target = await registerTecnico(request, admin.token, 'idle1456');
+
+    // The API's floor is 5 minutes, so the stored value is set to 3 seconds
+    // for the one session opened here and put back at once; createSession
+    // copies it onto the session.
+    let session: { token: string; refreshCookie: string };
+    const previous = await setStoredSessionTimeoutMinutes(0.05);
+    try {
+      session = await openSession(request, target.username);
+      // At once: the 3-second idle clock runs from the session's creation, so
+      // this check comes before any other round trip.
+      expect((await status(request, session.token)).status(), 'the session works while active').toBe(200);
+    } finally {
+      await setStoredSessionTimeoutMinutes(previous);
+      await closeStoredCredentialsDb();
+    }
+    const opened = await findLatestSession(target.userID);
+    expect(opened!.inactivityTimeoutMs).toBe(3000);
+
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    expect((await status(request, session.token)).status(), 'idle past the timeout').toBe(401);
+
+    const ended = await findLatestSession(target.userID);
+    expect(ended!.isActive).toBe(false);
+    expect(ended!.revocationReason).toBe('expiration');
+    await closeSessionsDb();
+  });
+
+  test('a password is stored only as a bcrypt hash and the MFA secret only as an AES-GCM envelope with a key id (RNF020 criteria 2, 3 and 5, #1456)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'rest1456');
+    const session = await openSession(request, target.username);
+
+    const user = await findStoredUser(target.userID);
+    const text = JSON.stringify(user);
+
+    // Criterion 2: an adaptive hash, never the password.
+    const hash = /^\$2[aby]\$(\d{2})\$[./A-Za-z0-9]{53}$/.exec(String(user!.passwordHash));
+    expect(hash, 'passwordHash is a bcrypt hash').toBeTruthy();
+    expect(Number(hash![1])).toBeGreaterThanOrEqual(10);
+    expect(user).not.toHaveProperty('password');
+    expect(text.includes(password)).toBe(false);
+
+    // Criterion 3: the TOTP seed is ciphertext. The enrolment that just
+    // succeeded checked its code against this envelope, decrypted.
+    const envelope = user!.mfaSecretCiphertext;
+    expect(envelope.alg).toBe('aes-256-gcm');
+    for (const field of ['iv', 'tag', 'data']) expect(typeof envelope[field]).toBe('string');
+    expect(user).not.toHaveProperty('mfaSecret');
+    expect(text.includes(session.secret)).toBe(false);
+
+    // Criterion 5: the envelope names the deployment's key id, the slot a key
+    // rotation reads, not the code default. Rotation itself needs a restart
+    // under a new key and is proven by the backend's fieldEncryption tests.
+    expect(typeof envelope.keyId).toBe('string');
+    expect(envelope.keyId).not.toBe('default');
+    await closeStoredCredentialsDb();
+  });
+
+  // RNF020 criterion 1: TLS 1.2 or higher is negotiated by the deployment's
+  // HTTPS edge, not by this stack, which serves plain HTTP; the deployment
+  // check proves the TLS version. The application's own part is to tell
+  // browsers to use HTTPS only.
+  test('the API sends Strict-Transport-Security (RNF020 criterion 1, #1456)', async ({ request }) => {
+    const response = await request.get(`${apiBaseURL}/api/auth/password-policy`);
+    expect(response.ok(), await response.text()).toBeTruthy();
+    const hsts = response.headers()['strict-transport-security'] || '';
+    expect(hsts).toMatch(/max-age=31536000/);
+    expect(hsts).toMatch(/includeSubDomains/);
+    expect(hsts).toMatch(/preload/);
   });
 });

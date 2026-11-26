@@ -9,6 +9,7 @@
     "/api/auth",
     "/api/audit",
     "/api/monitoring",
+    "/api/availability",
     "/api/backup",
     "/api/backup-policy",
     "/api/ingestion",
@@ -58,6 +59,9 @@
     "/api/analysis-types",
     "/api/diagnostic-reports",
     "/api/_test-support/ingestion",
+    "/api/_test-support/reference-import-runs",
+    "/api/_test-support/foundation-runs",
+    "/api/_test-support/graph-projection",
     "/api/terminologies",
     "/api/cids",
     "/api/phone-codes",
@@ -74,6 +78,9 @@
     "/api/imaging-derived-data",
     "/api/imaging-studies",
     "/api/networks",
+    "/api/research-resources",
+    "/api/research-resource-collections",
+    "/api/research-resource-biobanks",
     "/api/biomarker-associations",
     "/api/assays",
     "/api/assays/{assayId}/files",
@@ -105,6 +112,10 @@
     {
       "name": "monitoring",
       "description": "/api/monitoring: run history and request and queue metrics."
+    },
+    {
+      "name": "availability",
+      "description": "/api/availability: outage and maintenance records and the monthly availability report."
     },
     {
       "name": "backup",
@@ -299,6 +310,18 @@
       "description": "/api/_test-support/ingestion: the test-support probe of the ingestion gateway, registered only where test-support routes are enabled (RF029)."
     },
     {
+      "name": "test-support-reference-import-runs",
+      "description": "/api/_test-support/reference-import-runs: the test-support reference import into an E2E_ dataset and the check of its preserved asset, registered only where test-support routes are enabled (RF028, RNF032)."
+    },
+    {
+      "name": "test-support-foundation-runs",
+      "description": "/api/_test-support/foundation-runs: the test-support run of the Foundation job on an e2e_foundation_ scratch database, registered only where test-support routes are enabled (RF022, RNF031)."
+    },
+    {
+      "name": "test-support-graph-projection",
+      "description": "/api/_test-support/graph-projection: the test-support run of the graph projection reconciliation, scoped to named samples, registered only where test-support routes are enabled (RF023, RNF016, RNF019)."
+    },
+    {
       "name": "terminologies",
       "description": "/api/terminologies: the search of the terminology codes (CID, ORPHA, OMIM and others)."
     },
@@ -361,6 +384,18 @@
     {
       "name": "networks",
       "description": "/api/networks: the networks (name, juristic person, countries, contact and members)."
+    },
+    {
+      "name": "research-resources",
+      "description": "/api/research-resources: the research resources (name, contact, sex categories, sample types and design) a collection and a biobank are linked through (RNF008 AC3)."
+    },
+    {
+      "name": "research-resource-collections",
+      "description": "/api/research-resource-collections: the links from a collection to the research resource it belongs to, with a role and an effective period (RNF008 AC3)."
+    },
+    {
+      "name": "research-resource-biobanks",
+      "description": "/api/research-resource-biobanks: the links from a biobank to a research resource it holds, with a role and an effective period (RNF008 AC3)."
     },
     {
       "name": "biomarker-associations",
@@ -2007,6 +2042,74 @@
         }
       }
     },
+    "/api/monitoring/frontend-timings": {
+      "post": {
+        "tags": [
+          "monitoring"
+        ],
+        "summary": "Record the request timings the browser measured",
+        "description": "Gate: authenticate. Any signed-in user. The batch is taken whole or refused whole; a refused batch records nothing. The timings are kept in memory and served under data.frontend by GET /api/monitoring/metrics.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "timings"
+                ],
+                "properties": {
+                  "timings": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "name",
+                        "ms"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "maxLength": 200,
+                          "pattern": "^(GET|POST|PUT|PATCH|DELETE) /[A-Za-z0-9/_:.-]*$",
+                          "description": "The method and the URL path, query dropped, each identifier segment written as :id."
+                        },
+                        "ms": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 600000,
+                          "description": "Milliseconds from the request's start to its response."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Every timing recorded."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          }
+        }
+      }
+    },
     "/api/monitoring/metrics": {
       "get": {
         "tags": [
@@ -2308,12 +2411,15 @@
                                       "QUEUE_UNAVAILABLE",
                                       "QUEUE_BACKLOG",
                                       "QUEUE_FAILED",
-                                      "OUTBOX_DEAD_LETTER"
+                                      "OUTBOX_DEAD_LETTER",
+                                      "BACKUP_RPO",
+                                      "RESOURCE_MEMORY",
+                                      "RESOURCE_DISK"
                                     ]
                                   },
                                   "subject": {
                                     "type": "string",
-                                    "description": "http, a queue name, or graph_projection_outbox."
+                                    "description": "http, a queue name, graph_projection_outbox, backup, or backend."
                                   },
                                   "severity": {
                                     "type": "string",
@@ -2410,6 +2516,411 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/availability/records": {
+      "get": {
+        "tags": [
+          "availability"
+        ],
+        "summary": "The outage and maintenance records overlapping a month",
+        "description": "Gate: requireRole(4). Sorted by startedAt, at most 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "description": "The calendar month, YYYY-MM (UTC).",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "recordId": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "outage",
+                                  "maintenance"
+                                ]
+                              },
+                              "startedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "endedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "cause": {
+                                "type": "string",
+                                "maxLength": 500
+                              },
+                              "impact": {
+                                "type": "string",
+                                "maxLength": 500
+                              },
+                              "announcedAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "Only on maintenance."
+                              },
+                              "createdBy": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "availability"
+        ],
+        "summary": "Record an outage or an announced maintenance window (RNF003 C2)",
+        "description": "Gate: requireRole(4). Dates are ISO-8601 with Z or an offset, and none may be later than now plus 5 minutes. A maintenance needs announcedAt before startedAt; an outage takes none. Unknown keys are ignored.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "outage",
+                      "maintenance"
+                    ]
+                  },
+                  "startedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "endedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "After startedAt."
+                  },
+                  "cause": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "impact": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "announcedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required for maintenance and before startedAt; refused for outage."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "startedAt",
+                  "endedAt",
+                  "cause",
+                  "impact"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "recordId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "outage",
+                                "maintenance"
+                              ]
+                            },
+                            "startedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "endedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "cause": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "impact": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "announcedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "Only on maintenance."
+                            },
+                            "createdBy": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/availability/report": {
+      "get": {
+        "tags": [
+          "availability"
+        ],
+        "summary": "The monthly availability report (RNF003 C1, C4)",
+        "description": "Gate: requireRole(4). Maintenance time is left out of the period; outage time inside a maintenance window is not counted. A month still running is measured up to now and answers partial: true. A month that has not started yet answers 422.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "description": "The calendar month, YYYY-MM (UTC).",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "month": {
+                              "type": "string"
+                            },
+                            "partial": {
+                              "type": "boolean",
+                              "description": "True while the month is still running."
+                            },
+                            "asOf": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "The instant the period is measured to: now for a running month, else the first instant of the next month."
+                            },
+                            "periodMinutes": {
+                              "type": "number"
+                            },
+                            "maintenanceMinutes": {
+                              "type": "number"
+                            },
+                            "maintenanceLimitMinutes": {
+                              "type": "number",
+                              "description": "240."
+                            },
+                            "maintenanceWithinLimit": {
+                              "type": "boolean"
+                            },
+                            "outageMinutes": {
+                              "type": "number"
+                            },
+                            "availabilityPercent": {
+                              "type": "number",
+                              "nullable": true,
+                              "description": "Rounded to 4 decimals. Null when evaluable is false."
+                            },
+                            "targetPercent": {
+                              "type": "number",
+                              "description": "99.5."
+                            },
+                            "met": {
+                              "type": "boolean",
+                              "description": "False when evaluable is false."
+                            },
+                            "evaluable": {
+                              "type": "boolean",
+                              "description": "False when the period has no minutes left once maintenance is taken out."
+                            },
+                            "records": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "recordId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "outage",
+                                      "maintenance"
+                                    ]
+                                  },
+                                  "startedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "endedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  },
+                                  "cause": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "impact": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "announcedAt": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "description": "Only on maintenance."
+                                  },
+                                  "createdBy": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -2830,6 +3341,13 @@
                       },
                       "purpose": {
                         "type": "string"
+                      },
+                      "accessPolicyId": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "ELM-0022: the AccessPolicy ids that govern the record (RF029 AC2). Optional; each must name a policy in force applicable to the entityType, else the record is quarantined."
                       }
                     }
                   },
@@ -3804,6 +4322,59 @@
                 }
               }
             }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/retention-policies/data-classes": {
+      "get": {
+        "tags": [
+          "retention-policies"
+        ],
+        "summary": "The data classes with their purpose, sensitivity, policy, period and owner (RNF022 AC1)",
+        "description": "Gates: authenticate, requireRole(4). Registered before /{id}, so data-classes is never read as an id.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One record per data class.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -6730,8 +7301,12 @@
           "incidents"
         ],
         "summary": "Open a temperature incident, or add to the one open for the sensor",
-        "description": "Gates: none. The route registers no authenticate and no permission, so this operation is unauthenticated. The incident and quarantine answer at the top level, not under data. It does not open the request database (req.app.locals.db), so it never answers 503. An open, acknowledged or escalated incident for the sensorKey is updated; otherwise one is created and the alert recipients are mailed.",
-        "security": [],
+        "description": "Gates: requireMachineIngestSecret (header x-telemetry-ingest-secret). No authenticate, so it never answers 401. The incident and quarantine answer at the top level, not under data. It does not open the request database (req.app.locals.db), so it never answers 503. An open, acknowledged or escalated incident for the sensorKey is updated; otherwise one is created and the alert recipients are mailed.",
+        "security": [
+          {
+            "telemetryIngestSecret": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -6793,6 +7368,16 @@
                       }
                     }
                   ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The machine-ingest secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -11764,7 +12349,7 @@
           "users"
         ],
         "summary": "Register a sample",
-        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope. The 503 comes from authenticate. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. The 403 is also STRICT_MODE_BLOCKED. The 404 is an organizationId a global caller names that does not exist. The 422 is a qualificationContext error or a 422-tagged failure and carries details; every other failure is 400.",
+        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope. The 503 comes from authenticate. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. The 403 is also STRICT_MODE_BLOCKED. The 404 is an organizationId a global caller names that does not exist. The 422 is a qualificationContext error, a field of the RCS result (RCS_DERIVED_WRITE_REFUSED with fields), or a 422-tagged failure and carries details; every other failure is 400.",
         "security": [
           {
             "bearerAuth": []
@@ -11862,6 +12447,11 @@
                   "qualificationContext": {
                     "type": "object",
                     "description": "The use context checked by RF018 AC2."
+                  },
+                  "governanceEvidence": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "RNF018 AC5: governance evidence references, read when the body carries sprec, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A custody-event reference cannot resolve at registration, since the sample does not exist yet. A documentation reference resolves only to an approval of the sample's collectionId. Absent evidence leaves its criterion unread. A governanceEvidenceResolution the body sends is ignored."
                   }
                 },
                 "additionalProperties": true,
@@ -12775,7 +13365,7 @@
           "security"
         ],
         "summary": "Update the security configuration",
-        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. The 400 and 422 are a refused validation run (422 when a governance invariant is violated, 400 otherwise) and add configurationValidationRunId and violatedInvariants; any other untagged failure is also 400. The 409 is another change activated first.",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. The 400 and 422 are a refused validation run (422 when a governance invariant is violated, 400 otherwise) and add configurationValidationRunId, violatedInvariants and violations, one { invariantId, fieldPath } per refused path; any other untagged failure is also 400. The 409 is another change activated first.",
         "security": [
           {
             "bearerAuth": []
@@ -12871,6 +13461,20 @@
                       "items": {
                         "type": "object"
                       }
+                    },
+                    "violations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "invariantId": {
+                            "type": "string"
+                          },
+                          "fieldPath": {
+                            "type": "string"
+                          }
+                        }
+                      }
                     }
                   },
                   "required": [
@@ -12922,6 +13526,20 @@
                       "type": "array",
                       "items": {
                         "type": "object"
+                      }
+                    },
+                    "violations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "invariantId": {
+                            "type": "string"
+                          },
+                          "fieldPath": {
+                            "type": "string"
+                          }
+                        }
                       }
                     }
                   },
@@ -17607,13 +18225,109 @@
         }
       }
     },
+    "/api/samples/{id}/graph-status": {
+      "get": {
+        "tags": [
+          "samples"
+        ],
+        "summary": "Read the projected graph status of a sample",
+        "description": "Gates: authenticate, requireOrganizationScope. Reads the sample's :Sample node in a READ session and writes nothing: the projector is the only graph writer. A COMPROMISED status carries the cold-chain compromise fields (RF019). A sample the projector has not reached answers projected false with null fields. A sample of another organization answers 403, an unknown sample 404. The 503 comes from authenticate and from the handler: without the database, without the graph driver, or when the graph is unreachable (a ServiceUnavailable or SessionExpired driver error). Any other read failure answers 500 with a generic error and no driver message.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The sample: its _id or its specimenId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The projected graph status, keyed by the sample's _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "sampleId": {
+                              "type": "string"
+                            },
+                            "projected": {
+                              "type": "boolean"
+                            },
+                            "status": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "compromisedAt": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "compromiseFreezerKey": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "compromiseBreachedSince": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "sampleId",
+                            "projected",
+                            "status",
+                            "compromisedAt",
+                            "compromiseFreezerKey",
+                            "compromiseBreachedSince"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/samples": {
       "post": {
         "tags": [
           "samples"
         ],
         "summary": "Register a sample",
-        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope, then the payload validation. The 503 comes from authenticate and from the handler. The 422 comes first from the payload validation (a prohibited legacy field such as patientID or sampleID, or a failed field check, with details) and then from the registration (a study or protocol that is not active or approved). The 403 is also STRICT_MODE_BLOCKED. The 404 is a participant, study, protocol, collection, collection site or parent sample that does not exist. The 409 is a storage position that is taken. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. Any other failure that names a missing or invalid field answers 400, and the rest 500.",
+        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope, then the payload validation. The 503 comes from authenticate and from the handler. The 422 comes first from the payload validation (a prohibited legacy field such as patientID or sampleID, a field of the RCS result as RCS_DERIVED_WRITE_REFUSED with fields, or a failed field check, with details) and then from the registration (a study or protocol that is not active or approved). The 403 is also STRICT_MODE_BLOCKED. The 404 is a participant, study, protocol, collection, collection site or parent sample that does not exist. The 409 is a storage position that is taken. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. Any other failure that names a missing or invalid field answers 400, and the rest 500.",
         "security": [
           {
             "bearerAuth": []
@@ -17703,7 +18417,7 @@
                   },
                   "collectionId": {
                     "type": "string",
-                    "description": "An existing collection."
+                    "description": "An existing collection whose governance regime admits registration (RF004 AC2); required."
                   },
                   "barcode": {
                     "type": "string"
@@ -17720,6 +18434,11 @@
                     "type": "object",
                     "additionalProperties": true,
                     "description": "The use context checked by RF018 AC2: all five fields or none."
+                  },
+                  "governanceEvidence": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "RNF018 AC5: governance evidence references, read when the body carries sprec, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A custody-event reference cannot resolve at registration, since the sample does not exist yet. A documentation reference resolves only to an approval of the sample's collectionId. Absent evidence leaves its criterion unread. A governanceEvidenceResolution the body sends is ignored."
                   }
                 },
                 "required": [
@@ -17732,7 +18451,8 @@
                   "linkedProject",
                   "boxId",
                   "positionCode",
-                  "registeredAt"
+                  "registeredAt",
+                  "collectionId"
                 ],
                 "additionalProperties": true
               }
@@ -18570,7 +19290,7 @@
           "samples"
         ],
         "summary": "Update a sample",
-        "description": "Gates: authenticate, requirePermission('editSample'), requireOrganizationScope. The 503 comes from authenticate and from the handler. A sample of another organization answers 403. The 403 is also a move of a sample that has no organizationId to a collectionSite outside the caller's. The 404 is an unknown sample. The 409 is a quarantined sample set to available (QUARANTINE_RELEASE_REQUIRED: use POST /api/samples/{id}/quarantine/release). The 422 is a refused status write (SPECIMEN_STATUS_WRITE_REFUSED: quantityStatus, closed, an invalid or v1.3.0 status, or any change out of closed) or a barcode write after the migration window (LEGACY_BARCODE_WRITE_REFUSED). Every other failure answers 400. Only the listed fields are written; any other body field is ignored. The 200 returns the stored sample.",
+        "description": "Gates: authenticate, requirePermission('editSample'), requireOrganizationScope. The 503 comes from authenticate and from the handler. A sample of another organization answers 403. The 403 is also a move of a sample that has no organizationId to a collectionSite outside the caller's. The 404 is an unknown sample. The 409 is a quarantined sample set to available (QUARANTINE_RELEASE_REQUIRED: use POST /api/samples/{id}/quarantine/release). The 422 is a refused status write (SPECIMEN_STATUS_WRITE_REFUSED: quantityStatus, closed, an invalid or v1.3.0 status, or any change out of closed) or a barcode write after the migration window (LEGACY_BARCODE_WRITE_REFUSED), or a write to the RCS result (RCS_DERIVED_WRITE_REFUSED: biologicalPenalty, rcsScore, scoreBasedGrade, finalGrade, gradeRoute, axisPenalties, calculationTrace, rcsEvaluation, modelVersion, matrixType, governanceStatus, governanceFailureReasons, governanceRuleCodes or sealedRcsAssessmentId, set only by RCS certification, with fields and details), or a negative or non-numeric quantity, currentQuantity or initialQuantity (INVALID_QUANTITY, with fields and details). The 422 is also a sprec that differs from the stored one (SPREC_WRITE_REFUSED, with fields and details): the SPREC is the certified input and an edit does not change it, so a body repeating the stored sprec passes and writes nothing. Every other failure answers 400. Only the listed fields are written; any other body field is ignored. The 200 returns the stored sample.",
         "security": [
           {
             "bearerAuth": []
@@ -18637,25 +19357,6 @@
                     "type": "string",
                     "description": "GOOD, COMPROMISED or UNKNOWN."
                   },
-                  "modelVersion": {
-                    "type": "string"
-                  },
-                  "matrixType": {
-                    "type": "string"
-                  },
-                  "governanceStatus": {
-                    "type": "string"
-                  },
-                  "governanceFailureReasons": {},
-                  "governanceRuleCodes": {},
-                  "biologicalPenalty": {},
-                  "rcsScore": {},
-                  "scoreBasedGrade": {},
-                  "finalGrade": {},
-                  "gradeRoute": {},
-                  "axisPenalties": {},
-                  "calculationTrace": {},
-                  "rcsEvaluation": {},
                   "externalQualityAssessment": {},
                   "locationID": {},
                   "linkedProject": {
@@ -18667,9 +19368,6 @@
                   },
                   "sprec": {},
                   "merkleRoot": {
-                    "type": "string"
-                  },
-                  "sealedRcsAssessmentId": {
                     "type": "string"
                   },
                   "sealedSpecimenPreanalyticsId": {
@@ -37743,7 +38441,7 @@
           "physical-chain"
         ],
         "summary": "Place a container at a storage position",
-        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. RF017 AC2, RULE-030. A container is in scope through the specimen it holds (SPECIMEN_OUT_OF_SCOPE) or, empty, through the location its position's rack is at (CONTAINER_OUT_OF_SCOPE); an empty, unplaced one may be placed by the holder of the target position's rack location. The 404 is an unknown container (CONTAINER_NOT_FOUND); the 409 a container or position already assigned over the interval, history included (ASSIGNMENT_OVERLAP); the 422 a missing storagePositionId, an unknown assignmentStatus or a removedAt not after placedAt (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. RF017 AC2, RULE-030. A container is in scope through the specimen it holds (SPECIMEN_OUT_OF_SCOPE) or, empty, through the location its position's rack is at (CONTAINER_OUT_OF_SCOPE); an empty, unplaced one may be placed by the holder of the target position's rack location. The 404 is an unknown container (CONTAINER_NOT_FOUND); the 409 a container or position already assigned over the interval, history included (ASSIGNMENT_OVERLAP); the 422 a missing storagePositionId, an unknown assignmentStatus or a removedAt not after placedAt (VALIDATION_ERROR), or a position that is not one of its rack's prepared StoragePosition rows, a rack never prepared included (POSITION_NOT_IN_GRID). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
         "security": [
           {
             "bearerAuth": []
@@ -38101,7 +38799,7 @@
           "physical-chain"
         ],
         "summary": "Locate a rack at a storage location",
-        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RULE-035: a rack is in one location at a time. The rack is in scope through the location: 404 LOCATION_NOT_FOUND, 403 LOCATION_OUT_OF_SCOPE, and 422 LOCATION_UNUSABLE when the location or an ancestor is not active (RF017 AC8). The 409 is an interval that overlaps another location of the rack, history included (ASSIGNMENT_OVERLAP); the 422 is also a missing storageLocationId, an unknown assignmentStatus or a removedAt not after placedAt (VALIDATION_ERROR). The rack itself is not looked up. The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RULE-035: a rack is in one location at a time. The rack is in scope through the location: 404 LOCATION_NOT_FOUND, 403 LOCATION_OUT_OF_SCOPE, and 422 LOCATION_UNUSABLE when the location or an ancestor is not active (RF017 AC8). A caller of organization scope must also hold the location a prepared rack's own record names, if any (403 LOCATION_OUT_OF_SCOPE). The 409 is an interval that overlaps another location of the rack, history included (ASSIGNMENT_OVERLAP); the 422 is also a missing storageLocationId, an unknown assignmentStatus or a removedAt not after placedAt (VALIDATION_ERROR). The rack itself is not looked up. The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
         "security": [
           {
             "bearerAuth": []
@@ -38446,6 +39144,580 @@
         }
       }
     },
+    "/api/physical-chain/racks": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Create a rack and its grid of storage positions",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF016 AC2: writes the StorageRack and one StoragePosition per cell of its grid, rows A upwards and columns 01 upwards (top_left_origin). An omitted grid field takes the approved fixture: cryogenic_rack, 8 rows by 12 columns, alpha_numeric, top_left_origin, so 96 positions. A storageLocationId given must name a location of the caller's organization: 404 LOCATION_NOT_FOUND, 403 LOCATION_OUT_OF_SCOPE; and a usable one: 422 LOCATION_UNUSABLE when it or an ancestor is not active (RF017 AC8). A caller of organization scope must also hold the location the rack is already open at, if any (LOCATION_OUT_OF_SCOPE). The 409 is a rack id already created (RACK_EXISTS); the 422 a storageRackId given that is not a non-empty string, or a grid the model refuses, such as a rowCount outside 1-26, a columnCount outside 1-99 or an unknown coordinateScheme, orientationRule or status (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "storageRackId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A non-empty string; minted when absent."
+                  },
+                  "rackType": {
+                    "type": "string",
+                    "description": "cryogenic_rack when absent."
+                  },
+                  "rowCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 26,
+                    "description": "8 when absent."
+                  },
+                  "columnCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99,
+                    "description": "12 when absent."
+                  },
+                  "coordinateScheme": {
+                    "type": "string",
+                    "enum": [
+                      "alpha_numeric"
+                    ]
+                  },
+                  "orientationRule": {
+                    "type": "string",
+                    "enum": [
+                      "top_left_origin"
+                    ]
+                  },
+                  "storageLocationId": {
+                    "type": "string",
+                    "description": "A location of the caller's organization."
+                  },
+                  "catalogReference": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active"
+                    ]
+                  },
+                  "sourceEventId": {
+                    "type": "string",
+                    "description": "The audit entry's source event id (V2E-0683, V2E-0690); minted when absent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The rack and its positions are created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "The StorageRack, with the number of StoragePosition rows written.",
+                          "properties": {
+                            "storageRackId": {
+                              "type": "string"
+                            },
+                            "rackType": {
+                              "type": "string"
+                            },
+                            "rowCount": {
+                              "type": "integer"
+                            },
+                            "columnCount": {
+                              "type": "integer"
+                            },
+                            "coordinateScheme": {
+                              "type": "string",
+                              "enum": [
+                                "alpha_numeric"
+                              ]
+                            },
+                            "orientationRule": {
+                              "type": "string",
+                              "enum": [
+                                "top_left_origin"
+                              ]
+                            },
+                            "storageLocationId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "catalogReference": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "active"
+                              ]
+                            },
+                            "positionCount": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "storageRackId",
+                            "rackType",
+                            "rowCount",
+                            "columnCount",
+                            "coordinateScheme",
+                            "orientationRule",
+                            "status",
+                            "positionCount"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the location belongs to another organization (LOCATION_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The location is not found (LOCATION_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The rack already exists (RACK_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The location is not usable, or the rack id or grid is invalid (LOCATION_UNUSABLE, VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/racks/{storageRackId}/positions": {
+      "get": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "List a rack's storage positions",
+        "description": "Gates: authenticate (router.use), requirePermission('viewStorageTopology'), requireOrganizationScope. RF016 AC2: the rack's StoragePosition rows in top_left_origin order, row A first and columns 01 upwards within a row. 404 RACK_NOT_FOUND for a rack never created. The rack is in scope through the location it is open at, or else the location its record names; a caller of organization scope outside it is refused 403 RACK_OUT_OF_SCOPE, and a rack located nowhere is a global caller's only. The failures are coded: the error is the code and message the reason. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "storageRackId",
+            "in": "path",
+            "required": true,
+            "description": "The rack.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rack's positions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "description": "A StoragePosition: one cell of the grid, its id the rack id and the position code.",
+                            "properties": {
+                              "storagePositionId": {
+                                "type": "string"
+                              },
+                              "storageRackId": {
+                                "type": "string"
+                              },
+                              "rowIndex": {
+                                "type": "integer"
+                              },
+                              "columnIndex": {
+                                "type": "integer"
+                              },
+                              "positionCode": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "available"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "storagePositionId",
+                              "storageRackId",
+                              "rowIndex",
+                              "columnIndex",
+                              "positionCode",
+                              "status"
+                            ],
+                            "additionalProperties": true
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the rack's location belongs to another organization or the rack is located nowhere (RACK_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The rack is not found (RACK_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/racks/{storageRackId}/labels": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Issue a rack's linear code",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF016 AC5. The target is the rack, the status active, and issuedAt and issuedBy are set here from the request; those four are never read from the body. The rack must have an open RackLocationAssignment or a StorageRack row (RACK_NOT_FOUND otherwise, a container's id included) and be in scope as for reading its grid: through its open location first, then the location on its own record; a rack located nowhere is a global caller's only (RACK_OUT_OF_SCOPE). The symbology must be code_128, the one linear symbology RF016 AC5 names; another or a missing one is a 422 before anything is written. The 422 is also a missing or unknown field, a non-boolean immutableAtSource, a manufacturer_applied origin (RULE-034), an institution_applied label without templateVersionId and printBatchId, or an encodedValue holding a CPF, an e-mail or whitespace (VALIDATION_ERROR, RULE-012). The 409 is a value already active in the namespace (LABEL_EXISTS). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "storageRackId",
+            "in": "path",
+            "required": true,
+            "description": "The rack.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "encodedValue": {
+                    "type": "string",
+                    "description": "No CPF, e-mail or whitespace."
+                  },
+                  "symbology": {
+                    "type": "string",
+                    "enum": [
+                      "code_128"
+                    ],
+                    "description": "Read case-insensitively; the rack's code is linear (RF016 AC5)."
+                  },
+                  "identifierOrigin": {
+                    "type": "string",
+                    "enum": [
+                      "institution_applied"
+                    ],
+                    "description": "Read case-insensitively; a rack's code is institutional (RULE-034)."
+                  },
+                  "namespaceRegistryId": {
+                    "type": "string"
+                  },
+                  "carrierPlacement": {
+                    "type": "string"
+                  },
+                  "immutableAtSource": {
+                    "type": "boolean"
+                  },
+                  "templateVersionId": {
+                    "type": "string",
+                    "description": "Required for an institution_applied label."
+                  },
+                  "printBatchId": {
+                    "type": "string",
+                    "description": "Required for an institution_applied label."
+                  },
+                  "checksum": {
+                    "type": "string"
+                  },
+                  "replacesIdentifierId": {
+                    "type": "string"
+                  },
+                  "labelIdentifierId": {
+                    "type": "string",
+                    "description": "Minted when absent."
+                  }
+                },
+                "required": [
+                  "encodedValue",
+                  "symbology",
+                  "identifierOrigin",
+                  "namespaceRegistryId",
+                  "carrierPlacement",
+                  "immutableAtSource"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The rack's code is issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "labelIdentifierId": {
+                              "type": "string"
+                            },
+                            "encodedValue": {
+                              "type": "string"
+                            },
+                            "symbology": {
+                              "type": "string"
+                            },
+                            "targetType": {
+                              "type": "string",
+                              "enum": [
+                                "storage_rack"
+                              ]
+                            },
+                            "targetId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "active"
+                              ]
+                            },
+                            "issuedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "issuedBy": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "identifierOrigin": {
+                              "type": "string"
+                            },
+                            "namespaceRegistryId": {
+                              "type": "string"
+                            },
+                            "carrierPlacement": {
+                              "type": "string"
+                            },
+                            "immutableAtSource": {
+                              "type": "boolean"
+                            },
+                            "templateVersionId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "printBatchId": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "labelIdentifierId",
+                            "encodedValue",
+                            "symbology",
+                            "targetType",
+                            "targetId",
+                            "status"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the rack is outside the caller's organizations (RACK_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No open placement and no StorageRack row under that id (RACK_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The value is already active in the namespace (LABEL_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid label, a symbology other than code_128 included (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/physical-chain/containers/{containerId}/labels": {
       "post": {
         "tags": [
@@ -38665,6 +39937,339 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/validation-protocols": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Register an ex ante physical identification validation protocol",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF016 AC7. A PhysicalIdentificationValidationProtocol (V2E-0700..0709), a global record held by no organization. approvalStatus is draft when absent, and approvedAt is required once it is approved_for_execution. The 422 is a missing or invalid field (VALIDATION_ERROR); the 409 a protocol with the same id or protocolVersion (PROTOCOL_EXISTS). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "physicalIdentificationValidationProtocolId": {
+                    "type": "string",
+                    "description": "Minted when absent."
+                  },
+                  "protocolVersion": {
+                    "type": "string",
+                    "description": "SemVer."
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "ex_ante_synthetic"
+                    ]
+                  },
+                  "evidenceUri": {
+                    "type": "string"
+                  },
+                  "evidenceHash": {
+                    "type": "string",
+                    "description": "SHA-256, hexadecimal."
+                  },
+                  "approvedSymbologies": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "fixtureCatalogRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "realSpecimenUse": {
+                    "type": "boolean"
+                  },
+                  "approvalStatus": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "approved_for_execution",
+                      "retired"
+                    ],
+                    "description": "draft when absent."
+                  },
+                  "approvedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required when approvalStatus is approved_for_execution."
+                  }
+                },
+                "required": [
+                  "protocolVersion",
+                  "scope",
+                  "evidenceUri",
+                  "evidenceHash",
+                  "approvedSymbologies",
+                  "fixtureCatalogRefs",
+                  "realSpecimenUse"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The protocol is registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "physicalIdentificationValidationProtocolId": {
+                              "type": "string"
+                            },
+                            "protocolVersion": {
+                              "type": "string",
+                              "description": "SemVer."
+                            },
+                            "scope": {
+                              "type": "string",
+                              "enum": [
+                                "ex_ante_synthetic"
+                              ]
+                            },
+                            "evidenceUri": {
+                              "type": "string"
+                            },
+                            "evidenceHash": {
+                              "type": "string",
+                              "description": "SHA-256, hexadecimal."
+                            },
+                            "approvedSymbologies": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "fixtureCatalogRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "realSpecimenUse": {
+                              "type": "boolean"
+                            },
+                            "approvalStatus": {
+                              "type": "string",
+                              "enum": [
+                                "draft",
+                                "approved_for_execution",
+                                "retired"
+                              ]
+                            },
+                            "approvedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "physicalIdentificationValidationProtocolId",
+                            "protocolVersion",
+                            "scope",
+                            "approvalStatus",
+                            "realSpecimenUse"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "A protocol with the same id or protocolVersion exists (PROTOCOL_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid protocol (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/validation-protocols/{physicalIdentificationValidationProtocolId}/executions": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Authorize a run of a validation protocol",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. RF016 AC7, RULE-037. A run is authorized only when the stored protocol is approved_for_execution and, in the ex_ante_synthetic scope, realSpecimenUse is false; otherwise 409 PROTOCOL_NOT_EXECUTABLE. The authorization is documentary, not a result of the assay: nothing is written but its audit entry. The 404 is an unknown protocol (PROTOCOL_NOT_FOUND). The failures are coded: the error is the code and message the reason. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "physicalIdentificationValidationProtocolId",
+            "in": "path",
+            "required": true,
+            "description": "The protocol.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run is authorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "physicalIdentificationValidationProtocolId": {
+                              "type": "string"
+                            },
+                            "protocolVersion": {
+                              "type": "string"
+                            },
+                            "scope": {
+                              "type": "string"
+                            },
+                            "approvalStatus": {
+                              "type": "string",
+                              "enum": [
+                                "approved_for_execution"
+                              ]
+                            },
+                            "realSpecimenUse": {
+                              "type": "boolean"
+                            },
+                            "authorizedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          },
+                          "required": [
+                            "physicalIdentificationValidationProtocolId",
+                            "protocolVersion",
+                            "scope",
+                            "approvalStatus",
+                            "realSpecimenUse",
+                            "authorizedAt"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The protocol is not found (PROTOCOL_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The protocol is not approved_for_execution, or an ex ante one uses a real specimen (PROTOCOL_NOT_EXECUTABLE, RULE-037).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -40043,7 +41648,7 @@
           "quality"
         ],
         "summary": "Preview the quality assessment of a sample payload",
-        "description": "Gates: authenticate. Evaluates the quality of the posted sample without storing anything; no body field is required and any body is assessed. The 500 is only authenticate's (or an unexpected throw in the evaluation); the 503 is authenticate's.",
+        "description": "Gates: authenticate. Evaluates the quality of the posted sample without storing anything; no body field is required and any body is assessed. The 500 is only authenticate's (or an unexpected throw in the evidence lookup or the evaluation); the 503 is authenticate's.",
         "security": [
           {
             "bearerAuth": []
@@ -40056,7 +41661,7 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": true,
-                "description": "The sample fields to assess; legacy quality fields are normalized to the canonical ones."
+                "description": "The sample fields to assess; legacy quality fields are normalized to the canonical ones. Optional governanceEvidence (RNF018 AC5): an object with optional arrays traceability, monitoring and documentation (at most 20 each) of { uri, hash }, where uri is urn:bioavanced:custody-event:<eventId>, urn:bioavanced:telemetry-exposure-summary:<id> or urn:bioavanced:collection-governance-approval:<approvalId> respectively, and hash is sha256:<64 lower-case hex> of the stored record. Optional specimenId names the specimen a custody event or telemetry summary must belong to. Optional collectionId names the collection a collection-governance-approval reference must belong to: documentation evidence, an SOP's included, is an approval of that collection, and one of another collection, or with no collectionId, is an unresolvable URI. Each presented reference is resolved against the stored record before certification; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule. A governanceEvidenceResolution the client sends is ignored."
               }
             }
           }
@@ -40077,7 +41682,7 @@
                         "data": {
                           "type": "object",
                           "additionalProperties": true,
-                          "description": "The certification result, with rcs_input, deprecated_legacy_fields and, when the payload carried one, qualification_context."
+                          "description": "The certification result, with rcs_input, deprecated_legacy_fields, governance_evidence and, when the payload carried one, qualification_context. governance_evidence holds the six governance criteria (metadataComplete, terminologyValid, traceabilityOk, monitoringOk, documentationOk, semanticCompatible), each true, false or null, with unresolvedReasons, gateResult ('pass', 'fail' or null), failureReasons, evidenceRefs (the URIs of the references that resolved) and the validation rule set's version and checksum; traceabilityOk, monitoringOk and documentationOk are true only when governanceEvidence references of that category were presented and all resolved; semanticCompatible is true only when every axis of the matrix resolved its code and context and the traceability (custody) references resolved, and gateResult is 'pass' when all six criteria are true."
                         }
                       },
                       "required": [
@@ -40941,14 +42546,473 @@
         }
       }
     },
+    "/api/_test-support/foundation-runs/run": {
+      "post": {
+        "tags": [
+          "test-support-foundation-runs"
+        ],
+        "summary": "Run the Foundation job on an e2e_foundation_ scratch database",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. Runs the Foundation job's own runSeed() in the posted mode against the posted scratch database on the same Mongo server, never the stack's own database, so a rollback or a failing gate leaves the stack's FoundationDataRun and ReadinessReport untouched (RF022, RNF031, #1485). A wrong or missing secret answers 403. 400 is a database outside the e2e_foundation_ namespace (invalid_database) or a mode the job does not run (invalid_mode); validation runs before any database access. 503 is no database or a database named as the stack's own; 500 is any failure of the job.",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "database": {
+                    "type": "string",
+                    "pattern": "^e2e_foundation_[a-z0-9_]{1,40}$"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "dry_run",
+                      "apply",
+                      "validate",
+                      "rollback"
+                    ]
+                  }
+                },
+                "required": [
+                  "database",
+                  "mode"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The FoundationDataRun, its ReadinessReport (null for a dry run) and the job's exit code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "run": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "report": {
+                          "type": "object",
+                          "nullable": true,
+                          "additionalProperties": true
+                        },
+                        "exitCode": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_database or invalid_mode.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The Foundation job failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/_test-support/graph-projection/reconcile": {
+      "post": {
+        "tags": [
+          "test-support-graph-projection"
+        ],
+        "summary": "Run the graph projection reconciliation scoped to named samples",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. Runs the reconciliation script's own reconcile() scoped to the posted specimenIds, never over the whole database: it reports the named samples with no Sample node or a drifted one, and the named samples' stalled outbox aggregates; with repair it requeues their dead letters and appends their events to the outbox again. The graph is only read (RF023 AC6, RNF016 C2, RNF019 C6 C7, #1502). A wrong or missing secret answers 403. 400 is a specimenIds that is not a list of 1 to 50 24-hex ids (invalid_specimen_ids) or a repair that is not a boolean (invalid_repair); validation runs before any database access. 503 is no database or no Neo4j driver; 500 is any failure of the reconciliation.",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "specimenIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{24}$"
+                    }
+                  },
+                  "repair": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "specimenIds",
+                  "repair"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The reconciliation result: the stalled aggregates, the samples missing from or drifted from the graph, and what the repair requeued or appended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_specimen_ids or invalid_repair.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The reconciliation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/_test-support/reference-import-runs/run": {
+      "post": {
+        "tags": [
+          "test-support-reference-import-runs"
+        ],
+        "summary": "Run a reference import into an E2E_ dataset",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. Writes the posted records as a JSONL file and runs the real reference import pipeline on it with the HPO source's registration and normalizer, under the posted E2E_ datasetCode and its own systemUri urn:bioavanced:e2e:<datasetCode>, so no real dataset is touched (RF028, RNF032, #1476). The release it registers waits approved for an explicit promotion. A wrong or missing secret answers 403. 400 is a datasetCode outside the E2E_ namespace (invalid_dataset_code), a bad datasetVersion (invalid_dataset_version) or records that are not 1..1000 objects (invalid_records); validation runs before any file or database access. 503 is no database; 500 is any failure of the import.",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "datasetCode": {
+                    "type": "string",
+                    "pattern": "^E2E_[A-Za-z0-9_-]{1,60}$"
+                  },
+                  "datasetVersion": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]{1,40}$"
+                  },
+                  "records": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "required": [
+                  "datasetCode",
+                  "datasetVersion",
+                  "records"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The import run, its release and whether it was approved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "run": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "releaseId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "approved": {
+                          "type": "boolean"
+                        },
+                        "idempotent": {
+                          "type": "boolean"
+                        },
+                        "assetUri": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_dataset_code, invalid_dataset_version or invalid_records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The import failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/_test-support/reference-import-runs/asset": {
+      "post": {
+        "tags": [
+          "test-support-reference-import-runs"
+        ],
+        "summary": "Check the preserved asset of an E2E_ reference release",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. Reads the object storage copy a reference import preserved for an E2E_ datasetCode and checksum, and answers whether it exists and the sha256 of its stored bytes (RF028 AC2, RNF032, #1476). It reads no database. A wrong or missing secret answers 403. 400 is a datasetCode outside the E2E_ namespace (invalid_dataset_code) or a checksum that is not 64 lowercase hex digits (invalid_checksum). A missing object, or one that is not a regular file, is a 200 with exists false and sha256 null. 500 is any other failure of the read.",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "datasetCode": {
+                    "type": "string",
+                    "pattern": "^E2E_[A-Za-z0-9_-]{1,60}$"
+                  },
+                  "checksum": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "datasetCode",
+                  "checksum"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Whether the preserved asset exists, and the sha256 of its stored bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "assetUri": {
+                          "type": "string"
+                        },
+                        "exists": {
+                          "type": "boolean"
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_dataset_code or invalid_checksum.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read of the stored object failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/terminologies": {
       "get": {
         "tags": [
           "terminologies"
         ],
         "summary": "Search the terminologies",
-        "description": "Gates: none. No authenticate, so it never answers 401 or 403 (the code carries no session check). The filter is sistema (upper-cased) and a text search; limit is 1..500. When nothing matches, it may hydrate the local store from a remote Orphanet source before answering. 503 is no database; 500 is any failure of the read. The route has no 400.",
-        "security": [],
+        "description": "Gates: authenticate. There is no permission or organization gate: any signed-in user reads it (#1553). The 403 is authenticate's refusals (an expired role, a pending MFA setup), and the 503 also comes from authenticate. The filter is sistema (upper-cased) and a text search; limit is 1..500. When nothing matches, it may hydrate the local store from a remote Orphanet source before answering. 503 is no database; 500 is any failure of the read. The route has no 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "sistema",
@@ -41077,6 +43141,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -46554,6 +48624,1389 @@
         }
       }
     },
+    "/api/research-resources": {
+      "get": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "List the research resources",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The research-resources records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ResearchResourceRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "Create a ResearchResource",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; researchResourceId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a name that is not a non-empty string, a contactInformation that is not a non-empty array of contacts each with a filled value, a sexCategories that is not a non-empty array of non-empty codes, a sampleTypes that is not a non-empty array, a url that is not a URI, a sampleCollectionSettings, researchResourceDesigns or inclusionCriteria that is not a list of non-empty codes, a datasetTypes, storageTemperatures, diseases, useAccessConditions or publications that is not a list, an ageLow or ageHigh that is not a finite number, or a totalNumberOfSubjects that is not a non-negative integer. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "researchResourceId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "acronym": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A URI that new URL() accepts when sent."
+                  },
+                  "contactInformation": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "description": "Required, a non-empty array of contacts, each an object with at least one non-empty string value."
+                  },
+                  "description": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "sampleSource": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "sexCategories": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array of non-empty codes."
+                  },
+                  "ageLow": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "A finite number when sent."
+                  },
+                  "ageHigh": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "A finite number when sent."
+                  },
+                  "ageLowUnit": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "ageHighUnit": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "datasetTypes": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "sampleTypes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {},
+                    "description": "Required, a non-empty array of CodeableConcepts; its entries are not checked."
+                  },
+                  "storageTemperatures": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "diseases": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of diseases when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "sampleCollectionSettings": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "researchResourceDesigns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "useAccessConditions": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "researchResourceStatus": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "totalNumberOfSubjects": {
+                    "type": "integer",
+                    "nullable": true,
+                    "minimum": 0,
+                    "description": "A non-negative integer when sent."
+                  },
+                  "inclusionCriteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "publications": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of identifiers when sent; its entries are not checked; stored as [] when omitted."
+                  }
+                },
+                "required": [
+                  "name",
+                  "contactInformation",
+                  "sexCategories",
+                  "sampleTypes"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The ResearchResource is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resources/{id}": {
+      "get": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "Read a ResearchResource",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the researchResourceId as a number, the researchResourceId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its researchResourceId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "Update a ResearchResource",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches), keeps the allowed keys the body names, and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its researchResourceId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; researchResourceId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "acronym": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A URI that new URL() accepts when sent."
+                  },
+                  "contactInformation": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "description": "Required, a non-empty array of contacts, each an object with at least one non-empty string value."
+                  },
+                  "description": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "sampleSource": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "sexCategories": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array of non-empty codes."
+                  },
+                  "ageLow": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "A finite number when sent."
+                  },
+                  "ageHigh": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "A finite number when sent."
+                  },
+                  "ageLowUnit": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "ageHighUnit": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "datasetTypes": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "sampleTypes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {},
+                    "description": "Required, a non-empty array of CodeableConcepts; its entries are not checked."
+                  },
+                  "storageTemperatures": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "diseases": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of diseases when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "sampleCollectionSettings": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "researchResourceDesigns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "useAccessConditions": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+                  },
+                  "researchResourceStatus": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "totalNumberOfSubjects": {
+                    "type": "integer",
+                    "nullable": true,
+                    "minimum": 0,
+                    "description": "A non-negative integer when sent."
+                  },
+                  "inclusionCriteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "publications": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of identifiers when sent; its entries are not checked; stored as [] when omitted."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ResearchResource is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "research-resources"
+        ],
+        "summary": "Delete a ResearchResource",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its researchResourceId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResource is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resource-collections": {
+      "get": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "List the research resource collection links",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The research-resource-collections records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ResearchResourceCollectionRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "Create a ResearchResourceCollection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; associationId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a researchResourceId or collectionId that is not a non-empty string, an associationRole that is sent but empty, or an effectivePeriod that is not an object, has a bound that is not a date, or ends at or before its start. The 404 is checked after the 422: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or collectionId names no collection (looked up in collections by collectionId). The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "associationId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "researchResourceId": {
+                    "type": "string",
+                    "description": "Required, the researchResourceId of an existing research resource.",
+                    "minLength": 1
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "description": "Required, the collectionId of an existing collection.",
+                    "minLength": 1
+                  },
+                  "associationRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A non-empty code when sent."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "researchResourceId",
+                  "collectionId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The ResearchResourceCollection is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceCollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "A reference is unresolved: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or collectionId names no collection (looked up in collections by collectionId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resource-collections/{id}": {
+      "get": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "Read a ResearchResourceCollection",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the associationId as a number, the associationId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceCollection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceCollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "Update a ResearchResourceCollection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches), keeps the allowed keys the body names, and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. The 404 is also an unresolved reference, checked on the keys the body sends: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or collectionId names no collection (looked up in collections by collectionId). There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; associationId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "researchResourceId": {
+                    "type": "string",
+                    "description": "Required, the researchResourceId of an existing research resource.",
+                    "minLength": 1
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "description": "Required, the collectionId of an existing collection.",
+                    "minLength": 1
+                  },
+                  "associationRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A non-empty code when sent."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceCollection is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceCollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No record matches the id, or a reference is unresolved: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or collectionId names no collection (looked up in collections by collectionId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "research-resource-collections"
+        ],
+        "summary": "Delete a ResearchResourceCollection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceCollection is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resource-biobanks": {
+      "get": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "List the research resource biobank links",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The research-resource-biobanks records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ResearchResourceBiobankRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "Create a ResearchResourceBiobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; associationId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a researchResourceId or biobankId that is not a non-empty string, an associationRole that is sent but empty, or an effectivePeriod that is not an object, has a bound that is not a date, or ends at or before its start. The 404 is checked after the 422: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or biobankId names no biobank (looked up in biobanks by biobankId). The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "associationId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "researchResourceId": {
+                    "type": "string",
+                    "description": "Required, the researchResourceId of an existing research resource.",
+                    "minLength": 1
+                  },
+                  "biobankId": {
+                    "type": "string",
+                    "description": "Required, the biobankId of an existing biobank.",
+                    "minLength": 1
+                  },
+                  "associationRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A non-empty code when sent."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "researchResourceId",
+                  "biobankId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The ResearchResourceBiobank is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceBiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "A reference is unresolved: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or biobankId names no biobank (looked up in biobanks by biobankId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/research-resource-biobanks/{id}": {
+      "get": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "Read a ResearchResourceBiobank",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the associationId as a number, the associationId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceBiobank.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceBiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "Update a ResearchResourceBiobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches), keeps the allowed keys the body names, and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. The 404 is also an unresolved reference, checked on the keys the body sends: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or biobankId names no biobank (looked up in biobanks by biobankId). There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; associationId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "researchResourceId": {
+                    "type": "string",
+                    "description": "Required, the researchResourceId of an existing research resource.",
+                    "minLength": 1
+                  },
+                  "biobankId": {
+                    "type": "string",
+                    "description": "Required, the biobankId of an existing biobank.",
+                    "minLength": 1
+                  },
+                  "associationRole": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A non-empty code when sent."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceBiobank is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResearchResourceBiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No record matches the id, or a reference is unresolved: researchResourceId names no research resource (looked up in researchResources by researchResourceId), or biobankId names no biobank (looked up in biobanks by biobankId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "research-resource-biobanks"
+        ],
+        "summary": "Delete a ResearchResourceBiobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its associationId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchResourceBiobank is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/biomarker-associations": {
       "get": {
         "tags": [
@@ -50815,8 +54268,12 @@
           "orphanet"
         ],
         "summary": "Search the Orphanet diseases",
-        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It searches the local cids and terminologies stores; when nothing matches, it asks the Orphadata API (only when external terminology sync is enabled and ORPHADATA_BASE_URL is set), and a remote failure is logged and read as no result. When the local search throws it runs once more, and answers 500 only when that fails too. An empty result is 200 with []. 400 is a missing q; 503 is no database.",
-        "security": [],
+        "description": "Gates: authenticate. There is no permission or organization gate: any signed-in user reads it (#1553). The 403 is authenticate's refusals (an expired role, a pending MFA setup), and the 503 also comes from authenticate. It searches the local cids and terminologies stores; when nothing matches, it asks the Orphadata API (only when external terminology sync is enabled and ORPHADATA_BASE_URL is set), and a remote failure is logged and read as no result. When the local search throws it runs once more, and answers 500 only when that fails too. An empty result is 200 with []. 400 is a missing q; 503 is no database.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -50940,6 +54397,12 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "500": {
             "description": "The local search failed twice.",
             "content": {
@@ -50985,8 +54448,12 @@
           "hpo"
         ],
         "summary": "Search the HPO terms",
-        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It searches the local hpo_terms store (label, hpoId or synonyms, obsolete terms left out, at most 20); when that finds nothing, or throws, it asks the external HPO API only when external HPO lookup is enabled. A local failure with the external lookup disabled is 200 with []. 400 is a missing or blank q; 500 is a failure of the external lookup after a local failure.",
-        "security": [],
+        "description": "Gates: authenticate. There is no permission or organization gate: any signed-in user reads it (#1553). The 403 is authenticate's refusals (an expired role, a pending MFA setup), and the 503 also comes from authenticate. It searches the local hpo_terms store (label, hpoId or synonyms, obsolete terms left out, at most 20); when that finds nothing, or throws, it asks the external HPO API only when external HPO lookup is enabled. A local failure with the external lookup disabled is 200 with []. 400 is a missing or blank q; 500 is a failure of the external lookup after a local failure.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -51032,6 +54499,12 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "500": {
             "description": "Both the local and the external search failed.",
             "content": {
@@ -51049,6 +54522,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -51059,8 +54535,12 @@
           "hpo"
         ],
         "summary": "Read one HPO term",
-        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It reads the hpo_terms record whose hpoId is id. 404 is no such term; 500 is a failure of the read, a missing database included.",
-        "security": [],
+        "description": "Gates: authenticate. There is no permission or organization gate: any signed-in user reads it (#1553). The 403 is authenticate's refusals (an expired role, a pending MFA setup), and the 503 also comes from authenticate. It reads the hpo_terms record whose hpoId is id. 404 is no such term; 500 is a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -51083,6 +54563,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "404": {
             "description": "No such term (error Not found).",
@@ -51119,6 +54605,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -54096,7 +57585,7 @@
           "intake-wizard"
         ],
         "summary": "Register a sample and its participant through the intake wizard",
-        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope, then intakeGovernanceResponseGuard, which rebuilds a body whose success is true as the 200 below (its governance status read back from the stored sample) and passes any other body through unchanged. It matches the participant or creates one (a match outside the caller's organizations is linked, never updated), decides the consent, grades the quality, takes the next free storage position automatically and stores the sample, released only when the consent is active and the quality allows it, else quarantined. The 400 is an empty or non-object body, an organization pick the create rule refuses, or a matched participant with no identifier to check its consent against. The 409 is no storage box with free capacity and a free position. The 422 is a legacy alias of a canonical field, or a failed canonical.v1.intake check, with fields and details; or boxes with room, none of them in a ready freezer with an operational sensor (success false, error and details). The 403 also comes from a caller with no organization, and the 404 is a picked organization that does not exist. The 503 comes from authenticate and from the handler. Any other failure answers the statusCode it carries, else 500.",
+        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope, then intakeGovernanceResponseGuard, which rebuilds a body whose success is true as the 200 below (its governance status read back from the stored sample) and passes any other body through unchanged. It matches the participant or creates one (a match outside the caller's organizations is linked, never updated), decides the consent, grades the quality, takes the next free storage position automatically and stores the sample, released only when the consent is active and the quality allows it, else quarantined. The 400 is an empty or non-object body, an organization pick the create rule refuses, or a matched participant with no identifier to check its consent against. The 409 is no storage box with free capacity and a free position. The 422 is a legacy alias of a canonical field, or a failed canonical.v1.intake check, with fields and details; or a specimen.quantity at or below zero (INVALID_QUANTITY, with fields and details), refused before anything is written; or boxes with room, none of them in a ready freezer with an operational sensor (success false, error and details). The 403 also comes from a caller with no organization, and the 404 is a picked organization that does not exist. The 503 comes from authenticate and from the handler. Any other failure answers the statusCode it carries, else 500.",
         "security": [
           {
             "bearerAuth": []
@@ -56834,6 +60323,261 @@
           "_id"
         ]
       },
+      "ResearchResourceRecord": {
+        "type": "object",
+        "description": "A ResearchResource document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "researchResourceId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "acronym": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "nullable": true,
+            "description": "A URI that new URL() accepts when sent."
+          },
+          "contactInformation": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {}
+            },
+            "description": "Required, a non-empty array of contacts, each an object with at least one non-empty string value."
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "sampleSource": {
+            "type": "string",
+            "nullable": true
+          },
+          "sexCategories": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Required, a non-empty array of non-empty codes."
+          },
+          "ageLow": {
+            "type": "number",
+            "nullable": true,
+            "description": "A finite number when sent."
+          },
+          "ageHigh": {
+            "type": "number",
+            "nullable": true,
+            "description": "A finite number when sent."
+          },
+          "ageLowUnit": {
+            "type": "string",
+            "nullable": true
+          },
+          "ageHighUnit": {
+            "type": "string",
+            "nullable": true
+          },
+          "datasetTypes": {
+            "type": "array",
+            "items": {},
+            "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "sampleTypes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {},
+            "description": "Required, a non-empty array of CodeableConcepts; its entries are not checked."
+          },
+          "storageTemperatures": {
+            "type": "array",
+            "items": {},
+            "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "diseases": {
+            "type": "array",
+            "items": {},
+            "description": "A list of diseases when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "sampleCollectionSettings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "researchResourceDesigns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "useAccessConditions": {
+            "type": "array",
+            "items": {},
+            "description": "A list of CodeableConcepts when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "researchResourceStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "totalNumberOfSubjects": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "description": "A non-negative integer when sent."
+          },
+          "inclusionCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "publications": {
+            "type": "array",
+            "items": {},
+            "description": "A list of identifiers when sent; its entries are not checked; stored as [] when omitted."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "ResearchResourceCollectionRecord": {
+        "type": "object",
+        "description": "A ResearchResourceCollection document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "associationId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "researchResourceId": {
+            "type": "string",
+            "description": "Required, the researchResourceId of an existing research resource.",
+            "minLength": 1
+          },
+          "collectionId": {
+            "type": "string",
+            "description": "Required, the collectionId of an existing collection.",
+            "minLength": 1
+          },
+          "associationRole": {
+            "type": "string",
+            "nullable": true,
+            "description": "A non-empty code when sent."
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "nullable": true,
+            "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "nullable": true
+              },
+              "end": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "ResearchResourceBiobankRecord": {
+        "type": "object",
+        "description": "A ResearchResourceBiobank document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "associationId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "researchResourceId": {
+            "type": "string",
+            "description": "Required, the researchResourceId of an existing research resource.",
+            "minLength": 1
+          },
+          "biobankId": {
+            "type": "string",
+            "description": "Required, the biobankId of an existing biobank.",
+            "minLength": 1
+          },
+          "associationRole": {
+            "type": "string",
+            "nullable": true,
+            "description": "A non-empty code when sent."
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "nullable": true,
+            "description": "A Period { start, end } when sent: each bound a date new Date() accepts, and end after start. The link counts only over [start, end); with no period it always counts.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "nullable": true
+              },
+              "end": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
       "BiomarkerAssociationRecord": {
         "type": "object",
         "description": "A BiomarkerAssociation document as the API returns it.",
@@ -58377,6 +62121,11 @@
           "organizationId": {
             "type": "string",
             "description": "The organization the intake is stamped with, picked by the rule POST /api/samples uses: a single-organization caller's own, a multi-organization caller's pick among its own, or a global caller's pick of any existing organization or none."
+          },
+          "governanceEvidence": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "RNF018 AC5: governance evidence references, in the shape POST /api/quality/preview takes (optional arrays traceability, monitoring and documentation, at most 20 each, of { uri, hash }). Each presented reference is resolved against the stored record before the intake certifies the specimen; one with a missing hash, an unresolvable URI or a different stored hash fails its category's governance rule, and the specimen is stored quarantined (QUALITY_GOVERNANCE_FAILURE). A custody-event or telemetry reference cannot resolve at intake, since the specimen does not exist yet. A documentation reference resolves only to an approval of specimen.collectionId. Absent evidence leaves its criterion unread. A governanceEvidenceResolution in the body is refused as a non-canonical field."
           }
         },
         "additionalProperties": true

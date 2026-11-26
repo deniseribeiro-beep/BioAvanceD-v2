@@ -98,11 +98,73 @@ describe('neo4jCanonicalProjection.service', () => {
       expect(result.projected).toBe(true);
     });
 
+    // #1550: the rebuild removes the edges the reconcile reports for it.
+    it('SPECIMEN_DONOR_UNLINKED deletes the donor edge and the GOVERNED_BY edges through that donor\'s consents', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'SPECIMEN_DONOR_UNLINKED', aggregateId: 's-1', payload: { specimenId: 's-1', donorId: 'DONOR_x' } });
+      expect(session.run).toHaveBeenCalledTimes(1);
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(cypher).toContain('(donor:Donor {id: $donorId})-[r:DONATED]->(sample:Sample {id: $specimenId})');
+      expect(cypher).toContain('OPTIONAL MATCH (donor)-[:CONSENTED_UNDER]->(:EthicalConsent)<-[g:GOVERNED_BY]-(sample)');
+      expect(cypher).toContain('WITH r, collect(g) AS governed');
+      expect(cypher).toContain('FOREACH (edge IN governed | DELETE edge)');
+      expect(cypher).toContain('DELETE r');
+      expect(cypher).toContain('GOVERNED_BY');
+      expect(params).toEqual({ donorId: 'DONOR_x', specimenId: 's-1' });
+      expect(result).toEqual({ projected: true, eventType: 'SPECIMEN_DONOR_UNLINKED', specimenId: 's-1', donorId: 'DONOR_x' });
+    });
+
+    it('SPECIMEN_DONOR_UNLINKED without a donorId is skipped with its reason and runs nothing', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'SPECIMEN_DONOR_UNLINKED', aggregateId: 's-1', payload: { specimenId: 's-1' } });
+      expect(result).toEqual({ skipped: true, eventType: 'SPECIMEN_DONOR_UNLINKED', specimenId: 's-1', reason: 'missing specimenId or donorId' });
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
+    it('STORAGE_POSITION_RELEASED closes the open STORED_AT at releasedAt', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'STORAGE_POSITION_RELEASED', eventId: 'e-9', aggregateId: 's-1', payload: { specimenId: 's-1', releasedAt: '2026-11-13T10:00:00.000Z' } });
+      expect(session.run).toHaveBeenCalledTimes(1);
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(cypher).toContain('r.validTo IS NULL');
+      // A placement that began at or after releasedAt stays open.
+      expect(cypher).toContain('AND (r.validFrom IS NULL OR r.validFrom < datetime($releasedAt))');
+      expect(cypher).toContain('SET r.validTo = datetime($releasedAt)');
+      expect(params.releasedAt).toBe('2026-11-13T10:00:00.000Z');
+      expect(params.specimenId).toBe('s-1');
+      expect(result).toEqual({ projected: true, eventType: 'STORAGE_POSITION_RELEASED', specimenId: 's-1' });
+    });
+
+    it('STORAGE_POSITION_RELEASED without a specimenId is skipped with its reason and runs nothing', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'STORAGE_POSITION_RELEASED', aggregateId: '', payload: { specimenId: '', releasedAt: '2026-11-13T10:00:00.000Z' } });
+      expect(result).toEqual({ skipped: true, eventType: 'STORAGE_POSITION_RELEASED', specimenId: '', reason: 'missing specimenId' });
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
     it('returns skipped for an unrecognized event type without calling session.run', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
       const result = await service.applyEvent(session, { eventType: 'SOMETHING_ELSE', aggregateType: 'Foo', eventId: 'e1' });
       expect(result).toEqual({ skipped: true, eventType: 'SOMETHING_ELSE', aggregateType: 'Foo', eventId: 'e1' });
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
+    it('INGESTION_RECORD_PERSISTED is skipped as an event with no graph relation, without calling session.run', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'INGESTION_RECORD_PERSISTED', aggregateType: 'Dataset', eventId: 'e-ing' });
+      expect(result).toEqual({
+        skipped: true,
+        eventType: 'INGESTION_RECORD_PERSISTED',
+        aggregateType: 'Dataset',
+        eventId: 'e-ing',
+        reason: 'no graph relation: the ingested target appends its own graph events',
+      });
       expect(session.run).not.toHaveBeenCalled();
     });
 

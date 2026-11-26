@@ -22,6 +22,13 @@
  * mfaLocked vira false o documento não casa mais com o filtro, então rodar
  * de novo é no-op (0 usuários encontrados, 0 atualizados).
  *
+ * One-way: sem rollback. Sobrescreve `mfaLocked: true` e `mfaFailedAttempts`
+ * com `false` e `0`; o valor anterior de `mfaFailedAttempts` não fica
+ * registrado em lugar nenhum, e quais usuários tinham `mfaLocked: true` só
+ * aparece no log do console (cada `_id` é impresso), que o script não guarda.
+ * Repor os valores voltaria a barrar no login usuários que nunca deveriam ter
+ * sido barrados (#683, #762). Desfazer é restaurar users de um backup.
+ *
  * Uso: node backend/src/scripts/migrateClearStaleMfaLocks.js
  * ou, de dentro de api/backend: npm run mfa:migrate-stale-locks
  *

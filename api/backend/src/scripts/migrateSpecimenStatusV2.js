@@ -29,6 +29,14 @@
  * evidence stay in the summary's needsDispositionEvidence on every run until
  * a disposition for them is executed (which closes them itself).
  *
+ * One-way: no rollback. legacySpecimenStatus keeps each converted
+ * document's v1.3.0 value, but the v2 code accepts no v1.3.0 value on write
+ * (models/Sample.js), the OperationalStateDecision each conversion appended
+ * is append-only history (operationalStateDecision.service.js has no update
+ * or delete), the quantityStatus it derived keeps no earlier value, and a
+ * specimen's status may have changed since. Undo it by restoring samples and
+ * operationalStateDecisions from a backup taken before the run.
+ *
  * Usage (from api/backend):
  *   npm run migrate:specimen-status-v2               applies
  *   npm run migrate:specimen-status-v2 -- --dry-run  counts, writes nothing

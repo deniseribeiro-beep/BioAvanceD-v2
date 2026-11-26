@@ -300,6 +300,34 @@ describe('logs.routes.js', () => {
       expect(logServiceMock.getLogs).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ limit: 10000, page: 1 }));
     });
 
+    // #1466: getLogs hands back serialized rows, whose Dates are
+    // { _type: 'Date', _value, _formatted } objects; the CSV printed them as
+    // "[object Object]". Both exports share buildCsv.
+    it('writes each row timestamp as ISO 8601, from the serialized Date getLogs returns (#1466)', async () => {
+      const { serializeLogs } = require('../../src/utils/logSerializer');
+      const at = new Date('2026-11-06T17:30:00.123Z');
+      const fallback = new Date('2026-11-05T08:00:00.000Z');
+      const logs = serializeLogs([
+        { timestamp: at, dateTime: at, action: 'CREATE', entity: 'User', message: 'usuário' },
+        { dateTime: fallback, action: 'LOGIN' },
+        { timestamp: 'not a date', action: 'QUERY' },
+      ]);
+      for (const path of ['/api/logs/export/csv', '/api/logs/export/xlsx']) {
+        logServiceMock.getLogs.mockResolvedValueOnce({ logs });
+        const response = await request(appWithDb(dbWithRbac({ accessType: 4 }))).get(path).buffer(true).parse((res, cb) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => cb(null, Buffer.concat(chunks).toString('utf8')));
+        });
+        expect(response.status).toBe(200);
+        const lines = response.body.split('\n');
+        expect(lines[1].startsWith('"2026-11-06T17:30:00.123Z","","CREATE","User"'), `${path}: ${lines[1]}`).toBe(true);
+        expect(lines[2].startsWith('"2026-11-05T08:00:00.000Z",'), `${path}: ${lines[2]}`).toBe(true);
+        expect(lines[3].startsWith('"",'), `${path}: ${lines[3]}`).toBe(true);
+        expect(response.body).not.toContain('[object Object]');
+      }
+    });
+
     it('usa lista vazia quando o serviço não retorna logs', async () => {
       logServiceMock.getLogs.mockResolvedValueOnce({});
       const response = await request(appWithDb(dbWithRbac({ accessType: 4 }))).get('/api/logs/export/csv');

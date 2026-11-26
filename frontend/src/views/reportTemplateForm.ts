@@ -1,4 +1,4 @@
-import { ReportTemplate } from '../types/models';
+import { ReportTemplate, REPORT_TEMPLATE_HANDLER_KEYS } from '../types/models';
 
 // #726 (RF008 AC#6): free-form config per handler (e.g. temperature's
 // `{ mode: 'control' | 'report' }` — see report-template-seed.service.js),
@@ -33,7 +33,9 @@ export function buildReportTemplateSubmissionPayload(
   const payload: Partial<ReportTemplate> = {
     name: formData.name,
     description: formData.description || null,
-    handlerKey: formData.handlerKey,
+    // #1450: the form's select shows the first key when the template has
+    // none, so the payload sends that same key.
+    handlerKey: formData.handlerKey || REPORT_TEMPLATE_HANDLER_KEYS[0],
     handlerOptions,
     templateStatus: formData.templateStatus || 'active',
   };

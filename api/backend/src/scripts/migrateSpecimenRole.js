@@ -15,6 +15,11 @@
  * Idempotent: a filled document holds one of the five values, so a second
  * run writes nothing.
  *
+ * One-way: no rollback. The run writes the default a create would have given
+ * (SampleModel.resolveSpecimenRole), so a filled sample cannot be told from
+ * one created since, and specimenRole is 1..1 Core, so unsetting it would
+ * leave the sample invalid. Undo is restoring samples from a backup.
+ *
  * Usage (from api/backend):
  *   npm run migrate:specimen-role               applies
  *   npm run migrate:specimen-role -- --dry-run  counts, writes nothing

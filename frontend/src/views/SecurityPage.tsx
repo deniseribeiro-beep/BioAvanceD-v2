@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
 import ConfigurationReleasesPanel from '../components/security/ConfigurationReleasesPanel';
+import SettingCatalogPanel from '../components/security/SettingCatalogPanel';
 
 // #1248: the retention keys are decided by the active RetentionPolicy, so
 // they render read-only with a line naming it.
@@ -202,6 +203,7 @@ export default function SecurityPage({ embedded = false }: SecurityPageProps) {
     { id: 'lgpd', label: t('security.sections.lgpd'), testId: 'security-nav-lgpd' },
     { id: 'policies', label: t('security.sections.policies'), testId: 'security-nav-policies' },
     { id: 'releases', label: t('security.sections.releases'), testId: 'security-nav-releases' },
+    { id: 'catalog', label: t('security.sections.catalog'), testId: 'security-nav-catalog' },
   ] as const;
 
   return (
@@ -219,7 +221,7 @@ export default function SecurityPage({ embedded = false }: SecurityPageProps) {
       )}
 
       {error && (
-        <div className="security-error">
+        <div className="security-error" data-testid="security-error">
           <AlertCircle size={20} />
           <span>{error}</span>
         </div>
@@ -300,6 +302,7 @@ export default function SecurityPage({ embedded = false }: SecurityPageProps) {
                 <div className="config-field">
                   <label>{t('security.authentication.maxLoginAttempts')}</label>
                   <input title="security-input"
+                    data-testid="security-max-login-attempts-input"
                     type="number"
                     min="1"
                     max="10"
@@ -924,6 +927,7 @@ export default function SecurityPage({ embedded = false }: SecurityPageProps) {
           {activeSection === 'releases' && (
             <ConfigurationReleasesPanel t={t} showToast={showToast} onRolledBack={loadConfig} />
           )}
+          {activeSection === 'catalog' && <SettingCatalogPanel t={t} />}
 
           {activeSection === 'policies' && (
             <div className="security-policies">

@@ -14,6 +14,7 @@ const { resolveCallerCreateOrganization } = require('../../services/callerCreate
 const { isSampleInOrganizationScope, applySampleOrganizationScope } = require('../../services/sampleTenancy.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
+const { readSampleGraphStatus } = require('../../services/sampleGraphStatus.service');
 const { qualificationContextErrors } = require('../../services/quality-domain.service');
 
 // GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
@@ -89,6 +90,49 @@ router.get('/:id/compliance-graph', authenticate, requireOrganizationScope, asyn
     });
   }
 });
+
+// #1559: the sample's projected graph status (RF019 cold-chain compromise), read in a READ session; the projector is the only graph writer.
+router.get('/:id/graph-status', authenticate, requireOrganizationScope, async (req, res) => {
+  try {
+    const graphDb = req.app.locals.db;
+    if (!graphDb) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const graphSample = await sampleService.getSample(graphDb, req.params.id);
+    if (graphSample && !isSampleInOrganizationScope(graphSample, req.organizationScope)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
+    if (!graphSample) {
+      return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
+    }
+
+    const graphDriver = req.app.locals.neo4jDriver;
+    if (!graphDriver) {
+      return res.status(503).json({ success: false, error: 'Grafo indisponível' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: await readSampleGraphStatus(graphDriver, String(graphSample._id)),
+    });
+  } catch (error) {
+    logger.error('[SAMPLE_GRAPH_STATUS] Falha ao ler o estado projetado da amostra:', error.message);
+    // A graph unreachable after boot is the same outage as an absent driver;
+    // the driver's text (host and port) stays in the log, never in the body.
+    if (error.code === 'ServiceUnavailable' || error.code === 'SessionExpired') {
+      return res.status(503).json({ success: false, error: 'Grafo indisponível' });
+    }
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao ler o estado projetado da amostra',
+    });
+  }
+});
 const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
 const LineageRepository = require('../../infrastructure/database/neo4j/LineageRepository');
 const { getCollection } = require('../../utils/collectionResolver');
@@ -104,7 +148,7 @@ const {
   EXTRACTION_PROTOCOL_IDS,
   MIABIS_QUALITY_IDS,
 } = require('../../config/constants/specimen.constants');
-const { SPECIMEN_ROLE_VALUES } = require('../../models/Sample');
+const { SPECIMEN_ROLE_VALUES, findRcsDerivedFields, rcsDerivedWriteDetails } = require('../../models/Sample');
 
 // #789: the prohibited pre-rename vocabulary, in ONE place. It was inlined
 // in validateCreateSamplePayload only, so `GET /` had no way to reject the
@@ -155,6 +199,17 @@ function validateCreateSamplePayload(req, res, next) {
       error: 'NON_CANONICAL_FIELD',
       fields: [...new Set(aliasFields)],
       details: [...new Set(aliasFields)].map((field) => `${field}: campo não canônico`)
+    });
+  }
+
+  // RNF018 AC4: the RCS result is set only by certification, never by a caller.
+  const rcsDerivedFields = findRcsDerivedFields(payload);
+  if (rcsDerivedFields.length > 0) {
+    return res.status(422).json({
+      success: false,
+      error: 'RCS_DERIVED_WRITE_REFUSED',
+      fields: rcsDerivedFields,
+      details: rcsDerivedWriteDetails(rcsDerivedFields)
     });
   }
 
@@ -508,6 +563,11 @@ router.post('/',
           error: 'Posição ocupada',
           message: errorMessage
         });
+      }
+
+      // RNF007 AC4 (#1463): a barcode holding personal data answers its stable code.
+      if (error.code === 'BARCODE_PERSONAL_DATA') {
+        return res.status(422).json({ success: false, error: 'BARCODE_PERSONAL_DATA', message: errorMessage, details: [errorMessage] });
       }
 
       if ([400, 422].includes(error.status || error.statusCode)) {
@@ -1254,6 +1314,16 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
         details: [error.message]
       });
     }
+    // RNF018 AC4: a write to the RCS result answers 422.
+    if (error.code === 'RCS_DERIVED_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'RCS_DERIVED_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
+    // RF018 AC10 (#1537): an edit that changes the certified SPREC answers 422.
+    if (error.code === 'SPREC_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'SPREC_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
+    // RNF018 AC1 (#1525): a negative or non-numeric quantity answers 422.
+    if (error.code === 'INVALID_QUANTITY') return res.status(422).json({ success: false, error: 'INVALID_QUANTITY', message: error.message, fields: error.fields, details: error.details });
+    // RF006 AC4 (#1531): an edit of a ledgered quantity answers 422.
+    if (error.code === 'QUANTITY_LEDGER_WRITE_REFUSED') return res.status(422).json({ success: false, error: 'QUANTITY_LEDGER_WRITE_REFUSED', message: error.message, fields: error.fields, details: error.details });
+    // #1548: a reseal that lost a race with another edit answers 409; the client re-reads.
+    if (error.code === 'SAMPLE_SEAL_WRITE_CONFLICT') return res.status(409).json({ success: false, error: 'SAMPLE_SEAL_WRITE_CONFLICT', message: error.message, details: error.details });
     // #1378 (ELM-0116): a barcode write after the migration window answers 422.
     if (error.code === 'LEGACY_BARCODE_WRITE_REFUSED') {
       return res.status(422).json({
@@ -1262,6 +1332,10 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
         message: error.message,
         details: [error.message]
       });
+    }
+    // RNF007 AC4 (#1463): a barcode holding personal data answers its stable code.
+    if (error.code === 'BARCODE_PERSONAL_DATA') {
+      return res.status(422).json({ success: false, error: 'BARCODE_PERSONAL_DATA', message: error.message, details: [error.message] });
     }
     return res.status(400).json({
       success: false,

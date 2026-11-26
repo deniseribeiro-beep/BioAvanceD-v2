@@ -86,6 +86,24 @@ class Neo4jCanonicalProjectionService {
     if (type === 'BIOMARKER_ASSOCIATION_UPSERTED') {
       return this.applyBiomarkerAssociationProjection(session, event);
     }
+    if (type === 'SPECIMEN_DONOR_UNLINKED') {
+      return this.applySpecimenDonorUnlink(session, event);
+    }
+    if (type === 'STORAGE_POSITION_RELEASED') {
+      return this.applyStoragePositionRelease(session, event);
+    }
+    // #1550 RF029 AC6: the event carries ids only and names no second node, so
+    // it has no relation to draw; a target with relations appends its own graph
+    // events (SPECIMEN_UPSERTED, LINEAGE_REGISTERED, CONSENT_UPSERTED).
+    if (type === 'INGESTION_RECORD_PERSISTED') {
+      return {
+        skipped: true,
+        eventType: type,
+        aggregateType: normalizeText(event?.aggregateType),
+        eventId: normalizeText(event?.eventId),
+        reason: 'no graph relation: the ingested target appends its own graph events',
+      };
+    }
 
     return {
       skipped: true,
@@ -394,6 +412,47 @@ class Neo4jCanonicalProjectionService {
       sourceService: normalizeText(event.sourceService) || 'unknown',
       eventId: normalizeText(event.eventId),
     });
+    return { projected: true, eventType: event.eventType, specimenId };
+  }
+
+  // #1550: a donor edge Mongo does not hold. DONATED carries no validity
+  // interval, so it is deleted, with the GOVERNED_BY edges the specimen
+  // projection made from that donor's consents. A replay matches nothing.
+  async applySpecimenDonorUnlink(session, event) {
+    const payload = event.payload || {};
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
+    const donorId = normalizeText(payload.donorId);
+    if (!specimenId || !donorId) {
+      return { skipped: true, eventType: event.eventType, specimenId, reason: 'missing specimenId or donorId' };
+    }
+
+    await session.run(`
+      MATCH (donor:Donor {id: $donorId})-[r:DONATED]->(sample:Sample {id: $specimenId})
+      OPTIONAL MATCH (donor)-[:CONSENTED_UNDER]->(:EthicalConsent)<-[g:GOVERNED_BY]-(sample)
+      WITH r, collect(g) AS governed
+      FOREACH (edge IN governed | DELETE edge)
+      DELETE r
+    `, { donorId, specimenId });
+    return { projected: true, eventType: event.eventType, specimenId, donorId };
+  }
+
+  // #1550: a sample Mongo places nowhere. Its open STORED_AT edges are closed
+  // at releasedAt, as a new placement closes the previous one, and stay as
+  // history. A replay finds no open edge.
+  async applyStoragePositionRelease(session, event) {
+    const payload = event.payload || {};
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
+    if (!specimenId) {
+      return { skipped: true, eventType: event.eventType, specimenId, reason: 'missing specimenId' };
+    }
+    const releasedAt = normalizeIso(payload.releasedAt || event.occurredAt) || new Date().toISOString();
+
+    await session.run(`
+      MATCH (sample:Sample {id: $specimenId})-[r:STORED_AT]->(:StoragePosition)
+      WHERE r.validTo IS NULL
+        AND (r.validFrom IS NULL OR r.validFrom < datetime($releasedAt))
+      SET r.validTo = datetime($releasedAt), r.updatedAt = datetime(), r.releasedByEventId = $eventId
+    `, { specimenId, releasedAt, eventId: normalizeText(event.eventId) });
     return { projected: true, eventType: event.eventType, specimenId };
   }
 

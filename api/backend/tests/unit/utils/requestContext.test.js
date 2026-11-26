@@ -92,19 +92,39 @@ describe('requestContext queue jobs', () => {
     expect(spy.mock.calls[0][0]).toMatch(/\[req:req-job-0001\]/);
   });
 
-  it('drops a job request id that could inject text into a log line', async () => {
-    let seen = 'unset';
-    await requestContext.withJobRequestContext(async () => {
-      seen = requestContext.currentRequestId();
-    })({ data: { requestId: 'abc\n[ERROR] forged' } });
-    expect(seen).toBeNull();
+  // #1468 (RNF015 C1): a job with a malformed or missing id runs under a
+  // fresh correlation id of its own, never the malformed text or an outer id.
+  it('#1468 replaces a job request id that could inject text into a log line with a fresh one', async () => {
+    const malformed = 'abc\n[ERROR] forged';
+    const outer = 'req-outer-0002';
+    const seen = await inRequest(outer, () =>
+      requestContext.withJobRequestContext(async () => requestContext.currentRequestId())({ data: { requestId: malformed } })
+    );
+    expect(requestContext.WELL_FORMED.test(seen)).toBe(true);
+    expect(seen).not.toBe(malformed);
+    expect(seen).not.toBe(outer);
   });
 
-  it('does not let a job without an id inherit an outer request id', async () => {
-    const seen = await inRequest('req-outer-0001', () =>
+  it('#1468 runs a job without an id under a fresh id, not an outer request id', async () => {
+    const outer = 'req-outer-0001';
+    const seen = await inRequest(outer, () =>
       requestContext.withJobRequestContext(async () => requestContext.currentRequestId())({ data: {} })
     );
-    expect(seen).toBeNull();
+    expect(requestContext.WELL_FORMED.test(seen)).toBe(true);
+    expect(seen).not.toBe(outer);
+  });
+
+  it('#1468 runs a job whose data is undefined under a fresh well-formed id', async () => {
+    const seen = await requestContext.withJobRequestContext(async () => requestContext.currentRequestId())({ name: 'x' });
+    expect(requestContext.WELL_FORMED.test(seen)).toBe(true);
+  });
+
+  it('#1468 runAsJob keeps a well-formed id and gives each id-less run a fresh one', () => {
+    expect(requestContext.runAsJob('req-job-0002', () => requestContext.currentRequestId())).toBe('req-job-0002');
+    const a = requestContext.runAsJob(null, () => requestContext.currentRequestId());
+    const b = requestContext.runAsJob(null, () => requestContext.currentRequestId());
+    expect(requestContext.WELL_FORMED.test(a)).toBe(true);
+    expect(a).not.toBe(b);
   });
 });
 

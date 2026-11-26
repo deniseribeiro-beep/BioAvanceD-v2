@@ -13,7 +13,9 @@ require('../models/TemperaturePolicy.schema');
 // throws "Schema hasn't been registered for model \"Device\"" otherwise.
 require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
-const { readingIdentityOf, screenReading } = require('../services/telemetryReadingContract');
+const {
+  readingIdentityOf, screenReading, splitContractFields, IOT_API_READING_FIELDS, payloadHashCheckOf, auditStrippedFields,
+} = require('../services/telemetryReadingContract');
 const { getDatastream } = require('../services/telemetryBinding.service');
 const { datastreamEquipmentIdsBySensor } = require('../services/sensorDatastream.service');
 const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
@@ -275,9 +277,22 @@ async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, norma
 
 async function ingestTelemetry(req, res) {
   try {
-    const { sensorId, temperature } = req.body || {};
+    // RF009 AC8, RNF004 C7 (#1540): fields outside the reading contract may
+    // carry personal data. They are stripped here, before the reading is
+    // hashed, screened or stored, and the reading is kept and flagged by a
+    // personal_data_stripped issue, never refused.
+    // RNF004 C4 (#1521): a client payloadHash is taken out before the split,
+    // so it is neither hashed nor stripped as a non-contract field, and is
+    // checked against the reading's own payloadHash below.
+    // RULE-025 (#1582): the split is the first read of the body, and the
+    // stripped fields' security audit is written at receipt, before any
+    // exit, so a refused body is audited too.
+    const { payloadHash: clientPayloadHash, ...sentBody } = req.body || {};
+    const { reading: contractBody, strippedFields } = splitContractFields(sentBody, IOT_API_READING_FIELDS);
+    const { sensorId, temperature } = contractBody;
     const normalizedSensorId = String(sensorId || '').trim();
     const normalizedTemperature = Number(temperature);
+    await auditStrippedFields(connectMongoDB, { ingestionService: 'iot-api', strippedFields, sensorId: normalizedSensorId || null });
 
     if (!normalizedSensorId || !Number.isFinite(normalizedTemperature)) {
       // #1120 (Axis E E3): the audit row names which condition refused the
@@ -298,11 +313,15 @@ async function ingestTelemetry(req, res) {
     // date is a 422.
     let identity;
     try {
-      identity = readingIdentityOf(req.body || {}, new Date(), { ingestionService: 'iot-api' });
+      identity = readingIdentityOf(contractBody, new Date(), { ingestionService: 'iot-api' });
     } catch (error) {
       res.locals.auditReason = error.auditReason || 'invalid_payload';
       return res.status(error.statusCode || 422).json({ success: false, error: error.message });
     }
+    // RNF004 C4 (#1521): a mismatched payloadHash is a corrupted message. It
+    // is never answered as a replay, since its idempotencyKey is as
+    // untrusted as the rest of it; screenReading records it and refuses 422.
+    const payloadHashCheck = payloadHashCheckOf(clientPayloadHash, identity);
 
     // RF009 AC7 (#1317): a client idempotencyKey already accepted for this
     // sensor is a replay. It answers 200 with the first reading, and writes,
@@ -318,7 +337,7 @@ async function ingestTelemetry(req, res) {
     // ensureIdempotencyKeyIndex creates when a key is recorded, keeps one key
     // row (#1391).
     let replayScope = null;
-    if (identity.idempotencyKeySource === 'client') {
+    if (identity.idempotencyKeySource === 'client' && payloadHashCheck !== 'mismatch') {
       replayScope = `TelemetryReading:${normalizedSensorId}`;
       let resultRef = null;
       try {
@@ -334,7 +353,7 @@ async function ingestTelemetry(req, res) {
     try {
       // RF009 AC7: a drift or an implausible value is recorded as a
       // TelemetryValidationIssue; an implausible value is a 422 here.
-      await screenReading(connectMongoDB, identity, req.body || {});
+      await screenReading(connectMongoDB, identity, contractBody, { strippedFields, payloadHashCheck });
     } catch (error) {
       res.locals.auditReason = error.auditReason || 'invalid_payload';
       return res.status(error.statusCode || 422).json({ success: false, error: error.message });

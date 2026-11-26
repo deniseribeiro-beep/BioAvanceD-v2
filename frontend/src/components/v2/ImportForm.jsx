@@ -24,6 +24,9 @@ function getFieldError(error) {
   return error?.issues?.[0]?.message || '';
 }
 
+/**
+ * @param {{ onSuccess?: (data: unknown) => void, onError?: (message: string) => void, className?: string }} props
+ */
 export default function ImportForm({ onSuccess, onError, className = '' }) {
   const [file, setFile] = useState(null);
   const [touched, setTouched] = useState(false);
