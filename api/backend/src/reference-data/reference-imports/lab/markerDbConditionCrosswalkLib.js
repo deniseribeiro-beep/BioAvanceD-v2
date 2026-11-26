@@ -106,8 +106,9 @@ function buildConditionLookupIndex(records, systemUri) {
   const normalizeCode = isOrpha ? normalizeOrphaCode : normalizeMondoCode;
 
   for (const raw of records) {
-    const code = normalizeCode(raw.id);
-    const display = typeof raw.lbl === 'string' ? raw.lbl.trim() : '';
+    const code = normalizeCode(raw.id || raw.code);
+    const displayRaw = typeof raw.lbl === 'string' ? raw.lbl : raw.display;
+    const display = typeof displayRaw === 'string' ? displayRaw.trim() : '';
     if (!code || !display || raw.obsolete) continue;
 
     const concept = { systemUri, code, display };
@@ -125,8 +126,9 @@ function buildConditionLookupIndex(records, systemUri) {
 
     registerLabel(display, isOrpha ? 'exact_label_orpha' : 'exact_label_mondo');
     for (const syn of Array.isArray(raw.synonyms) ? raw.synonyms : []) {
-      if (typeof syn === 'string' && syn.trim()) {
-        registerLabel(syn, isOrpha ? 'alias_orpha' : 'alias_mondo');
+      const synText = typeof syn === 'string' ? syn : (syn && syn.term);
+      if (typeof synText === 'string' && synText.trim()) {
+        registerLabel(synText, isOrpha ? 'alias_orpha' : 'alias_mondo');
       }
     }
   }
@@ -163,7 +165,7 @@ function buildMondoToOrphaMap(orphaIndex, mondoRecords) {
   }
 
   for (const raw of mondoRecords) {
-    const mondoCode = normalizeMondoCode(raw.id);
+    const mondoCode = normalizeMondoCode(raw.id || raw.code);
     if (!mondoCode || raw.obsolete) continue;
 
     for (const orphaCode of collectOrphaXrefs(raw)) {
@@ -172,7 +174,8 @@ function buildMondoToOrphaMap(orphaIndex, mondoRecords) {
       }
     }
 
-    const norm = normalizeConditionLabel(raw.lbl);
+    const lbl = typeof raw.lbl === 'string' ? raw.lbl : raw.display;
+    const norm = normalizeConditionLabel(lbl);
     const orphaCode = orphaPrimaryByNorm.get(norm);
     if (orphaCode && orphaIndex.byCode.has(orphaCode) && !map.has(mondoCode)) {
       map.set(mondoCode, { orphaCode, method: 'mondo_label_orpha' });

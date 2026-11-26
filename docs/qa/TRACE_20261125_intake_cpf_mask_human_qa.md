@@ -160,6 +160,12 @@ Ver `PENDING_HUMAN_REVIEW_20261125_passo3_wave.md` (DECIDED). Git: `feature/dock
 - Test stack: `biomarkerAssociations=2521`
 - Fora deste fechamento (documentado stub/sample): SIGTAP full na coleção (só sample no pack), SRC_CPATH/SRC_FDA_PGX sem dump
 
+### G1 reimport homolog tip `:8080` (2026-11-26 residual)
+- TSV reconvert → **42001** associations; crosswalk **59.78%** mapped (25108); unmatched HITL `crosswalk-unmatched-2026-11-26.jsonl` (16893)
+- Mongo `bioavanced_test`: ORPHA-coded **before 16 → after 13222**; outbox `BIOMARKER_ASSOCIATION_UPSERTED` enqueued 13206 → PENDING 0
+- Neo4j `POSSUI_BIOMARCADOR` count **13173**
+- API `GET /dictionary/suggest?orphaCode=324` → **135** biomarkers
+
 ### Critérios smoke
 - `/biomarker-associations` itemCount > 0; suggest ORPHA fixture com biomarkers.length > 0 (Mongo)
 - Wizard: buscar procedimento SIGTAP; alergia ATC; GPS sugere Local da coleta

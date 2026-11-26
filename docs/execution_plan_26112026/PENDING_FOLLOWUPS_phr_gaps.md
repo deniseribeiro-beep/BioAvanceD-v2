@@ -93,25 +93,25 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 ## 4. P0 / G1 — Crosswalk MarkerDB provisório → ORPHA/MONDO
 
-**Status tip:** script híbrido + unit tests; **reimport Mongo/Neo4j homolog** pendente (VM TERMINATED).
+**Status tip:** script híbrido + unit tests; **reimport homolog tip `:8080` DONE** (2026-11-26).
 
 ### Situação
 
 | Camada | Estado |
 |--------|--------|
-| Catálogo ORPHA (`terminologyConcepts`) | Full-lab (~11 645 ORPHA em ~556 020 conceitos) |
-| Associações MarkerDB | ~2505 com `https://markerdb.ca/condition` |
-| Associações com ORPHA explícito | **16** (fixture) até reimport pós-crosswalk |
-| `/dictionary/suggest?orphaCode=` | ORPHA + Mongo fallback; alimenta pós-reimport |
+| Catálogo ORPHA (`terminologyConcepts`) | Full-lab (~11 645 ORPHA em ~556 020 conceitos) — export `docs/data/markerdb/orpha-full.jsonl` p/ crosswalk |
+| Associações MarkerDB | TSV reconvert **42001** (`2024-09-12/biomarker-associations-full.jsonl`; XML path rejeitado — nested `<condition>`) |
+| Associações com ORPHA explícito | **before 16** fixture → **after 13222** (`bioavanced_test`) |
+| `/dictionary/suggest?orphaCode=` | Fabry `324` → **135** biomarkers (2026-11-26) |
 
 ### Implementar / verificar
 
 - [x] Estratégia: exact / normalize / aliases / MONDO→ORPHA — `markerDbConditionCrosswalkLib.js`
 - [x] Script offline: `crosswalkMarkerDbConditions.js` (+ CLI `scripts/reference-imports/crosswalk-markerdb-conditions.js`)
-- [x] % mapeado + fila unmatched versionada; **sem inventar** código
-- [ ] Suggest: doenças do dump com biomarcadores após **reimport** homolog
-- [ ] Outbox: re-emitir após reimport enriched JSONL
-- [ ] Evidência before/after + Fabry + N doenças no homolog
+- [x] % mapeado + fila unmatched versionada; **sem inventar** código — **59.78%** mapped (25108/42001); unmatched `docs/data/markerdb/crosswalk-unmatched-2026-11-26.jsonl` (16893)
+- [x] Suggest: doenças do dump com biomarcadores após **reimport** homolog — Fabry 324 = 135
+- [x] Outbox: re-emitir após reimport enriched JSONL — `outboxEnqueued=13206`; PENDING→0; Neo4j `POSSUI_BIOMARCADOR=13173`
+- [x] Evidência before/after + Fabry + N doenças no homolog — § tabela acima
 - [x] ADR provisional atualizado (híbrido)
 - [x] Decisão registrada abaixo
 
@@ -122,8 +122,8 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 ## 5. P1 / G2–G3 — Dumps BR e oficiais
 
 - [x] **G2** path convert/import + typeahead intake — `docs/operations/sigtap-full-import-v2.1.md`
-- [ ] **G2** SIGTAP **full** no Mongo prod (dump full ainda ausente no repo; sample 200 dry-run OK)
-- [ ] Typeahead verde no homolog tip 2.1 (após import full)
+- [x] **G2** SIGTAP **full** no Mongo tip `:8080` (`bioavanced_test`) — `sigtap=5068` from `TabelaUnificada_202611_v2611051737/` (2026-11-26 reimport; evidence `docs/qa/MANUAL_VERIFY_v2.1_G2_sigtap.md`)
+- [x] Typeahead API verde no homolog tip 2.1 — `query=BIOP` → `source: SIGTAP`; UI wizard = G4-05
 - [x] **G3** SRC_CPATH / SRC_FDA_PGX: ADR N/A — `docs/decisions/2026-11-26-cpath-fda-pgx-na-v2.1.md`
 - ~~Pack Zenodo: DOI~~ **REMOVIDO** do go-live 2.1
 

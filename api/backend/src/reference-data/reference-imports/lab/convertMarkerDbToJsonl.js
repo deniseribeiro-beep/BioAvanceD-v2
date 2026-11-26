@@ -281,7 +281,9 @@ function convertDirectory(dirPath) {
   const files = fs.readdirSync(dirPath)
     .filter((f) => /\.(tsv|xml)$/i.test(f))
     .sort();
-  // Prefer XML when both exist for same stem
+  // Prefer TSV when both exist: MarkerDB XML nests a disease <condition>
+  // inside a measurement <condition> block; the XML path truncated labels to
+  // the outer blob (slice 200). TSV `conditions` column is the clean disease name.
   const byStem = new Map();
   for (const f of files) {
     const stem = f.replace(/\.(tsv|xml)$/i, '');
@@ -293,7 +295,7 @@ function convertDirectory(dirPath) {
   const seen = new Set();
   const out = [];
   for (const [, paths] of byStem) {
-    const chosen = paths.xml || paths.tsv;
+    const chosen = paths.tsv || paths.xml;
     for (const rec of convertFile(chosen)) {
       if (seen.has(rec.biomarkerId)) continue;
       seen.add(rec.biomarkerId);
