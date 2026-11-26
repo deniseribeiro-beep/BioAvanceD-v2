@@ -63,12 +63,27 @@ async function openPanelForSample(page: import('@playwright/test').Page, sample:
   // by the same page, wrongly fulfilling them with the list envelope and
   // crashing SampleDetailsPage's compliance-graph rendering (`.graphPath` of
   // an object with no such key).
-  await page.route('**/api/samples', async (route) => {
+  // Match pathname `/api/samples` with optional query (`?limit=200` from
+  // useSamples after ui-mongo-binding). Playwright's bare `**/api/samples`
+  // glob does not match when a query string is present, so the list call
+  // used to fall through to the real backend, 401 on mockLogin's unsigned
+  // token, and force-logout to /login before Gerenciar Armazenagem appeared.
+  await page.route((url) => /\/api\/samples$/.test(url.pathname), async (route) => {
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ success: true, data: { samples: [sample] } }),
+    });
+  });
+
+  // Deep-link fallback when the list window misses the fixture id.
+  await page.route(`**/api/samples/${sample._id}`, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: sample }),
     });
   });
 
