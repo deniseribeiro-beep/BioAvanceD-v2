@@ -42,10 +42,10 @@ Marque `[x]` **somente** com evidência (contagem Mongo, log, MANUAL_VERIFY, com
 | ID | Item | Critério de done | Seção | Tip (re-auditoria) |
 |----|------|------------------|-------|---------------------|
 | **G0** | Sanitização docs/históricos wave 1 | Inventário keep/archive/delete; `docs/_archive/pre-2.1/`; SoT 2.1 limpo; sem rewrite de git | §3 | **DONE** `d16f093a` + GCP `W1_GCP_SYNC_OK` |
-| **G1** | Crosswalk MarkerDB → ORPHA/MONDO + suggest real | Dump mapeado; suggest clínico ≠ só 16 fixture | §4 P0 | **DONE tip** scripts+tests (`b409ca2c`+); reimport ORPHA edges ainda residual se unmatched |
-| **G2** | SIGTAP (+ fluxos BR críticos) no prod | Typeahead + dump full (`TabelaUnificada_202611_*`) | §5 P1 | **DONE** convert+import homolog **sigtap=5068** (`W2_SIGTAP_FINAL`) |
+| **G1** | Crosswalk MarkerDB → ORPHA/MONDO + suggest real | Dump mapeado; suggest clínico ≠ só 16 fixture | §4 P0 | **DONE** reimport tip `:8080` ORPHA **16→13222**; suggest Fabry 135; unmatched HITL 16893 (`MANUAL_VERIFY_v2.1_G1_crosswalk.md`) |
+| **G2** | SIGTAP (+ fluxos BR críticos) no prod | Typeahead + dump full (`TabelaUnificada_202611_*`) | §5 P1 | **DONE** tip `bioavanced_test` **sigtap=5068** + API/UI (`MANUAL_VERIFY_v2.1_G2_sigtap.md`) |
 | **G3** | CPATH / FDA_PGX | Import real **ou** ADR “N/A nesta release” assinado | §5 P1 | **DONE** ADR N/A merged |
-| **G4** | Smokes humanos TRACE/P4 | Sessão, rascunho, Fabry E2E, ATC/SIGTAP/TCLE geo PASS | §6 P2/P4 | **PENDING_HUMAN** checklist `MANUAL_VERIFY_v2.1_G4_smokes.md` |
+| **G4** | Smokes humanos TRACE/P4 | Sessão, rascunho, Fabry E2E, ATC/SIGTAP/TCLE geo PASS | §6 P2/P4 | **10/11 PASS** 2026-11-26; **G4-09 BLOCKED** (gov.br real creds) — `MANUAL_VERIFY_v2.1_G4_smokes.md` |
 | **G5** | Busca única inventário (P5.3) | Uma busca; armazenagem acoplada | §7 P5.3 | **DONE** `dc8a79c6` + GCP sync |
 | **G6** | Etiqueta → scan → consulta (P5.4) | Code128 + DataMatrix → acha amostra | §7 P5.4 | **DONE** `dc8a79c6` |
 | **G7** | TCLE builder + import claros (P5.1/P5.2) | Instruções + smoke publicar/import | §7 | **DONE** tip; smoke humano residual G4 |
@@ -139,14 +139,14 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 ### Obrigatório G4 (homolog tip 2.1, **sem** mock de runtime)
 
-- [ ] UX tip: CPF, sólidos SPREC, sigla/modal, doc-primeiro, busca doença
-- [ ] Fabry/324 → CID/ORPHA/OMIM + HPO + biomarcadores (após G1 reimport)
-- [ ] Procedimentos SIGTAP + alergia ATC + TCLE geo presencial
-- [ ] Keepalive
-- [ ] Rascunho intake
-- [ ] TCLE remoto gov.br **real** → `identityProof`
-- [ ] Canvas presencial após geo
-- [ ] Lista `/biomarker-associations` pós-crosswalk
+- [x] UX tip: CPF, sólidos SPREC, sigla/modal, doc-primeiro, busca doença
+- [x] Fabry/324 → CID/ORPHA/OMIM + HPO + biomarcadores (após G1 reimport)
+- [x] Procedimentos SIGTAP + alergia ATC + TCLE geo presencial
+- [x] Keepalive
+- [x] Rascunho intake
+- [ ] TCLE remoto gov.br **real** → `identityProof` — **BLOCKED** sem client staging/real
+- [x] Canvas presencial após geo
+- [x] Lista `/biomarker-associations` pós-crosswalk
 
 ---
 
@@ -241,9 +241,9 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 **Entrada:**
 
-- [x] Scorecard tip + ADRs out (exceto G4 humano / G1–G2 reimport live)
-- [x] Protocolo + hygiene docs
-- [ ] Smokes G4 verdes
+- [x] Scorecard tip + ADRs out (G1/G2 live DONE; G4 10/11)
+- [x] Protocolo + hygiene docs (`GOVBR_OIDC_MOCK=false` no tip)
+- [ ] Smokes G4 verdes — falta **G4-09** gov.br real
 - [x] Issues G12 zeradas no escopo
 
 **Ensaio / produção:** checklist `docs/qa/MANUAL_VERIFY_v2.1_ex_ante_gate.md`
@@ -252,7 +252,7 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 - [ ] Relatório PASS
 - [ ] Tag `v2.1.0` + deploy + smoke pós-deploy
 
-**Bloqueio atual:** VM homolog TERMINATED; não promover sem G4 PASS.
+**Bloqueio atual:** G4-09 sem credenciais gov.br staging/real — **não** taguear `v2.1.0`.
 
 ---
 
@@ -270,7 +270,7 @@ Incluir na **primeira** wave; não destruir trilha de auditoria.
 
 1. Executar na ordem das waves (§2); não pular G10 antes de G8/G9.  
 2. Cada `[x]`: evidência inline ou link.  
-3. Residual tip→homolog: religar VM → G1 reimport → G2 dump full → G4 → W7.  
+3. Residual tip→homolog: G1/G2 DONE; G4-09 gov.br real → W7.  
 4. Zenodo DOI: archive; não misturar com go-live.
 
 ---

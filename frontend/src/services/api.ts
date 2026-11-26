@@ -799,7 +799,8 @@ export const extractionProtocolService = {
 // ELM-0275..0285 (#1402): the mount's idField is biomarkerId, which the PUT
 // matches and never writes. No delete: the screen only creates and edits.
 export const biomarkerAssociationService = {
-  getAll: () => api.get<ApiEnvelope<BiomarkerAssociation[]>>('/biomarker-associations'),
+  getAll: (params?: { limit?: number; q?: string }) =>
+    api.get<ApiEnvelope<BiomarkerAssociation[]>>('/biomarker-associations', { params, timeout: 60000 }),
   create: (data: Partial<BiomarkerAssociation>) => api.post<ApiEnvelope<BiomarkerAssociation>>('/biomarker-associations', data),
   update: (biomarkerId: string, data: Partial<BiomarkerAssociation>) =>
     api.put<ApiEnvelope<BiomarkerAssociation>>(`/biomarker-associations/${encodeURIComponent(biomarkerId)}`, data),

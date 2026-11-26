@@ -47,11 +47,16 @@ export default function BiomarkerAssociationsPage() {
   const [loadError, setLoadError] = useState<string[] | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (q?: string) => {
     setLoading(true);
     setLoadError(null);
     try {
-      const response = await biomarkerAssociationService.getAll();
+      const trimmed = String(q || '').trim();
+      const response = await biomarkerAssociationService.getAll(
+        trimmed.length >= 2
+          ? { q: trimmed, limit: 500 }
+          : { limit: 500 },
+      );
       const items = extractResponseItems<BiomarkerAssociation>(response);
       setRows(items);
     } catch (err: any) {
@@ -64,6 +69,15 @@ export default function BiomarkerAssociationsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (trimmed.length < 2) return undefined;
+    const handle = window.setTimeout(() => {
+      void load(trimmed);
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [searchQuery, load]);
 
   const filteredRows = useMemo(
     () => rows.filter((row) => matchesBiomarkerAssociationSearch(row, searchQuery)),

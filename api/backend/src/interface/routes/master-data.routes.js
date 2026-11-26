@@ -133,8 +133,30 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
     try {
       const db = req.app.locals.db;
 
-      const listQuery = scopeField ? applyOrganizationScopeFilter({}, req.organizationScope, scopeField) : {};
-      const items = await db.collection(collectionName).find(listQuery).sort({ createdAt: -1, _id: -1 }).toArray();
+      let listQuery = scopeField ? applyOrganizationScopeFilter({}, req.organizationScope, scopeField) : {};
+      const rawQ = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      if (rawQ) {
+        const safe = rawQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const rx = new RegExp(safe, 'i');
+        listQuery = {
+          ...listQuery,
+          $or: [
+            { [idField]: rx },
+            { 'analyte.code': rx },
+            { 'analyte.display': rx },
+            { 'associatedCondition.code': rx },
+            { 'associatedCondition.display': rx },
+          ],
+        };
+      }
+      // Optional limit keeps large catalogs (e.g. biomarkerAssociations post-G1) usable.
+      const parsedLimit = Number.parseInt(String(req.query.limit || ''), 10);
+      const limit = Number.isFinite(parsedLimit) && parsedLimit > 0
+        ? Math.min(parsedLimit, 5000)
+        : null;
+      let cursor = db.collection(collectionName).find(listQuery).sort({ createdAt: -1, _id: -1 });
+      if (limit != null) cursor = cursor.limit(limit);
+      const items = await cursor.toArray();
       return res.status(200).json({ success: true, data: items });
     } catch (error) {
       return res.status(500).json({ success: false, error: 'Erro ao listar dados mestre', message: error.message });

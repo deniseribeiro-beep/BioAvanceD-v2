@@ -20,6 +20,7 @@
 - [ ] Deploy per install/configuration runbooks
 - [ ] Smoke pós-deploy: login tenant, intake, inventário, uma etiqueta
 
-## Status tip (2026-11-26)
+## Status tip (2026-11-26 residual)
 
-Implementação tip preparada; **ensaio ex ante e promote produção** aguardam homolog live + G4 humano PASS (VM pode estar TERMINATED até religar).
+Homolog tip `:8080` **live**; G1/G2 closed; G4 **10/11 PASS** — **G4-09 BLOCKED** (faltam `GOVBR_OIDC_*` staging/real).  
+**Não** taguear `v2.1.0` nem ensaiar RF016 promote até G4-09 PASS.
