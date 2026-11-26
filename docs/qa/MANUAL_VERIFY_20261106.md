@@ -19,7 +19,7 @@ Homolog em `0274b0f6` (`feature/homolog-consent-mail-directory`), proxy `:8080`,
 | TCLE-GOVBR-01 | INSTRUMENTED | Flag `CONSENT_GOVBR_OIDC_ENABLED`; rotas `/api/e-consent/govbr/{status,start,callback}`; botão na `ConsentTokenPage` |
 | TCLE-GEO-ACCEPT | INSTRUMENTED | Aceite remoto envia `location` (`readPanelLocation`) + `identityProof` na evidência |
 | TCLE-ICP-01 | INSTRUMENTED | `icpBrasil.service` + evidência `identityProvider: icp-brasil` quando proof no accept; flag `CONSENT_ICP_BRASIL_ENABLED` |
-| TCLE-MANUAL | PENDING | Homolog: habilitar mock `GOVBR_OIDC_MOCK=true`, percorrer link do participante, ver proof na evidence JSON |
+| TCLE-MANUAL | INSTRUMENTED | `compose.test.yml` liga `CONSENT_GOVBR_OIDC_ENABLED` + `GOVBR_OIDC_MOCK`; e2e `tcle-govbr-icp.spec.ts` cobre status/start/callback. Manual residual: abrir link do participante na UI e conferir `identityProof` na evidence JSON |
 
 ## Skips
 
