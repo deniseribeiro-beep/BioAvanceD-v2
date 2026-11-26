@@ -41,11 +41,13 @@ Matriz consolidada: [`matriz-rastreabilidade-comercial-v2.1.md`](../compliance/m
 
 | Workflow | Status nesta auditoria |
 |----------|------------------------|
-| `ci-pipeline.yml` (push main) | _preencher após verde_ |
-| `tls-check.yml` (`bioadvanced.dev`) | _preencher após verde_ |
+| `ci-pipeline.yml` / `tls-check.yml` | **DEFERRED** 2026-11-26 — sem minutos Actions; tip segue com commits `[skip ci]` até haver cota |
+| Nota | Tentativa pós-domínio: runners sem cota (jobs vazios) → repo ficou **public** temporariamente para liberar Actions; CI ainda falhou em testes acumulados desde `[skip ci]` waves; **não** bloquear go-live tip |
 
 ## Residual pós-tag
 
 1. **G8-GOVBR-REAL** — Login Único real (ADR Option B).
-2. Apex DNS A `@` se ainda não propagar.
+2. Apex DNS A `@` se ainda não propagar (`www` OK).
 3. Domínio com grafia “BioAvanceD” correta (futuro / Student Pack).
+4. **CI verde no GitHub** — quando houver minutos Actions (sem `[skip ci]`).
+5. SSL policy LB `bioavanced-tls12` (RESTRICTED / TLS≥1.2) — revalidar `tls-check` com cota.
