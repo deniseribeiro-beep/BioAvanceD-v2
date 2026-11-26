@@ -23,6 +23,8 @@ function parseArgs(argv) {
   return args;
 }
 
+const BATCH_SIZE = 500;
+
 async function importFile(db, filePath, dryRun) {
   const coll = dryRun ? null : db.collection('terminologyConcepts');
   const rl = readline.createInterface({
@@ -31,6 +33,14 @@ async function importFile(db, filePath, dryRun) {
   });
   let upserted = 0;
   let rejected = 0;
+  let batch = [];
+
+  async function flush() {
+    if (!batch.length || dryRun) return;
+    await coll.bulkWrite(batch, { ordered: false });
+    batch = [];
+  }
+
   for await (const line of rl) {
     if (!line.trim()) continue;
     const raw = JSON.parse(line);
@@ -40,28 +50,29 @@ async function importFile(db, filePath, dryRun) {
       rejected += 1;
       continue;
     }
-    if (dryRun) {
-      upserted += 1;
-      continue;
-    }
-    await coll.updateOne(
-      { systemUri: SYSTEM_URI, code },
-      {
-        $set: {
-          systemUri: SYSTEM_URI,
-          code,
-          display,
-          semanticType: 'procedure',
-          sourceId: 'SRC_SIGTAP',
-          obsolete: Boolean(raw.obsolete),
-          updatedAt: new Date(),
-        },
-        $setOnInsert: { createdAt: new Date() },
-      },
-      { upsert: true },
-    );
     upserted += 1;
+    if (dryRun) continue;
+    batch.push({
+      updateOne: {
+        filter: { systemUri: SYSTEM_URI, code },
+        update: {
+          $set: {
+            systemUri: SYSTEM_URI,
+            code,
+            display,
+            semanticType: 'procedure',
+            sourceId: 'SRC_SIGTAP',
+            obsolete: Boolean(raw.obsolete),
+            updatedAt: new Date(),
+          },
+          $setOnInsert: { createdAt: new Date() },
+        },
+        upsert: true,
+      },
+    });
+    if (batch.length >= BATCH_SIZE) await flush();
   }
+  await flush();
   return { upserted, rejected, systemUri: SYSTEM_URI, filePath, dryRun };
 }
 
