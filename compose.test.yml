@@ -47,6 +47,14 @@ x-test-env: &test-env
   ALERT_EMAIL_TO: e2e-admin@bioavanced.test
   USER_ANON_SALT: vitest-user-anon-salt
   CONSENT_SECRET: vitest-consent-secret-key
+  # PHR TCLE remote identity (ADR 2026-11-26): enable gov.br OIDC in mock mode
+  # on the test stack so e2e can exercise start/callback without Login Único.
+  CONSENT_GOVBR_OIDC_ENABLED: "true"
+  GOVBR_OIDC_MOCK: "true"
+  GOVBR_OIDC_CLIENT_ID: e2e-govbr-client
+  GOVBR_OIDC_CLIENT_SECRET: e2e-govbr-secret
+  GOVBR_OIDC_REDIRECT_URI: https://e2e.bioavanced.test/patients/consent/govbr/callback
+  CONSENT_ICP_BRASIL_ENABLED: "true"
   # #829: required by NotificationService.getFrontendUrl(), which throws when
   # it is empty -- and POST /e-consent/generate-link had no try/catch, so that
   # throw exited the API process. It was set nowhere in this file or
