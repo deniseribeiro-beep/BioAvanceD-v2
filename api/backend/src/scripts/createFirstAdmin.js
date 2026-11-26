@@ -46,6 +46,20 @@ async function createFirstAdmin(options = {}) {
 
     const usersCount = await users.countDocuments({});
     if (usersCount > 0) {
+      // Homolog/test volumes often keep a bootstrap admin across image rebuilds.
+      // After an RBAC catalog reseed, that user can login but lack an active
+      // administrator assignment (403 on every gated route). Re-assert it here.
+      const existingAdmin = await users.findOne({ username: config.username });
+      if (existingAdmin) {
+        await seedRolesAndPermissions(db);
+        await grantRoleForAccessType(db, {
+          userAccountId: String(existingAdmin._id),
+          accessType: 4,
+          grantedBy: 'BOOTSTRAP_SYSTEM',
+        });
+        logger.info('[ADMIN_BOOTSTRAP] Users exist; refreshed administrator assignment for bootstrap admin.');
+        return { status: 'ensured_admin_role', usersCount };
+      }
       logger.info('[ADMIN_BOOTSTRAP] Users collection is not empty. No changes made.');
       return { status: 'skipped', reason: 'users_exist', usersCount };
     }

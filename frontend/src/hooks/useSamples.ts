@@ -47,9 +47,13 @@ export function useSamples() {
     const seq = requestSeq.next();
     try {
       setLoading(true);
-      // Default newest-first page is 50 server-side; when searching by
-      // specimenId, ask the API so the row is not lost behind that cap.
-      const response = await samplesApi.getAll(params);
+      // Default newest-first page is 50 server-side; pull a wider window on
+      // the inventory mount so a just-created specimen is not lost behind
+      // that cap before a specimenId search runs (ui-mongo-binding).
+      const response = await samplesApi.getAll({
+        limit: 200,
+        ...params,
+      });
       if (!requestSeq.isCurrent(seq)) return;
       const samplesData = extractSamples(response.data);
       setSamples(samplesData);
